@@ -2947,8 +2947,7 @@ class _StepFormDialogState extends State<_StepFormDialog> {
             labelText: 'Platform',
             border: OutlineInputBorder(),
           ),
-          items: ['', ...options]
-              .toSet()
+          items: {'', ...options}
               .map(
                 (item) => DropdownMenuItem(
                   value: item,
@@ -4084,7 +4083,7 @@ class _EventEditor extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final options = ['', ...eventTypes].toSet().toList();
+    final options = {'', ...eventTypes}.toList();
     final value = options.contains(event.type) ? event.type : '';
     return Container(
       margin: const EdgeInsets.only(bottom: 10),

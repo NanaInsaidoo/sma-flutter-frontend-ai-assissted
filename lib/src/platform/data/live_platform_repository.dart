@@ -1470,11 +1470,6 @@ class LivePlatformRepository implements PlatformRepository {
   String _stepNameForIndex(int index) =>
       _onboardingSteps[index.clamp(0, _onboardingSteps.length - 1)];
 
-  int _termNumber(String term) {
-    final number = RegExp(r'\d+').firstMatch(term)?.group(0);
-    return int.tryParse(number ?? '') ?? 1;
-  }
-
   String _schoolSlug(String schoolName) {
     final slug = schoolName
         .toLowerCase()

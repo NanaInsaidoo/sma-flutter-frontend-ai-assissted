@@ -1,0 +1,13 @@
+{
+  "name": "sma-flutter-frontend-ai-assisted",
+  "private": true,
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:update": "playwright test --update-snapshots"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.57.0",
+    "pngjs": "^7.0.0"
+  }
+}

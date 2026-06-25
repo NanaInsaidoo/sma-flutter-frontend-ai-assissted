@@ -7,6 +7,7 @@ import 'auth/presentation/auth_screen.dart';
 import 'dashboard/data/mock_dashboard_repository.dart';
 import 'dashboard/presentation/administrator_dashboard.dart';
 import 'platform/data/live_platform_repository.dart';
+import 'platform/data/mock_platform_repository.dart';
 import 'platform/data/platform_repository.dart';
 import 'platform/domain/platform_models.dart';
 import 'platform/presentation/platform_admin_shell.dart';
@@ -34,6 +35,8 @@ class _PlatformRouteConfig {
 }
 
 class _SchoolManagementAppState extends State<SchoolManagementApp> {
+  static const bool _useE2eMocks = bool.fromEnvironment('SMA_E2E_MOCKS');
+
   bool _showSchoolAdministrator = false;
   AuthSession? _session;
   final AuthApiClient _authApi = AuthApiClient();
@@ -49,7 +52,7 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
     _session = _sessionStore.load();
     _router = GoRouter(
       initialLocation: _session == null ? '/login' : _routeForSession(_session),
-      overridePlatformDefaultLocation: true,
+      overridePlatformDefaultLocation: false,
       redirect: (context, state) {
         final signedIn = _session != null;
         final onLogin = state.matchedLocation == '/login';
@@ -247,6 +250,9 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
   }
 
   PlatformRepository get _currentPlatformRepository {
+    if (_useE2eMocks) {
+      return _platformRepository ??= MockPlatformRepository();
+    }
     return _platformRepository ??= LivePlatformRepository(
       accessToken: _session?.accessToken,
       userDisplayName: _session?.displayName ?? 'Super Admin',

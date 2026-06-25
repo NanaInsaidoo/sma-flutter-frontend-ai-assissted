@@ -3405,8 +3405,12 @@ class _SchoolFilterDropdown extends StatelessWidget {
             value: enabled
                 ? (values.contains(value) ? value : values.first)
                 : null,
-            disabledHint: Text(disabledHint ?? ''),
+            disabledHint: Text(
+              disabledHint ?? '',
+              overflow: TextOverflow.ellipsis,
+            ),
             isDense: true,
+            isExpanded: true,
             decoration: InputDecoration(
               hintText: disabledHint,
               filled: true,
@@ -3429,7 +3433,12 @@ class _SchoolFilterDropdown extends StatelessWidget {
               ),
             ),
             items: values
-                .map((item) => DropdownMenuItem(value: item, child: Text(item)))
+                .map(
+                  (item) => DropdownMenuItem(
+                    value: item,
+                    child: Text(item, overflow: TextOverflow.ellipsis),
+                  ),
+                )
                 .toList(),
             onChanged: enabled
                 ? (value) {
