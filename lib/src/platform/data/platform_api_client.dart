@@ -1,0 +1,537 @@
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+
+class PlatformApiClient {
+  PlatformApiClient({
+    required this.accessToken,
+    this.onRefreshAccessToken,
+    http.Client? client,
+  }) : _client = client ?? http.Client();
+
+  static const String baseUrl =
+      'https://api.airghana.org/Narellallc/sma-v1/1.0.0';
+
+  String? accessToken;
+  final Future<String?> Function()? onRefreshAccessToken;
+  final http.Client _client;
+
+  Future<SchoolCreationLookups> getSchoolCreationLookups() async {
+    final results = await Future.wait([
+      _lookupOptions('/api/lookup/school-categories'),
+      _lookupOptions('/api/lookup/education-levels'),
+      _lookupOptions('/api/lookup/ges-registration-types'),
+      _lookupOptions('/api/lookup/business-registration-types'),
+      _lookupOptions('/api/lookup/social-welfare-compliance-statuses'),
+      _lookupOptions('/api/lookup/nationalities'),
+      _lookupOptions('/api/lookup/regions'),
+      _lookupOptions('/api/lookup/academic-years'),
+      _lookupOptions('/api/lookup/term-types'),
+      _lookupOptions('/api/lookup/social-media-platforms'),
+      _lookupOptions('/api/lookup/event-types'),
+    ]);
+
+    final fallback = SchoolCreationLookups.fallback();
+    return SchoolCreationLookups(
+      schoolCategories: results[0].labels.isEmpty
+          ? fallback.schoolCategories
+          : results[0].labels,
+      schoolCategoryIds: results[0].ids,
+      educationLevels: results[1].labels.isEmpty
+          ? fallback.educationLevels
+          : results[1].labels,
+      educationLevelIds: results[1].ids,
+      gesRegistrationTypes: results[2].labels.isEmpty
+          ? fallback.gesRegistrationTypes
+          : results[2].labels,
+      gesRegistrationTypeIds: results[2].ids,
+      businessRegistrationTypes: results[3].labels.isEmpty
+          ? fallback.businessRegistrationTypes
+          : results[3].labels,
+      businessRegistrationTypeIds: results[3].ids,
+      socialWelfareStatuses: results[4].labels.isEmpty
+          ? fallback.socialWelfareStatuses
+          : results[4].labels,
+      socialWelfareStatusIds: results[4].ids,
+      countries: results[5].labels.isEmpty
+          ? fallback.countries
+          : results[5].labels,
+      countryIds: results[5].ids.isEmpty ? fallback.countryIds : results[5].ids,
+      regions: results[6].labels.isEmpty ? fallback.regions : results[6].labels,
+      regionIds: results[6].ids.isEmpty ? fallback.regionIds : results[6].ids,
+      academicYears: results[7].labels,
+      academicYearIds: results[7].ids,
+      termTypes: results[8].labels,
+      termTypeIds: results[8].ids,
+      socialMediaPlatforms: results[9].labels.isEmpty
+          ? fallback.socialMediaPlatforms
+          : results[9].labels,
+      socialMediaPlatformIds: results[9].ids,
+      eventTypes: results[10].labels,
+      eventTypeIds: results[10].ids,
+      gradeLevels: const [],
+      gradeLevelIds: const {},
+      cities: fallback.cities,
+      cityIds: fallback.cityIds,
+      districts: fallback.districts,
+      districtIds: fallback.districtIds,
+    );
+  }
+
+  Future<({List<String> labels, Map<String, int> ids})>
+  getDefaultGradeLevels() async {
+    final result = await _lookupOptions('/api/grade-levels/default');
+    return (labels: result.labels, ids: result.ids);
+  }
+
+  Future<SchoolCreationLookups> getDistrictLookups(int? regionId) async {
+    final base = SchoolCreationLookups.fallback();
+    final options = await _lookupOptions(
+      '/api/lookup/districts${regionId != null && regionId > 0 ? '?regionId=$regionId' : ''}',
+    );
+    return SchoolCreationLookups(
+      schoolCategories: base.schoolCategories,
+      schoolCategoryIds: base.schoolCategoryIds,
+      educationLevels: base.educationLevels,
+      educationLevelIds: base.educationLevelIds,
+      gesRegistrationTypes: base.gesRegistrationTypes,
+      gesRegistrationTypeIds: base.gesRegistrationTypeIds,
+      businessRegistrationTypes: base.businessRegistrationTypes,
+      businessRegistrationTypeIds: base.businessRegistrationTypeIds,
+      socialWelfareStatuses: base.socialWelfareStatuses,
+      socialWelfareStatusIds: base.socialWelfareStatusIds,
+      countries: base.countries,
+      countryIds: base.countryIds,
+      regions: base.regions,
+      regionIds: base.regionIds,
+      academicYears: base.academicYears,
+      academicYearIds: base.academicYearIds,
+      termTypes: base.termTypes,
+      termTypeIds: base.termTypeIds,
+      socialMediaPlatforms: base.socialMediaPlatforms,
+      socialMediaPlatformIds: base.socialMediaPlatformIds,
+      eventTypes: base.eventTypes,
+      eventTypeIds: base.eventTypeIds,
+      gradeLevels: base.gradeLevels,
+      gradeLevelIds: base.gradeLevelIds,
+      cities: base.cities,
+      cityIds: base.cityIds,
+      districts: options.labels,
+      districtIds: options.ids,
+    );
+  }
+
+  Future<SchoolCreationLookups> getCityLookups(String search) async {
+    final base = SchoolCreationLookups.fallback();
+    final query = Uri.encodeQueryComponent(search.trim());
+    final options = await _lookupOptions('/api/lookup/cities?search=$query');
+    return SchoolCreationLookups(
+      schoolCategories: base.schoolCategories,
+      schoolCategoryIds: base.schoolCategoryIds,
+      educationLevels: base.educationLevels,
+      educationLevelIds: base.educationLevelIds,
+      gesRegistrationTypes: base.gesRegistrationTypes,
+      gesRegistrationTypeIds: base.gesRegistrationTypeIds,
+      businessRegistrationTypes: base.businessRegistrationTypes,
+      businessRegistrationTypeIds: base.businessRegistrationTypeIds,
+      socialWelfareStatuses: base.socialWelfareStatuses,
+      socialWelfareStatusIds: base.socialWelfareStatusIds,
+      countries: base.countries,
+      countryIds: base.countryIds,
+      regions: base.regions,
+      regionIds: base.regionIds,
+      academicYears: base.academicYears,
+      academicYearIds: base.academicYearIds,
+      termTypes: base.termTypes,
+      termTypeIds: base.termTypeIds,
+      socialMediaPlatforms: base.socialMediaPlatforms,
+      socialMediaPlatformIds: base.socialMediaPlatformIds,
+      eventTypes: base.eventTypes,
+      eventTypeIds: base.eventTypeIds,
+      gradeLevels: base.gradeLevels,
+      gradeLevelIds: base.gradeLevelIds,
+      cities: options.labels,
+      cityIds: options.ids,
+      districts: base.districts,
+      districtIds: base.districtIds,
+    );
+  }
+
+  Future<_LookupResult> _lookupOptions(String path) async {
+    if (accessToken == null ||
+        accessToken!.isEmpty ||
+        accessToken == 'preview') {
+      return const _LookupResult();
+    }
+
+    try {
+      final response = await _sendWithRefresh(path);
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        return const _LookupResult();
+      }
+      final decoded = jsonDecode(response.body);
+      final list = decoded is List
+          ? decoded
+          : decoded is Map<String, dynamic>
+          ? _lookupList(decoded)
+          : null;
+      if (list is! List) return const _LookupResult();
+
+      final options = list
+          .map((item) {
+            if (item is String) return _LookupOption(label: item);
+            if (item is Map<String, dynamic>) {
+              final id = _intFrom(item, [
+                'id',
+                'schoolCategoryId',
+                'educationLevelId',
+                'registrationTypeId',
+                'gesRegistrationTypeId',
+                'businessRegistrationTypeId',
+                'complianceStatusId',
+                'countryId',
+                'regionId',
+                'districtId',
+                'cityId',
+                'academicYearId',
+                'termTypeId',
+                'socialMediaPlatformId',
+                'platformId',
+                'eventTypeId',
+                'gradeLevelId',
+              ]);
+              for (final key in [
+                'gradeName',
+                'gradeLevelName',
+                'cityName',
+                'districtName',
+                'regionName',
+                'eventName',
+                'eventTypeName',
+                'platformName',
+                'socialMediaPlatformName',
+                'name',
+                'level',
+                'status',
+                'description',
+                'label',
+                'year',
+                'countryName',
+              ]) {
+                final value = item[key];
+                if (value != null && value.toString().trim().isNotEmpty) {
+                  return _LookupOption(label: value.toString(), id: id);
+                }
+              }
+            }
+            return const _LookupOption(label: '');
+          })
+          .where((option) => option.label.trim().isNotEmpty)
+          .toList();
+      return _LookupResult(options);
+    } catch (_) {
+      return const _LookupResult();
+    }
+  }
+
+  dynamic _lookupList(Map<String, dynamic> decoded) {
+    final container =
+        decoded['data'] ??
+        decoded['content'] ??
+        decoded['items'] ??
+        decoded['results'] ??
+        decoded['options'] ??
+        decoded['districts'] ??
+        decoded['regions'];
+    if (container is Map<String, dynamic>) {
+      return container['content'] ??
+          container['items'] ??
+          container['results'] ??
+          container['options'] ??
+          container['districts'] ??
+          container['regions'];
+    }
+    return container;
+  }
+
+  Future<http.Response> _sendWithRefresh(String path) async {
+    Future<http.Response> send() => _client.get(
+      Uri.parse('$baseUrl$path'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $accessToken',
+      },
+    );
+
+    var response = await send().timeout(const Duration(seconds: 12));
+    if ((response.statusCode == 401 || response.statusCode == 403) &&
+        onRefreshAccessToken != null) {
+      final refreshedToken = await onRefreshAccessToken!.call();
+      if (refreshedToken != null &&
+          refreshedToken.isNotEmpty &&
+          refreshedToken != accessToken) {
+        accessToken = refreshedToken;
+        response = await send().timeout(const Duration(seconds: 12));
+      }
+    }
+    return response;
+  }
+
+  int? _intFrom(Map<String, dynamic> item, List<String> keys) {
+    for (final key in keys) {
+      final value = item[key];
+      if (value is int) return value;
+      final parsed = int.tryParse('$value');
+      if (parsed != null) return parsed;
+    }
+    return null;
+  }
+}
+
+class _LookupOption {
+  const _LookupOption({required this.label, this.id});
+  final String label;
+  final int? id;
+}
+
+class _LookupResult {
+  const _LookupResult([this.options = const []]);
+  final List<_LookupOption> options;
+
+  List<String> get labels =>
+      options.map((option) => option.label).toSet().toList();
+  Map<String, int> get ids => {
+    for (final option in options)
+      if (option.id != null) option.label: option.id!,
+  };
+}
+
+class SchoolCreationLookups {
+  const SchoolCreationLookups({
+    required this.schoolCategories,
+    required this.schoolCategoryIds,
+    required this.educationLevels,
+    required this.educationLevelIds,
+    required this.gesRegistrationTypes,
+    required this.gesRegistrationTypeIds,
+    required this.businessRegistrationTypes,
+    required this.businessRegistrationTypeIds,
+    required this.socialWelfareStatuses,
+    required this.socialWelfareStatusIds,
+    required this.countries,
+    required this.countryIds,
+    required this.regions,
+    required this.regionIds,
+    required this.academicYears,
+    required this.academicYearIds,
+    required this.termTypes,
+    required this.termTypeIds,
+    required this.socialMediaPlatforms,
+    required this.socialMediaPlatformIds,
+    required this.eventTypes,
+    required this.eventTypeIds,
+    required this.gradeLevels,
+    required this.gradeLevelIds,
+    required this.cities,
+    required this.cityIds,
+    required this.districts,
+    required this.districtIds,
+  });
+
+  final List<String> schoolCategories;
+  final Map<String, int> schoolCategoryIds;
+  final List<String> educationLevels;
+  final Map<String, int> educationLevelIds;
+  final List<String> gesRegistrationTypes;
+  final Map<String, int> gesRegistrationTypeIds;
+  final List<String> businessRegistrationTypes;
+  final Map<String, int> businessRegistrationTypeIds;
+  final List<String> socialWelfareStatuses;
+  final Map<String, int> socialWelfareStatusIds;
+  final List<String> countries;
+  final Map<String, int> countryIds;
+  final List<String> regions;
+  final Map<String, int> regionIds;
+  final List<String> academicYears;
+  final Map<String, int> academicYearIds;
+  final List<String> termTypes;
+  final Map<String, int> termTypeIds;
+  final List<String> socialMediaPlatforms;
+  final Map<String, int> socialMediaPlatformIds;
+  final List<String> eventTypes;
+  final Map<String, int> eventTypeIds;
+  final List<String> gradeLevels;
+  final Map<String, int> gradeLevelIds;
+  final List<String> cities;
+  final Map<String, int> cityIds;
+  final List<String> districts;
+  final Map<String, int> districtIds;
+
+  SchoolCreationLookups copyWith({
+    List<String>? cities,
+    Map<String, int>? cityIds,
+    List<String>? districts,
+    Map<String, int>? districtIds,
+    List<String>? gradeLevels,
+    Map<String, int>? gradeLevelIds,
+    List<String>? academicYears,
+    Map<String, int>? academicYearIds,
+  }) {
+    return SchoolCreationLookups(
+      schoolCategories: schoolCategories,
+      schoolCategoryIds: schoolCategoryIds,
+      educationLevels: educationLevels,
+      educationLevelIds: educationLevelIds,
+      gesRegistrationTypes: gesRegistrationTypes,
+      gesRegistrationTypeIds: gesRegistrationTypeIds,
+      businessRegistrationTypes: businessRegistrationTypes,
+      businessRegistrationTypeIds: businessRegistrationTypeIds,
+      socialWelfareStatuses: socialWelfareStatuses,
+      socialWelfareStatusIds: socialWelfareStatusIds,
+      countries: countries,
+      countryIds: countryIds,
+      regions: regions,
+      regionIds: regionIds,
+      academicYears: academicYears ?? this.academicYears,
+      academicYearIds: academicYearIds ?? this.academicYearIds,
+      termTypes: termTypes,
+      termTypeIds: termTypeIds,
+      socialMediaPlatforms: socialMediaPlatforms,
+      socialMediaPlatformIds: socialMediaPlatformIds,
+      eventTypes: eventTypes,
+      eventTypeIds: eventTypeIds,
+      gradeLevels: gradeLevels ?? this.gradeLevels,
+      gradeLevelIds: gradeLevelIds ?? this.gradeLevelIds,
+      cities: cities ?? this.cities,
+      cityIds: cityIds ?? this.cityIds,
+      districts: districts ?? this.districts,
+      districtIds: districtIds ?? this.districtIds,
+    );
+  }
+
+  factory SchoolCreationLookups.fallback() => const SchoolCreationLookups(
+    schoolCategories: [
+      'Private day school',
+      'Private boarding school',
+      'Montessori school',
+      'Faith-based private school',
+      'International school',
+      'Special needs school',
+    ],
+    schoolCategoryIds: {},
+    educationLevels: [
+      'Basic School (KG-JHS)',
+      'Early Childhood only',
+      'Primary only',
+      'Junior High School only',
+      'Combined Basic + SHS',
+    ],
+    educationLevelIds: {},
+    gesRegistrationTypes: [
+      'Private School',
+      'Public School',
+      'Faith-Based School',
+      'International School',
+      'Community School',
+    ],
+    gesRegistrationTypeIds: {},
+    businessRegistrationTypes: [
+      'Limited Liability Company',
+      'Sole Proprietorship',
+      'Partnership',
+      'Trust',
+      'NGO / Not-for-Profit',
+    ],
+    businessRegistrationTypeIds: {},
+    socialWelfareStatuses: [
+      'Fully Compliant',
+      'Conditionally Approved',
+      'Pending Inspection',
+      'Provisional Approval',
+      'Non-Compliant',
+    ],
+    socialWelfareStatusIds: {},
+    countries: ['Ghana'],
+    countryIds: {'Ghana': 1},
+    regions: [
+      'Greater Accra',
+      'Ashanti',
+      'Central',
+      'Eastern',
+      'Western',
+      'Western North',
+      'Volta',
+      'Oti',
+      'Northern',
+      'Savannah',
+      'North East',
+      'Upper East',
+      'Upper West',
+      'Bono',
+      'Bono East',
+      'Ahafo',
+    ],
+    regionIds: {
+      'Greater Accra': 1,
+      'Ashanti': 2,
+      'Central': 3,
+      'Eastern': 4,
+      'Western': 5,
+      'Western North': 6,
+      'Volta': 7,
+      'Oti': 8,
+      'Northern': 9,
+      'Savannah': 10,
+      'North East': 11,
+      'Upper East': 12,
+      'Upper West': 13,
+      'Bono': 14,
+      'Bono East': 15,
+      'Ahafo': 16,
+    },
+    academicYears: ['2025/26', '2026/27', '2027/28'],
+    academicYearIds: {},
+    termTypes: ['Term 1', 'Term 2', 'Term 3'],
+    termTypeIds: {},
+    socialMediaPlatforms: ['Facebook', 'Instagram', 'X', 'TikTok', 'LinkedIn'],
+    socialMediaPlatformIds: {},
+    eventTypes: ['Mid-Term Holiday', 'Christmas Break', 'Sports Day', 'Other'],
+    eventTypeIds: {},
+    gradeLevels: [
+      'Creche',
+      'Nursery 1',
+      'Nursery 2',
+      'KG1',
+      'KG2',
+      'Basic 1',
+      'Basic 2',
+      'Basic 3',
+      'Basic 4',
+      'Basic 5',
+      'Basic 6',
+      'JHS 1',
+      'JHS 2',
+      'JHS 3',
+    ],
+    gradeLevelIds: {
+      'KG1': 1,
+      'KG2': 2,
+      'Nursery 1': 3,
+      'Nursery 2': 4,
+      'Basic 1': 5,
+      'Basic 2': 6,
+      'Basic 3': 7,
+      'Basic 4': 8,
+      'Basic 5': 9,
+      'Basic 6': 10,
+      'JHS 1': 11,
+      'JHS 2': 12,
+      'JHS 3': 13,
+    },
+    cities: [],
+    cityIds: {},
+    districts: [],
+    districtIds: {},
+  );
+}
