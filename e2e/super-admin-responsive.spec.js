@@ -1,7 +1,7 @@
 const { expect, test } = require('@playwright/test');
 const { PNG } = require('pngjs');
 
-const session = {
+const baseSession = {
   accessToken: 'e2e-token',
   refreshToken: 'preview',
   firstName: 'System',
@@ -20,11 +20,36 @@ function routeUrl(path) {
   return `/#${path}`;
 }
 
-async function seedSession(page) {
-  await page.goto(routeUrl('/login'));
-  await page.evaluate((value) => {
+function sessionForRole(role) {
+  if (role === 'SUPER_ACCOUNT_MANAGER') {
+    return {
+      ...baseSession,
+      firstName: 'Super',
+      lastName: 'Manager',
+      userName: 'super.manager@sma.test',
+      role,
+      userId: 2,
+    };
+  }
+
+  if (role === 'ACCOUNT_MANAGER') {
+    return {
+      ...baseSession,
+      firstName: 'Account',
+      lastName: 'Manager',
+      userName: 'manager@sma.test',
+      role,
+      userId: 3,
+    };
+  }
+
+  return baseSession;
+}
+
+async function seedSession(page, role = 'SUPER_ADMIN') {
+  await page.addInitScript((value) => {
     window.localStorage.setItem('sma.auth.session', JSON.stringify(value));
-  }, session);
+  }, sessionForRole(role));
 }
 
 async function waitForFlutter(page) {
@@ -105,8 +130,8 @@ async function expectNoHorizontalOverflow(page) {
   });
 }
 
-async function openRoute(page, path, minNonWhiteRatio) {
-  await seedSession(page);
+async function openRoute(page, path, minNonWhiteRatio, role = 'SUPER_ADMIN') {
+  await seedSession(page, role);
   await page.goto(routeUrl(path));
   await expect(page).toHaveURL(
     new RegExp(routeUrl(path).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
@@ -115,7 +140,42 @@ async function openRoute(page, path, minNonWhiteRatio) {
   await expectNoHorizontalOverflow(page);
 }
 
-test.describe('Super Admin responsive shell', () => {
+const roleSuites = [
+  {
+    label: 'Super Admin',
+    slug: 'super-admin',
+    role: 'SUPER_ADMIN',
+    basePath: '/super-admin',
+    routes: [
+      ['schools', '/super-admin/schools', 0.05],
+      ['attention', '/super-admin/attention', 0.04],
+      ['account-managers', '/super-admin/account-managers', 0.05],
+    ],
+  },
+  {
+    label: 'Super Account Manager',
+    slug: 'super-account-manager',
+    role: 'SUPER_ACCOUNT_MANAGER',
+    basePath: '/super-account-manager',
+    routes: [
+      ['schools', '/super-account-manager/schools', 0.05],
+      ['attention', '/super-account-manager/attention', 0.04],
+      ['account-managers', '/super-account-manager/account-managers', 0.05],
+    ],
+  },
+  {
+    label: 'Account Manager',
+    slug: 'account-manager',
+    role: 'ACCOUNT_MANAGER',
+    basePath: '/account-manager',
+    routes: [
+      ['schools', '/account-manager/schools', 0.05],
+      ['attention', '/account-manager/attention', 0.04],
+    ],
+  },
+];
+
+test.describe('Platform responsive shell', () => {
   test('login screen renders without horizontal overflow', async ({ page }, testInfo) => {
     await page.goto(routeUrl('/login'));
     await expectRenderedContent(page, 0.08);
@@ -126,27 +186,23 @@ test.describe('Super Admin responsive shell', () => {
     });
   });
 
-  test('dashboard renders without horizontal overflow', async ({ page }, testInfo) => {
-    await openRoute(page, '/super-admin', 0.08);
-    await page.screenshot({
-      path: `e2e/screenshots/${testInfo.project.name}-dashboard.png`,
-      fullPage: true,
-    });
-  });
-
-  test('primary Super Admin routes render cleanly', async ({ page }, testInfo) => {
-    const routes = [
-      ['schools', '/super-admin/schools', 0.05],
-      ['attention', '/super-admin/attention', 0.04],
-      ['account-managers', '/super-admin/account-managers', 0.05],
-    ];
-
-    for (const [name, path, minNonWhiteRatio] of routes) {
-      await openRoute(page, path, minNonWhiteRatio);
+  for (const suite of roleSuites) {
+    test(`${suite.label} dashboard renders without horizontal overflow`, async ({ page }, testInfo) => {
+      await openRoute(page, suite.basePath, 0.08, suite.role);
       await page.screenshot({
-        path: `e2e/screenshots/${testInfo.project.name}-${name}.png`,
+        path: `e2e/screenshots/${testInfo.project.name}-${suite.slug}-dashboard.png`,
         fullPage: true,
       });
+    });
+
+    for (const [name, path, minNonWhiteRatio] of suite.routes) {
+      test(`${suite.label} ${name} route renders cleanly`, async ({ page }, testInfo) => {
+        await openRoute(page, path, minNonWhiteRatio, suite.role);
+        await page.screenshot({
+          path: `e2e/screenshots/${testInfo.project.name}-${suite.slug}-${name}.png`,
+          fullPage: true,
+        });
+      });
     }
-  });
+  }
 });

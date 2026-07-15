@@ -1,6 +1,6 @@
 const { defineConfig, devices } = require('@playwright/test');
 
-const port = process.env.SMA_E2E_PORT || '4174';
+const port = process.env.SMA_E2E_PORT || '4184';
 const baseURL = process.env.SMA_E2E_BASE_URL || `http://127.0.0.1:${port}`;
 
 module.exports = defineConfig({
@@ -34,7 +34,7 @@ module.exports = defineConfig({
     ].join(' '),
     url: baseURL,
     timeout: 120_000,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: process.env.SMA_E2E_REUSE_SERVER === 'true',
   },
   projects: [
     {

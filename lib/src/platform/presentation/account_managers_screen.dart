@@ -303,29 +303,23 @@ class _StatusTabs extends StatelessWidget {
       ('Pending approval', AccountManagerStatus.pendingApproval),
       ('Suspended', AccountManagerStatus.suspended),
     ];
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: tabs.map((tab) {
-          final active = selected == tab.$2;
-          return Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: ChoiceChip(
-              selected: active,
-              onSelected: (_) => onSelected(tab.$2),
-              label: Text(tab.$1),
-              selectedColor: AppColors.greenSoft,
-              side: BorderSide(
-                color: active ? AppColors.green : AppColors.border,
-              ),
-              labelStyle: TextStyle(
-                color: active ? AppColors.green : AppColors.muted,
-                fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-              ),
-            ),
-          );
-        }).toList(),
-      ),
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: tabs.map((tab) {
+        final active = selected == tab.$2;
+        return ChoiceChip(
+          selected: active,
+          onSelected: (_) => onSelected(tab.$2),
+          label: Text(tab.$1),
+          selectedColor: AppColors.greenSoft,
+          side: BorderSide(color: active ? AppColors.green : AppColors.border),
+          labelStyle: TextStyle(
+            color: active ? AppColors.green : AppColors.muted,
+            fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+          ),
+        );
+      }).toList(),
     );
   }
 }

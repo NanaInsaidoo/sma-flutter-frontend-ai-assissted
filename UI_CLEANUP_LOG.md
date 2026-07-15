@@ -39,3 +39,33 @@ Cleaned up and validated the Super Admin responsive web experience with Playwrig
 - Flutter web paints much of the UI to canvas in this setup, so Playwright cannot reliably assert visible text with DOM selectors. The suite therefore combines route checks, rendered-pixel checks, screenshot capture, and horizontal overflow detection.
 - The first mobile login load can be white while the Flutter development server finishes its cold startup. The test now performs one reload before failing, and still fails if the app remains blank.
 - No critical UI issue remains open from this cleanup pass.
+
+---
+
+Date: 2026-07-15
+
+## Scope
+
+Expanded the responsive validation from Super Admin only to the three platform admin experiences: Super Admin, Super Account Manager, and Account Manager. The pass covered phone, phone landscape, tablet, desktop, and zoomed desktop routes.
+
+## Changes Made
+
+- Added role-aware Playwright coverage for Super Admin, Super Account Manager, and Account Manager dashboards.
+- Added route coverage for the role-specific Schools, Needs Attention, and Account Managers sections where applicable.
+- Changed the Playwright test server port to `4184` and disabled silent reuse by default so tests do not accidentally validate another app already running on the old port.
+- Fixed the mobile Account Managers status filters by wrapping the chips instead of clipping them horizontally.
+- Shortened the Super Account Manager mobile page title from "Account manager operations" to "Manager operations" to avoid header truncation on narrow screens.
+
+## Validation
+
+- `flutter analyze`: no issues found
+- `npm run test:e2e`: 60 passed
+  - Super Admin: dashboard, schools, needs attention, account managers
+  - Super Account Manager: dashboard, schools, needs attention, account managers
+  - Account Manager: dashboard, schools, needs attention
+  - Breakpoints: mobile, mobile landscape, tablet, desktop, desktop zoom
+
+## Notes
+
+- Visual spot checks confirmed the Account Managers mobile filters now display all states without cutting off "Pending approval".
+- No core functionality or backend API contracts were changed.

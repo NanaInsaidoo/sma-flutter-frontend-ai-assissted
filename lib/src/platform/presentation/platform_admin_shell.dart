@@ -958,7 +958,7 @@ class _PlatformWorkspace extends StatelessWidget {
 
 String _overviewTitleForRole(PlatformRole role) => switch (role) {
   PlatformRole.superAdmin => 'Platform overview',
-  PlatformRole.superAccountManager => 'Account manager operations',
+  PlatformRole.superAccountManager => 'Manager operations',
   PlatformRole.accountManager => 'My assigned schools',
 };
 
