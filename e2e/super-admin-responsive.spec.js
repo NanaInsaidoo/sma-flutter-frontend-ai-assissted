@@ -205,4 +205,13 @@ test.describe('Platform responsive shell', () => {
       });
     }
   }
+
+  test('Account Manager direct account-managers route redirects away', async ({ page }) => {
+    await seedSession(page, 'ACCOUNT_MANAGER');
+    await page.goto(routeUrl('/account-manager/account-managers'));
+    await waitForFlutter(page);
+    await expect(page).toHaveURL(/#\/account-manager$/);
+    await expectRenderedContent(page, 0.08);
+    await expectNoHorizontalOverflow(page);
+  });
 });

@@ -1116,6 +1116,8 @@ class LivePlatformRepository implements PlatformRepository {
       'privacyAgreementAccepted': true,
       'password': 'password',
       'inviteMethod': draft.inviteMethod,
+      'emailDelivery': draft.inviteMethod != 'SMS',
+      'smsDelivery': draft.inviteMethod != 'Email',
     };
 
     try {
