@@ -3,11 +3,12 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../../config/api_config.dart';
+
 class AuthApiClient {
   AuthApiClient({http.Client? client}) : _client = client ?? http.Client();
 
-  static const String baseUrl =
-      'https://api.airghana.org/Narellallc/sma-v1/1.0.0';
+  static const String baseUrl = ApiConfig.baseUrl;
 
   final http.Client _client;
 
@@ -86,8 +87,18 @@ class AuthApiClient {
   Future<void> changePasswordAfterVerification({
     required String accessToken,
     required String userName,
+    String? currentPassword,
     required String newPassword,
   }) async {
+    if (currentPassword != null && currentPassword.isNotEmpty) {
+      await _post('/api/auth/change-password', {
+        'userName': userName,
+        'currentPassword': currentPassword,
+        'newPassword': newPassword,
+      }, accessToken: accessToken);
+      return;
+    }
+
     await _post('/api/auth/change-password-after-verification', {
       'userName': userName,
       'newPassword': newPassword,
@@ -157,10 +168,14 @@ class AuthApiClient {
 
   Map<String, dynamic> _identifierPayload(String rawIdentifier) {
     final identifier = rawIdentifier.trim();
-    if (identifier.contains('@')) return {'email': identifier};
-
     final digits = identifier.replaceAll(RegExp(r'\D'), '');
     if (digits.length >= 9) return {'phoneNumber': identifier};
+
+    final normalized = identifier.toLowerCase();
+    final looksLikeEmail =
+        RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(identifier) &&
+        !normalized.endsWith('@platform');
+    if (looksLikeEmail) return {'email': identifier};
 
     return {'userName': identifier};
   }
@@ -177,6 +192,8 @@ class AuthSession {
     required this.requiresDateOfBirth,
     required this.isAccountManager,
     required this.role,
+    required this.accountStatus,
+    required this.userStatus,
     required this.customSchoolId,
     required this.schoolName,
     required this.userId,
@@ -191,9 +208,54 @@ class AuthSession {
   final bool requiresDateOfBirth;
   final bool isAccountManager;
   final String role;
+  final String accountStatus;
+  final String userStatus;
   final String customSchoolId;
   final String schoolName;
   final int userId;
+
+  bool get isAccountManagerRole {
+    final value = role.trim().toUpperCase();
+    return isAccountManager ||
+        value == 'ACCOUNT_MANAGER' ||
+        value == 'SUPER_ACCOUNT_MANAGER' ||
+        value == 'ACCOUNT_MANAGER_UNVERIFIED' ||
+        value == 'ACCOUNT_MANAGER_VERIFIED_STAFF';
+  }
+
+  bool get isPendingAccountManagerApproval {
+    if (!isAccountManagerRole) return false;
+    final value = accountStatus.trim().toUpperCase();
+    return value == 'PENDING_REVIEW' ||
+        value == 'PENDING_APPROVAL' ||
+        value == 'PENDING';
+  }
+
+  bool get isBlockedFromLogin {
+    const blockedStatuses = {
+      'SUSPENDED',
+      'INACTIVE',
+      'DELETED',
+      'DISABLED',
+      'REJECTED',
+    };
+    return blockedStatuses.contains(accountStatus.trim().toUpperCase()) ||
+        blockedStatuses.contains(userStatus.trim().toUpperCase());
+  }
+
+  String get loginBlockMessage {
+    final values = [
+      accountStatus.trim().toUpperCase(),
+      userStatus.trim().toUpperCase(),
+    ];
+    if (values.contains('SUSPENDED')) {
+      return 'This account has been suspended. Please contact your administrator.';
+    }
+    if (values.contains('INACTIVE') || values.contains('DELETED')) {
+      return 'This account is no longer active. Please contact your administrator.';
+    }
+    return 'This account cannot access the system. Please contact your administrator.';
+  }
 
   String get displayName {
     final name = '$firstName $lastName'.trim();
@@ -217,6 +279,9 @@ class AuthSession {
           tokenClaims['role'] as String? ??
           tokenClaims['authorities'] as String? ??
           '',
+      accountStatus:
+          json['accountStatus'] as String? ?? '',
+      userStatus: json['status'] as String? ?? json['userStatus'] as String? ?? '',
       customSchoolId:
           json['customSchoolId'] as String? ??
           json['tenantId'] as String? ??
@@ -241,6 +306,8 @@ class AuthSession {
     'requiresDateOfBirth': requiresDateOfBirth,
     'isAccountManager': isAccountManager,
     'role': role,
+    'accountStatus': accountStatus,
+    'userStatus': userStatus,
     'customSchoolId': customSchoolId,
     'schoolName': schoolName,
     'userId': userId,
@@ -256,6 +323,8 @@ class AuthSession {
     bool? requiresDateOfBirth,
     bool? isAccountManager,
     String? role,
+    String? accountStatus,
+    String? userStatus,
     String? customSchoolId,
     String? schoolName,
     int? userId,
@@ -270,6 +339,8 @@ class AuthSession {
       requiresDateOfBirth: requiresDateOfBirth ?? this.requiresDateOfBirth,
       isAccountManager: isAccountManager ?? this.isAccountManager,
       role: role ?? this.role,
+      accountStatus: accountStatus ?? this.accountStatus,
+      userStatus: userStatus ?? this.userStatus,
       customSchoolId: customSchoolId ?? this.customSchoolId,
       schoolName: schoolName ?? this.schoolName,
       userId: userId ?? this.userId,
@@ -291,6 +362,10 @@ class AuthSession {
       requiresDateOfBirth: refreshed.requiresDateOfBirth,
       isAccountManager: refreshed.isAccountManager || isAccountManager,
       role: refreshed.role.isEmpty ? role : refreshed.role,
+      accountStatus: refreshed.accountStatus.isEmpty
+          ? accountStatus
+          : refreshed.accountStatus,
+      userStatus: refreshed.userStatus.isEmpty ? userStatus : refreshed.userStatus,
       customSchoolId: refreshed.customSchoolId.isEmpty
           ? customSchoolId
           : refreshed.customSchoolId,

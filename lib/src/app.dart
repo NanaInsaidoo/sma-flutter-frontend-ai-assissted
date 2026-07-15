@@ -50,6 +50,10 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
   void initState() {
     super.initState();
     _session = _sessionStore.load();
+    if (_session?.isBlockedFromLogin ?? false) {
+      _sessionStore.clear();
+      _session = null;
+    }
     _router = GoRouter(
       initialLocation: _session == null ? '/login' : _routeForSession(_session),
       overridePlatformDefaultLocation: false,
@@ -60,6 +64,14 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
         if (signedIn && onLogin) return _routeForSession(_session);
         if (state.matchedLocation == '/') {
           return signedIn ? _routeForSession(_session) : '/login';
+        }
+        if (signedIn && _session != null && _isPlatformRole(_session!)) {
+          final expectedBase = _platformBasePathForSession(_session!);
+          final currentBase = _platformBaseFromPath(state.uri.path);
+          if (currentBase != null && currentBase != expectedBase) {
+            final suffix = state.uri.path.substring(currentBase.length);
+            return '$expectedBase$suffix';
+          }
         }
         return null;
       },
@@ -73,6 +85,12 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
           path: '/login',
           builder: (context, state) => AuthScreen(
             onAuthenticated: (session) {
+              if (session.isBlockedFromLogin) {
+                _sessionStore.clear();
+                _session = null;
+                _router.go('/login');
+                return;
+              }
               _sessionStore.save(session);
               setState(() {
                 _session = session;
@@ -99,44 +117,9 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
             );
           },
           routes: [
-            GoRoute(
-              path: '/super-admin',
-              builder: (context, state) => const SizedBox.shrink(),
-              routes: [
-                GoRoute(
-                  path: 'schools',
-                  builder: (context, state) => const SizedBox.shrink(),
-                  routes: [
-                    GoRoute(
-                      path: 'new',
-                      builder: (context, state) => const SizedBox.shrink(),
-                    ),
-                    GoRoute(
-                      path: ':schoolCode',
-                      builder: (context, state) => const SizedBox.shrink(),
-                    ),
-                  ],
-                ),
-                GoRoute(
-                  path: 'onboarding',
-                  builder: (context, state) => const SizedBox.shrink(),
-                  routes: [
-                    GoRoute(
-                      path: ':schoolCode',
-                      builder: (context, state) => const SizedBox.shrink(),
-                    ),
-                  ],
-                ),
-                GoRoute(
-                  path: 'attention',
-                  builder: (context, state) => const SizedBox.shrink(),
-                ),
-                GoRoute(
-                  path: 'account-managers',
-                  builder: (context, state) => const SizedBox.shrink(),
-                ),
-              ],
-            ),
+            _platformRouteGroup('/super-admin'),
+            _platformRouteGroup('/super-account-manager'),
+            _platformRouteGroup('/account-manager'),
           ],
         ),
       ],
@@ -152,7 +135,74 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
 
   String _routeForSession(AuthSession? session) {
     if (session == null) return '/login';
-    return _isPlatformRole(session) ? '/super-admin' : '/school-admin';
+    return _isPlatformRole(session)
+        ? _platformBasePathForSession(session)
+        : '/school-admin';
+  }
+
+  GoRoute _platformRouteGroup(String basePath) {
+    return GoRoute(
+      path: basePath,
+      builder: (context, state) => const SizedBox.shrink(),
+      routes: [
+        GoRoute(
+          path: 'schools',
+          builder: (context, state) => const SizedBox.shrink(),
+          routes: [
+            GoRoute(
+              path: 'new',
+              builder: (context, state) => const SizedBox.shrink(),
+            ),
+            GoRoute(
+              path: ':schoolCode',
+              builder: (context, state) => const SizedBox.shrink(),
+            ),
+          ],
+        ),
+        GoRoute(
+          path: 'onboarding',
+          builder: (context, state) => const SizedBox.shrink(),
+          routes: [
+            GoRoute(
+              path: ':schoolCode',
+              builder: (context, state) => const SizedBox.shrink(),
+            ),
+          ],
+        ),
+        GoRoute(
+          path: 'attention',
+          builder: (context, state) => const SizedBox.shrink(),
+        ),
+        GoRoute(
+          path: 'account-managers',
+          builder: (context, state) => const SizedBox.shrink(),
+        ),
+      ],
+    );
+  }
+
+  String _platformBasePathForSession(AuthSession session) {
+    return switch (platformRoleFromApiRole(
+      session.role,
+      isAccountManager: session.isAccountManager,
+    )) {
+      PlatformRole.superAdmin => '/super-admin',
+      PlatformRole.superAccountManager => '/super-account-manager',
+      PlatformRole.accountManager => '/account-manager',
+    };
+  }
+
+  String? _platformBaseFromPath(String path) {
+    for (final basePath in const [
+      '/super-admin',
+      '/super-account-manager',
+      '/account-manager',
+    ]) {
+      if (path == basePath || path.startsWith('$basePath/')) {
+        return basePath;
+      }
+    }
+    return null;
   }
 
   bool _isPlatformRole(AuthSession session) {
@@ -207,6 +257,13 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
     return PlatformAdminShell(
       accessToken: _session?.accessToken,
       userDisplayName: _session?.displayName ?? 'Super Admin',
+      role: platformRoleFromApiRole(
+        _session?.role,
+        isAccountManager: _session?.isAccountManager ?? false,
+      ),
+      basePath: _session == null
+          ? '/account-manager'
+          : _platformBasePathForSession(_session!),
       onRefreshAccessToken: _refreshAccessToken,
       repository: _currentPlatformRepository,
       dashboardFuture: _currentPlatformSnapshot,
@@ -256,6 +313,10 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
     return _platformRepository ??= LivePlatformRepository(
       accessToken: _session?.accessToken,
       userDisplayName: _session?.displayName ?? 'Super Admin',
+      role: platformRoleFromApiRole(
+        _session?.role,
+        isAccountManager: _session?.isAccountManager ?? false,
+      ),
       onRefreshAccessToken: _refreshAccessToken,
     );
   }
@@ -277,6 +338,7 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
 
   void _refreshPlatformSnapshot() {
     setState(() {
+      _platformSnapshotData = null;
       _platformSnapshot = _loadPlatformSnapshot();
     });
   }
@@ -294,6 +356,17 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
       );
       if (!mounted) return refreshed.accessToken;
       final nextSession = _session!.mergeRefresh(refreshed);
+      if (nextSession.isBlockedFromLogin) {
+        _sessionStore.clear();
+        setState(() {
+          _session = null;
+          _platformRepository = null;
+          _platformSnapshot = null;
+          _platformSnapshotData = null;
+        });
+        _router.go('/login');
+        return null;
+      }
       _sessionStore.save(nextSession);
       setState(() => _session = nextSession);
       return nextSession.accessToken;

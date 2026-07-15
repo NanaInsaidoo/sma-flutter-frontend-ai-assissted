@@ -46,6 +46,13 @@ abstract interface class PlatformRepository {
   /// Finalize a completed onboarding record.
   Future<SchoolOnboardingRecord> finishSchoolSetup(String customSchoolId);
 
+  /// Backend route: PUT /api/schools/{customSchoolId}/changeschoolstatus
+  Future<void> changeSchoolStatus({
+    required String customSchoolId,
+    required SchoolStatus status,
+    String? reason,
+  });
+
   /// Generate a short-lived URL for viewing a saved school document.
   Future<String> getSchoolDocumentDownloadUrl({
     required String customSchoolId,
@@ -142,6 +149,29 @@ abstract interface class PlatformRepository {
 
   /// Future backend route: POST /api/v1/account-managers/invitations
   Future<AccountManagerProfile> createAccountManager(AccountManagerDraft draft);
+
+  /// Backend route: PATCH /api/account-managers/{id}/status
+  Future<AccountManagerProfile> updateAccountManagerStatus({
+    required String accountManagerId,
+    required AccountManagerStatus status,
+    String? reason,
+  });
+
+  /// Backend route: DELETE /api/account-managers/{id}
+  Future<void> deleteAccountManager({
+    required String accountManagerId,
+    String? reason,
+  });
+
+  /// Backend route: POST /api/account-managers/{id}/reset-password
+  Future<SchoolAdministratorInviteResult> forceResetAccountManagerPassword({
+    required AccountManagerProfile manager,
+  });
+
+  /// Backend route: POST /api/account-managers/{id}/resend-credentials
+  Future<SchoolAdministratorInviteResult> resendAccountManagerCredentials({
+    required AccountManagerProfile manager,
+  });
 
   /// Backend route: GET /api/account-managers/school-assignment-reasons
   Future<List<SchoolAssignmentReasonOption>> getSchoolAssignmentReasons();

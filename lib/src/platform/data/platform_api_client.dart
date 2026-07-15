@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../../config/api_config.dart';
+
 class PlatformApiClient {
   PlatformApiClient({
     required this.accessToken,
@@ -9,8 +11,7 @@ class PlatformApiClient {
     http.Client? client,
   }) : _client = client ?? http.Client();
 
-  static const String baseUrl =
-      'https://api.airghana.org/Narellallc/sma-v1/1.0.0';
+  static const String baseUrl = ApiConfig.baseUrl;
 
   String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
@@ -31,50 +32,35 @@ class PlatformApiClient {
       _lookupOptions('/api/lookup/event-types'),
     ]);
 
-    final fallback = SchoolCreationLookups.fallback();
     return SchoolCreationLookups(
-      schoolCategories: results[0].labels.isEmpty
-          ? fallback.schoolCategories
-          : results[0].labels,
+      schoolCategories: results[0].labels,
       schoolCategoryIds: results[0].ids,
-      educationLevels: results[1].labels.isEmpty
-          ? fallback.educationLevels
-          : results[1].labels,
+      educationLevels: results[1].labels,
       educationLevelIds: results[1].ids,
-      gesRegistrationTypes: results[2].labels.isEmpty
-          ? fallback.gesRegistrationTypes
-          : results[2].labels,
+      gesRegistrationTypes: results[2].labels,
       gesRegistrationTypeIds: results[2].ids,
-      businessRegistrationTypes: results[3].labels.isEmpty
-          ? fallback.businessRegistrationTypes
-          : results[3].labels,
+      businessRegistrationTypes: results[3].labels,
       businessRegistrationTypeIds: results[3].ids,
-      socialWelfareStatuses: results[4].labels.isEmpty
-          ? fallback.socialWelfareStatuses
-          : results[4].labels,
+      socialWelfareStatuses: results[4].labels,
       socialWelfareStatusIds: results[4].ids,
-      countries: results[5].labels.isEmpty
-          ? fallback.countries
-          : results[5].labels,
-      countryIds: results[5].ids.isEmpty ? fallback.countryIds : results[5].ids,
-      regions: results[6].labels.isEmpty ? fallback.regions : results[6].labels,
-      regionIds: results[6].ids.isEmpty ? fallback.regionIds : results[6].ids,
+      countries: results[5].labels,
+      countryIds: results[5].ids,
+      regions: results[6].labels,
+      regionIds: results[6].ids,
       academicYears: results[7].labels,
       academicYearIds: results[7].ids,
       termTypes: results[8].labels,
       termTypeIds: results[8].ids,
-      socialMediaPlatforms: results[9].labels.isEmpty
-          ? fallback.socialMediaPlatforms
-          : results[9].labels,
+      socialMediaPlatforms: results[9].labels,
       socialMediaPlatformIds: results[9].ids,
       eventTypes: results[10].labels,
       eventTypeIds: results[10].ids,
       gradeLevels: const [],
       gradeLevelIds: const {},
-      cities: fallback.cities,
-      cityIds: fallback.cityIds,
-      districts: fallback.districts,
-      districtIds: fallback.districtIds,
+      cities: const [],
+      cityIds: const {},
+      districts: const [],
+      districtIds: const {},
     );
   }
 
@@ -85,75 +71,21 @@ class PlatformApiClient {
   }
 
   Future<SchoolCreationLookups> getDistrictLookups(int? regionId) async {
-    final base = SchoolCreationLookups.fallback();
     final options = await _lookupOptions(
       '/api/lookup/districts${regionId != null && regionId > 0 ? '?regionId=$regionId' : ''}',
     );
-    return SchoolCreationLookups(
-      schoolCategories: base.schoolCategories,
-      schoolCategoryIds: base.schoolCategoryIds,
-      educationLevels: base.educationLevels,
-      educationLevelIds: base.educationLevelIds,
-      gesRegistrationTypes: base.gesRegistrationTypes,
-      gesRegistrationTypeIds: base.gesRegistrationTypeIds,
-      businessRegistrationTypes: base.businessRegistrationTypes,
-      businessRegistrationTypeIds: base.businessRegistrationTypeIds,
-      socialWelfareStatuses: base.socialWelfareStatuses,
-      socialWelfareStatusIds: base.socialWelfareStatusIds,
-      countries: base.countries,
-      countryIds: base.countryIds,
-      regions: base.regions,
-      regionIds: base.regionIds,
-      academicYears: base.academicYears,
-      academicYearIds: base.academicYearIds,
-      termTypes: base.termTypes,
-      termTypeIds: base.termTypeIds,
-      socialMediaPlatforms: base.socialMediaPlatforms,
-      socialMediaPlatformIds: base.socialMediaPlatformIds,
-      eventTypes: base.eventTypes,
-      eventTypeIds: base.eventTypeIds,
-      gradeLevels: base.gradeLevels,
-      gradeLevelIds: base.gradeLevelIds,
-      cities: base.cities,
-      cityIds: base.cityIds,
+    return SchoolCreationLookups.empty().copyWith(
       districts: options.labels,
       districtIds: options.ids,
     );
   }
 
   Future<SchoolCreationLookups> getCityLookups(String search) async {
-    final base = SchoolCreationLookups.fallback();
     final query = Uri.encodeQueryComponent(search.trim());
     final options = await _lookupOptions('/api/lookup/cities?search=$query');
-    return SchoolCreationLookups(
-      schoolCategories: base.schoolCategories,
-      schoolCategoryIds: base.schoolCategoryIds,
-      educationLevels: base.educationLevels,
-      educationLevelIds: base.educationLevelIds,
-      gesRegistrationTypes: base.gesRegistrationTypes,
-      gesRegistrationTypeIds: base.gesRegistrationTypeIds,
-      businessRegistrationTypes: base.businessRegistrationTypes,
-      businessRegistrationTypeIds: base.businessRegistrationTypeIds,
-      socialWelfareStatuses: base.socialWelfareStatuses,
-      socialWelfareStatusIds: base.socialWelfareStatusIds,
-      countries: base.countries,
-      countryIds: base.countryIds,
-      regions: base.regions,
-      regionIds: base.regionIds,
-      academicYears: base.academicYears,
-      academicYearIds: base.academicYearIds,
-      termTypes: base.termTypes,
-      termTypeIds: base.termTypeIds,
-      socialMediaPlatforms: base.socialMediaPlatforms,
-      socialMediaPlatformIds: base.socialMediaPlatformIds,
-      eventTypes: base.eventTypes,
-      eventTypeIds: base.eventTypeIds,
-      gradeLevels: base.gradeLevels,
-      gradeLevelIds: base.gradeLevelIds,
+    return SchoolCreationLookups.empty().copyWith(
       cities: options.labels,
       cityIds: options.ids,
-      districts: base.districts,
-      districtIds: base.districtIds,
     );
   }
 
@@ -410,125 +342,31 @@ class SchoolCreationLookups {
     );
   }
 
-  factory SchoolCreationLookups.fallback() => const SchoolCreationLookups(
-    schoolCategories: [
-      'Private day school',
-      'Private boarding school',
-      'Montessori school',
-      'Faith-based private school',
-      'International school',
-      'Special needs school',
-    ],
+  factory SchoolCreationLookups.empty() => const SchoolCreationLookups(
+    schoolCategories: [],
     schoolCategoryIds: {},
-    educationLevels: [
-      'Basic School (KG-JHS)',
-      'Early Childhood only',
-      'Primary only',
-      'Junior High School only',
-      'Combined Basic + SHS',
-    ],
+    educationLevels: [],
     educationLevelIds: {},
-    gesRegistrationTypes: [
-      'Private School',
-      'Public School',
-      'Faith-Based School',
-      'International School',
-      'Community School',
-    ],
+    gesRegistrationTypes: [],
     gesRegistrationTypeIds: {},
-    businessRegistrationTypes: [
-      'Limited Liability Company',
-      'Sole Proprietorship',
-      'Partnership',
-      'Trust',
-      'NGO / Not-for-Profit',
-    ],
+    businessRegistrationTypes: [],
     businessRegistrationTypeIds: {},
-    socialWelfareStatuses: [
-      'Fully Compliant',
-      'Conditionally Approved',
-      'Pending Inspection',
-      'Provisional Approval',
-      'Non-Compliant',
-    ],
+    socialWelfareStatuses: [],
     socialWelfareStatusIds: {},
-    countries: ['Ghana'],
-    countryIds: {'Ghana': 1},
-    regions: [
-      'Greater Accra',
-      'Ashanti',
-      'Central',
-      'Eastern',
-      'Western',
-      'Western North',
-      'Volta',
-      'Oti',
-      'Northern',
-      'Savannah',
-      'North East',
-      'Upper East',
-      'Upper West',
-      'Bono',
-      'Bono East',
-      'Ahafo',
-    ],
-    regionIds: {
-      'Greater Accra': 1,
-      'Ashanti': 2,
-      'Central': 3,
-      'Eastern': 4,
-      'Western': 5,
-      'Western North': 6,
-      'Volta': 7,
-      'Oti': 8,
-      'Northern': 9,
-      'Savannah': 10,
-      'North East': 11,
-      'Upper East': 12,
-      'Upper West': 13,
-      'Bono': 14,
-      'Bono East': 15,
-      'Ahafo': 16,
-    },
-    academicYears: ['2025/26', '2026/27', '2027/28'],
+    countries: [],
+    countryIds: {},
+    regions: [],
+    regionIds: {},
+    academicYears: [],
     academicYearIds: {},
-    termTypes: ['Term 1', 'Term 2', 'Term 3'],
+    termTypes: [],
     termTypeIds: {},
-    socialMediaPlatforms: ['Facebook', 'Instagram', 'X', 'TikTok', 'LinkedIn'],
+    socialMediaPlatforms: [],
     socialMediaPlatformIds: {},
-    eventTypes: ['Mid-Term Holiday', 'Christmas Break', 'Sports Day', 'Other'],
+    eventTypes: [],
     eventTypeIds: {},
-    gradeLevels: [
-      'Creche',
-      'Nursery 1',
-      'Nursery 2',
-      'KG1',
-      'KG2',
-      'Basic 1',
-      'Basic 2',
-      'Basic 3',
-      'Basic 4',
-      'Basic 5',
-      'Basic 6',
-      'JHS 1',
-      'JHS 2',
-      'JHS 3',
-    ],
-    gradeLevelIds: {
-      'KG1': 1,
-      'KG2': 2,
-      'Nursery 1': 3,
-      'Nursery 2': 4,
-      'Basic 1': 5,
-      'Basic 2': 6,
-      'Basic 3': 7,
-      'Basic 4': 8,
-      'Basic 5': 9,
-      'Basic 6': 10,
-      'JHS 1': 11,
-      'JHS 2': 12,
-      'JHS 3': 13,
-    },
+    gradeLevels: [],
+    gradeLevelIds: {},
     cities: [],
     cityIds: {},
     districts: [],

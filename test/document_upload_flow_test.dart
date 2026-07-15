@@ -27,6 +27,46 @@ void main() {
     }
   });
 
+  test('account manager schools use the managed paginated API', () async {
+    final client = MockClient((request) async {
+      expect(request.method, 'GET');
+      expect(
+        request.url.path,
+        '/Narellallc/sma-v1/1.0.0/api/account-managers/schools/paginated',
+      );
+      expect(request.url.queryParameters['page'], '0');
+      expect(request.url.queryParameters['size'], '20');
+      expect(request.url.queryParameters['sort'], 'createdAt,desc');
+      return http.Response(
+        jsonEncode({
+          'content': [
+            {
+              'customSchoolId': 'MYS-XXX-9F3710',
+              'schoolName': 'My School',
+              'registrationStatus': 'APPROVED',
+              'totalStudents': 0,
+            },
+          ],
+          'totalElements': 1,
+          'totalPages': 1,
+          'number': 0,
+          'size': 20,
+        }),
+        200,
+      );
+    });
+
+    final page = await LivePlatformRepository(
+      accessToken: 'test-token',
+      role: PlatformRole.accountManager,
+      client: client,
+    ).getSchools(size: 20);
+
+    expect(page.schools, hasLength(1));
+    expect(page.schools.single.code, 'MYS-XXX-9F3710');
+    expect(page.totalElements, 1);
+  });
+
   test('academic years are loaded from the global lookup', () async {
     final client = MockClient((request) async {
       expect(request.method, 'GET');
@@ -110,6 +150,37 @@ void main() {
     expect(result.progress.registrationStatus, 'PENDING_APPROVAL');
   });
 
+  test('school approval uses the school status change API', () async {
+    final client = MockClient((request) async {
+      expect(request.method, 'PUT');
+      expect(
+        request.url.path,
+        '/Narellallc/sma-v1/1.0.0/api/schools/SCH-001/changeschoolstatus',
+      );
+      expect(jsonDecode(request.body), {
+        'status': 'APPROVED',
+        'reason': 'School registration reviewed and approved',
+      });
+      return http.Response(
+        jsonEncode({
+          'customSchoolId': 'SCH-001',
+          'schoolName': 'Approved School',
+          'registrationStatus': 'APPROVED',
+        }),
+        200,
+      );
+    });
+
+    await LivePlatformRepository(
+      accessToken: 'test-token',
+      client: client,
+    ).changeSchoolStatus(
+      customSchoolId: 'SCH-001',
+      status: SchoolStatus.approved,
+      reason: 'School registration reviewed and approved',
+    );
+  });
+
   test(
     'school administrator invitation uses the user management API',
     () async {
@@ -161,6 +232,53 @@ void main() {
       expect(result.temporaryPassword, 'Temp123!');
     },
   );
+
+  test('account manager invitation sends the selected account type', () async {
+    final client = MockClient((request) async {
+      expect(request.method, 'POST');
+      expect(
+        request.url.path,
+        '/Narellallc/sma-v1/1.0.0/api/auth/register/account-manager',
+      );
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      expect(body['firstName'], 'Akosua');
+      expect(body['lastName'], 'Mensah');
+      expect(body['email'], 'akosua@example.com');
+      expect(body['phoneNumber'], '+233241234567');
+      expect(body['dateOfBirth'], '1990-06-20');
+      expect(body['role'], 'SUPER_ACCOUNT_MANAGER');
+      expect(body['inviteMethod'], 'Email and SMS');
+      return http.Response(
+        jsonEncode({
+          'id': 42,
+          'firstName': 'Akosua',
+          'lastName': 'Mensah',
+          'email': 'akosua@example.com',
+          'phoneNumber': '+233241234567',
+          'status': 'PENDING',
+        }),
+        201,
+      );
+    });
+
+    final result =
+        await LivePlatformRepository(
+          accessToken: 'test-token',
+          client: client,
+        ).createAccountManager(
+          AccountManagerDraft(
+            firstName: 'Akosua',
+            lastName: 'Mensah',
+            email: 'akosua@example.com',
+            phone: '+233241234567',
+            dateOfBirth: DateTime(1990, 6, 20),
+            inviteMethod: 'Email and SMS',
+            role: PlatformRole.superAccountManager,
+          ),
+        );
+
+    expect(result.email, 'akosua@example.com');
+  });
 
   test('school users are loaded from the user management API', () async {
     final client = MockClient((request) async {

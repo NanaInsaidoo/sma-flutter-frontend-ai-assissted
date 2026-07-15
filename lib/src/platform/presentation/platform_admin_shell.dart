@@ -17,11 +17,13 @@ class PlatformAdminShell extends StatefulWidget {
     super.key,
     required this.accessToken,
     required this.userDisplayName,
+    required this.role,
     required this.onRefreshAccessToken,
     required this.repository,
     required this.dashboardFuture,
     required this.cachedDashboard,
     required this.onRefreshDashboard,
+    required this.basePath,
     required this.initialPage,
     required this.createSchool,
     required this.resumeOnboarding,
@@ -33,11 +35,13 @@ class PlatformAdminShell extends StatefulWidget {
 
   final String? accessToken;
   final String userDisplayName;
+  final PlatformRole role;
   final Future<String?> Function() onRefreshAccessToken;
   final PlatformRepository repository;
   final Future<AccountManagerSnapshot> dashboardFuture;
   final AccountManagerSnapshot? cachedDashboard;
   final VoidCallback onRefreshDashboard;
+  final String basePath;
   final PlatformPage initialPage;
   final bool createSchool;
   final bool resumeOnboarding;
@@ -51,11 +55,11 @@ class PlatformAdminShell extends StatefulWidget {
 }
 
 class _PlatformAdminShellState extends State<PlatformAdminShell> {
-  final PlatformRole _currentRole = PlatformRole.superAccountManager;
   AccountManagerProfile? _selectedManager;
   ManagedSchool? _routeSchoolCache;
   Future<SchoolCreationLookups>? _schoolLookupFuture;
   SchoolCreationLookups? _schoolLookupCache;
+  String? _selectedAttentionCategory;
 
   Future<SchoolCreationLookups> _loadSchoolLookups() {
     final cached = _schoolLookupCache;
@@ -78,8 +82,21 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
     setState(() {
       _selectedManager = null;
       _routeSchoolCache = null;
+      if (page != PlatformPage.attention) {
+        _selectedAttentionCategory = null;
+      }
     });
+    widget.onRefreshDashboard();
     widget.onNavigatePath(_pathForPage(page));
+  }
+
+  void _openAttentionCategory(String category) {
+    setState(() {
+      _selectedManager = null;
+      _routeSchoolCache = null;
+      _selectedAttentionCategory = category;
+    });
+    widget.onNavigatePath(_pathForPage(PlatformPage.attention));
   }
 
   void _openCreateSchool() {
@@ -87,13 +104,13 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
       _selectedManager = null;
       _routeSchoolCache = null;
     });
-    widget.onNavigatePath('/super-admin/schools/new');
+    widget.onNavigatePath('${widget.basePath}/schools/new');
   }
 
   void _resumeSchoolOnboarding(ManagedSchool school) {
     setState(() => _selectedManager = null);
     widget.onNavigatePath(
-      '/super-admin/onboarding/${Uri.encodeComponent(school.code)}',
+      '${widget.basePath}/onboarding/${Uri.encodeComponent(school.code)}',
     );
   }
 
@@ -107,7 +124,7 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
       return;
     }
     widget.onNavigatePath(
-      '/super-admin/schools/${Uri.encodeComponent(school.code)}',
+      '${widget.basePath}/schools/${Uri.encodeComponent(school.code)}',
     );
   }
 
@@ -127,23 +144,45 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
     final decoded = Uri.decodeComponent(code);
     final cached = _routeSchoolCache;
     if (cached != null && cached.code == decoded) return cached;
-    return schools.cast<ManagedSchool?>().firstWhere(
+    final local = schools.cast<ManagedSchool?>().firstWhere(
       (school) => school?.code == decoded,
       orElse: () => null,
+    );
+    if (local != null) return local;
+    return ManagedSchool(
+      name: decoded,
+      code: decoded,
+      region: 'Not provided',
+      district: '',
+      town: 'Not provided',
+      students: 0,
+      staff: 0,
+      status: SchoolStatus.inProgress,
+      progress: 0,
+      accountManager: 'Not assigned',
+      subscriptionPlan: '',
+      subscriptionStatus: '',
+      renewalDate: '',
+      lastActive: '',
+      approvedDate: '',
+      administratorName: '',
+      administratorPhone: '',
+      administratorEmail: '',
     );
   }
 
   String _pathForPage(PlatformPage page) {
     return switch (page) {
-      PlatformPage.overview => '/super-admin',
-      PlatformPage.schools => '/super-admin/schools',
-      PlatformPage.onboarding => '/super-admin/onboarding',
-      PlatformPage.attention => '/super-admin/attention',
-      PlatformPage.accountManagers => '/super-admin/account-managers',
+      PlatformPage.overview => widget.basePath,
+      PlatformPage.schools => '${widget.basePath}/schools',
+      PlatformPage.onboarding => '${widget.basePath}/onboarding',
+      PlatformPage.attention => '${widget.basePath}/attention',
+      PlatformPage.accountManagers => '${widget.basePath}/account-managers',
     };
   }
 
   Future<void> _openManagerByName(String name) async {
+    if (!widget.role.canManageAccountManagers) return;
     final managers = await widget.repository.searchAccountManagers(
       searchTerm: name,
       userStatuses: const [],
@@ -166,7 +205,7 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
         if (snapshot.hasError && !snapshot.hasData) {
           return Scaffold(
             body: _ApiErrorState(
-              title: 'Unable to load Super Admin data',
+              title: 'Unable to load ${widget.role.label} data',
               message:
                   'The dashboard could not load from the server. Check your connection or sign in again.',
               onRetry: widget.onRefreshDashboard,
@@ -176,7 +215,8 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
         if (!snapshot.hasData) {
           return _PlatformLoadingShell(
             page: widget.initialPage,
-            role: _currentRole,
+            role: widget.role,
+            userDisplayName: widget.userDisplayName,
             onPageSelected: _openPage,
             onCreateSchool: _openCreateSchool,
             onOpenSchoolAdministrator: widget.onOpenSchoolAdministrator,
@@ -189,14 +229,27 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
           });
         }
         final data = snapshot.requireData;
+        final visibleAttentionCount = _visibleNeedsAttentionCount(
+          data,
+          widget.role,
+        );
         return LayoutBuilder(
           builder: (context, constraints) {
             final desktop = constraints.maxWidth >= 980;
+            final page =
+                !widget.role.canManageAccountManagers &&
+                    widget.initialPage == PlatformPage.accountManagers
+                ? PlatformPage.overview
+                : widget.initialPage;
+            if (page != widget.initialPage) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) widget.onNavigatePath(_pathForPage(page));
+              });
+            }
             final routeSchool = _schoolForRoute(data.schools);
             final creatingSchool =
                 widget.createSchool ||
                 (widget.resumeOnboarding && routeSchool != null);
-            final page = widget.initialPage;
             final content = creatingSchool
                 ? SchoolCreationScreen(
                     accessToken: widget.accessToken,
@@ -212,17 +265,21 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
                         : null,
                     onBack: () => widget.onNavigatePath(
                       widget.resumeOnboarding
-                          ? '/super-admin/onboarding'
-                          : '/super-admin/schools',
+                          ? '${widget.basePath}/onboarding'
+                          : '${widget.basePath}/schools',
                     ),
+                    onStepSaved: () {
+                      setState(() => _routeSchoolCache = null);
+                      widget.onRefreshDashboard();
+                    },
                     onCreated: () {
                       widget.onRefreshDashboard();
-                      widget.onNavigatePath('/super-admin/schools');
+                      widget.onNavigatePath('${widget.basePath}/schools');
                     },
                     onViewCreated: (schoolId) {
                       widget.onRefreshDashboard();
                       widget.onNavigatePath(
-                        '/super-admin/schools/${Uri.encodeComponent(schoolId)}',
+                        '${widget.basePath}/schools/${Uri.encodeComponent(schoolId)}',
                       );
                     },
                   )
@@ -236,23 +293,38 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
                       setState(() => _routeSchoolCache = null);
                       widget.onRefreshDashboard();
                     },
-                    onBack: () => widget.onNavigatePath('/super-admin/schools'),
+                    onBack: () =>
+                        widget.onNavigatePath('${widget.basePath}/schools'),
                     onViewAccountManager: _openManagerByName,
+                    canViewAccountManagerDetails:
+                        widget.role.canManageAccountManagers,
                   )
                 : _selectedManager != null
                 ? AccountManagerDetailScreen(
                     manager: _selectedManager!,
                     schools: data.schools,
-                    onBack: () => setState(() => _selectedManager = null),
+                    repository: widget.repository,
+                  onBack: () => setState(() => _selectedManager = null),
+                    onManagerUpdated: (manager) {
+                      setState(() => _selectedManager = manager);
+                      widget.onRefreshDashboard();
+                    },
+                    onManagerDeleted: () {
+                      setState(() => _selectedManager = null);
+                      widget.onRefreshDashboard();
+                    },
                     onViewSchool: _openSchool,
                   )
                 : switch (page) {
                     PlatformPage.overview => _AccountManagerOverview(
+                      repository: widget.repository,
                       data: data,
+                      role: widget.role,
                       onCreateSchool: _openCreateSchool,
                       onViewSchools: () => _openPage(PlatformPage.schools),
                       onViewOnboarding: () => _openPage(PlatformPage.schools),
                       onViewAttention: () => _openPage(PlatformPage.attention),
+                      onViewAttentionCategory: _openAttentionCategory,
                       onViewSchool: _openSchool,
                     ),
                     PlatformPage.schools => _SchoolsScreen(
@@ -260,6 +332,8 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
                       accessToken: widget.accessToken,
                       onRefreshAccessToken: widget.onRefreshAccessToken,
                       schools: data.schools,
+                      totalSchools: data.totalSchools,
+                      role: widget.role,
                       onCreateSchool: _openCreateSchool,
                       onViewSchool: _openSchool,
                     ),
@@ -268,6 +342,8 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
                       accessToken: widget.accessToken,
                       onRefreshAccessToken: widget.onRefreshAccessToken,
                       schools: data.schools,
+                      totalSchools: data.totalSchools,
+                      role: widget.role,
                       onCreateSchool: _openCreateSchool,
                       onViewSchool: _openSchool,
                     ),
@@ -275,26 +351,48 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
                       repository: widget.repository,
                       schools: data.schools,
                       pendingAccountManagerApprovals: data.pendingApprovals,
+                      role: widget.role,
+                      initialCategory: _selectedAttentionCategory,
                       onViewSchool: _openSchool,
                       onResumeOnboarding: _resumeSchoolOnboarding,
                       onViewManager: _openManager,
                     ),
-                    PlatformPage.accountManagers => AccountManagersScreen(
-                      repository: widget.repository,
-                      schools: data.schools,
-                      onViewManager: _openManager,
-                    ),
+                    PlatformPage.accountManagers =>
+                      widget.role.canManageAccountManagers
+                          ? AccountManagersScreen(
+                              repository: widget.repository,
+                              role: widget.role,
+                              schools: data.schools,
+                              onViewManager: _openManager,
+                              onManagersChanged: widget.onRefreshDashboard,
+                            )
+                          : _AccountManagerOverview(
+                              repository: widget.repository,
+                              data: data,
+                              role: widget.role,
+                              onCreateSchool: _openCreateSchool,
+                              onViewSchools: () =>
+                                  _openPage(PlatformPage.schools),
+                              onViewOnboarding: () =>
+                                  _openPage(PlatformPage.schools),
+                              onViewAttention: () =>
+                                  _openPage(PlatformPage.attention),
+                              onViewAttentionCategory: _openAttentionCategory,
+                              onViewSchool: _openSchool,
+                            ),
                   };
 
             final workspace = _PlatformWorkspace(
               title: creatingSchool
-                  ? (routeSchool == null ? 'Create school' : routeSchool.name)
+                  ? (routeSchool == null ? 'Add School' : routeSchool.name)
                   : routeSchool != null
                   ? routeSchool.name
                   : _selectedManager != null
                   ? _selectedManager!.name
                   : switch (page) {
-                      PlatformPage.overview => 'Overview',
+                      PlatformPage.overview => _overviewTitleForRole(
+                        widget.role,
+                      ),
                       PlatformPage.schools => 'Schools',
                       PlatformPage.onboarding => 'Onboarding',
                       PlatformPage.attention => 'Needs attention',
@@ -309,14 +407,19 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
                   : _selectedManager != null
                   ? 'Account manager details'
                   : switch (page) {
-                      PlatformPage.overview => 'Your portfolio at a glance',
+                      PlatformPage.overview => _overviewSubtitleForRole(
+                        widget.role,
+                      ),
                       PlatformPage.schools =>
-                        'All schools with approval and account manager filters',
+                        widget.role.canViewAllSchools
+                            ? 'All schools with approval and location filters'
+                            : 'Schools assigned to you',
                       PlatformPage.onboarding => 'Schools completing setup',
                       PlatformPage.attention => 'Schools requiring action',
                       PlatformPage.accountManagers =>
                         'Manage your platform team',
                     },
+              role: widget.role,
               managerName: data.managerName,
               showMenu: !desktop,
               onLogout: widget.onLogout,
@@ -333,9 +436,11 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
                     onPageSelected: _openPage,
                     onCreateSchool: _openCreateSchool,
                     onOpenSchoolAdministrator: widget.onOpenSchoolAdministrator,
-                    schoolCount: data.schools.length,
-                    attentionCount: data.needsAttentionCount,
-                    role: _currentRole,
+                    schoolCount: data.totalSchools,
+                    attentionCount: visibleAttentionCount,
+                    accountManagerCount: data.accountManagers,
+                    role: widget.role,
+                    userDisplayName: widget.userDisplayName,
                   ),
                 ),
                 body: workspace,
@@ -351,9 +456,11 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
                     onPageSelected: _openPage,
                     onCreateSchool: _openCreateSchool,
                     onOpenSchoolAdministrator: widget.onOpenSchoolAdministrator,
-                    schoolCount: data.schools.length,
-                    attentionCount: data.needsAttentionCount,
-                    role: _currentRole,
+                    schoolCount: data.totalSchools,
+                    attentionCount: visibleAttentionCount,
+                    accountManagerCount: data.accountManagers,
+                    role: widget.role,
+                    userDisplayName: widget.userDisplayName,
                   ),
                   Expanded(child: workspace),
                 ],
@@ -428,6 +535,7 @@ class _PlatformLoadingShell extends StatelessWidget {
   const _PlatformLoadingShell({
     required this.page,
     required this.role,
+    required this.userDisplayName,
     required this.onPageSelected,
     required this.onCreateSchool,
     required this.onOpenSchoolAdministrator,
@@ -436,6 +544,7 @@ class _PlatformLoadingShell extends StatelessWidget {
 
   final PlatformPage page;
   final PlatformRole role;
+  final String userDisplayName;
   final ValueChanged<PlatformPage> onPageSelected;
   final VoidCallback onCreateSchool;
   final VoidCallback onOpenSchoolAdministrator;
@@ -447,8 +556,9 @@ class _PlatformLoadingShell extends StatelessWidget {
       builder: (context, constraints) {
         final desktop = constraints.maxWidth >= 980;
         final content = _PlatformWorkspace(
-          title: _titleForPage(page),
-          subtitle: _subtitleForPage(page),
+          title: _titleForPage(page, role),
+          subtitle: _subtitleForPage(page, role),
+          role: role,
           managerName: 'Loading...',
           showMenu: !desktop,
           onLogout: onLogout,
@@ -467,7 +577,9 @@ class _PlatformLoadingShell extends StatelessWidget {
                 onOpenSchoolAdministrator: onOpenSchoolAdministrator,
                 schoolCount: 0,
                 attentionCount: 0,
+                accountManagerCount: 0,
                 role: role,
+                userDisplayName: userDisplayName,
               ),
             ),
             body: content,
@@ -485,7 +597,9 @@ class _PlatformLoadingShell extends StatelessWidget {
                 onOpenSchoolAdministrator: onOpenSchoolAdministrator,
                 schoolCount: 0,
                 attentionCount: 0,
+                accountManagerCount: 0,
                 role: role,
+                userDisplayName: userDisplayName,
               ),
               Expanded(child: content),
             ],
@@ -495,22 +609,25 @@ class _PlatformLoadingShell extends StatelessWidget {
     );
   }
 
-  String _titleForPage(PlatformPage page) => switch (page) {
-    PlatformPage.overview => 'Overview',
+  String _titleForPage(PlatformPage page, PlatformRole role) => switch (page) {
+    PlatformPage.overview => _overviewTitleForRole(role),
     PlatformPage.schools => 'Schools',
     PlatformPage.onboarding => 'Onboarding',
     PlatformPage.attention => 'Needs attention',
     PlatformPage.accountManagers => 'Account Managers',
   };
 
-  String _subtitleForPage(PlatformPage page) => switch (page) {
-    PlatformPage.overview => 'Your portfolio at a glance',
-    PlatformPage.schools =>
-      'All schools with approval and account manager filters',
-    PlatformPage.onboarding => 'Schools completing setup',
-    PlatformPage.attention => 'Schools requiring action',
-    PlatformPage.accountManagers => 'Manage your platform team',
-  };
+  String _subtitleForPage(PlatformPage page, PlatformRole role) =>
+      switch (page) {
+        PlatformPage.overview => _overviewSubtitleForRole(role),
+        PlatformPage.schools =>
+          role.canViewAllSchools
+              ? 'All schools with approval and location filters'
+              : 'Schools assigned to you',
+        PlatformPage.onboarding => 'Schools completing setup',
+        PlatformPage.attention => 'Schools requiring action',
+        PlatformPage.accountManagers => 'Manage your platform team',
+      };
 }
 
 class _DashboardSkeletonContent extends StatelessWidget {
@@ -734,6 +851,7 @@ class _PlatformWorkspace extends StatelessWidget {
   const _PlatformWorkspace({
     required this.title,
     required this.subtitle,
+    required this.role,
     required this.managerName,
     required this.child,
     required this.showMenu,
@@ -742,6 +860,7 @@ class _PlatformWorkspace extends StatelessWidget {
 
   final String title;
   final String subtitle;
+  final PlatformRole role;
   final String managerName;
   final Widget child;
   final bool showMenu;
@@ -783,17 +902,24 @@ class _PlatformWorkspace extends StatelessWidget {
                     ),
                     if (MediaQuery.sizeOf(context).width >= 650) ...[
                       const SizedBox(width: 10),
-                      Text(
-                        subtitle,
-                        style: const TextStyle(
-                          color: AppColors.muted,
-                          fontSize: 12,
+                      Flexible(
+                        child: Text(
+                          subtitle,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: AppColors.muted,
+                            fontSize: 12,
+                          ),
                         ),
                       ),
                     ],
                   ],
                 ),
               ),
+              if (MediaQuery.sizeOf(context).width >= 760) ...[
+                _RoleBadge(role: role),
+                const SizedBox(width: 10),
+              ],
               IconButton(
                 tooltip: 'Notifications',
                 onPressed: () {},
@@ -830,21 +956,102 @@ class _PlatformWorkspace extends StatelessWidget {
   }
 }
 
+String _overviewTitleForRole(PlatformRole role) => switch (role) {
+  PlatformRole.superAdmin => 'Platform overview',
+  PlatformRole.superAccountManager => 'Account manager operations',
+  PlatformRole.accountManager => 'My assigned schools',
+};
+
+String _overviewSubtitleForRole(PlatformRole role) => switch (role) {
+  PlatformRole.superAdmin => 'Full platform visibility',
+  PlatformRole.superAccountManager => 'Team, assignment, and approval view',
+  PlatformRole.accountManager => 'Assigned school portfolio',
+};
+
+String _roleScopeLabel(PlatformRole role) => switch (role) {
+  PlatformRole.superAdmin => 'Viewing all schools',
+  PlatformRole.superAccountManager => 'Viewing all schools',
+  PlatformRole.accountManager => 'Assigned schools only',
+};
+
+IconData _roleIcon(PlatformRole role) => switch (role) {
+  PlatformRole.superAdmin => Icons.admin_panel_settings_rounded,
+  PlatformRole.superAccountManager => Icons.supervisor_account_rounded,
+  PlatformRole.accountManager => Icons.assignment_ind_rounded,
+};
+
+Color _roleAccent(PlatformRole role) => switch (role) {
+  PlatformRole.superAdmin => const Color(0xFF7C3AED),
+  PlatformRole.superAccountManager => AppColors.blue,
+  PlatformRole.accountManager => AppColors.green,
+};
+
+class _RoleBadge extends StatelessWidget {
+  const _RoleBadge({required this.role});
+
+  final PlatformRole role;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = _roleAccent(role);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: .09),
+        border: Border.all(color: accent.withValues(alpha: .2)),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(_roleIcon(role), size: 15, color: accent),
+          const SizedBox(width: 6),
+          Text(
+            role.label,
+            style: TextStyle(
+              color: accent,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(width: 7),
+          Container(width: 1, height: 12, color: accent.withValues(alpha: .22)),
+          const SizedBox(width: 7),
+          Text(
+            _roleScopeLabel(role),
+            style: TextStyle(
+              color: accent.withValues(alpha: .84),
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _AccountManagerOverview extends StatelessWidget {
   const _AccountManagerOverview({
+    required this.repository,
     required this.data,
+    required this.role,
     required this.onCreateSchool,
     required this.onViewSchools,
     required this.onViewOnboarding,
     required this.onViewAttention,
+    required this.onViewAttentionCategory,
     required this.onViewSchool,
   });
 
+  final PlatformRepository repository;
   final AccountManagerSnapshot data;
+  final PlatformRole role;
   final VoidCallback onCreateSchool;
   final VoidCallback onViewSchools;
   final VoidCallback onViewOnboarding;
   final VoidCallback onViewAttention;
+  final ValueChanged<String> onViewAttentionCategory;
   final ValueChanged<ManagedSchool> onViewSchool;
 
   @override
@@ -854,9 +1061,13 @@ class _AccountManagerOverview extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _WelcomePanel(name: data.managerName, onCreateSchool: onCreateSchool),
+          _WelcomePanel(
+            name: data.managerName,
+            role: role,
+            onCreateSchool: onCreateSchool,
+          ),
           const SizedBox(height: 20),
-          _PlatformStats(data: data),
+          _PlatformStats(data: data, role: role),
           const SizedBox(height: 20),
           LayoutBuilder(
             builder: (context, constraints) {
@@ -864,12 +1075,20 @@ class _AccountManagerOverview extends StatelessWidget {
                 return Column(
                   children: [
                     _PendingApprovalPanel(
+                      repository: repository,
                       schools: data.schools,
+                      summary: data.needsAttentionSummary,
+                      role: role,
                       onViewAll: onViewOnboarding,
                       onViewSchool: onViewSchool,
                     ),
                     const SizedBox(height: 16),
-                    _PortfolioAlerts(data: data, onViewAll: onViewAttention),
+                    _PortfolioAlerts(
+                      data: data,
+                      role: role,
+                      onViewAll: onViewAttention,
+                      onViewCategory: onViewAttentionCategory,
+                    ),
                   ],
                 );
               }
@@ -879,7 +1098,10 @@ class _AccountManagerOverview extends StatelessWidget {
                   Expanded(
                     flex: 6,
                     child: _PendingApprovalPanel(
+                      repository: repository,
                       schools: data.schools,
+                      summary: data.needsAttentionSummary,
+                      role: role,
                       onViewAll: onViewOnboarding,
                       onViewSchool: onViewSchool,
                     ),
@@ -889,7 +1111,9 @@ class _AccountManagerOverview extends StatelessWidget {
                     flex: 4,
                     child: _PortfolioAlerts(
                       data: data,
+                      role: role,
                       onViewAll: onViewAttention,
+                      onViewCategory: onViewAttentionCategory,
                     ),
                   ),
                 ],
@@ -909,8 +1133,13 @@ class _AccountManagerOverview extends StatelessWidget {
 }
 
 class _WelcomePanel extends StatelessWidget {
-  const _WelcomePanel({required this.name, required this.onCreateSchool});
+  const _WelcomePanel({
+    required this.name,
+    required this.role,
+    required this.onCreateSchool,
+  });
   final String name;
+  final PlatformRole role;
   final VoidCallback onCreateSchool;
 
   @override
@@ -940,9 +1169,9 @@ class _WelcomePanel extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 6),
-              const Text(
-                'Review school approvals, account managers, and platform activity.',
-                style: TextStyle(color: Color(0xFFD0E9E5), fontSize: 13),
+              Text(
+                _welcomeCopyForRole(role),
+                style: const TextStyle(color: Color(0xFFD0E9E5), fontSize: 13),
               ),
             ],
           ),
@@ -954,7 +1183,7 @@ class _WelcomePanel extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
             ),
             icon: const Icon(Icons.add_business_rounded, size: 19),
-            label: const Text('Create school'),
+            label: const Text('Add School'),
           ),
         ],
       ),
@@ -962,18 +1191,30 @@ class _WelcomePanel extends StatelessWidget {
   }
 }
 
+String _welcomeCopyForRole(PlatformRole role) => switch (role) {
+  PlatformRole.superAdmin =>
+    'Review platform schools, approvals, account managers, and operational activity.',
+  PlatformRole.superAccountManager =>
+    'Manage account managers, school assignments, approvals, and onboarding progress.',
+  PlatformRole.accountManager =>
+    'Manage your assigned schools, onboarding progress, and action items.',
+};
+
 class _PlatformStats extends StatelessWidget {
-  const _PlatformStats({required this.data});
+  const _PlatformStats({required this.data, required this.role});
   final AccountManagerSnapshot data;
+  final PlatformRole role;
 
   @override
   Widget build(BuildContext context) {
     final items = [
       _StatItem(
-        'Total schools',
+        role.canViewAllSchools ? 'Total schools' : 'Assigned schools',
         '${data.totalSchools}',
         data.totalSchoolsCaption.isEmpty
-            ? 'Loaded from school records'
+            ? role.canViewAllSchools
+                  ? 'Loaded from school records'
+                  : 'Schools assigned to you'
             : data.totalSchoolsCaption,
         Icons.apartment_rounded,
         AppColors.green,
@@ -987,18 +1228,19 @@ class _PlatformStats extends StatelessWidget {
         Icons.verified_rounded,
         const Color(0xFF059669),
       ),
-      _StatItem(
-        'Account managers',
-        '${data.accountManagers}',
-        data.accountManagersCaption.isEmpty
-            ? 'Loaded from account managers'
-            : data.accountManagersCaption,
-        Icons.manage_accounts_rounded,
-        AppColors.blue,
-      ),
+      if (role.canManageAccountManagers)
+        _StatItem(
+          'Account managers',
+          '${data.accountManagers}',
+          data.accountManagersCaption.isEmpty
+              ? 'Loaded from account managers'
+              : data.accountManagersCaption,
+          Icons.manage_accounts_rounded,
+          AppColors.blue,
+        ),
       _StatItem(
         'Needs attention',
-        '${data.needsAttentionCount}',
+        '${_visibleNeedsAttentionCount(data, role)}',
         'Grouped action items',
         Icons.pending_actions_rounded,
         AppColors.red,
@@ -1007,11 +1249,12 @@ class _PlatformStats extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final columns = constraints.maxWidth >= 880
+        final responsiveColumns = constraints.maxWidth >= 880
             ? 4
             : constraints.maxWidth >= 520
             ? 2
             : 1;
+        final columns = responsiveColumns.clamp(1, items.length).toInt();
         const gap = 14.0;
         final width = (constraints.maxWidth - (columns - 1) * gap) / columns;
         return Wrap(
@@ -1092,6 +1335,26 @@ class _StatItem {
   final Color color;
 }
 
+int _visibleNeedsAttentionCount(
+  AccountManagerSnapshot data,
+  PlatformRole role,
+) {
+  if (!role.canManageAccountManagers) {
+    return _assignedSchoolAttentionSummary(data.schools).total;
+  }
+  final summary = data.needsAttentionSummary;
+  if (summary == null) {
+    return data.needsAttentionCount;
+  }
+  return summary.categories
+      .where(
+        (category) =>
+            role.canManageAccountManagers ||
+            category.category != 'ACCOUNT_MANAGER_APPROVALS',
+      )
+      .fold<int>(0, (total, category) => total + category.count);
+}
+
 class _Panel extends StatelessWidget {
   const _Panel({
     required this.title,
@@ -1140,105 +1403,361 @@ class _Panel extends StatelessWidget {
   }
 }
 
-class _PendingApprovalPanel extends StatelessWidget {
+class _PendingApprovalPanel extends StatefulWidget {
   const _PendingApprovalPanel({
+    required this.repository,
     required this.schools,
+    required this.summary,
+    required this.role,
     required this.onViewAll,
     required this.onViewSchool,
   });
+
+  final PlatformRepository repository;
   final List<ManagedSchool> schools;
+  final NeedsAttentionSummary? summary;
+  final PlatformRole role;
   final VoidCallback onViewAll;
   final ValueChanged<ManagedSchool> onViewSchool;
 
   @override
+  State<_PendingApprovalPanel> createState() => _PendingApprovalPanelState();
+}
+
+class _PendingApprovalPanelState extends State<_PendingApprovalPanel> {
+  Future<NeedsAttentionPage>? _approvalPreviewFuture;
+  String? _openingItemId;
+
+  @override
+  void initState() {
+    super.initState();
+    _approvalPreviewFuture = _loadApprovalPreview();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PendingApprovalPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.role != widget.role ||
+        oldWidget.summary != widget.summary ||
+        oldWidget.repository != widget.repository) {
+      _approvalPreviewFuture = _loadApprovalPreview();
+    }
+  }
+
+  Future<NeedsAttentionPage>? _loadApprovalPreview() {
+    if (!widget.role.canManageAccountManagers) return null;
+    if (_schoolApprovalsCount <= 0) {
+      return Future.value(
+        const NeedsAttentionPage(
+          items: [],
+          totalElements: 0,
+          totalPages: 1,
+          currentPage: 0,
+          pageSize: 5,
+        ),
+      );
+    }
+    return widget.repository.getNeedsAttentionItems(
+      category: 'SCHOOL_APPROVALS',
+      page: 0,
+      size: 5,
+    );
+  }
+
+  int get _schoolApprovalsCount {
+    for (final category in widget.summary?.categories ?? const []) {
+      if (category.category == 'SCHOOL_APPROVALS') return category.count;
+    }
+    return 0;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final pending = schools.where(_isSchoolPendingApproval).toList();
+    if (widget.role.canManageAccountManagers) {
+      return _buildSchoolApprovalPreview();
+    }
+    return _buildAccountManagerOnboardingPanel();
+  }
+
+  Widget _buildSchoolApprovalPreview() {
+    final count = _schoolApprovalsCount;
     return _Panel(
-      title: 'Schools pending approval (${pending.length})',
-      action: pending.length > 5 ? 'View all →' : null,
-      onAction: onViewAll,
-      child: pending.isEmpty
-          ? const Padding(
+      title: 'Schools pending approval ($count)',
+      action: count > 5 ? 'View all →' : null,
+      onAction: widget.onViewAll,
+      child: FutureBuilder<NeedsAttentionPage>(
+        future: _approvalPreviewFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              !snapshot.hasData) {
+            return const _ApprovalPreviewSkeleton();
+          }
+          if (snapshot.hasError && !snapshot.hasData) {
+            return Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Could not load school approvals.'),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: () => setState(
+                      () => _approvalPreviewFuture = _loadApprovalPreview(),
+                    ),
+                    icon: const Icon(Icons.refresh_rounded, size: 18),
+                    label: const Text('Retry'),
+                  ),
+                ],
+              ),
+            );
+          }
+          final items = snapshot.data?.items ?? const <NeedsAttentionItem>[];
+          if (items.isEmpty) {
+            return const Padding(
               padding: EdgeInsets.all(24),
               child: Text('No schools are currently pending approval.'),
+            );
+          }
+          return Column(
+            children: [
+              ...items.map(_approvalItemRow),
+              if (count > items.length)
+                InkWell(
+                  onTap: widget.onViewAll,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 14,
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 34,
+                          height: 34,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: AppColors.amber.withValues(alpha: .14),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            '+${count - items.length}',
+                            style: const TextStyle(
+                              color: AppColors.amber,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            '${count - items.length} more schools pending approval',
+                            style: const TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        const Icon(
+                          Icons.chevron_right_rounded,
+                          color: AppColors.muted,
+                          size: 18,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _approvalItemRow(NeedsAttentionItem item) {
+    final opening = _openingItemId == item.id;
+    return InkWell(
+      onTap: opening ? null : () => _openApprovalItem(item),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        child: Row(
+          children: [
+            _SchoolAvatar(name: item.title),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.title,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    _approvalPreviewDescription(item),
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 10.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (opening)
+              const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                decoration: BoxDecoration(
+                  color: AppColors.amber.withValues(alpha: .12),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: const Text(
+                  'Pending approval',
+                  style: TextStyle(
+                    color: AppColors.amber,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            const SizedBox(width: 8),
+            const Icon(
+              Icons.chevron_right_rounded,
+              color: AppColors.muted,
+              size: 18,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _approvalPreviewDescription(NeedsAttentionItem item) {
+    final description = item.description.trim();
+    final age = item.ageInDays;
+    if (description.isNotEmpty) {
+      return age == null ? description : '$description · ${age}d waiting';
+    }
+    if (age != null) return 'Submitted for review · ${age}d waiting';
+    return 'Submitted and waiting for review';
+  }
+
+  Future<void> _openApprovalItem(NeedsAttentionItem item) async {
+    setState(() => _openingItemId = item.id);
+    try {
+      final local = widget.schools.cast<ManagedSchool?>().firstWhere(
+        (school) =>
+            school?.code == _schoolCodeForAttentionItem(item) ||
+            school?.name == item.title,
+        orElse: () => null,
+      );
+      if (!mounted) return;
+      if (local != null) {
+        widget.onViewSchool(local);
+        return;
+      }
+      final fallback = _schoolReferenceForAttentionItem(item);
+      if (fallback != null) {
+        widget.onViewSchool(fallback);
+        return;
+      }
+      final page = await widget.repository.getSchools(
+        searchTerm: item.title,
+        size: 10,
+      );
+      if (!mounted) return;
+      final school = page.schools.cast<ManagedSchool?>().firstWhere(
+        (school) => school?.name == item.title,
+        orElse: () => page.schools.isEmpty ? null : page.schools.first,
+      );
+      if (school != null) {
+        widget.onViewSchool(school);
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not open ${item.title}.')));
+    } finally {
+      if (mounted) setState(() => _openingItemId = null);
+    }
+  }
+
+  ManagedSchool? _schoolReferenceForAttentionItem(NeedsAttentionItem item) {
+    final code = _schoolCodeForAttentionItem(item);
+    if (code.isEmpty) return null;
+    final locationParts = item.description
+        .split('·')
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty && part != code)
+        .toList();
+    final region = locationParts.isNotEmpty
+        ? locationParts.first
+        : 'Not provided';
+    final town = locationParts.length > 1 ? locationParts[1] : 'Not provided';
+    final status = item.status.trim().isEmpty
+        ? SchoolStatus.pendingApproval
+        : schoolStatusFromApi(item.status);
+    return ManagedSchool(
+      name: item.title.trim().isEmpty ? code : item.title.trim(),
+      code: code,
+      region: region,
+      district: '',
+      town: town,
+      students: 0,
+      staff: 0,
+      status: status,
+      progress: status == SchoolStatus.pendingApproval ? 1 : 0,
+      accountManager: 'Not assigned',
+      subscriptionPlan: '',
+      subscriptionStatus: '',
+      renewalDate: '',
+      lastActive: '',
+      approvedDate: '',
+      administratorName: '',
+      administratorPhone: '',
+      administratorEmail: '',
+    );
+  }
+
+  String _schoolCodeForAttentionItem(NeedsAttentionItem item) {
+    final values = [item.entityId, item.description, item.id, item.title];
+    final pattern = RegExp(r'\b[A-Z0-9]{2,}-XXX-[A-Z0-9]+\b');
+    for (final value in values) {
+      final match = pattern.firstMatch(value.toUpperCase());
+      if (match != null) return match.group(0)!;
+    }
+    return '';
+  }
+
+  Widget _buildAccountManagerOnboardingPanel() {
+    final items = widget.schools
+        .where((school) => school.status.isOnboarding)
+        .toList();
+    return _Panel(
+      title: 'Onboarding in progress (${items.length})',
+      action: items.length > 5 ? 'View all →' : null,
+      onAction: widget.onViewAll,
+      child: items.isEmpty
+          ? const Padding(
+              padding: EdgeInsets.all(24),
+              child: Text('No assigned schools are currently onboarding.'),
             )
           : Column(
               children: [
-                ...pending
-                    .take(5)
-                    .map(
-                      (school) => InkWell(
-                        onTap: () => onViewSchool(school),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 18,
-                            vertical: 14,
-                          ),
-                          child: Row(
-                            children: [
-                              _SchoolAvatar(name: school.name),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            school.name,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(
-                                              fontSize: 12.5,
-                                              fontWeight: FontWeight.w700,
-                                            ),
-                                          ),
-                                        ),
-                                        Text(
-                                          _approvalStatusLabel(school),
-                                          style: const TextStyle(
-                                            color: AppColors.amber,
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w800,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 3),
-                                    Text(
-                                      '${school.town}, ${school.region} · Awaiting Super Admin review',
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        color: AppColors.muted,
-                                        fontSize: 10.5,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 9),
-                                    LinearProgressIndicator(
-                                      value: school.progress,
-                                      minHeight: 6,
-                                      color: AppColors.amber,
-                                      backgroundColor: AppColors.amber
-                                          .withValues(alpha: .14),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              const Icon(
-                                Icons.chevron_right_rounded,
-                                color: AppColors.muted,
-                                size: 18,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                if (pending.length > 5)
+                ...items.take(5).map(_onboardingSchoolRow),
+                if (items.length > 5)
                   InkWell(
-                    onTap: onViewAll,
+                    onTap: widget.onViewAll,
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 18,
@@ -1251,13 +1770,13 @@ class _PendingApprovalPanel extends StatelessWidget {
                             height: 34,
                             alignment: Alignment.center,
                             decoration: BoxDecoration(
-                              color: AppColors.amber.withValues(alpha: .14),
+                              color: AppColors.green.withValues(alpha: .14),
                               borderRadius: BorderRadius.circular(10),
                             ),
                             child: Text(
-                              '+${pending.length - 5}',
+                              '+${items.length - 5}',
                               style: const TextStyle(
-                                color: AppColors.amber,
+                                color: AppColors.green,
                                 fontWeight: FontWeight.w800,
                                 fontSize: 12,
                               ),
@@ -1266,7 +1785,7 @@ class _PendingApprovalPanel extends StatelessWidget {
                           const SizedBox(width: 12),
                           Expanded(
                             child: Text(
-                              '${pending.length - 5} more schools pending approval',
+                              '${items.length - 5} more schools in onboarding',
                               style: const TextStyle(
                                 fontSize: 12.5,
                                 fontWeight: FontWeight.w700,
@@ -1284,6 +1803,107 @@ class _PendingApprovalPanel extends StatelessWidget {
                   ),
               ],
             ),
+    );
+  }
+
+  Widget _onboardingSchoolRow(ManagedSchool school) {
+    return InkWell(
+      onTap: () => widget.onViewSchool(school),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        child: Row(
+          children: [
+            _SchoolAvatar(name: school.name),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          school.name,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        '${(school.progress * 100).round()}%',
+                        style: const TextStyle(
+                          color: AppColors.green,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    '${school.town}, ${school.region} · Continue setup',
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 10.5,
+                    ),
+                  ),
+                  const SizedBox(height: 9),
+                  LinearProgressIndicator(
+                    value: school.progress,
+                    minHeight: 6,
+                    color: AppColors.green,
+                    backgroundColor: AppColors.green.withValues(alpha: .14),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            const Icon(
+              Icons.chevron_right_rounded,
+              color: AppColors.muted,
+              size: 18,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ApprovalPreviewSkeleton extends StatelessWidget {
+  const _ApprovalPreviewSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: List.generate(
+        3,
+        (_) => const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+          child: Row(
+            children: [
+              _SkeletonBox(width: 44, height: 44, radius: 12),
+              SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _SkeletonBox(width: 180, height: 12),
+                    SizedBox(height: 8),
+                    _SkeletonBox(width: 260, height: 10),
+                  ],
+                ),
+              ),
+              SizedBox(width: 12),
+              _SkeletonBox(width: 110, height: 26, radius: 999),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1511,11 +2131,60 @@ class _OnboardingSchoolRow extends StatelessWidget {
   }
 }
 
+ManagedSchool? _schoolReferenceForAttentionItem(NeedsAttentionItem item) {
+  final code = _schoolCodeForAttentionItem(item);
+  if (code.isEmpty) return null;
+  final locationParts = item.description
+      .split('·')
+      .map((part) => part.trim())
+      .where((part) => part.isNotEmpty && part != code)
+      .toList();
+  final region = locationParts.isNotEmpty
+      ? locationParts.first
+      : 'Not provided';
+  final town = locationParts.length > 1 ? locationParts[1] : 'Not provided';
+  final status = item.status.trim().isEmpty
+      ? SchoolStatus.pendingApproval
+      : schoolStatusFromApi(item.status);
+  return ManagedSchool(
+    name: item.title.trim().isEmpty ? code : item.title.trim(),
+    code: code,
+    region: region,
+    district: '',
+    town: town,
+    students: 0,
+    staff: 0,
+    status: status,
+    progress: status == SchoolStatus.pendingApproval ? 1 : 0,
+    accountManager: 'Not assigned',
+    subscriptionPlan: '',
+    subscriptionStatus: '',
+    renewalDate: '',
+    lastActive: '',
+    approvedDate: '',
+    administratorName: '',
+    administratorPhone: '',
+    administratorEmail: '',
+  );
+}
+
+String _schoolCodeForAttentionItem(NeedsAttentionItem item) {
+  final values = [item.entityId, item.description, item.id, item.title];
+  final pattern = RegExp(r'\b[A-Z0-9]{2,}-XXX-[A-Z0-9]+\b');
+  for (final value in values) {
+    final match = pattern.firstMatch(value.toUpperCase());
+    if (match != null) return match.group(0)!;
+  }
+  return '';
+}
+
 class _AttentionSchoolsScreen extends StatefulWidget {
   const _AttentionSchoolsScreen({
     required this.repository,
     required this.schools,
     required this.pendingAccountManagerApprovals,
+    required this.role,
+    required this.initialCategory,
     required this.onViewSchool,
     required this.onResumeOnboarding,
     required this.onViewManager,
@@ -1523,6 +2192,8 @@ class _AttentionSchoolsScreen extends StatefulWidget {
   final PlatformRepository repository;
   final List<ManagedSchool> schools;
   final int pendingAccountManagerApprovals;
+  final PlatformRole role;
+  final String? initialCategory;
   final ValueChanged<ManagedSchool> onViewSchool;
   final ValueChanged<ManagedSchool> onResumeOnboarding;
   final ValueChanged<AccountManagerProfile> onViewManager;
@@ -1550,32 +2221,84 @@ class _AttentionSchoolsScreenState extends State<_AttentionSchoolsScreen> {
   }
 
   @override
+  void didUpdateWidget(covariant _AttentionSchoolsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialCategory != widget.initialCategory &&
+        widget.initialCategory != null) {
+      _selectInitialCategoryIfAvailable();
+    }
+  }
+
+  @override
   void dispose() {
     _searchDebounce?.cancel();
     super.dispose();
   }
 
   Future<NeedsAttentionSummary> _loadSummary() async {
+    if (!widget.role.canManageAccountManagers) {
+      final summary = _assignedSchoolAttentionSummary(widget.schools);
+      final categories = _visibleAttentionCategories(summary.categories);
+      if (mounted) {
+        setState(() {
+          _summary = summary;
+          _selectedIndex = _initialCategoryIndex(categories);
+          _itemsFuture = categories.isEmpty ? null : _loadItems();
+        });
+      } else {
+        _summary = summary;
+        _selectedIndex = _initialCategoryIndex(categories);
+        _itemsFuture = categories.isEmpty ? null : _loadItems();
+      }
+      return summary;
+    }
     final summary = await widget.repository.getNeedsAttentionSummary();
+    final categories = _visibleAttentionCategories(summary.categories);
     if (mounted) {
       setState(() {
         _summary = summary;
-        _selectedIndex = _selectedIndex.clamp(
-          0,
-          summary.categories.isEmpty ? 0 : summary.categories.length - 1,
-        );
-        _itemsFuture = summary.categories.isEmpty ? null : _loadItems();
+        _selectedIndex = _initialCategoryIndex(categories);
+        _itemsFuture = categories.isEmpty ? null : _loadItems();
       });
     } else {
       _summary = summary;
-      _itemsFuture = summary.categories.isEmpty ? null : _loadItems();
+      _selectedIndex = _initialCategoryIndex(categories);
+      _itemsFuture = categories.isEmpty ? null : _loadItems();
     }
     return summary;
   }
 
+  void _selectInitialCategoryIfAvailable() {
+    final summary = _summary;
+    if (summary == null) return;
+    final categories = _visibleAttentionCategories(summary.categories);
+    final index = _initialCategoryIndex(categories);
+    setState(() {
+      _selectedIndex = index;
+      _page = 0;
+      _query = '';
+      _itemsFuture = categories.isEmpty ? null : _loadItems();
+    });
+  }
+
+  int _initialCategoryIndex(List<NeedsAttentionCategory> categories) {
+    if (categories.isEmpty) return 0;
+    final requested = widget.initialCategory;
+    if (requested == null || requested.trim().isEmpty) {
+      return _selectedIndex.clamp(0, categories.length - 1);
+    }
+    final index = categories.indexWhere(
+      (category) => category.category == requested,
+    );
+    return index < 0 ? 0 : index;
+  }
+
   Future<NeedsAttentionPage> _loadItems() {
     final summary = _summary;
-    if (summary == null || summary.categories.isEmpty) {
+    final categories = summary == null
+        ? const <NeedsAttentionCategory>[]
+        : _visibleAttentionCategories(summary.categories);
+    if (summary == null || categories.isEmpty) {
       return Future.value(
         NeedsAttentionPage(
           items: const [],
@@ -1586,8 +2309,18 @@ class _AttentionSchoolsScreenState extends State<_AttentionSchoolsScreen> {
         ),
       );
     }
-    final category = summary
-        .categories[_selectedIndex.clamp(0, summary.categories.length - 1)];
+    final category = categories[_selectedIndex.clamp(0, categories.length - 1)];
+    if (!widget.role.canManageAccountManagers) {
+      return Future.value(
+        _assignedSchoolAttentionPage(
+          schools: widget.schools,
+          category: category.category,
+          searchTerm: _query,
+          page: _page,
+          pageSize: _pageSize,
+        ),
+      );
+    }
     return widget.repository.getNeedsAttentionItems(
       category: category.category,
       searchTerm: _query,
@@ -1627,8 +2360,13 @@ class _AttentionSchoolsScreenState extends State<_AttentionSchoolsScreen> {
         }
 
         final summary = snapshot.data ?? _summary;
-        final categories =
-            summary?.categories ?? const <NeedsAttentionCategory>[];
+        final categories = _visibleAttentionCategories(
+          summary?.categories ?? const <NeedsAttentionCategory>[],
+        );
+        final totalCount = categories.fold<int>(
+          0,
+          (total, category) => total + category.count,
+        );
         final selectedCategory = categories.isEmpty
             ? null
             : categories[_selectedIndex.clamp(0, categories.length - 1)];
@@ -1642,7 +2380,7 @@ class _AttentionSchoolsScreenState extends State<_AttentionSchoolsScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Needs attention (${summary?.total ?? 0})',
+                'Needs attention ($totalCount)',
                 style: const TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.w800,
@@ -1650,19 +2388,15 @@ class _AttentionSchoolsScreenState extends State<_AttentionSchoolsScreen> {
               ),
               const SizedBox(height: 4),
               const Text(
-                'Grouped by the action Super Admin needs to take.',
+                'Grouped by the action you need to take.',
                 style: TextStyle(color: AppColors.muted, fontSize: 12),
               ),
               const SizedBox(height: 18),
               if (categories.isEmpty)
-                const Card(
-                  child: Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Text(
-                      'No current attention items.',
-                      style: TextStyle(color: AppColors.muted),
-                    ),
-                  ),
+                _AttentionEmptyState(
+                  onRefresh: () {
+                    setState(() => _summaryFuture = _loadSummary());
+                  },
                 )
               else ...[
                 Wrap(
@@ -1756,6 +2490,7 @@ class _AttentionSchoolsScreenState extends State<_AttentionSchoolsScreen> {
     try {
       switch (item.actionTarget) {
         case 'ACCOUNT_MANAGER_DETAIL':
+          if (!widget.role.canManageAccountManagers) break;
           final page = await widget.repository.getAccountManagerPage(
             searchTerm: item.title,
             userStatuses: const ['PENDING'],
@@ -1802,20 +2537,130 @@ class _AttentionSchoolsScreenState extends State<_AttentionSchoolsScreen> {
   Future<ManagedSchool?> _schoolForAttentionItem(
     NeedsAttentionItem item,
   ) async {
+    final code = _schoolCodeForAttentionItem(item);
     final local = widget.schools.cast<ManagedSchool?>().firstWhere(
-      (school) => school?.code == item.entityId,
+      (school) => school?.code == code || school?.name == item.title,
       orElse: () => null,
     );
     if (local != null) return local;
+    final fallback = _schoolReferenceForAttentionItem(item);
+    if (fallback != null) return fallback;
     final page = await widget.repository.getSchools(
-      searchTerm: item.entityId.isEmpty ? item.title : item.entityId,
+      searchTerm: code.isEmpty ? item.title : code,
       size: 10,
     );
     return page.schools.cast<ManagedSchool?>().firstWhere(
-      (school) => school?.code == item.entityId,
+      (school) => school?.code == code || school?.name == item.title,
       orElse: () => page.schools.isEmpty ? null : page.schools.first,
     );
   }
+
+  List<NeedsAttentionCategory> _categoriesForRole(
+    List<NeedsAttentionCategory> categories,
+  ) {
+    if (widget.role.canManageAccountManagers) return categories;
+    return categories
+        .where(
+          (category) =>
+              category.category != 'ACCOUNT_MANAGER_APPROVALS' &&
+              category.category != 'SCHOOL_APPROVALS',
+        )
+        .toList();
+  }
+
+  List<NeedsAttentionCategory> _visibleAttentionCategories(
+    List<NeedsAttentionCategory> categories,
+  ) {
+    return _categoriesForRole(
+      categories,
+    ).where((category) => category.count > 0).toList();
+  }
+}
+
+NeedsAttentionSummary _assignedSchoolAttentionSummary(
+  List<ManagedSchool> schools,
+) {
+  final categories = <NeedsAttentionCategory>[
+    NeedsAttentionCategory(
+      category: 'ONBOARDING_STALLED',
+      label: 'Onboarding stalled',
+      count: schools.where(_isAssignedSchoolOnboardingStalled).length,
+      priority: 'HIGH',
+    ),
+    NeedsAttentionCategory(
+      category: 'COMPLIANCE_MISSING',
+      label: 'Compliance missing',
+      count: schools.where(_isAssignedSchoolComplianceMissing).length,
+      priority: 'MEDIUM',
+    ),
+  ].where((category) => category.count > 0).toList();
+  return NeedsAttentionSummary(
+    total: categories.fold<int>(0, (total, category) => total + category.count),
+    categories: categories,
+  );
+}
+
+NeedsAttentionPage _assignedSchoolAttentionPage({
+  required List<ManagedSchool> schools,
+  required String category,
+  required String searchTerm,
+  required int page,
+  required int pageSize,
+}) {
+  final query = searchTerm.trim().toLowerCase();
+  final filtered = schools.where((school) {
+    final matchesCategory = switch (category) {
+      'ONBOARDING_STALLED' => _isAssignedSchoolOnboardingStalled(school),
+      'COMPLIANCE_MISSING' => _isAssignedSchoolComplianceMissing(school),
+      _ => false,
+    };
+    if (!matchesCategory) return false;
+    if (query.isEmpty) return true;
+    return school.name.toLowerCase().contains(query) ||
+        school.code.toLowerCase().contains(query) ||
+        school.region.toLowerCase().contains(query) ||
+        school.district.toLowerCase().contains(query);
+  }).toList();
+  final start = (page * pageSize).clamp(0, filtered.length);
+  final end = (start + pageSize).clamp(0, filtered.length);
+  final items = filtered.sublist(start, end).map((school) {
+    return NeedsAttentionItem(
+      id: '${category}_${school.code}',
+      category: category,
+      priority: category == 'ONBOARDING_STALLED' ? 'HIGH' : 'MEDIUM',
+      title: school.name,
+      description: category == 'ONBOARDING_STALLED'
+          ? 'Setup has not moved forward recently.'
+          : 'Registration or compliance information needs follow-up.',
+      entityType: 'SCHOOL',
+      entityId: school.code,
+      status: school.status.apiValue,
+      actionTarget: category == 'ONBOARDING_STALLED'
+          ? 'SCHOOL_ONBOARDING_FORM'
+          : 'SCHOOL_COMPLIANCE_SECTION',
+    );
+  }).toList();
+  return NeedsAttentionPage(
+    items: items,
+    totalElements: filtered.length,
+    totalPages: filtered.isEmpty ? 1 : ((filtered.length - 1) ~/ pageSize) + 1,
+    currentPage: page,
+    pageSize: pageSize,
+  );
+}
+
+bool _isAssignedSchoolOnboardingStalled(ManagedSchool school) {
+  return school.status.isOnboarding &&
+      school.progress > 0 &&
+      school.progress < 1;
+}
+
+bool _isAssignedSchoolComplianceMissing(ManagedSchool school) {
+  final reasons = school.needsAttentionReasons.join(' ').toLowerCase();
+  return reasons.contains('ges') ||
+      reasons.contains('business registration') ||
+      reasons.contains('compliance') ||
+      reasons.contains('registration missing');
 }
 
 class _AttentionSummaryCard extends StatelessWidget {
@@ -1974,6 +2819,116 @@ class _AttentionLoadingState extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _AttentionEmptyState extends StatelessWidget {
+  const _AttentionEmptyState({required this.onRefresh});
+
+  final VoidCallback onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 720;
+        final icon = Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: AppColors.green.withValues(alpha: .1),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: const Icon(Icons.task_alt_rounded, color: AppColors.green),
+        );
+        final content = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'No current attention items',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Account manager approvals, school approvals, stalled onboarding, and missing compliance items will appear here when they need action.',
+              style: TextStyle(color: AppColors.muted, height: 1.5),
+            ),
+            const SizedBox(height: 18),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: const [
+                _AttentionEmptyChip('Account manager approvals'),
+                _AttentionEmptyChip('School approvals'),
+                _AttentionEmptyChip('Onboarding stalled'),
+                _AttentionEmptyChip('Compliance missing'),
+              ],
+            ),
+          ],
+        );
+        final refreshButton = OutlinedButton.icon(
+          onPressed: onRefresh,
+          icon: const Icon(Icons.refresh_rounded),
+          label: const Text('Refresh'),
+        );
+
+        return SizedBox(
+          width: double.infinity,
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(28),
+              child: compact
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        icon,
+                        const SizedBox(height: 16),
+                        content,
+                        const SizedBox(height: 18),
+                        refreshButton,
+                      ],
+                    )
+                  : Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        icon,
+                        const SizedBox(width: 18),
+                        Expanded(child: content),
+                        const SizedBox(width: 18),
+                        refreshButton,
+                      ],
+                    ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _AttentionEmptyChip extends StatelessWidget {
+  const _AttentionEmptyChip(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.background,
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: AppColors.muted,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }
@@ -2441,11 +3396,6 @@ bool _isSchoolPendingApproval(ManagedSchool school) {
       school.status == SchoolStatus.completed;
 }
 
-String _approvalStatusLabel(ManagedSchool school) {
-  if (school.progress >= 1) return 'Ready';
-  return '${(school.progress * 100).round()}%';
-}
-
 ({String detail, IconData icon, Color color}) _activityForSchool(
   ManagedSchool school,
 ) {
@@ -2473,24 +3423,42 @@ String _approvalStatusLabel(ManagedSchool school) {
 }
 
 class _PortfolioAlerts extends StatelessWidget {
-  const _PortfolioAlerts({required this.data, required this.onViewAll});
+  const _PortfolioAlerts({
+    required this.data,
+    required this.role,
+    required this.onViewAll,
+    required this.onViewCategory,
+  });
 
   final AccountManagerSnapshot data;
+  final PlatformRole role;
   final VoidCallback onViewAll;
+  final ValueChanged<String> onViewCategory;
 
   @override
   Widget build(BuildContext context) {
-    final summary = data.needsAttentionSummary;
+    final summary = role.canManageAccountManagers
+        ? data.needsAttentionSummary
+        : _assignedSchoolAttentionSummary(data.schools);
     final groups =
         summary?.categories
+            .where(
+              (category) =>
+                  role.canManageAccountManagers ||
+                  category.category != 'ACCOUNT_MANAGER_APPROVALS',
+            )
             .map(_attentionGroupForCategory)
             .where((group) => group.count > 0)
             .toList() ??
         const <_AttentionGroup>[];
-    final totalCount = summary?.total ?? 0;
+    final totalCount = groups.fold<int>(
+      0,
+      (total, group) => total + group.count,
+    );
     final previewItems = groups
         .map(
           (group) => (
+            category: group.category,
             color: group.color,
             title: group.count == 1
                 ? group.title
@@ -2520,20 +3488,9 @@ class _PortfolioAlerts extends StatelessWidget {
                     color: item.color,
                     title: item.title,
                     detail: item.detail,
-                    onTap: onViewAll,
+                    onTap: () => onViewCategory(item.category),
                   ),
                 ),
-                if (totalCount > visible.length)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(18, 4, 18, 14),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton(
-                        onPressed: onViewAll,
-                        child: Text('+${totalCount - visible.length} more'),
-                      ),
-                    ),
-                  ),
               ],
             ),
     );
@@ -2705,6 +3662,8 @@ class _SchoolsScreen extends StatefulWidget {
     required this.accessToken,
     required this.onRefreshAccessToken,
     required this.schools,
+    required this.totalSchools,
+    required this.role,
     required this.onCreateSchool,
     required this.onViewSchool,
   });
@@ -2712,6 +3671,8 @@ class _SchoolsScreen extends StatefulWidget {
   final String? accessToken;
   final Future<String?> Function() onRefreshAccessToken;
   final List<ManagedSchool> schools;
+  final int totalSchools;
+  final PlatformRole role;
   final VoidCallback onCreateSchool;
   final ValueChanged<ManagedSchool> onViewSchool;
 
@@ -2768,6 +3729,8 @@ class _SchoolsScreenState extends State<_SchoolsScreen> {
   @override
   Widget build(BuildContext context) {
     final fallbackPage = _fallbackPage();
+    final displayedTotal =
+        _loadedSchoolsPage?.totalElements ?? widget.totalSchools;
     final regions = _lookupRegions.isNotEmpty
         ? ['All Regions', ..._lookupRegions]
         : [
@@ -2789,21 +3752,28 @@ class _SchoolsScreenState extends State<_SchoolsScreen> {
         children: [
           Row(
             children: [
-              const Expanded(
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Schools',
-                      style: TextStyle(
+                      widget.role.canViewAllSchools
+                          ? 'Schools ($displayedTotal)'
+                          : 'Assigned schools ($displayedTotal)',
+                      style: const TextStyle(
                         fontSize: 22,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-                    SizedBox(height: 4),
+                    const SizedBox(height: 4),
                     Text(
-                      'Browse schools by name, approval status, region, and district.',
-                      style: TextStyle(color: AppColors.muted, fontSize: 12),
+                      widget.role.canViewAllSchools
+                          ? 'Browse schools by name, approval status, region, and district.'
+                          : 'Browse the schools assigned to your account.',
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 12,
+                      ),
                     ),
                   ],
                 ),
@@ -2811,7 +3781,7 @@ class _SchoolsScreenState extends State<_SchoolsScreen> {
               FilledButton.icon(
                 onPressed: widget.onCreateSchool,
                 icon: const Icon(Icons.add_rounded),
-                label: const Text('Create school'),
+                label: const Text('Add School'),
               ),
             ],
           ),
@@ -3980,7 +4950,9 @@ class _PlatformSidebar extends StatelessWidget {
     required this.onOpenSchoolAdministrator,
     required this.schoolCount,
     required this.attentionCount,
+    required this.accountManagerCount,
     required this.role,
+    required this.userDisplayName,
   });
 
   final PlatformPage page;
@@ -3990,7 +4962,9 @@ class _PlatformSidebar extends StatelessWidget {
   final VoidCallback onOpenSchoolAdministrator;
   final int schoolCount;
   final int attentionCount;
+  final int accountManagerCount;
   final PlatformRole role;
+  final String userDisplayName;
 
   @override
   Widget build(BuildContext context) {
@@ -4049,7 +5023,7 @@ class _PlatformSidebar extends StatelessWidget {
                   ),
                   icon: const Icon(Icons.add_rounded, size: 18),
                   label: const Text(
-                    'Create school',
+                    'Add School',
                     style: TextStyle(fontWeight: FontWeight.w800),
                   ),
                 ),
@@ -4086,6 +5060,7 @@ class _PlatformSidebar extends StatelessWidget {
                     _PlatformNavItem(
                       icon: Icons.manage_accounts_rounded,
                       label: 'Account managers',
+                      badge: '$accountManagerCount',
                       active:
                           !creatingSchool &&
                           page == PlatformPage.accountManagers,
@@ -4099,38 +5074,40 @@ class _PlatformSidebar extends StatelessWidget {
               padding: const EdgeInsets.all(10),
               child: Column(
                 children: [
-                  Material(
-                    color: const Color(0x22FFFFFF),
-                    borderRadius: BorderRadius.circular(9),
-                    child: InkWell(
-                      onTap: onOpenSchoolAdministrator,
+                  if (role.canManageAccountManagers) ...[
+                    Material(
+                      color: const Color(0x22FFFFFF),
                       borderRadius: BorderRadius.circular(9),
-                      child: const Padding(
-                        padding: EdgeInsets.all(10),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.swap_horiz_rounded,
-                              color: Colors.white,
-                              size: 18,
-                            ),
-                            SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                'Preview school admin',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 11.5,
-                                  fontWeight: FontWeight.w600,
+                      child: InkWell(
+                        onTap: onOpenSchoolAdministrator,
+                        borderRadius: BorderRadius.circular(9),
+                        child: const Padding(
+                          padding: EdgeInsets.all(10),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.swap_horiz_rounded,
+                                color: Colors.white,
+                                size: 18,
+                              ),
+                              SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  'Preview school admin',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 10),
+                    const SizedBox(height: 10),
+                  ],
                   Row(
                     children: [
                       const CircleAvatar(
@@ -4150,8 +5127,8 @@ class _PlatformSidebar extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text(
-                              'Abena Mensah',
+                            Text(
+                              userDisplayName,
                               style: TextStyle(
                                 color: Colors.white,
                                 fontSize: 12,

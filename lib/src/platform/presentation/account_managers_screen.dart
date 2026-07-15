@@ -10,12 +10,16 @@ class AccountManagersScreen extends StatefulWidget {
   const AccountManagersScreen({
     super.key,
     required this.repository,
+    required this.role,
     required this.schools,
     required this.onViewManager,
+    required this.onManagersChanged,
   });
   final PlatformRepository repository;
+  final PlatformRole role;
   final List<ManagedSchool> schools;
   final ValueChanged<AccountManagerProfile> onViewManager;
+  final VoidCallback onManagersChanged;
 
   @override
   State<AccountManagersScreen> createState() => _AccountManagersScreenState();
@@ -30,6 +34,7 @@ class _AccountManagersScreenState extends State<AccountManagersScreen> {
   AccountManagerStatus? _filter;
   int _page = 0;
   String _searchTerm = '';
+  final List<AccountManagerProfile> _recentlyInvitedManagers = [];
 
   @override
   void initState() {
@@ -44,13 +49,14 @@ class _AccountManagersScreenState extends State<AccountManagersScreen> {
     super.dispose();
   }
 
-  Future<AccountManagerPage> _loadManagers() {
-    return widget.repository.getAccountManagerPage(
+  Future<AccountManagerPage> _loadManagers() async {
+    final page = await widget.repository.getAccountManagerPage(
       searchTerm: _searchTerm,
       userStatuses: _statusesFor(_filter),
       page: _page,
       size: _pageSize,
     );
+    return _mergeRecentlyInvitedManagers(page);
   }
 
   void _reload() {
@@ -85,12 +91,61 @@ class _AccountManagersScreenState extends State<AccountManagersScreen> {
   }
 
   Future<void> _openCreateDialog() async {
-    final created = await showDialog<bool>(
+    final created = await showDialog<AccountManagerProfile>(
       context: context,
-      builder: (context) =>
-          _CreateAccountManagerDialog(repository: widget.repository),
+      builder: (context) => _CreateAccountManagerDialog(
+        repository: widget.repository,
+        role: widget.role,
+      ),
     );
-    if (created == true) _reload();
+    if (created == null) return;
+    setState(() {
+      _recentlyInvitedManagers.removeWhere(
+        (manager) =>
+            manager.id == created.id ||
+            manager.email.toLowerCase() == created.email.toLowerCase(),
+      );
+      _recentlyInvitedManagers.insert(0, created);
+      _filter = AccountManagerStatus.invited;
+      _page = 0;
+      _searchTerm = '';
+      _searchController.clear();
+      _managers = _loadManagers();
+    });
+    widget.onManagersChanged();
+  }
+
+  AccountManagerPage _mergeRecentlyInvitedManagers(AccountManagerPage page) {
+    final localManagers = _recentlyInvitedManagers
+        .where(_matchesCurrentView)
+        .where(
+          (local) => !page.managers.any(
+            (remote) =>
+                remote.id == local.id ||
+                remote.email.toLowerCase() == local.email.toLowerCase(),
+          ),
+        )
+        .toList();
+    if (localManagers.isEmpty || page.currentPage != 0) return page;
+    final merged = [...localManagers, ...page.managers];
+    return AccountManagerPage(
+      managers: merged,
+      totalElements: page.totalElements + localManagers.length,
+      totalPages: page.totalPages,
+      currentPage: page.currentPage,
+      pageSize: page.pageSize,
+    );
+  }
+
+  bool _matchesCurrentView(AccountManagerProfile manager) {
+    final statusMatches = _filter == null || manager.status == _filter;
+    if (!statusMatches) return false;
+    final query = _searchTerm.trim().toLowerCase();
+    if (query.isEmpty) return true;
+    return manager.name.toLowerCase().contains(query) ||
+        manager.email.toLowerCase().contains(query) ||
+        manager.phone.toLowerCase().contains(query) ||
+        manager.region.toLowerCase().contains(query);
   }
 
   @override
@@ -227,8 +282,8 @@ List<String> _statusesFor(AccountManagerStatus? status) {
   return switch (status) {
     null => const [],
     AccountManagerStatus.active => const ['ACTIVE'],
-    AccountManagerStatus.pendingApproval => const ['PENDING'],
-    AccountManagerStatus.invited => const ['PENDING'],
+    AccountManagerStatus.pendingApproval => const ['PENDING', 'PENDING_APPROVAL'],
+    AccountManagerStatus.invited => const ['INVITED'],
     AccountManagerStatus.suspended => const ['SUSPENDED'],
   };
 }
@@ -244,6 +299,7 @@ class _StatusTabs extends StatelessWidget {
     const tabs = <(String, AccountManagerStatus?)>[
       ('All', null),
       ('Active', AccountManagerStatus.active),
+      ('Invited', AccountManagerStatus.invited),
       ('Pending approval', AccountManagerStatus.pendingApproval),
       ('Suspended', AccountManagerStatus.suspended),
     ];
@@ -291,8 +347,10 @@ class _ManagerHeader extends StatelessWidget {
       child: const Row(
         children: [
           Expanded(flex: 3, child: Text('ACCOUNT MANAGER', style: style)),
-          SizedBox(width: 130, child: Text('VERIFICATION', style: style)),
-          SizedBox(width: 90, child: Text('SCHOOLS', style: style)),
+          SizedBox(
+            width: 90,
+            child: Center(child: Text('SCHOOLS', style: style)),
+          ),
           SizedBox(width: 130, child: Text('STATUS', style: style)),
           SizedBox(width: 130, child: Text('LAST ACTIVE', style: style)),
           SizedBox(width: 90, child: Text('ACTIONS', style: style)),
@@ -354,13 +412,14 @@ class _ManagerRow extends StatelessWidget {
             ),
             if (wide) ...[
               SizedBox(
-                width: 130,
-                child: _Tag(
-                  label: manager.verified ? 'Verified' : 'Unverified',
-                  color: manager.verified ? AppColors.green : AppColors.amber,
+                width: 90,
+                child: Center(
+                  child: Text(
+                    '${manager.schoolCount}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
                 ),
               ),
-              SizedBox(width: 90, child: Text('${manager.schoolCount}')),
               SizedBox(
                 width: 130,
                 child: _Tag(label: status.$1, color: status.$2),
@@ -368,7 +427,7 @@ class _ManagerRow extends StatelessWidget {
               SizedBox(
                 width: 130,
                 child: Text(
-                  manager.lastActive,
+                  _formatAccountManagerDate(manager.lastActive),
                   style: const TextStyle(fontSize: 11.5),
                 ),
               ),
@@ -729,8 +788,12 @@ class _AccountManagersError extends StatelessWidget {
 }
 
 class _CreateAccountManagerDialog extends StatefulWidget {
-  const _CreateAccountManagerDialog({required this.repository});
+  const _CreateAccountManagerDialog({
+    required this.repository,
+    required this.role,
+  });
   final PlatformRepository repository;
+  final PlatformRole role;
 
   @override
   State<_CreateAccountManagerDialog> createState() =>
@@ -745,6 +808,7 @@ class _CreateAccountManagerDialogState
   final _email = TextEditingController();
   final _phone = TextEditingController();
   DateTime? _dateOfBirth;
+  PlatformRole? _accountType;
   String? _inviteMethod;
   bool _submitting = false;
 
@@ -759,17 +823,19 @@ class _CreateAccountManagerDialogState
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_dateOfBirth == null || _inviteMethod == null) {
+    if (_accountType == null || _dateOfBirth == null || _inviteMethod == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Select a date of birth and invitation method.'),
+          content: Text(
+            'Select an account type, date of birth, and invitation method.',
+          ),
         ),
       );
       return;
     }
     setState(() => _submitting = true);
     try {
-      await widget.repository.createAccountManager(
+      final created = await widget.repository.createAccountManager(
         AccountManagerDraft(
           firstName: _firstName.text.trim(),
           lastName: _lastName.text.trim(),
@@ -777,9 +843,10 @@ class _CreateAccountManagerDialogState
           phone: _phone.text.trim(),
           dateOfBirth: _dateOfBirth!,
           inviteMethod: _inviteMethod!,
+          role: _accountType!,
         ),
       );
-      if (mounted) Navigator.pop(context, true);
+      if (mounted) Navigator.pop(context, created);
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -793,6 +860,15 @@ class _CreateAccountManagerDialogState
 
   @override
   Widget build(BuildContext context) {
+    final accountTypes = widget.role == PlatformRole.superAdmin
+        ? const [
+            PlatformRole.accountManager,
+            PlatformRole.superAccountManager,
+          ]
+        : const [
+            PlatformRole.accountManager,
+          ];
+
     return AlertDialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
@@ -819,6 +895,28 @@ class _CreateAccountManagerDialogState
                   ),
                 ),
                 const SizedBox(height: 18),
+                _LabeledControl(
+                  label: 'Account type',
+                  child: DropdownButtonFormField<PlatformRole>(
+                    value: _accountType,
+                    hint: const Text('Select account type'),
+                    validator: (value) =>
+                        value == null ? 'Select account type' : null,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                    ),
+                    items: accountTypes
+                        .map(
+                          (role) => DropdownMenuItem(
+                            value: role,
+                            child: Text(role.label),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) => setState(() => _accountType = value),
+                  ),
+                ),
+                const SizedBox(height: 14),
                 Row(
                   children: [
                     Expanded(
@@ -843,6 +941,8 @@ class _CreateAccountManagerDialogState
                   label: 'Email',
                   hint: 'e.g. john.doe@example.com',
                   controller: _email,
+                  keyboardType: TextInputType.emailAddress,
+                  validator: _validateEmailAddress,
                 ),
                 const SizedBox(height: 14),
                 _DialogField(
@@ -892,6 +992,8 @@ class _CreateAccountManagerDialogState
                   child: DropdownButtonFormField<String>(
                     value: _inviteMethod,
                     hint: const Text('Select invite method'),
+                    validator: (value) =>
+                        value == null ? 'Select invite method' : null,
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
                     ),
@@ -930,10 +1032,14 @@ class _DialogField extends StatelessWidget {
     required this.label,
     required this.controller,
     required this.hint,
+    this.keyboardType,
+    this.validator,
   });
   final String label;
   final TextEditingController controller;
   final String hint;
+  final TextInputType? keyboardType;
+  final String? Function(String?)? validator;
 
   @override
   Widget build(BuildContext context) {
@@ -941,9 +1047,12 @@ class _DialogField extends StatelessWidget {
       label: label,
       child: TextFormField(
         controller: controller,
-        validator: (value) => value == null || value.trim().isEmpty
-            ? 'This field is required'
-            : null,
+        keyboardType: keyboardType,
+        validator:
+            validator ??
+            (value) => value == null || value.trim().isEmpty
+                ? 'This field is required'
+                : null,
         decoration: InputDecoration(
           hintText: hint,
           border: const OutlineInputBorder(),
@@ -977,4 +1086,64 @@ class _LabeledControl extends StatelessWidget {
       ],
     );
   }
+}
+
+String? _validateEmailAddress(String? value) {
+  final email = value?.trim() ?? '';
+  if (email.isEmpty) return 'Email address is required';
+  final valid = RegExp(
+    r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$",
+    caseSensitive: false,
+  ).hasMatch(email);
+  return valid ? null : 'Enter a valid email address.';
+}
+
+String _formatAccountManagerDate(String value) {
+  final raw = value.trim();
+  if (raw.isEmpty) return 'Not yet active';
+  if (raw.toLowerCase() == 'never' || raw.toLowerCase() == 'not yet active') {
+    return 'Not yet active';
+  }
+
+  final arrayDate = RegExp(
+    r'^\[(\d{4}),\s*(\d{1,2}),\s*(\d{1,2})',
+  ).firstMatch(raw);
+  if (arrayDate != null) {
+    final year = int.tryParse(arrayDate.group(1)!);
+    final month = int.tryParse(arrayDate.group(2)!);
+    final day = int.tryParse(arrayDate.group(3)!);
+    if (year != null && month != null && day != null) {
+      return _formatDayMonthYear(DateTime(year, month, day));
+    }
+  }
+
+  final parsed = DateTime.tryParse(raw.replaceFirst(' ', 'T'));
+  if (parsed == null) return raw;
+  return _formatDayMonthYear(parsed);
+}
+
+String _formatDayMonthYear(DateTime value) {
+  const months = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  final day = value.day;
+  final suffix = switch (day) {
+    11 || 12 || 13 => 'th',
+    _ when day % 10 == 1 => 'st',
+    _ when day % 10 == 2 => 'nd',
+    _ when day % 10 == 3 => 'rd',
+    _ => 'th',
+  };
+  return '$day$suffix ${months[value.month - 1]} ${value.year}';
 }

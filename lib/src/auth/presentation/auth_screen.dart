@@ -13,6 +13,7 @@ enum _AuthMode {
   firstLoginDob,
   firstLoginPassword,
   firstLoginPasswordDone,
+  accountPendingApproval,
 }
 
 class AuthScreen extends StatefulWidget {
@@ -133,18 +134,25 @@ class _AuthScreenState extends State<AuthScreen> {
           await _api.changePasswordAfterVerification(
             accessToken: session.accessToken,
             userName: session.userName,
+            currentPassword: _password.text,
             newPassword: _newPassword.text,
           );
           setState(() {
             _pendingSession = null;
-            _mode = _AuthMode.firstLoginPasswordDone;
+            _mode = session.isAccountManagerRole
+                ? _AuthMode.accountPendingApproval
+                : _AuthMode.firstLoginPasswordDone;
             _message =
-                'Password updated. Sign in again with your new password.';
+                session.isAccountManagerRole
+                ? 'Password updated. Your account is now waiting for approval.'
+                : 'Password updated. Sign in again with your new password.';
             _password.clear();
             _newPassword.clear();
             _confirmPassword.clear();
           });
         case _AuthMode.firstLoginPasswordDone:
+          _backToLogin();
+        case _AuthMode.accountPendingApproval:
           _backToLogin();
       }
     } on AuthException catch (error) {
@@ -163,21 +171,27 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   void _continueAfterLogin(AuthSession session) {
-    final role = session.role.toUpperCase();
-    final bypassSetup =
-        role == 'SUPER_ADMIN' ||
-        role == 'SUPER_ACCOUNT_MANAGER' ||
-        role == 'ACCOUNT_MANAGER' ||
-        role == 'ACCOUNT_MANAGER_UNVERIFIED' ||
-        role == 'ACCOUNT_MANAGER_VERIFIED_STAFF' ||
-        session.isAccountManager;
+    if (session.isBlockedFromLogin) {
+      setState(() {
+        _pendingSession = null;
+        _message = session.loginBlockMessage;
+        _isError = true;
+        _password.clear();
+      });
+      return;
+    }
 
-    if (!bypassSetup && session.requiresDateOfBirth) {
+    final role = session.role.toUpperCase();
+    final bypassSetup = role == 'SUPER_ADMIN';
+    final isAccountManager = session.isAccountManagerRole;
+
+    if (!bypassSetup && isAccountManager && session.mustChangePassword) {
       setState(() {
         _pendingSession = session;
-        _mode = _AuthMode.firstLoginDob;
-        _message = 'Confirm your date of birth to activate this account.';
-        _dateOfBirth.clear();
+        _mode = _AuthMode.firstLoginPassword;
+        _message = 'Create your own password before entering the dashboard.';
+        _newPassword.clear();
+        _confirmPassword.clear();
       });
       return;
     }
@@ -193,10 +207,33 @@ class _AuthScreenState extends State<AuthScreen> {
       return;
     }
 
+    if (!bypassSetup && !isAccountManager && session.requiresDateOfBirth) {
+      setState(() {
+        _pendingSession = session;
+        _mode = _AuthMode.firstLoginDob;
+        _message = 'Confirm your date of birth to activate this account.';
+        _dateOfBirth.clear();
+      });
+      return;
+    }
+
+    if (!bypassSetup && session.isPendingAccountManagerApproval) {
+      setState(() {
+        _pendingSession = null;
+        _mode = _AuthMode.accountPendingApproval;
+        _message =
+            'Your account is waiting for Super Admin approval before dashboard access.';
+        _password.clear();
+        _newPassword.clear();
+        _confirmPassword.clear();
+      });
+      return;
+    }
+
     widget.onAuthenticated(
       session.copyWith(
         requiresDateOfBirth: false,
-        mustChangePassword: bypassSetup ? session.mustChangePassword : false,
+        mustChangePassword: false,
       ),
     );
   }
@@ -523,6 +560,10 @@ class _AuthScreenState extends State<AuthScreen> {
         ];
       case _AuthMode.firstLoginPasswordDone:
         return const [_SuccessPanel()];
+      case _AuthMode.accountPendingApproval:
+        return const [
+          _PendingApprovalPanel(),
+        ];
     }
   }
 
@@ -537,6 +578,7 @@ class _AuthScreenState extends State<AuthScreen> {
       _AuthMode.firstLoginDob => 'Confirm Identity',
       _AuthMode.firstLoginPassword => 'Update Password',
       _AuthMode.firstLoginPasswordDone => 'Back to Login',
+      _AuthMode.accountPendingApproval => 'Back to Login',
     };
   }
 
@@ -758,6 +800,7 @@ class _Header extends StatelessWidget {
       _AuthMode.firstLoginDob => 'Confirm identity',
       _AuthMode.firstLoginPassword => 'Create your password',
       _AuthMode.firstLoginPasswordDone => 'Password updated',
+      _AuthMode.accountPendingApproval => 'Waiting for approval',
     };
     final subtitle = switch (mode) {
       _AuthMode.login => 'Sign in to continue to your SMA workspace.',
@@ -771,9 +814,11 @@ class _Header extends StatelessWidget {
       _AuthMode.firstLoginDob =>
         'This is required the first time you activate your staff account.',
       _AuthMode.firstLoginPassword =>
-        'Set a private password before accessing your school dashboard.',
+        'Set a private password before your account is sent for approval.',
       _AuthMode.firstLoginPasswordDone =>
         'Your account is ready. Sign in again with the new password.',
+      _AuthMode.accountPendingApproval =>
+        'A Super Admin must approve this account before dashboard access is enabled.',
     };
 
     return Column(
@@ -948,6 +993,38 @@ class _SuccessPanel extends StatelessWidget {
           'Your password has been updated successfully.',
           textAlign: TextAlign.center,
           style: TextStyle(fontWeight: FontWeight.w800),
+        ),
+      ],
+    ),
+  );
+}
+
+class _PendingApprovalPanel extends StatelessWidget {
+  const _PendingApprovalPanel();
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(18),
+    decoration: BoxDecoration(
+      color: AppColors.amber.withValues(alpha: .08),
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: AppColors.amber.withValues(alpha: .2)),
+    ),
+    child: const Column(
+      children: [
+        Icon(Icons.hourglass_top_rounded, color: AppColors.amber, size: 38),
+        SizedBox(height: 10),
+        Text(
+          'Your account is waiting for approval.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontWeight: FontWeight.w800),
+        ),
+        SizedBox(height: 8),
+        Text(
+          'A Super Admin must approve your account before you can access the dashboard.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: AppColors.muted, height: 1.4),
         ),
       ],
     ),

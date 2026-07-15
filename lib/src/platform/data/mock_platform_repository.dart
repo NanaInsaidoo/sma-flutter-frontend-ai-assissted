@@ -406,6 +406,15 @@ class MockPlatformRepository implements PlatformRepository {
   }
 
   @override
+  Future<void> changeSchoolStatus({
+    required String customSchoolId,
+    required SchoolStatus status,
+    String? reason,
+  }) async {
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+  }
+
+  @override
   Future<String> getSchoolDocumentDownloadUrl({
     required String customSchoolId,
     required String documentId,
@@ -644,6 +653,7 @@ class MockPlatformRepository implements PlatformRepository {
     await Future<void>.delayed(const Duration(milliseconds: 650));
     final accountManager = AccountManagerProfile(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
+      userId: DateTime.now().millisecondsSinceEpoch.toString(),
       name: '${draft.firstName} ${draft.lastName}',
       email: draft.email,
       phone: draft.phone,
@@ -659,6 +669,69 @@ class MockPlatformRepository implements PlatformRepository {
     );
     _accountManagers.add(accountManager);
     return accountManager;
+  }
+
+  @override
+  Future<AccountManagerProfile> updateAccountManagerStatus({
+    required String accountManagerId,
+    required AccountManagerStatus status,
+    String? reason,
+  }) async {
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    final index = _accountManagers.indexWhere(
+      (manager) => manager.id == accountManagerId,
+    );
+    if (index < 0) return _accountManagers.first;
+    final current = _accountManagers[index];
+    final updated = AccountManagerProfile(
+      id: current.id,
+      userId: current.userId,
+      name: current.name,
+      email: current.email,
+      phone: current.phone,
+      region: current.region,
+      schoolCount: current.schoolCount,
+      activeSchoolCount: current.activeSchoolCount,
+      status: status,
+      lastActive: current.lastActive,
+      joined: current.joined,
+      inviteMethod: current.inviteMethod,
+      verified: current.verified,
+      bio: current.bio,
+    );
+    _accountManagers[index] = updated;
+    return updated;
+  }
+
+  @override
+  Future<void> deleteAccountManager({
+    required String accountManagerId,
+    String? reason,
+  }) async {
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    _accountManagers.removeWhere((manager) => manager.id == accountManagerId);
+  }
+
+  @override
+  Future<SchoolAdministratorInviteResult> forceResetAccountManagerPassword({
+    required AccountManagerProfile manager,
+  }) async {
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    return SchoolAdministratorInviteResult(
+      message: 'Password reset successfully for ${manager.email}.',
+      temporaryPassword: 'Temp123!',
+    );
+  }
+
+  @override
+  Future<SchoolAdministratorInviteResult> resendAccountManagerCredentials({
+    required AccountManagerProfile manager,
+  }) async {
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    return SchoolAdministratorInviteResult(
+      message: 'Temporary credentials have been sent to ${manager.email}.',
+      temporaryPassword: 'Temp123!',
+    );
   }
 
   @override
@@ -712,6 +785,6 @@ class MockPlatformRepository implements PlatformRepository {
 String _mockUserStatus(AccountManagerStatus status) => switch (status) {
   AccountManagerStatus.active => 'ACTIVE',
   AccountManagerStatus.pendingApproval => 'PENDING',
-  AccountManagerStatus.invited => 'PENDING',
+  AccountManagerStatus.invited => 'INVITED',
   AccountManagerStatus.suspended => 'SUSPENDED',
 };

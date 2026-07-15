@@ -63,7 +63,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('ACTIVE · 4 streams'), findsOneWidget);
+    expect(find.text('4 streams selected'), findsOneWidget);
   });
 }
 

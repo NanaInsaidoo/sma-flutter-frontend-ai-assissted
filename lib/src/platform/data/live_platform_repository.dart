@@ -12,12 +12,14 @@ class LivePlatformRepository implements PlatformRepository {
   LivePlatformRepository({
     required this.accessToken,
     this.userDisplayName,
+    this.role = PlatformRole.superAdmin,
     this.onRefreshAccessToken,
     http.Client? client,
   }) : _client = client ?? http.Client();
 
   String? accessToken;
   final String? userDisplayName;
+  final PlatformRole role;
   final Future<String?> Function()? onRefreshAccessToken;
   final http.Client _client;
 
@@ -44,31 +46,42 @@ class LivePlatformRepository implements PlatformRepository {
     }
   }
 
+  bool get _usesManagedSchoolEndpoint => role == PlatformRole.accountManager;
+
   @override
   Future<AccountManagerSnapshot> getAccountManagerDashboard() async {
     _requireApi();
 
-    final dashboardResponse = await _getFirst([
-      '/api/super-admin/dashboard',
-      '/api/super-admin/dashboard/stats',
-      '/api/dashboard/super-admin',
-    ], purpose: 'Super Admin dashboard');
-    final schoolsResponse = await _getFirst([
-      '/api/super-admin/dashboard/schools?page=0&size=100',
-      '/api/schools?page=0&size=100',
-      '/api/schools',
-    ], purpose: 'schools');
+    if (_usesManagedSchoolEndpoint) {
+      final schoolsPage = await _getManagedSchoolsPage(page: 0, size: 100);
+      return AccountManagerSnapshot(
+        managerName: _dashboardManagerName(const {}),
+        schools: schoolsPage.schools,
+        accountManagers: 0,
+        pendingApprovals: 0,
+        totalSchoolsValue: schoolsPage.totalElements,
+        activeSchoolsValue: schoolsPage.schools
+            .where((school) => school.status.isApproved)
+            .length,
+        totalSchoolsCaption: 'Schools assigned to you',
+        activeSchoolsCaption: 'Approved assigned schools',
+      );
+    }
 
+    final dashboardResponse = await _get('/api/super-admin/dashboard');
     final dashboard = _asMap(_unwrap(dashboardResponse));
     final statsCandidate = dashboard['stats'];
     final stats = _asMap(
       statsCandidate is Map<String, dynamic> ? statsCandidate : dashboard,
     );
-    final schools = _asList(
-      _unwrap(schoolsResponse),
-    ).map(_schoolFromJson).toList();
-    final accountManagers = await _getAccountManagersForDashboard();
-    final needsAttention = await getNeedsAttentionSummary();
+    final schools = await _getDashboardSchoolsForOverview();
+    final roleScopedManagerTotals = role == PlatformRole.superAccountManager
+        ? await _getRoleScopedAccountManagerTotals()
+        : null;
+    final accountManagers = roleScopedManagerTotals == null
+        ? await _getAccountManagersForDashboard()
+        : const <AccountManagerProfile>[];
+    final needsAttention = await _getNeedsAttentionForDashboard();
 
     return AccountManagerSnapshot(
       managerName: _dashboardManagerName(dashboard),
@@ -76,8 +89,10 @@ class LivePlatformRepository implements PlatformRepository {
       totalSchoolsValue: _statValue(stats, 'totalSchools').$1,
       activeSchoolsValue: _statValue(stats, 'activeSchools').$1,
       accountManagers:
+          roleScopedManagerTotals?.total ??
           _statValue(stats, 'accountManagers').$1 ?? accountManagers.length,
       pendingApprovals:
+          roleScopedManagerTotals?.pending ??
           _statValue(stats, 'pendingApprovals').$1 ??
           accountManagers
               .where(
@@ -87,8 +102,12 @@ class LivePlatformRepository implements PlatformRepository {
               .length,
       totalSchoolsCaption: _statValue(stats, 'totalSchools').$2,
       activeSchoolsCaption: _statValue(stats, 'activeSchools').$2,
-      accountManagersCaption: _statValue(stats, 'accountManagers').$2,
-      pendingApprovalsCaption: _statValue(stats, 'pendingApprovals').$2,
+      accountManagersCaption:
+          roleScopedManagerTotals?.caption ??
+          _statValue(stats, 'accountManagers').$2,
+      pendingApprovalsCaption:
+          roleScopedManagerTotals?.pendingCaption ??
+          _statValue(stats, 'pendingApprovals').$2,
       needsAttentionSummary: needsAttention,
     );
   }
@@ -177,6 +196,39 @@ class LivePlatformRepository implements PlatformRepository {
   }) async {
     _requireApi();
 
+    if (_usesManagedSchoolEndpoint) {
+      final managedPage = await _getManagedSchoolsPage(page: page, size: size);
+      final filteredSchools = managedPage.schools
+          .where(
+            (school) => _matchesApiFallbackFilters(
+              school,
+              searchTerm: searchTerm,
+              region: region,
+              district: district,
+              status: status,
+              accountManager: accountManagerId,
+            ),
+          )
+          .toList();
+      final hasClientFilters =
+          (searchTerm?.trim().isNotEmpty ?? false) ||
+          _apiRegion(region) != null ||
+          (district?.trim().isNotEmpty ?? false) &&
+              district?.trim() != 'All Districts' ||
+          _apiSchoolStatus(status) != null ||
+          (accountManagerId?.trim().isNotEmpty ?? false) &&
+              accountManagerId?.trim() != 'All AMs';
+      return ManagedSchoolPage(
+        schools: filteredSchools,
+        totalElements: hasClientFilters
+            ? filteredSchools.length
+            : managedPage.totalElements,
+        totalPages: hasClientFilters ? 1 : managedPage.totalPages,
+        currentPage: hasClientFilters ? 0 : managedPage.currentPage,
+        pageSize: managedPage.pageSize,
+      );
+    }
+
     final query = <String, String>{
       'page': page.toString(),
       'size': size.toString(),
@@ -204,21 +256,9 @@ class LivePlatformRepository implements PlatformRepository {
     }
 
     final queryString = Uri(queryParameters: query).query;
-    final hasAddressFilter =
-        cleanRegion != null ||
-        (cleanDistrict != null &&
-            cleanDistrict.isNotEmpty &&
-            cleanDistrict != 'All Districts');
-    final paths = hasAddressFilter
-        ? [
-            '/api/schools?$queryString',
-            '/api/super-admin/dashboard/schools?$queryString',
-          ]
-        : [
-            '/api/super-admin/dashboard/schools?$queryString',
-            '/api/schools?$queryString',
-          ];
-    final response = await _getFirst(paths, purpose: 'schools');
+    final response = await _get(
+      '/api/super-admin/dashboard/schools?$queryString',
+    );
     final responseMap = _asMap(response);
     final schools = _asList(_unwrap(response))
         .map(_schoolFromJson)
@@ -247,17 +287,42 @@ class LivePlatformRepository implements PlatformRepository {
     );
   }
 
+  Future<ManagedSchoolPage> _getManagedSchoolsPage({
+    required int page,
+    required int size,
+  }) async {
+    final query = Uri(
+      queryParameters: {
+        'page': page.toString(),
+        'size': size.toString(),
+        'sort': 'createdAt,desc',
+      },
+    ).query;
+    final response = await _get(
+      '/api/account-managers/schools/paginated?$query',
+    );
+    final responseMap = _asMap(response);
+    final schools = _asList(_unwrap(response)).map(_schoolFromJson).toList();
+    return ManagedSchoolPage(
+      schools: schools,
+      totalElements: _int(responseMap, [
+        'totalElements',
+        'total',
+        'totalSchools',
+      ], fallback: schools.length),
+      totalPages: _int(responseMap, ['totalPages'], fallback: 1),
+      currentPage: _int(responseMap, ['currentPage', 'number'], fallback: page),
+      pageSize: _int(responseMap, ['pageSize', 'size'], fallback: size),
+    );
+  }
+
   @override
   Future<SchoolOnboardingRecord> getSchoolOnboardingRecord(
     String customSchoolId,
   ) async {
     _requireApi();
     final encoded = Uri.encodeComponent(customSchoolId);
-    final response = await _getFirst([
-      '/api/schools/$encoded',
-      '/api/schools/$encoded/registration',
-      '/api/schools/$encoded/onboarding',
-    ], purpose: 'school onboarding record');
+    final response = await _get('/api/schools/$encoded');
     final data = _asMap(_unwrapSchoolRecord(response));
     return SchoolOnboardingRecord(
       data: data,
@@ -466,6 +531,20 @@ class LivePlatformRepository implements PlatformRepository {
   }
 
   @override
+  Future<void> changeSchoolStatus({
+    required String customSchoolId,
+    required SchoolStatus status,
+    String? reason,
+  }) async {
+    _requireApi();
+    final encoded = Uri.encodeComponent(customSchoolId);
+    await _put('/api/schools/$encoded/changeschoolstatus', {
+      'status': status.apiValue,
+      if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+    });
+  }
+
+  @override
   Future<String> getSchoolDocumentDownloadUrl({
     required String customSchoolId,
     required String documentId,
@@ -604,12 +683,31 @@ class LivePlatformRepository implements PlatformRepository {
       'temporaryPassword',
       'tempPassword',
     ]);
+    final createdUser = SchoolUserInfo(
+      id: _string(data, ['userId', 'id']),
+      name: [
+        invite.firstName.trim(),
+        invite.middleName.trim(),
+        invite.lastName.trim(),
+      ].where((part) => part.isNotEmpty).join(' '),
+      email: invite.email.trim(),
+      phoneNumber: _ghanaPhoneNumber(invite.phoneNumber),
+      role: 'ADMINISTRATOR',
+      status: 'INVITED',
+      lastLogin: 'Never',
+      username: username,
+      userType: 'STAFF',
+      customSchoolId: customSchoolId,
+      invitedAt: DateTime.now().toIso8601String(),
+      dateOfBirth: _isoDate(invite.dateOfBirth),
+    );
     return SchoolAdministratorInviteResult(
       message: _string(data, [
         'message',
       ], fallback: 'School administrator invitation sent successfully.'),
       username: username.isEmpty ? null : username,
       temporaryPassword: temporaryPassword.isEmpty ? null : temporaryPassword,
+      user: createdUser,
     );
   }
 
@@ -620,7 +718,10 @@ class LivePlatformRepository implements PlatformRepository {
     final response = await _get(
       '/api/user-management/schools/$encoded/users?page=0&size=100',
     );
-    return _asList(_unwrap(response)).map((item) {
+    final usersJson = response is Map<String, dynamic> && response['users'] != null
+        ? response['users']
+        : _unwrap(response);
+    return _asList(usersJson).map((item) {
       final map = _asMap(item);
       final firstName = _string(map, ['firstName']);
       final middleName = _string(map, ['middleName']);
@@ -1010,7 +1111,7 @@ class LivePlatformRepository implements PlatformRepository {
       'email': draft.email,
       'phoneNumber': draft.phone,
       'dateOfBirth': _apiDate(draft.dateOfBirth),
-      'role': 'ACCOUNT_MANAGER_UNVERIFIED',
+      'role': draft.role.apiRole,
       'userType': 'ADMIN',
       'privacyAgreementAccepted': true,
       'password': 'password',
@@ -1023,6 +1124,65 @@ class LivePlatformRepository implements PlatformRepository {
     } catch (_) {
       rethrow;
     }
+  }
+
+  @override
+  Future<AccountManagerProfile> updateAccountManagerStatus({
+    required String accountManagerId,
+    required AccountManagerStatus status,
+    String? reason,
+  }) async {
+    _requireApi();
+    final encoded = Uri.encodeComponent(accountManagerId);
+    final response = await _patch('/api/account-managers/$encoded/status', {
+      'status': _accountManagerStatusApiValue(status),
+      if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+    });
+    return _accountManagerFromJson(_unwrap(response));
+  }
+
+  @override
+  Future<void> deleteAccountManager({
+    required String accountManagerId,
+    String? reason,
+  }) async {
+    _requireApi();
+    final encoded = Uri.encodeComponent(accountManagerId);
+    await _delete('/api/account-managers/$encoded', {
+      if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+    });
+  }
+
+  @override
+  Future<SchoolAdministratorInviteResult> forceResetAccountManagerPassword({
+    required AccountManagerProfile manager,
+  }) async {
+    _requireApi();
+    final encoded = Uri.encodeComponent(manager.id);
+    final response = await _post(
+      '/api/account-managers/$encoded/reset-password',
+      const {},
+    );
+    return _credentialActionResult(
+      _asMap(_unwrap(response)),
+      fallback: 'Password reset successfully.',
+    );
+  }
+
+  @override
+  Future<SchoolAdministratorInviteResult> resendAccountManagerCredentials({
+    required AccountManagerProfile manager,
+  }) async {
+    _requireApi();
+    final encoded = Uri.encodeComponent(manager.id);
+    final response = await _post(
+      '/api/account-managers/$encoded/resend-credentials',
+      const {},
+    );
+    return _credentialActionResult(
+      _asMap(_unwrap(response)),
+      fallback: 'Temporary credentials sent successfully.',
+    );
   }
 
   @override
@@ -1501,28 +1661,71 @@ class LivePlatformRepository implements PlatformRepository {
     return _decodeOrThrow(response);
   }
 
-  Future<dynamic> _getFirst(
-    List<String> paths, {
-    required String purpose,
-  }) async {
-    Object? lastError;
-    for (final path in paths) {
-      try {
-        return await _get(path);
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    throw http.ClientException(
-      'Unable to load $purpose from the live API. ${lastError ?? ''}'.trim(),
-    );
-  }
-
   Future<List<AccountManagerProfile>> _getAccountManagersForDashboard() async {
     try {
       return await getAccountManagers();
     } catch (_) {
       return const [];
+    }
+  }
+
+  Future<
+    ({
+      int total,
+      int active,
+      int invited,
+      int pending,
+      String caption,
+      String pendingCaption,
+    })?
+  >
+  _getRoleScopedAccountManagerTotals() async {
+    try {
+      final total = await getAccountManagerPage(page: 0, size: 1);
+      final active = await getAccountManagerPage(
+        userStatuses: const ['ACTIVE'],
+        page: 0,
+        size: 1,
+      );
+      final invited = await getAccountManagerPage(
+        userStatuses: const ['INVITED'],
+        page: 0,
+        size: 1,
+      );
+      final pending = await getAccountManagerPage(
+        userStatuses: const ['PENDING'],
+        page: 0,
+        size: 1,
+      );
+      return (
+        total: total.totalElements,
+        active: active.totalElements,
+        invited: invited.totalElements,
+        pending: pending.totalElements,
+        caption: '${active.totalElements} active · ${invited.totalElements} invited',
+        pendingCaption: '${pending.totalElements} pending approval',
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<List<ManagedSchool>> _getDashboardSchoolsForOverview() async {
+    try {
+      final schoolsResponse = await _get(
+        '/api/super-admin/dashboard/schools?page=0&size=100',
+      );
+      return _asList(_unwrap(schoolsResponse)).map(_schoolFromJson).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<NeedsAttentionSummary?> _getNeedsAttentionForDashboard() async {
+    try {
+      return await getNeedsAttentionSummary();
+    } catch (_) {
+      return null;
     }
   }
 
@@ -1540,6 +1743,28 @@ class LivePlatformRepository implements PlatformRepository {
   Future<dynamic> _put(String path, Map<String, dynamic> body) async {
     final response = await _sendWithRefresh(
       () => _client.put(
+        Uri.parse('${PlatformApiClient.baseUrl}$path'),
+        headers: _headers,
+        body: jsonEncode(body),
+      ),
+    );
+    return _decodeOrThrow(response);
+  }
+
+  Future<dynamic> _patch(String path, Map<String, dynamic> body) async {
+    final response = await _sendWithRefresh(
+      () => _client.patch(
+        Uri.parse('${PlatformApiClient.baseUrl}$path'),
+        headers: _headers,
+        body: jsonEncode(body),
+      ),
+    );
+    return _decodeOrThrow(response);
+  }
+
+  Future<dynamic> _delete(String path, Map<String, dynamic> body) async {
+    final response = await _sendWithRefresh(
+      () => _client.delete(
         Uri.parse('${PlatformApiClient.baseUrl}$path'),
         headers: _headers,
         body: jsonEncode(body),
@@ -1788,7 +2013,8 @@ class LivePlatformRepository implements PlatformRepository {
     ]);
 
     return AccountManagerProfile(
-      id: _string(map, ['id', 'accountManagerId', 'userId']),
+      id: _string(map, ['id', 'accountManagerId']),
+      userId: _string(map, ['userId'], fallback: _string(map, ['id'])),
       name: fullName.isEmpty ? 'Account Manager' : fullName,
       email: _string(map, ['email'], fallback: draft?.email ?? ''),
       phone: _string(map, [
@@ -1934,9 +2160,18 @@ class LivePlatformRepository implements PlatformRepository {
     final value = status.toUpperCase();
     if (draft != null) return AccountManagerStatus.invited;
     if (value.contains('SUSPEND')) return AccountManagerStatus.suspended;
-    if (value.contains('PENDING')) return AccountManagerStatus.pendingApproval;
     if (value.contains('INVIT')) return AccountManagerStatus.invited;
+    if (value.contains('PENDING')) return AccountManagerStatus.pendingApproval;
     return AccountManagerStatus.active;
+  }
+
+  String _accountManagerStatusApiValue(AccountManagerStatus status) {
+    return switch (status) {
+      AccountManagerStatus.active => 'ACTIVE',
+      AccountManagerStatus.pendingApproval => 'PENDING',
+      AccountManagerStatus.invited => 'INVITED',
+      AccountManagerStatus.suspended => 'SUSPENDED',
+    };
   }
 
   String _string(

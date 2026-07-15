@@ -69,6 +69,7 @@ class SchoolCreationScreen extends StatefulWidget {
     required this.onBack,
     required this.onCreated,
     this.onViewCreated,
+    this.onStepSaved,
     this.initialLookups,
     this.lookupLoader,
     this.existingSchool,
@@ -86,6 +87,7 @@ class SchoolCreationScreen extends StatefulWidget {
   final VoidCallback onBack;
   final VoidCallback onCreated;
   final ValueChanged<String>? onViewCreated;
+  final VoidCallback? onStepSaved;
   final SchoolCreationLookups? initialLookups;
   final Future<SchoolCreationLookups> Function()? lookupLoader;
   final ManagedSchool? existingSchool;
@@ -157,7 +159,7 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
   final Map<String, PlatformFile> _documents = {};
   String? _customSchoolId;
   late SchoolCreationLookups _lookups =
-      (widget.initialLookups ?? SchoolCreationLookups.fallback()).copyWith(
+      (widget.initialLookups ?? SchoolCreationLookups.empty()).copyWith(
         gradeLevels: const [],
         gradeLevelIds: const {},
       );
@@ -775,6 +777,7 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
             return;
           }
           final progress = await _saveCurrentStep(index);
+          widget.onStepSaved?.call();
           if (widget.singleStepEdit) {
             await widget.onStepUpdated?.call();
             return;
@@ -862,14 +865,17 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
   Future<void> _submitSchool() async {
     if (_customSchoolId == null || _customSchoolId!.isEmpty) {
       final progress = await _saveCurrentStep(0);
+      widget.onStepSaved?.call();
       _applyOnboardingProgress(progress, fallbackNextStep: 1);
     }
     if (_customSchoolId != null && _customSchoolId!.isNotEmpty) {
       final progress = await _saveCurrentStep(8);
+      widget.onStepSaved?.call();
       _applyOnboardingProgress(progress, fallbackNextStep: 8);
       final submitted = await widget.repository.finishSchoolSetup(
         _customSchoolId!,
       );
+      widget.onStepSaved?.call();
       _applyOnboardingProgress(submitted.progress, fallbackNextStep: 8);
       if (!mounted) return;
       setState(() => _completedSteps = 9);
@@ -1188,29 +1194,67 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
       _socialMedia.text = _socialMediaLinks.first.handle;
     }
 
-    final term = _mapOf(data['currentAcademicTerm']);
+    final termCandidate = _firstMapOf(data, const [
+      'currentAcademicTerm',
+      'academicTerm',
+      'termCalendar',
+      'termDetails',
+      'currentTerm',
+    ]);
+    final term =
+        termCandidate.isNotEmpty ||
+            (data['academicYear'] == null &&
+                data['termType'] == null &&
+                data['events'] == null)
+        ? termCandidate
+        : data;
     _academicYear =
         _nameOf(term['academicYear']) ??
+        _text(term, ['academicYearName', 'academicYearLabel', 'yearName']) ??
         _text(_mapOf(term['academicYear']), ['year']) ??
         _academicYear;
-    _academicTerm = _nameOf(term['termType']) ?? _academicTerm;
+    _academicTerm =
+        _nameOf(term['termType']) ??
+        _text(term, ['termTypeName', 'academicTermName', 'termName']) ??
+        _academicTerm;
     _termDescription = _text(term, ['description']) ?? _termDescription;
-    _termStartDate = _parseDateValue(term['startDate']);
-    _termEndDate = _parseDateValue(term['endDate']);
+    _termStartDate = _parseDateValue(term['startDate']) ?? _termStartDate;
+    _termEndDate = _parseDateValue(term['endDate']) ?? _termEndDate;
+    final eventItems = _listOf(term['events']).isNotEmpty
+        ? _listOf(term['events'])
+        : _listOf(data['events']);
     _events
       ..clear()
       ..addAll(
-        _listOf(term['events']).map((item) {
+        eventItems.map((item) {
           final event = _mapOf(item);
+          final eventName = _text(event, ['name', 'eventName', 'title']) ?? '';
+          final eventTypeMap = _mapOf(event['eventType']);
+          final eventTypeId =
+              _intValue(eventTypeMap['id']) ?? _intValue(event['eventTypeId']);
+          final rawType =
+              (eventTypeId == null
+                  ? null
+                  : _labelForId(_lookups.eventTypeIds, eventTypeId)) ??
+              _eventTypeLabel(event['eventType']) ??
+              _text(event, ['eventTypeName', 'type']);
+          final matchedType = _matchingLookupLabel(
+            rawType,
+            _lookups.eventTypes,
+          );
+          final matchedName = _matchingLookupLabel(
+            eventName,
+            _lookups.eventTypes,
+          );
+          final type = matchedType ?? matchedName ?? 'Other';
+          final otherName = type == 'Other' ? eventName : '';
+          final eventDate = event['eventDate'] ?? event['date'];
           return _CalendarEvent(
-            type:
-                _nameOf(event['eventType']) ??
-                _text(event, ['name', 'eventName']) ??
-                'Other',
-            otherName: _text(event, ['name', 'eventName']) ?? '',
+            type: type,
+            otherName: otherName,
             description: _text(event, ['description']) ?? '',
-            startDate: _parseDateValue(event['startDate']),
-            endDate: _parseDateValue(event['endDate']),
+            startDate: _parseDateValue(event['startDate'] ?? eventDate),
+            endDate: _parseDateValue(event['endDate'] ?? eventDate),
             startTime: _parseTimeValue(
               event['startTime'],
               fallback: '00:00:00',
@@ -1281,6 +1325,17 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
     return <String, dynamic>{};
   }
 
+  Map<String, dynamic> _firstMapOf(
+    Map<String, dynamic> source,
+    List<String> keys,
+  ) {
+    for (final key in keys) {
+      final map = _mapOf(source[key]);
+      if (map.isNotEmpty) return map;
+    }
+    return <String, dynamic>{};
+  }
+
   List<dynamic> _listOf(dynamic value) => value is List ? value : const [];
 
   String? _text(Map<String, dynamic> map, List<String> keys) {
@@ -1297,6 +1352,34 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
     if (value is String && value.trim().isNotEmpty) return value.trim();
     final map = _mapOf(value);
     return _text(map, ['name', 'level', 'year', 'status']);
+  }
+
+  String? _eventTypeLabel(dynamic value) {
+    if (value is String && value.trim().isNotEmpty) return value.trim();
+    final map = _mapOf(value);
+    return _text(map, [
+      'name',
+      'eventTypeName',
+      'type',
+      'label',
+      'description',
+    ]);
+  }
+
+  String? _matchingLookupLabel(String? rawValue, List<String> options) {
+    final normalized = _normalizeLookupValue(rawValue);
+    if (normalized.isEmpty) return null;
+    for (final option in options) {
+      if (_normalizeLookupValue(option) == normalized) return option;
+    }
+    return null;
+  }
+
+  String _normalizeLookupValue(String? value) {
+    return (value ?? '').trim().toLowerCase().replaceAll(
+      RegExp(r'[^a-z0-9]'),
+      '',
+    );
   }
 
   int? _intValue(dynamic value) {
@@ -2185,7 +2268,9 @@ class _StepFormDialogState extends State<_StepFormDialog> {
         description: _termDescription.text,
         startDate: _termStartDate,
         endDate: _termEndDate,
-        events: _events,
+        events: _events
+            .map((event) => event.copy(isDraft: false))
+            .toList(growable: false),
       );
       widget.onDocumentsChanged(_documents);
       if (widget.embedded) {
@@ -2286,55 +2371,117 @@ class _StepFormDialogState extends State<_StepFormDialog> {
     return jsonEncode(value);
   }
 
+  bool get _hasUnsavedChanges => _stepSignature() != _initialSignature;
+
+  Future<bool> _confirmLeavingUnsavedStep() async {
+    if (!_hasUnsavedChanges || _saving) return true;
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('Leave without saving?'),
+        content: const Text(
+          'You have unsaved changes on this step. If you leave now, those changes will be lost.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Stay here'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Leave without saving'),
+          ),
+        ],
+      ),
+    );
+    return leave == true;
+  }
+
+  Future<void> _handleCancel() async {
+    if (await _confirmLeavingUnsavedStep()) {
+      widget.onCancel?.call();
+    }
+  }
+
+  Future<void> _handlePrevious() async {
+    if (await _confirmLeavingUnsavedStep()) {
+      widget.onPrevious?.call();
+    }
+  }
+
+  Future<void> _handleStepSelected(int step) async {
+    if (step == widget.index) return;
+    if (await _confirmLeavingUnsavedStep()) {
+      widget.onStepSelected?.call(step);
+    }
+  }
+
+  Future<void> _handleDialogCancel() async {
+    if (await _confirmLeavingUnsavedStep() && mounted) {
+      Navigator.pop(context);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (widget.embedded) return _buildEmbeddedWizard(context);
 
-    return AlertDialog(
-      title: Text(widget.step.title),
-      content: SizedBox(
-        width: 620,
-        child: Form(
-          key: _formKey,
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (_validationMessage != null) ...[
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: AppColors.red.withValues(alpha: .08),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      _validationMessage!,
-                      style: const TextStyle(
-                        color: AppColors.red,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        await _handleDialogCancel();
+      },
+      child: AlertDialog(
+        title: Text(widget.step.title),
+        content: SizedBox(
+          width: 620,
+          child: Form(
+            key: _formKey,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (_validationMessage != null) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppColors.red.withValues(alpha: .08),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        _validationMessage!,
+                        style: const TextStyle(
+                          color: AppColors.red,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 12),
+                    const SizedBox(height: 12),
+                  ],
+                  _content(),
                 ],
-                _content(),
-              ],
+              ),
             ),
           ),
         ),
+        actions: [
+          TextButton(
+            onPressed: _handleDialogCancel,
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: widget.index == 8 && !_reviewConfirmed ? null : _save,
+            child: Text(
+              widget.index == 8 ? 'Submit school' : 'Save & continue',
+            ),
+          ),
+        ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: widget.index == 8 && !_reviewConfirmed ? null : _save,
-          child: Text(widget.index == 8 ? 'Submit school' : 'Save & continue'),
-        ),
-      ],
     );
   }
 
@@ -2447,7 +2594,7 @@ class _StepFormDialogState extends State<_StepFormDialog> {
                       Row(
                         children: [
                           TextButton(
-                            onPressed: widget.onCancel,
+                            onPressed: _handleCancel,
                             child: const Text('Onboarding'),
                           ),
                           const Text(
@@ -2491,8 +2638,8 @@ class _StepFormDialogState extends State<_StepFormDialog> {
               index: widget.index,
               total: _SchoolCreationScreenState._steps.length,
               canSubmit: widget.index != 8 || _reviewConfirmed,
-              onBack: widget.onPrevious,
-              onCancel: widget.onCancel,
+              onBack: widget.onPrevious == null ? null : _handlePrevious,
+              onCancel: _handleCancel,
               onContinue: _save,
               primaryLabel: widget.singleStepEdit ? 'Save Changes' : null,
               saving: _saving,
@@ -2500,19 +2647,26 @@ class _StepFormDialogState extends State<_StepFormDialog> {
           ],
         );
 
-        return ColoredBox(
-          color: AppColors.background,
-          child: Row(
-            children: [
-              if (showRail)
-                _WizardRail(
-                  steps: _SchoolCreationScreenState._steps,
-                  current: widget.index,
-                  completed: widget.completedSteps,
-                  onSelected: widget.onStepSelected!,
-                ),
-              Expanded(child: pane),
-            ],
+        return PopScope(
+          canPop: false,
+          onPopInvokedWithResult: (didPop, result) async {
+            if (didPop) return;
+            await _handleCancel();
+          },
+          child: ColoredBox(
+            color: AppColors.background,
+            child: Row(
+              children: [
+                if (showRail)
+                  _WizardRail(
+                    steps: _SchoolCreationScreenState._steps,
+                    current: widget.index,
+                    completed: widget.completedSteps,
+                    onSelected: _handleStepSelected,
+                  ),
+                Expanded(child: pane),
+              ],
+            ),
           ),
         );
       },
@@ -3225,7 +3379,7 @@ class _SocialMediaFormRow {
   void dispose() => handle.dispose();
 }
 
-class _GradeLevelSetup extends StatelessWidget {
+class _GradeLevelSetup extends StatefulWidget {
   const _GradeLevelSetup({
     required this.streams,
     required this.gradeLevels,
@@ -3240,6 +3394,14 @@ class _GradeLevelSetup extends StatelessWidget {
   final String? error;
   final Future<void> Function() onRetry;
   final ValueChanged<Map<String, int>> onChanged;
+
+  @override
+  State<_GradeLevelSetup> createState() => _GradeLevelSetupState();
+}
+
+class _GradeLevelSetupState extends State<_GradeLevelSetup> {
+  final List<int> _draftRows = [];
+  int _nextDraftId = 0;
 
   static const groups = {
     'Early Childhood': ['Creche', 'Nursery 1', 'Nursery 2', 'KG1', 'KG2'],
@@ -3257,7 +3419,7 @@ class _GradeLevelSetup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (loading) {
+    if (widget.loading) {
       return const Center(
         child: Padding(
           padding: EdgeInsets.symmetric(vertical: 48),
@@ -3275,7 +3437,7 @@ class _GradeLevelSetup extends StatelessWidget {
         ),
       );
     }
-    if (gradeLevels.isEmpty) {
+    if (widget.gradeLevels.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 40),
@@ -3294,14 +3456,14 @@ class _GradeLevelSetup extends StatelessWidget {
               ),
               const SizedBox(height: 5),
               Text(
-                error ??
+                widget.error ??
                     'No placeholder grades are being used. Try the live platform again.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: AppColors.muted, fontSize: 12),
               ),
               const SizedBox(height: 16),
               OutlinedButton.icon(
-                onPressed: onRetry,
+                onPressed: widget.onRetry,
                 icon: const Icon(Icons.refresh_rounded),
                 label: const Text('Retry'),
               ),
@@ -3311,11 +3473,11 @@ class _GradeLevelSetup extends StatelessWidget {
       );
     }
     final groupedLevels = _groupedLevels;
-    final totalStreams = streams.values.fold(
+    final totalStreams = widget.streams.values.fold(
       0,
       (total, value) => total + value,
     );
-    final selectedPreview = streams.entries
+    final selectedPreview = widget.streams.entries
         .take(6)
         .map(
           (entry) =>
@@ -3339,7 +3501,7 @@ class _GradeLevelSetup extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      '${streams.length} grades selected',
+                      '${widget.streams.length} grades selected',
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w800,
@@ -3357,11 +3519,11 @@ class _GradeLevelSetup extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               Text(
-                streams.isEmpty
+                widget.streams.isEmpty
                     ? 'Select the grade levels this school currently runs. Streams can be changed later in school settings.'
                     : selectedPreview +
-                          (streams.length > 6
-                              ? ' · +${streams.length - 6} more'
+                          (widget.streams.length > 6
+                              ? ' · +${widget.streams.length - 6} more'
                               : ''),
                 style: const TextStyle(
                   color: AppColors.muted,
@@ -3373,6 +3535,29 @@ class _GradeLevelSetup extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16),
+        _AddGradeLevelControl(
+          canAdd: _availableGradeLevels.isNotEmpty,
+          onAdd: _addDraftRow,
+        ),
+        if (_draftRows.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          ..._draftRows.map(
+            (id) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _DraftGradeLevelRow(
+                availableGrades: _availableGradeLevels,
+                onSelected: (grade) {
+                  if (grade == null || grade.trim().isEmpty) return;
+                  final next = {...widget.streams, grade: 1};
+                  widget.onChanged(next);
+                  setState(() => _draftRows.remove(id));
+                },
+                onCancel: () => setState(() => _draftRows.remove(id)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+        ],
         ...groupedLevels.entries.map(
           (group) => Padding(
             padding: const EdgeInsets.only(bottom: 16),
@@ -3413,7 +3598,7 @@ class _GradeLevelSetup extends StatelessWidget {
                               ),
                             ),
                             Text(
-                              '${_activeInGroup(group.value)} of ${group.value.length} active',
+                              '${_selectedInGroup(group.value)} of ${group.value.length} selected',
                               style: const TextStyle(
                                 color: AppColors.muted,
                                 fontSize: 11,
@@ -3424,7 +3609,7 @@ class _GradeLevelSetup extends StatelessWidget {
                       ),
                       TextButton(
                         onPressed: () {
-                          final next = {...streams};
+                          final next = {...widget.streams};
                           final allSelected = group.value.every(
                             next.containsKey,
                           );
@@ -3435,10 +3620,10 @@ class _GradeLevelSetup extends StatelessWidget {
                               next.putIfAbsent(grade, () => 1);
                             }
                           }
-                          onChanged(next);
+                          widget.onChanged(next);
                         },
                         child: Text(
-                          group.value.every(streams.containsKey)
+                          group.value.every(widget.streams.containsKey)
                               ? 'Clear'
                               : 'Select all',
                         ),
@@ -3447,8 +3632,8 @@ class _GradeLevelSetup extends StatelessWidget {
                   ),
                   const SizedBox(height: 12),
                   ...group.value.map((grade) {
-                    final active = streams.containsKey(grade);
-                    final count = streams[grade] ?? 1;
+                    final active = widget.streams.containsKey(grade);
+                    final count = widget.streams[grade] ?? 1;
                     return Container(
                       margin: const EdgeInsets.only(bottom: 8),
                       padding: const EdgeInsets.all(10),
@@ -3466,11 +3651,11 @@ class _GradeLevelSetup extends StatelessWidget {
                           Checkbox(
                             value: active,
                             onChanged: (selected) {
-                              final next = {...streams};
+                              final next = {...widget.streams};
                               selected == true
                                   ? next[grade] = 1
                                   : next.remove(grade);
-                              onChanged(next);
+                              widget.onChanged(next);
                             },
                           ),
                           Expanded(
@@ -3486,8 +3671,8 @@ class _GradeLevelSetup extends StatelessWidget {
                                 const SizedBox(height: 2),
                                 Text(
                                   active
-                                      ? 'ACTIVE · $count ${count == 1 ? 'stream' : 'streams'}'
-                                      : 'INACTIVE',
+                                      ? '$count ${count == 1 ? 'stream' : 'streams'} selected'
+                                      : 'Not included',
                                   style: TextStyle(
                                     color: active
                                         ? AppColors.green
@@ -3513,9 +3698,9 @@ class _GradeLevelSetup extends StatelessWidget {
                                   IconButton(
                                     onPressed: count > 1
                                         ? () {
-                                            final next = {...streams};
+                                            final next = {...widget.streams};
                                             next[grade] = count - 1;
-                                            onChanged(next);
+                                            widget.onChanged(next);
                                           }
                                         : null,
                                     icon: const Icon(
@@ -3536,9 +3721,9 @@ class _GradeLevelSetup extends StatelessWidget {
                                   IconButton(
                                     onPressed: count < 10
                                         ? () {
-                                            final next = {...streams};
+                                            final next = {...widget.streams};
                                             next[grade] = count + 1;
-                                            onChanged(next);
+                                            widget.onChanged(next);
                                           }
                                         : null,
                                     icon: const Icon(
@@ -3596,13 +3781,22 @@ class _GradeLevelSetup extends StatelessWidget {
     );
   }
 
-  int _activeInGroup(List<String> grades) =>
-      grades.where(streams.containsKey).length;
+  int _selectedInGroup(List<String> grades) =>
+      grades.where(widget.streams.containsKey).length;
+
+  List<String> get _availableGradeLevels => widget.gradeLevels
+      .where((grade) => !widget.streams.containsKey(grade))
+      .toList();
+
+  void _addDraftRow() {
+    if (_availableGradeLevels.isEmpty) return;
+    setState(() => _draftRows.insert(0, _nextDraftId++));
+  }
 
   Map<String, List<String>> get _groupedLevels {
     final grouped = {for (final entry in groups.entries) entry.key: <String>[]};
     final extras = <String>[];
-    for (final grade in gradeLevels) {
+    for (final grade in widget.gradeLevels) {
       final normalized = grade.toLowerCase().replaceAll(' ', '');
       if (normalized.contains('nursery') ||
           normalized.contains('creche') ||
@@ -3633,6 +3827,75 @@ class _GradeLevelSetup extends StatelessWidget {
     'Senior High School' => Icons.workspace_premium_rounded,
     _ => Icons.school_outlined,
   };
+}
+
+class _AddGradeLevelControl extends StatelessWidget {
+  const _AddGradeLevelControl({required this.canAdd, required this.onAdd});
+
+  final bool canAdd;
+  final VoidCallback onAdd;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: OutlinedButton.icon(
+        onPressed: canAdd ? onAdd : null,
+        icon: const Icon(Icons.add_rounded, size: 18),
+        label: const Text('Add New'),
+      ),
+    );
+  }
+}
+
+class _DraftGradeLevelRow extends StatelessWidget {
+  const _DraftGradeLevelRow({
+    required this.availableGrades,
+    required this.onSelected,
+    required this.onCancel,
+  });
+
+  final List<String> availableGrades;
+  final ValueChanged<String?> onSelected;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.greenSoft,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.green.withValues(alpha: .22)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: DropdownButtonFormField<String>(
+              value: null,
+              items: availableGrades
+                  .map(
+                    (grade) =>
+                        DropdownMenuItem(value: grade, child: Text(grade)),
+                  )
+                  .toList(),
+              decoration: const InputDecoration(
+                labelText: 'New grade level',
+                hintText: 'Select grade level',
+              ),
+              onChanged: onSelected,
+            ),
+          ),
+          const SizedBox(width: 10),
+          IconButton(
+            tooltip: 'Remove row',
+            onPressed: onCancel,
+            icon: const Icon(Icons.close_rounded),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _CalendarSetup extends StatelessWidget {
@@ -3682,6 +3945,7 @@ class _CalendarSetup extends StatelessWidget {
     final duration = startDate != null && endDate != null
         ? endDate!.difference(startDate!).inDays + 1
         : null;
+    final hasDraftEvent = events.any((event) => event.isDraft);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -3802,57 +4066,74 @@ class _CalendarSetup extends StatelessWidget {
         _CalendarCard(
           title: 'Events (optional)',
           action: OutlinedButton.icon(
-            onPressed: () {
-              final next = [...events, _CalendarEvent(type: '')];
-              onChanged(
-                academicYear: academicYear,
-                academicTerm: academicTerm,
-                description: description.text,
-                startDate: startDate,
-                endDate: endDate,
-                events: next,
-              );
-            },
+            onPressed: hasDraftEvent
+                ? null
+                : () {
+                    final next = [
+                      _CalendarEvent(type: '', isDraft: true),
+                      ...events,
+                    ];
+                    onChanged(
+                      academicYear: academicYear,
+                      academicTerm: academicTerm,
+                      description: description.text,
+                      startDate: startDate,
+                      endDate: endDate,
+                      events: next,
+                    );
+                  },
             icon: const Icon(Icons.add_rounded, size: 18),
-            label: const Text('Add event'),
+            label: Text(
+              hasDraftEvent ? 'Complete open event first' : 'Add event',
+            ),
           ),
           child: events.isEmpty
               ? const _EmptyCalendarEvents()
               : Column(
-                  children: events
-                      .asMap()
-                      .entries
-                      .map(
-                        (entry) => _EventEditor(
-                          index: entry.key,
-                          event: entry.value,
-                          eventTypes: eventTypes,
-                          onChanged: (event) {
-                            final next = [...events];
-                            next[entry.key] = event;
-                            onChanged(
-                              academicYear: academicYear,
-                              academicTerm: academicTerm,
-                              description: description.text,
-                              startDate: startDate,
-                              endDate: endDate,
-                              events: next,
-                            );
-                          },
-                          onDelete: () {
-                            final next = [...events]..removeAt(entry.key);
-                            onChanged(
-                              academicYear: academicYear,
-                              academicTerm: academicTerm,
-                              description: description.text,
-                              startDate: startDate,
-                              endDate: endDate,
-                              events: next,
-                            );
-                          },
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (hasDraftEvent) ...[
+                      const Text(
+                        'Save this calendar step or delete the open new event before adding another.',
+                        style: TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
                         ),
-                      )
-                      .toList(),
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+                    ...events.asMap().entries.map(
+                      (entry) => _EventEditor(
+                        index: entry.key,
+                        event: entry.value,
+                        eventTypes: eventTypes,
+                        onChanged: (event) {
+                          final next = [...events];
+                          next[entry.key] = event;
+                          onChanged(
+                            academicYear: academicYear,
+                            academicTerm: academicTerm,
+                            description: description.text,
+                            startDate: startDate,
+                            endDate: endDate,
+                            events: next,
+                          );
+                        },
+                        onDelete: () {
+                          final next = [...events]..removeAt(entry.key);
+                          onChanged(
+                            academicYear: academicYear,
+                            academicTerm: academicTerm,
+                            description: description.text,
+                            startDate: startDate,
+                            endDate: endDate,
+                            events: next,
+                          );
+                        },
+                      ),
+                    ),
+                  ],
                 ),
         ),
       ],
@@ -4953,6 +5234,7 @@ class _CalendarEvent {
     this.startTime = '00:00:00',
     this.endTime = '23:59:59',
     this.isSchoolDay = false,
+    this.isDraft = false,
   });
   final String type;
   final String otherName;
@@ -4962,6 +5244,7 @@ class _CalendarEvent {
   final String startTime;
   final String endTime;
   final bool isSchoolDay;
+  final bool isDraft;
   String get shortStart =>
       '${startDate!.day}-${startDate!.month}-${startDate!.year}';
   String get shortEnd => '${endDate!.day}-${endDate!.month}-${endDate!.year}';
@@ -4974,6 +5257,7 @@ class _CalendarEvent {
     String? startTime,
     String? endTime,
     bool? isSchoolDay,
+    bool? isDraft,
   }) => _CalendarEvent(
     type: type ?? this.type,
     otherName: otherName ?? this.otherName,
@@ -4983,6 +5267,7 @@ class _CalendarEvent {
     startTime: startTime ?? this.startTime,
     endTime: endTime ?? this.endTime,
     isSchoolDay: isSchoolDay ?? this.isSchoolDay,
+    isDraft: isDraft ?? this.isDraft,
   );
 }
 

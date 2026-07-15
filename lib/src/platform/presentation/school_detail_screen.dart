@@ -6,6 +6,7 @@ import '../../theme/app_theme.dart';
 import '../data/platform_api_client.dart';
 import '../data/platform_repository.dart';
 import '../domain/platform_models.dart';
+import 'document_opener.dart';
 import 'school_creation_screen.dart';
 
 class SchoolDetailScreen extends StatefulWidget {
@@ -18,6 +19,7 @@ class SchoolDetailScreen extends StatefulWidget {
     required this.onSchoolUpdated,
     required this.onBack,
     required this.onViewAccountManager,
+    required this.canViewAccountManagerDetails,
   });
 
   final ManagedSchool school;
@@ -27,6 +29,7 @@ class SchoolDetailScreen extends StatefulWidget {
   final VoidCallback onSchoolUpdated;
   final VoidCallback onBack;
   final ValueChanged<String> onViewAccountManager;
+  final bool canViewAccountManagerDetails;
 
   @override
   State<SchoolDetailScreen> createState() => _SchoolDetailScreenState();
@@ -36,6 +39,8 @@ class _SchoolDetailScreenState extends State<SchoolDetailScreen> {
   int _tab = 0;
   int? _preparingEditStep;
   bool _preparingReassign = false;
+  bool _approvingSchool = false;
+  SchoolStatus? _changingSchoolStatus;
   SchoolUserInfo? _selectedUser;
   late ManagedSchool _school;
   late Future<_SchoolProfileData> _profileFuture;
@@ -112,6 +117,160 @@ class _SchoolDetailScreenState extends State<SchoolDetailScreen> {
     }
   }
 
+  Future<void> _approveSchool() async {
+    if (_approvingSchool) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('Approve school?'),
+        content: Text(
+          '${_school.name} will be marked as approved and can proceed as an active school on the platform.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.verified_rounded, size: 18),
+            label: const Text('Approve school'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _approvingSchool = true);
+    try {
+      await widget.repository.changeSchoolStatus(
+        customSchoolId: _school.code,
+        status: SchoolStatus.approved,
+        reason: 'School registration reviewed and approved',
+      );
+      if (!mounted) return;
+      setState(() {
+        _school = _school.copyWith(status: SchoolStatus.approved, progress: 1);
+        _profileFuture = _loadProfile();
+      });
+      widget.onSchoolUpdated();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${_school.name} has been approved.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      final detail = error.toString().replaceFirst('ClientException: ', '');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not approve school. $detail')),
+      );
+    } finally {
+      if (mounted) setState(() => _approvingSchool = false);
+    }
+  }
+
+  Future<void> _changeSchoolStatus({
+    required SchoolStatus status,
+    required String title,
+    required String message,
+    required String confirmLabel,
+    required String reason,
+  }) async {
+    if (_changingSchoolStatus != null || _approvingSchool) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor:
+                  status == SchoolStatus.suspended ||
+                      status == SchoolStatus.deleted
+                  ? AppColors.red
+                  : null,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(confirmLabel),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _changingSchoolStatus = status);
+    try {
+      await widget.repository.changeSchoolStatus(
+        customSchoolId: _school.code,
+        status: status,
+        reason: reason,
+      );
+      if (!mounted) return;
+      setState(() {
+        _school = _school.copyWith(status: status);
+        _profileFuture = _loadProfile();
+      });
+      widget.onSchoolUpdated();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${_school.name} is now ${status.label}.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      final detail = error.toString().replaceFirst('ClientException: ', '');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not update school status. $detail')),
+      );
+    } finally {
+      if (mounted) setState(() => _changingSchoolStatus = null);
+    }
+  }
+
+  Future<void> _suspendSchool() {
+    return _changeSchoolStatus(
+      status: SchoolStatus.suspended,
+      title: 'Suspend school?',
+      message:
+          '${_school.name} will be suspended. School users may lose access until the school is reactivated.',
+      confirmLabel: 'Suspend school',
+      reason: 'School suspended by platform administrator',
+    );
+  }
+
+  Future<void> _deleteSchool() {
+    return _changeSchoolStatus(
+      status: SchoolStatus.deleted,
+      title: 'Delete school?',
+      message:
+          '${_school.name} will be marked as deleted. This is a soft delete, so the record is retained but removed from normal active use.',
+      confirmLabel: 'Delete school',
+      reason: 'School deleted by platform administrator',
+    );
+  }
+
+  Future<void> _viewDocument(SchoolDocumentInfo document) async {
+    try {
+      final documentId = document.documentId.trim();
+      if (documentId.isEmpty) {
+        throw StateError('The saved document reference is unavailable.');
+      }
+      prepareDocumentWindow();
+      final url = await widget.repository.getSchoolDocumentDownloadUrl(
+        customSchoolId: _school.code,
+        documentId: documentId,
+      );
+      await openDocumentUrl(url);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open this document.')),
+      );
+    }
+  }
+
   Future<void> _editProfileStep(int step) async {
     if (_preparingEditStep != null) return;
     setState(() => _preparingEditStep = step);
@@ -159,6 +318,7 @@ class _SchoolDetailScreenState extends State<SchoolDetailScreen> {
                 singleStepEdit: true,
                 onBack: () => Navigator.pop(dialogContext, false),
                 onCreated: () => Navigator.pop(dialogContext, true),
+                onStepSaved: widget.onSchoolUpdated,
                 onStepUpdated: () async {
                   try {
                     final refreshed = await _loadProfile();
@@ -217,6 +377,9 @@ class _SchoolDetailScreenState extends State<SchoolDetailScreen> {
       );
     }
     final status = _schoolStatus(school.status);
+    final changingStatus = _changingSchoolStatus;
+    final actionsDisabled =
+        _preparingReassign || _approvingSchool || changingStatus != null;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Column(
@@ -236,8 +399,25 @@ class _SchoolDetailScreenState extends State<SchoolDetailScreen> {
             statusLabel: status.$1,
             statusColor: status.$2,
             actions: [
+              if (school.status == SchoolStatus.pendingApproval)
+                FilledButton.icon(
+                  onPressed: actionsDisabled ? null : _approveSchool,
+                  icon: _approvingSchool
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.verified_rounded, size: 18),
+                  label: Text(
+                    _approvingSchool ? 'Approving...' : 'Approve school',
+                  ),
+                ),
               OutlinedButton.icon(
-                onPressed: _preparingReassign ? null : _openReassignDialog,
+                onPressed: actionsDisabled ? null : _openReassignDialog,
                 icon: _preparingReassign
                     ? const SizedBox(
                         width: 16,
@@ -247,6 +427,47 @@ class _SchoolDetailScreenState extends State<SchoolDetailScreen> {
                     : const Icon(Icons.swap_horiz_rounded, size: 18),
                 label: Text(_preparingReassign ? 'Preparing...' : 'Reassign'),
               ),
+              if (school.status != SchoolStatus.suspended &&
+                  school.status != SchoolStatus.deleted)
+                OutlinedButton.icon(
+                  onPressed: actionsDisabled ? null : _suspendSchool,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.red,
+                    side: const BorderSide(color: AppColors.red),
+                  ),
+                  icon: changingStatus == SchoolStatus.suspended
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.pause_circle_outline_rounded, size: 18),
+                  label: Text(
+                    changingStatus == SchoolStatus.suspended
+                        ? 'Suspending...'
+                        : 'Suspend',
+                  ),
+                ),
+              if (school.status != SchoolStatus.deleted)
+                OutlinedButton.icon(
+                  onPressed: actionsDisabled ? null : _deleteSchool,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.red,
+                    side: const BorderSide(color: AppColors.red),
+                  ),
+                  icon: changingStatus == SchoolStatus.deleted
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.delete_outline_rounded, size: 18),
+                  label: Text(
+                    changingStatus == SchoolStatus.deleted
+                        ? 'Deleting...'
+                        : 'Delete',
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: 18),
@@ -266,6 +487,7 @@ class _SchoolDetailScreenState extends State<SchoolDetailScreen> {
             0 => _SchoolOverview(
               school: school,
               onViewAccountManager: widget.onViewAccountManager,
+              canViewAccountManagerDetails: widget.canViewAccountManagerDetails,
             ),
             1 => FutureBuilder<_SchoolProfileData>(
               future: _profileFuture,
@@ -279,6 +501,7 @@ class _SchoolDetailScreenState extends State<SchoolDetailScreen> {
                   profile: snapshot.requireData,
                   onEditStep: _editProfileStep,
                   preparingStep: _preparingEditStep,
+                  onViewDocument: _viewDocument,
                 );
               },
             ),
@@ -308,13 +531,19 @@ class AccountManagerDetailScreen extends StatefulWidget {
     super.key,
     required this.manager,
     required this.schools,
+    required this.repository,
     required this.onBack,
+    required this.onManagerUpdated,
+    required this.onManagerDeleted,
     required this.onViewSchool,
   });
 
   final AccountManagerProfile manager;
   final List<ManagedSchool> schools;
+  final PlatformRepository repository;
   final VoidCallback onBack;
+  final ValueChanged<AccountManagerProfile> onManagerUpdated;
+  final VoidCallback onManagerDeleted;
   final ValueChanged<ManagedSchool> onViewSchool;
 
   @override
@@ -324,81 +553,494 @@ class AccountManagerDetailScreen extends StatefulWidget {
 
 class _AccountManagerDetailScreenState
     extends State<AccountManagerDetailScreen> {
+  late AccountManagerProfile _manager;
+  bool _busy = false;
   int _tab = 0;
 
   @override
+  void initState() {
+    super.initState();
+    _manager = widget.manager;
+  }
+
+  @override
+  void didUpdateWidget(covariant AccountManagerDetailScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.manager != widget.manager) _manager = widget.manager;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final manager = widget.manager;
-    final status = _managerStatus(manager.status);
+    final manager = _manager;
     final assigned = widget.schools
         .where((school) => school.accountManager == manager.name)
         .toList();
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          TextButton.icon(
-            onPressed: widget.onBack,
-            icon: const Icon(Icons.arrow_back_rounded, size: 18),
-            label: const Text('Back to Account Managers'),
-          ),
-          const SizedBox(height: 12),
-          _HeroCard(
-            avatar: _initials(manager.name),
-            title: manager.name,
-            subtitle:
-                '${manager.email} · ${manager.phone} · ${manager.region} Region',
-            statusLabel: status.$1,
-            statusColor: status.$2,
-            actions: [
-              if (manager.status == AccountManagerStatus.pendingApproval)
-                FilledButton.icon(
-                  onPressed: () {},
-                  icon: const Icon(Icons.check_rounded, size: 18),
-                  label: const Text('Approve Manager'),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1180),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextButton.icon(
+                onPressed: widget.onBack,
+                icon: const Icon(Icons.arrow_back_rounded, size: 18),
+                label: const Text('Back to Account Managers'),
+              ),
+              const SizedBox(height: 12),
+              _AccountManagerProfileHeader(
+                manager: manager,
+                assignedCount: assigned.length,
+                busy: _busy,
+                onApprove: () => _changeStatus(
+                  AccountManagerStatus.active,
+                  reason: 'Approved by Super Admin',
+                ),
+                onSuspend: () => _changeStatus(
+                  AccountManagerStatus.suspended,
+                  reason: 'Suspended by Super Admin',
+                ),
+                onReactivate: () => _changeStatus(
+                  AccountManagerStatus.active,
+                  reason: 'Reactivated by Super Admin',
+                ),
+                onForceResetPassword: _forceResetPassword,
+                onResendCredentials: _resendCredentials,
+                onDelete: _deleteManager,
+              ),
+              const SizedBox(height: 16),
+              _InfoGrid(
+                items: [
+                  _InfoItem('Email', manager.email),
+                  _InfoItem('Phone', manager.phone),
+                  _InfoItem('Joined', _formatReadableDate(manager.joined)),
+                  _InfoItem('Invite Method', manager.inviteMethod),
+                  _InfoItem(
+                    'Last Active',
+                    _formatReadableDate(manager.lastActive),
+                  ),
+                  _InfoItem('Schools Assigned', '${assigned.length}'),
+                ],
+              ),
+              const SizedBox(height: 22),
+              _AccountManagerTabs(
+                selected: _tab,
+                onSelected: (index) => setState(() => _tab = index),
+              ),
+              const SizedBox(height: 16),
+              if (_tab == 0)
+                _AssignedSchoolsPanel(
+                  schools: assigned,
+                  onViewSchool: widget.onViewSchool,
                 )
               else
-                OutlinedButton.icon(
-                  onPressed: () {},
-                  icon: const Icon(Icons.pause_circle_outline, size: 18),
-                  label: const Text('Suspend'),
+                const _ActivityPanel(
+                  title: 'Activity Log',
+                  activities: [
+                    'Account manager profile opened',
+                    'Assigned schools reviewed',
+                    'Credential actions available',
+                  ],
                 ),
             ],
           ),
-          const SizedBox(height: 16),
-          _InfoGrid(
-            items: [
-              _InfoItem('Email', manager.email),
-              _InfoItem('Phone', manager.phone),
-              _InfoItem('Joined', manager.joined),
-              _InfoItem('Invite Method', manager.inviteMethod),
-              _InfoItem('Last Active', manager.lastActive),
-              _InfoItem('Schools Assigned', '${assigned.length}'),
-            ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _changeStatus(
+    AccountManagerStatus status, {
+    required String reason,
+  }) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final updated = await widget.repository.updateAccountManagerStatus(
+        accountManagerId: _manager.id,
+        status: status,
+        reason: reason,
+      );
+      if (!mounted) return;
+      setState(() => _manager = updated);
+      widget.onManagerUpdated(updated);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${updated.name} updated successfully.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not update account manager. ${_actionError(error)}'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _deleteManager() async {
+    if (_busy) return;
+    final confirmed = await _confirmAccountManagerAction(
+      title: 'Delete account manager?',
+      message:
+          'This will remove ${_manager.name} from account manager access. This action should only be used when the account is no longer needed.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    );
+    if (!confirmed || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      await widget.repository.deleteAccountManager(
+        accountManagerId: _manager.id,
+        reason: 'Deleted by Super Admin',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${_manager.name} deleted successfully.')),
+      );
+      widget.onManagerDeleted();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not delete account manager. ${_actionError(error)}'),
+        ),
+      );
+      setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _forceResetPassword() async {
+    await _runAccountManagerCredentialAction(
+      title: 'Force reset password?',
+      message:
+          'This will generate a new temporary password for ${_manager.name}, mark the account as requiring password change, and send the credentials.',
+      confirmLabel: 'Force reset',
+      action: () =>
+          widget.repository.forceResetAccountManagerPassword(manager: _manager),
+    );
+  }
+
+  Future<void> _resendCredentials() async {
+    await _runAccountManagerCredentialAction(
+      title: 'Send temporary password?',
+      message:
+          'This will generate and send temporary login credentials to ${_manager.name}.',
+      confirmLabel: 'Send temporary password',
+      action: () =>
+          widget.repository.resendAccountManagerCredentials(manager: _manager),
+    );
+  }
+
+  Future<void> _runAccountManagerCredentialAction({
+    required String title,
+    required String message,
+    required String confirmLabel,
+    required Future<SchoolAdministratorInviteResult> Function() action,
+  }) async {
+    if (_busy) return;
+    final confirmed = await _confirmAccountManagerAction(
+      title: title,
+      message: message,
+      confirmLabel: confirmLabel,
+    );
+    if (!confirmed || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      final result = await action();
+      if (!mounted) return;
+      final suffix =
+          result.temporaryPassword == null || result.temporaryPassword!.isEmpty
+          ? ''
+          : ' Temporary password: ${result.temporaryPassword}';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('${result.message}$suffix')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not complete credential action. ${_actionError(error)}',
           ),
-          const SizedBox(height: 16),
-          _Tabs(
-            selected: _tab,
-            labels: const ['Assigned Schools', 'Activity Log'],
-            onSelected: (index) => setState(() => _tab = index),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<bool> _confirmAccountManagerAction({
+    required String title,
+    required String message,
+    required String confirmLabel,
+    bool destructive = false,
+  }) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
           ),
-          const SizedBox(height: 16),
-          if (_tab == 0)
-            _AssignedSchoolsPanel(
-              schools: assigned,
-              onViewSchool: widget.onViewSchool,
-            )
-          else
-            _ActivityPanel(
-              activities: [
-                '${manager.name} reviewed onboarding progress',
-                '${manager.name} contacted a school administrator',
-                'System sent weekly portfolio digest',
-                'Profile verification status checked',
-              ],
-            ),
+          FilledButton(
+            style: destructive
+                ? FilledButton.styleFrom(backgroundColor: AppColors.red)
+                : null,
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(confirmLabel),
+          ),
         ],
+      ),
+    );
+    return confirmed ?? false;
+  }
+}
+
+class _AccountManagerProfileHeader extends StatelessWidget {
+  const _AccountManagerProfileHeader({
+    required this.manager,
+    required this.assignedCount,
+    required this.busy,
+    required this.onApprove,
+    required this.onSuspend,
+    required this.onReactivate,
+    required this.onForceResetPassword,
+    required this.onResendCredentials,
+    required this.onDelete,
+  });
+
+  final AccountManagerProfile manager;
+  final int assignedCount;
+  final bool busy;
+  final VoidCallback onApprove;
+  final VoidCallback onSuspend;
+  final VoidCallback onReactivate;
+  final VoidCallback onForceResetPassword;
+  final VoidCallback onResendCredentials;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final status = _managerStatus(manager.status);
+    final pending = manager.status == AccountManagerStatus.pendingApproval;
+    final active = manager.status == AccountManagerStatus.active;
+    final suspended = manager.status == AccountManagerStatus.suspended;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final narrow = constraints.maxWidth < 820;
+            final avatar = _Avatar(label: _initials(manager.name), size: 64);
+            final meta = Wrap(
+              spacing: 18,
+              runSpacing: 6,
+              children: [
+                _ManagerMeta(
+                  icon: Icons.mail_outline_rounded,
+                  text: manager.email,
+                ),
+                _ManagerMeta(
+                  icon: Icons.phone_iphone_rounded,
+                  text: manager.phone,
+                ),
+                _ManagerMeta(
+                  icon: Icons.apartment_rounded,
+                  text: '$assignedCount schools assigned',
+                ),
+              ],
+            );
+            final primaryActions = Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: busy ? null : onForceResetPassword,
+                  icon: const Icon(Icons.lock_reset_rounded, size: 18),
+                  label: const Text('Force reset password'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: busy ? null : onResendCredentials,
+                  icon: const Icon(Icons.mark_email_read_outlined, size: 18),
+                  label: const Text('Send temporary password'),
+                ),
+                if (pending)
+                  FilledButton.icon(
+                    onPressed: busy ? null : onApprove,
+                    icon: const Icon(Icons.check_circle_rounded, size: 18),
+                    label: const Text('Approve AM'),
+                  )
+                else if (active)
+                  TextButton.icon(
+                    onPressed: busy ? null : onSuspend,
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppColors.red,
+                      backgroundColor: AppColors.red.withValues(alpha: .1),
+                    ),
+                    icon: const Icon(
+                      Icons.pause_circle_outline_rounded,
+                      size: 18,
+                    ),
+                    label: const Text('Suspend AM'),
+                  )
+                else if (suspended)
+                  FilledButton.icon(
+                    onPressed: busy ? null : onReactivate,
+                    icon: const Icon(Icons.restart_alt_rounded, size: 18),
+                    label: const Text('Reactivate AM'),
+                  ),
+                OutlinedButton.icon(
+                  onPressed: busy ? null : onDelete,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.red,
+                    side: const BorderSide(color: AppColors.red),
+                  ),
+                  icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                  label: const Text('Delete'),
+                ),
+              ],
+            );
+            final identity = Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                avatar,
+                const SizedBox(width: 18),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        manager.name,
+                        style: const TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      meta,
+                      const SizedBox(height: 18),
+                      primaryActions,
+                    ],
+                  ),
+                ),
+              ],
+            );
+            if (narrow) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  identity,
+                  const SizedBox(height: 16),
+                  _StatusPill(label: status.$1, color: status.$2),
+                ],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: identity),
+                const SizedBox(width: 18),
+                _StatusPill(label: status.$1, color: status.$2),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _ManagerMeta extends StatelessWidget {
+  const _ManagerMeta({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    if (text.trim().isEmpty) return const SizedBox.shrink();
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 15, color: AppColors.muted),
+        const SizedBox(width: 5),
+        Text(
+          text,
+          style: const TextStyle(color: AppColors.muted, fontSize: 13),
+        ),
+      ],
+    );
+  }
+}
+
+class _AccountManagerTabs extends StatelessWidget {
+  const _AccountManagerTabs({required this.selected, required this.onSelected});
+
+  final int selected;
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppColors.border)),
+      ),
+      child: Row(
+        children: [
+          _AccountManagerTabButton(
+            label: 'Assigned Schools',
+            selected: selected == 0,
+            onTap: () => onSelected(0),
+          ),
+          _AccountManagerTabButton(
+            label: 'Activity Log',
+            selected: selected == 1,
+            onTap: () => onSelected(1),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AccountManagerTabButton extends StatelessWidget {
+  const _AccountManagerTabButton({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(
+              color: selected ? AppColors.green : Colors.transparent,
+              width: 2,
+            ),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? AppColors.green : AppColors.muted,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
       ),
     );
   }
@@ -408,10 +1050,12 @@ class _SchoolOverview extends StatelessWidget {
   const _SchoolOverview({
     required this.school,
     required this.onViewAccountManager,
+    required this.canViewAccountManagerDetails,
   });
 
   final ManagedSchool school;
   final ValueChanged<String> onViewAccountManager;
+  final bool canViewAccountManagerDetails;
 
   @override
   Widget build(BuildContext context) {
@@ -457,10 +1101,12 @@ class _SchoolOverview extends StatelessWidget {
                     ],
                   ),
                 ),
-                TextButton(
-                  onPressed: () => onViewAccountManager(school.accountManager),
-                  child: const Text('View →'),
-                ),
+                if (canViewAccountManagerDetails)
+                  TextButton(
+                    onPressed: () =>
+                        onViewAccountManager(school.accountManager),
+                    child: const Text('View →'),
+                  ),
               ],
             ),
           ),
@@ -486,11 +1132,13 @@ class _SchoolProfile extends StatelessWidget {
     required this.profile,
     required this.onEditStep,
     required this.preparingStep,
+    required this.onViewDocument,
   });
   final ManagedSchool school;
   final _SchoolProfileData profile;
   final ValueChanged<int> onEditStep;
   final int? preparingStep;
+  final ValueChanged<SchoolDocumentInfo> onViewDocument;
 
   Widget _editButton(int step) => OutlinedButton.icon(
     onPressed: preparingStep == null ? () => onEditStep(step) : null,
@@ -514,28 +1162,6 @@ class _SchoolProfile extends StatelessWidget {
     final contact = _map(data['contactInfo']);
     final term = _map(data['currentAcademicTerm']);
     final events = _list(term['events']);
-    final personalPhones = _contactValues(
-      contact['personalPhoneNumbers'],
-      valueKeys: const ['number', 'phoneNumber'],
-    );
-    final workPhones = _contactValues(
-      contact['workPhoneNumbers'],
-      valueKeys: const ['number', 'phoneNumber'],
-    );
-    final socialMedia = _list(contact['socialMedia'])
-        .map((item) {
-          final media = _map(item);
-          final platform = _nestedValue(media['platform'], const ['name']);
-          final handle = _value(media, const ['handle', 'url']);
-          return [platform, handle].where((part) => part.isNotEmpty).join(': ');
-        })
-        .where((value) => value.isNotEmpty)
-        .join('\n');
-    final emails = _list(contact['emails'])
-        .map((value) => value.toString())
-        .where((value) => value.trim().isNotEmpty)
-        .join('\n');
-
     return Column(
       children: [
         _SectionCard(
@@ -577,7 +1203,12 @@ class _SchoolProfile extends StatelessWidget {
           items: [
             _InfoItem(
               'GES Registration Number',
-              _field(registration, const ['gesRegistrationNumber']),
+              _field(registration, const [
+                'gesRegistrationNumber',
+                'registrationNumberGes',
+                'registrationNumber',
+                'gesNumber',
+              ]),
             ),
             _InfoItem(
               'GES Registration Type',
@@ -592,7 +1223,11 @@ class _SchoolProfile extends StatelessWidget {
             ),
             _InfoItem(
               'Business Registration Number',
-              _field(registration, const ['businessRegistrationNumber']),
+              _field(registration, const [
+                'businessRegistrationNumber',
+                'businessRegNumber',
+                'businessNumber',
+              ]),
             ),
             _InfoItem(
               'Business Registration Type',
@@ -604,7 +1239,7 @@ class _SchoolProfile extends StatelessWidget {
             ),
             _InfoItem(
               'GEMIS Code',
-              _field(registration, const ['gemisCode', 'gemisNumber']),
+              _field(registration, const ['gemisCode', 'gemisNumber', 'gemis']),
             ),
             _InfoItem(
               'Tax ID Number',
@@ -676,43 +1311,25 @@ class _SchoolProfile extends StatelessWidget {
         _SectionCard(
           title: 'Contact Information',
           trailing: _editButton(4),
-          items: [
-            _InfoItem('Personal Phone Numbers', personalPhones),
-            _InfoItem('Work Phone Numbers', workPhones),
-            _InfoItem('Email Addresses', emails),
-            _InfoItem('Website', _field(contact, const ['website'])),
-            _InfoItem('Social Media', socialMedia),
-          ],
+          items: const [],
+          child: _ContactInformationView(contact: contact),
         ),
         const SizedBox(height: 14),
         _SectionCard(
           title: 'Required Documents',
           trailing: _editButton(5),
-          items: profile.documents.isEmpty
-              ? const [_InfoItem('Documents', 'No documents uploaded')]
-              : profile.documents
-                    .map(
-                      (document) => _InfoItem(
-                        document.documentType.replaceAll('_', ' '),
-                        '${document.fileName}\nStatus: ${document.status}',
-                      ),
-                    )
-                    .toList(),
+          items: const [],
+          child: _DocumentsView(
+            documents: profile.documents,
+            onViewDocument: onViewDocument,
+          ),
         ),
         const SizedBox(height: 14),
         _SectionCard(
           title: 'Grade Levels & Class Structure',
           trailing: _editButton(6),
-          items: profile.gradeLevels.isEmpty
-              ? const [_InfoItem('Grade Levels', 'No grade levels configured')]
-              : profile.gradeLevels
-                    .map(
-                      (grade) => _InfoItem(
-                        grade.gradeLevelName,
-                        '${grade.numberOfStreams} ${grade.numberOfStreams == 1 ? 'stream' : 'streams'} · ${grade.status}',
-                      ),
-                    )
-                    .toList(),
+          items: const [],
+          child: _GradeStructureView(gradeLevels: profile.gradeLevels),
         ),
         const SizedBox(height: 14),
         _SectionCard(
@@ -736,28 +1353,8 @@ class _SchoolProfile extends StatelessWidget {
         _SectionCard(
           title: 'School Calendar Events',
           trailing: _editButton(7),
-          items: events.isEmpty
-              ? const [_InfoItem('Events', 'No events added')]
-              : events.asMap().entries.map((entry) {
-                  final event = _map(entry.value);
-                  final name = _field(event, const [
-                    'name',
-                    'eventName',
-                  ], 'Event ${entry.key + 1}');
-                  final type = _objectField(event['eventType']);
-                  final dates =
-                      '${_dateField(event['startDate'])} to ${_dateField(event['endDate'])}';
-                  final times =
-                      '${_field(event, const ['startTime'])} to ${_field(event, const ['endTime'])}';
-                  final description = _field(event, const ['description']);
-                  final schoolDay = event['isSchoolDay'] == true
-                      ? 'School day'
-                      : 'Not a school day';
-                  return _InfoItem(
-                    name,
-                    '$type\n$description\n$dates\n$times\n$schoolDay',
-                  );
-                }).toList(),
+          items: const [],
+          child: _CalendarEventsList(events: events),
         ),
       ],
     );
@@ -853,6 +1450,7 @@ class _SchoolUsers extends StatefulWidget {
 
 class _SchoolUsersState extends State<_SchoolUsers> {
   late Future<List<SchoolUserInfo>> _usersFuture;
+  final List<SchoolUserInfo> _optimisticUsers = [];
 
   @override
   void initState() {
@@ -867,6 +1465,24 @@ class _SchoolUsersState extends State<_SchoolUsers> {
     setState(() => _usersFuture = _loadUsers());
   }
 
+  List<SchoolUserInfo> _mergeUsers(List<SchoolUserInfo> users) {
+    final merged = [..._optimisticUsers];
+    for (final user in users) {
+      final existingIndex = merged.indexWhere(
+        (local) =>
+            (local.id.isNotEmpty && local.id == user.id) ||
+            (local.email.isNotEmpty &&
+                local.email.toLowerCase() == user.email.toLowerCase()),
+      );
+      if (existingIndex >= 0) {
+        merged[existingIndex] = user;
+      } else {
+        merged.add(user);
+      }
+    }
+    return merged;
+  }
+
   Future<void> _showInviteDialog(BuildContext context) async {
     final result = await showDialog<SchoolAdministratorInviteResult>(
       context: context,
@@ -877,6 +1493,17 @@ class _SchoolUsersState extends State<_SchoolUsers> {
       ),
     );
     if (result == null || !context.mounted) return;
+    final user = result.user;
+    if (user != null) {
+      setState(() {
+        _optimisticUsers.removeWhere(
+          (existing) =>
+              (existing.id.isNotEmpty && existing.id == user.id) ||
+              existing.email.toLowerCase() == user.email.toLowerCase(),
+        );
+        _optimisticUsers.insert(0, user);
+      });
+    }
     _refreshUsers();
     await showDialog<void>(
       context: context,
@@ -919,7 +1546,7 @@ class _SchoolUsersState extends State<_SchoolUsers> {
     return FutureBuilder<List<SchoolUserInfo>>(
       future: _usersFuture,
       builder: (context, snapshot) {
-        final users = snapshot.data ?? const <SchoolUserInfo>[];
+        final users = _mergeUsers(snapshot.data ?? const <SchoolUserInfo>[]);
         final hasAdmin = users.any((user) => user.isAdministrator);
         return Card(
           clipBehavior: Clip.antiAlias,
@@ -2098,65 +2725,213 @@ class _AssignedSchoolsPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (schools.isEmpty) {
-      return const Card(
-        child: Padding(
-          padding: EdgeInsets.all(28),
-          child: _EmptyState(
-            icon: Icons.apartment_outlined,
-            title: 'No schools assigned yet',
-            detail: 'Assign schools after this account manager is approved.',
-          ),
-        ),
-      );
-    }
+    final wide = MediaQuery.sizeOf(context).width >= 860;
     return Card(
       child: Column(
-        children: schools.map((school) {
-          final status = _schoolStatus(school.status);
-          return InkWell(
-            onTap: () => onViewSchool(school),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
-              child: Row(
-                children: [
-                  _Avatar(label: _initials(school.name)),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    flex: 3,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          school.name,
-                          style: const TextStyle(fontWeight: FontWeight.w800),
-                        ),
-                        Text(
-                          '${school.town}, ${school.region}',
-                          style: const TextStyle(
-                            color: AppColors.muted,
-                            fontSize: 11,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const _AssignedSchoolsHeader(),
+          if (schools.isEmpty)
+            const _AssignedSchoolsEmptyRow()
+          else
+            ...schools.map((school) {
+              final status = _schoolStatus(school.status);
+              return Container(
+                decoration: const BoxDecoration(
+                  border: Border(bottom: BorderSide(color: AppColors.border)),
+                ),
+                child: InkWell(
+                  onTap: () => onViewSchool(school),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 15,
+                    ),
+                    child: wide
+                        ? Row(
+                            children: [
+                              Expanded(
+                                flex: 4,
+                                child: _AssignedSchoolNameCell(school: school),
+                              ),
+                              Expanded(
+                                flex: 2,
+                                child: Text(
+                                  school.region.trim().isEmpty
+                                      ? '-'
+                                      : school.region,
+                                ),
+                              ),
+                              Expanded(
+                                flex: 1,
+                                child: Text('${school.students}'),
+                              ),
+                              Expanded(
+                                flex: 2,
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: _StatusPill(
+                                    label: status.$1,
+                                    color: status.$2,
+                                  ),
+                                ),
+                              ),
+                              Expanded(
+                                flex: 2,
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: OutlinedButton(
+                                    onPressed: () => onViewSchool(school),
+                                    child: const Text('View School →'),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          )
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _AssignedSchoolNameCell(school: school),
+                              const SizedBox(height: 12),
+                              Wrap(
+                                spacing: 10,
+                                runSpacing: 8,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  Text(
+                                    school.region.trim().isEmpty
+                                        ? '-'
+                                        : school.region,
+                                    style: const TextStyle(
+                                      color: AppColors.muted,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                  Text(
+                                    '${school.students} students',
+                                    style: const TextStyle(
+                                      color: AppColors.muted,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                  _StatusPill(
+                                    label: status.$1,
+                                    color: status.$2,
+                                  ),
+                                  TextButton(
+                                    onPressed: () => onViewSchool(school),
+                                    child: const Text('View School →'),
+                                  ),
+                                ],
+                              ),
+                            ],
                           ),
-                        ),
-                      ],
-                    ),
                   ),
-                  if (MediaQuery.sizeOf(context).width >= 720) ...[
-                    SizedBox(width: 110, child: Text('${school.students}')),
-                    SizedBox(
-                      width: 140,
-                      child: _StatusPill(label: status.$1, color: status.$2),
-                    ),
-                  ],
-                  const Icon(
-                    Icons.chevron_right_rounded,
-                    color: AppColors.muted,
-                  ),
-                ],
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
+}
+
+class _AssignedSchoolNameCell extends StatelessWidget {
+  const _AssignedSchoolNameCell({required this.school});
+
+  final ManagedSchool school;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        _Avatar(label: _initials(school.name)),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                school.name,
+                style: const TextStyle(fontWeight: FontWeight.w800),
               ),
+              const SizedBox(height: 3),
+              Text(
+                school.code,
+                style: const TextStyle(color: AppColors.muted, fontSize: 11),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AssignedSchoolsHeader extends StatelessWidget {
+  const _AssignedSchoolsHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    final wide = MediaQuery.sizeOf(context).width >= 860;
+    const style = TextStyle(
+      color: AppColors.muted,
+      fontSize: 10,
+      fontWeight: FontWeight.w800,
+      letterSpacing: .7,
+    );
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+      decoration: const BoxDecoration(
+        color: AppColors.background,
+        border: Border(bottom: BorderSide(color: AppColors.border)),
+      ),
+      child: Row(
+        children: [
+          const Expanded(flex: 4, child: Text('SCHOOL NAME', style: style)),
+          if (wide) ...[
+            const Expanded(flex: 2, child: Text('REGION', style: style)),
+            const Expanded(flex: 1, child: Text('STUDENTS', style: style)),
+            const Expanded(flex: 2, child: Text('STATUS', style: style)),
+            const Expanded(flex: 2, child: Text('ACTIONS', style: style)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _AssignedSchoolsEmptyRow extends StatelessWidget {
+  const _AssignedSchoolsEmptyRow();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppColors.border)),
+      ),
+      child: Row(
+        children: [
+          const _Avatar(label: '—'),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text(
+                  'No schools assigned yet',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Assign schools will appear in this table.',
+                  style: TextStyle(color: AppColors.muted, fontSize: 12),
+                ),
+              ],
             ),
-          );
-        }).toList(),
+          ),
+        ],
       ),
     );
   }
@@ -2244,11 +3019,12 @@ class _InfoGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final columns = constraints.maxWidth >= 760
+        final responsiveColumns = constraints.maxWidth >= 760
             ? 3
             : constraints.maxWidth >= 480
             ? 2
             : 1;
+        final columns = responsiveColumns;
         const gap = 12.0;
         final width = (constraints.maxWidth - (columns - 1) * gap) / columns;
         return Wrap(
@@ -2264,10 +3040,16 @@ class _InfoGrid extends StatelessWidget {
 }
 
 class _SectionCard extends StatelessWidget {
-  const _SectionCard({required this.title, required this.items, this.trailing});
+  const _SectionCard({
+    required this.title,
+    required this.items,
+    this.trailing,
+    this.child,
+  });
   final String title;
   final List<_InfoItem> items;
   final Widget? trailing;
+  final Widget? child;
 
   @override
   Widget build(BuildContext context) {
@@ -2292,8 +3074,550 @@ class _SectionCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 14),
-            _InfoGrid(items: items),
+            child ?? _InfoGrid(items: items),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ContactInformationView extends StatelessWidget {
+  const _ContactInformationView({required this.contact});
+
+  final Map<String, dynamic> contact;
+
+  @override
+  Widget build(BuildContext context) {
+    final personalPhones = _contactRows(
+      contact['personalPhoneNumbers'],
+      valueKeys: const ['number', 'phoneNumber'],
+    );
+    final workPhones = _contactRows(
+      contact['workPhoneNumbers'],
+      valueKeys: const ['number', 'phoneNumber'],
+    );
+    final emails = _list(contact['emails'])
+        .map((value) => value.toString().trim())
+        .where((value) => value.isNotEmpty)
+        .toList();
+    final socialMedia = _socialMediaRows(contact['socialMedia']);
+    final website = _field(contact, const ['website']);
+
+    final hasAny =
+        personalPhones.isNotEmpty ||
+        workPhones.isNotEmpty ||
+        emails.isNotEmpty ||
+        socialMedia.isNotEmpty ||
+        website != 'Not provided';
+    if (!hasAny) {
+      return const _EmptyState(
+        icon: Icons.contact_phone_outlined,
+        title: 'No contact information added',
+        detail:
+            'Phone numbers, email addresses, and social links will appear here.',
+      );
+    }
+
+    return Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      children:
+          [
+            _ContactGroupCard(
+              title: 'Personal phones',
+              icon: Icons.phone_iphone_rounded,
+              rows: personalPhones,
+            ),
+            _ContactGroupCard(
+              title: 'Work phones',
+              icon: Icons.phone_in_talk_rounded,
+              rows: workPhones,
+            ),
+            _ContactGroupCard(
+              title: 'Emails',
+              icon: Icons.alternate_email_rounded,
+              rows: emails,
+            ),
+            if (website != 'Not provided')
+              _ContactGroupCard(
+                title: 'Website',
+                icon: Icons.language_rounded,
+                rows: [website],
+              ),
+            _ContactGroupCard(
+              title: 'Social media',
+              icon: Icons.public_rounded,
+              rows: socialMedia,
+            ),
+          ].where((card) => card.rows.isNotEmpty).map((card) {
+            return SizedBox(width: 310, child: card);
+          }).toList(),
+    );
+  }
+}
+
+class _ContactGroupCard extends StatelessWidget {
+  const _ContactGroupCard({
+    required this.title,
+    required this.icon,
+    required this.rows,
+  });
+
+  final String title;
+  final IconData icon;
+  final List<String> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: AppColors.green, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                title,
+                style: const TextStyle(
+                  color: AppColors.muted,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: .4,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ...rows.map(
+            (row) => Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(
+                row,
+                style: const TextStyle(
+                  color: AppColors.text,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DocumentsView extends StatelessWidget {
+  const _DocumentsView({required this.documents, required this.onViewDocument});
+
+  final List<SchoolDocumentInfo> documents;
+  final ValueChanged<SchoolDocumentInfo> onViewDocument;
+
+  @override
+  Widget build(BuildContext context) {
+    if (documents.isEmpty) {
+      return const _EmptyState(
+        icon: Icons.description_outlined,
+        title: 'No documents uploaded',
+        detail:
+            'Uploaded school registration and compliance files will appear here.',
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = constraints.maxWidth >= 980
+            ? 3
+            : constraints.maxWidth >= 640
+            ? 2
+            : 1;
+        const gap = 12.0;
+        final width = (constraints.maxWidth - (columns - 1) * gap) / columns;
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: documents.map((document) {
+            return SizedBox(
+              width: width,
+              child: _DocumentCard(
+                document: document,
+                onView: () => onViewDocument(document),
+              ),
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
+}
+
+class _DocumentCard extends StatelessWidget {
+  const _DocumentCard({required this.document, required this.onView});
+
+  final SchoolDocumentInfo document;
+  final VoidCallback onView;
+
+  @override
+  Widget build(BuildContext context) {
+    final status = document.status.trim().isEmpty
+        ? 'Available'
+        : _titleCase(document.status);
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: onView,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: AppColors.greenSoft,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(
+                Icons.description_rounded,
+                color: AppColors.green,
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _titleCase(document.documentType),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: .4,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    document.fileName,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      _SmallPill(label: status, color: AppColors.green),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Open',
+                        style: TextStyle(
+                          color: AppColors.green,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.open_in_new_rounded, color: AppColors.muted),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GradeStructureView extends StatelessWidget {
+  const _GradeStructureView({required this.gradeLevels});
+
+  final List<SchoolGradeLevelInfo> gradeLevels;
+
+  @override
+  Widget build(BuildContext context) {
+    if (gradeLevels.isEmpty) {
+      return const _EmptyState(
+        icon: Icons.account_tree_outlined,
+        title: 'No grade levels configured',
+        detail: 'Configured grade levels and stream counts will appear here.',
+      );
+    }
+
+    final activeGrades = gradeLevels
+        .where((grade) => grade.status.trim().toUpperCase() == 'ACTIVE')
+        .toList();
+    final visibleGrades = activeGrades.isEmpty ? gradeLevels : activeGrades;
+    final groups = _groupGradeLevels(visibleGrades);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: groups.entries.map((entry) {
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                entry.key.toUpperCase(),
+                style: const TextStyle(
+                  color: AppColors.muted,
+                  fontSize: 10.5,
+                  letterSpacing: .7,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: entry.value.map((grade) {
+                  return _GradeChip(grade: grade);
+                }).toList(),
+              ),
+            ],
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
+class _GradeChip extends StatelessWidget {
+  const _GradeChip({required this.grade});
+
+  final SchoolGradeLevelInfo grade;
+
+  @override
+  Widget build(BuildContext context) {
+    final streams = grade.numberOfStreams;
+    final streamLabel = streams == 1 ? '1 stream' : '$streams streams';
+    final inactive = grade.status.trim().toUpperCase() != 'ACTIVE';
+    return Container(
+      constraints: const BoxConstraints(minWidth: 130),
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+      decoration: BoxDecoration(
+        color: inactive ? AppColors.background : AppColors.greenSoft,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: inactive
+              ? AppColors.border
+              : AppColors.green.withValues(alpha: .18),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            grade.gradeLevelName,
+            style: TextStyle(
+              color: inactive ? AppColors.muted : AppColors.text,
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            streamLabel,
+            style: TextStyle(
+              color: inactive ? AppColors.muted : AppColors.green,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CalendarEventsList extends StatelessWidget {
+  const _CalendarEventsList({required this.events});
+
+  final List<dynamic> events;
+
+  @override
+  Widget build(BuildContext context) {
+    if (events.isEmpty) {
+      return const _EmptyState(
+        icon: Icons.event_busy_outlined,
+        title: 'No events added',
+        detail:
+            'Term holidays, sports days, and school events will appear here.',
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = constraints.maxWidth >= 980
+            ? 3
+            : constraints.maxWidth >= 640
+            ? 2
+            : 1;
+        const gap = 12.0;
+        final width = (constraints.maxWidth - (columns - 1) * gap) / columns;
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: events.asMap().entries.map((entry) {
+            return SizedBox(
+              width: width,
+              child: _CalendarEventCard(
+                event: _map(entry.value),
+                fallbackName: 'Event ${entry.key + 1}',
+              ),
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
+}
+
+class _CalendarEventCard extends StatelessWidget {
+  const _CalendarEventCard({required this.event, required this.fallbackName});
+
+  final Map<String, dynamic> event;
+  final String fallbackName;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = _field(event, const ['name', 'eventName'], fallbackName);
+    final type = _objectField(event['eventType']);
+    final description = _field(event, const ['description']);
+    final dateRange = _dateRange(event['startDate'], event['endDate']);
+    final timeRange = _timeRange(event['startTime'], event['endTime']);
+    final isSchoolDay = event['isSchoolDay'] == true;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              _SmallPill(
+                label: isSchoolDay ? 'School day' : 'No school',
+                color: isSchoolDay ? AppColors.green : AppColors.amber,
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (type != 'Not provided') ...[
+            Text(
+              type,
+              style: const TextStyle(
+                color: AppColors.green,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 6),
+          ],
+          if (description != 'Not provided') ...[
+            Text(
+              description,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppColors.text,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          _EventMetaRow(icon: Icons.date_range_rounded, text: dateRange),
+          const SizedBox(height: 7),
+          _EventMetaRow(icon: Icons.schedule_rounded, text: timeRange),
+        ],
+      ),
+    );
+  }
+}
+
+class _EventMetaRow extends StatelessWidget {
+  const _EventMetaRow({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 15, color: AppColors.muted),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Text(
+            text,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: AppColors.muted, fontSize: 11.5),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SmallPill extends StatelessWidget {
+  const _SmallPill({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .1),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 10,
+          fontWeight: FontWeight.w900,
         ),
       ),
     );
@@ -2612,21 +3936,30 @@ class _ReassignSchoolDialogState extends State<_ReassignSchoolDialog> {
                 label: 'School',
                 value: '${widget.school.name} · ${widget.school.code}',
               ),
-              const SizedBox(height: 10),
-              _ReassignReadOnlyRow(
-                label: 'Current Account Manager',
-                value: widget.school.accountManager.isEmpty
+              const SizedBox(height: 16),
+              _ReassignTransferPreview(
+                currentManager: widget.school.accountManager.isEmpty
                     ? 'Not assigned'
                     : widget.school.accountManager,
+                newManager: _selectedManager?.name,
               ),
               const SizedBox(height: 18),
+              const Text(
+                'Search for the new account manager',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.text,
+                ),
+              ),
+              const SizedBox(height: 8),
               TextField(
                 controller: _search,
                 enabled: !_submitting && _selectedManager == null,
                 onChanged: _onSearchChanged,
                 decoration: InputDecoration(
-                  labelText: 'Search Account Manager',
-                  hintText: 'Name, email, phone, or region',
+                  labelText: 'New Account Manager',
+                  hintText: 'Type name, email, phone, or region',
                   prefixIcon: const Icon(Icons.search_rounded),
                   suffixIcon: _selectedManager == null
                       ? null
@@ -2823,6 +4156,153 @@ class _AccountManagerSearchResults extends StatelessWidget {
               ),
             )
             .toList(),
+      ),
+    );
+  }
+}
+
+class _ReassignTransferPreview extends StatelessWidget {
+  const _ReassignTransferPreview({
+    required this.currentManager,
+    required this.newManager,
+  });
+
+  final String currentManager;
+  final String? newManager;
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedNewManager = newManager?.trim();
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7FAF9),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final stacked = constraints.maxWidth < 520;
+          final current = _ReassignTransferParty(
+            label: 'Current Account Manager',
+            value: currentManager,
+            icon: Icons.person_pin_circle_outlined,
+          );
+          final next = _ReassignTransferParty(
+            label: 'New Account Manager',
+            value: selectedNewManager == null || selectedNewManager.isEmpty
+                ? 'Search and select below'
+                : selectedNewManager,
+            icon: Icons.person_add_alt_1_rounded,
+            highlighted: selectedNewManager != null &&
+                selectedNewManager.isNotEmpty,
+          );
+          final arrow = Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: AppColors.greenSoft,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(
+              stacked
+                  ? Icons.keyboard_arrow_down_rounded
+                  : Icons.arrow_forward_rounded,
+              color: AppColors.green,
+            ),
+          );
+          if (stacked) {
+            return Column(
+              children: [
+                current,
+                const SizedBox(height: 10),
+                arrow,
+                const SizedBox(height: 10),
+                next,
+              ],
+            );
+          }
+          return Row(
+            children: [
+              Expanded(child: current),
+              const SizedBox(width: 12),
+              arrow,
+              const SizedBox(width: 12),
+              Expanded(child: next),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ReassignTransferParty extends StatelessWidget {
+  const _ReassignTransferParty({
+    required this.label,
+    required this.value,
+    required this.icon,
+    this.highlighted = false,
+  });
+
+  final String label;
+  final String value;
+  final IconData icon;
+  final bool highlighted;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: highlighted ? AppColors.greenSoft : Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: highlighted
+              ? AppColors.green.withValues(alpha: .35)
+              : AppColors.border,
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: highlighted ? Colors.white : AppColors.greenSoft,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: AppColors.green, size: 19),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label.toUpperCase(),
+                  style: const TextStyle(
+                    color: AppColors.muted,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: .5,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppColors.text,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -3234,8 +4714,8 @@ String _objectField(
   return value.isEmpty ? fallback : value;
 }
 
-String _contactValues(dynamic source, {required List<String> valueKeys}) {
-  final values = _list(source)
+List<String> _contactRows(dynamic source, {required List<String> valueKeys}) {
+  return _list(source)
       .map((item) {
         final contact = _map(item);
         final number = _value(contact, valueKeys);
@@ -3244,37 +4724,166 @@ String _contactValues(dynamic source, {required List<String> valueKeys}) {
         return type.isEmpty ? number : '$number ($type)';
       })
       .where((value) => value.isNotEmpty)
-      .join('\n');
-  return values.isEmpty ? 'Not provided' : values;
+      .toList();
+}
+
+List<String> _socialMediaRows(dynamic source) {
+  return _list(source)
+      .map((item) {
+        final media = _map(item);
+        final platform = _nestedValue(media['platform'], const ['name']);
+        final handle = _value(media, const ['handle', 'url']);
+        if (platform.isEmpty && handle.isEmpty) return '';
+        if (platform.isEmpty) return handle;
+        if (handle.isEmpty) return platform;
+        return '$platform: $handle';
+      })
+      .where((value) => value.isNotEmpty)
+      .toList();
 }
 
 String _dateField(dynamic value) {
-  if (value == null || value.toString().trim().isEmpty) return 'Not provided';
+  if (value == null) return 'Not provided';
+  if (value is List && value.length >= 3) {
+    final year = int.tryParse('${value[0]}');
+    final month = int.tryParse('${value[1]}');
+    final day = int.tryParse('${value[2]}');
+    if (year != null && month != null && day != null) {
+      return _formatDayMonthYear(DateTime(year, month, day));
+    }
+  }
+  if (value is Map) {
+    final year = int.tryParse('${value['year']}');
+    final month = int.tryParse('${value['month']}');
+    final day = int.tryParse('${value['day']}');
+    if (year != null && month != null && day != null) {
+      return _formatDayMonthYear(DateTime(year, month, day));
+    }
+  }
+  return _formatReadableDate(value.toString());
+}
+
+String _dateRange(dynamic start, dynamic end) {
+  final startText = _dateField(start);
+  final endText = _dateField(end);
+  if (startText == 'Not provided' && endText == 'Not provided') {
+    return 'Date not provided';
+  }
+  if (startText == endText || endText == 'Not provided') return startText;
+  if (startText == 'Not provided') return endText;
+  return '$startText - $endText';
+}
+
+String _timeRange(dynamic start, dynamic end) {
+  final startText = _timeField(start);
+  final endText = _timeField(end);
+  if (startText == 'Not provided' && endText == 'Not provided') {
+    return 'Time not provided';
+  }
+  if (startText == endText || endText == 'Not provided') return startText;
+  if (startText == 'Not provided') return endText;
+  return '$startText - $endText';
+}
+
+String _timeField(dynamic value) {
+  final parsed = _parseHourMinute(value);
+  if (parsed == null) return 'Not provided';
+  final hour = parsed.$1;
+  final minute = parsed.$2;
+  final period = hour >= 12 ? 'PM' : 'AM';
+  final displayHour = hour % 12 == 0 ? 12 : hour % 12;
+  final displayMinute = minute.toString().padLeft(2, '0');
+  return '$displayHour:$displayMinute $period';
+}
+
+(int, int)? _parseHourMinute(dynamic value) {
+  if (value == null) return null;
+  if (value is List && value.length >= 2) {
+    final hour = int.tryParse('${value[0]}');
+    final minute = int.tryParse('${value[1]}');
+    if (hour != null && minute != null) return (hour, minute);
+  }
+  if (value is Map) {
+    final hour = int.tryParse('${value['hour']}');
+    final minute = int.tryParse('${value['minute']}');
+    if (hour != null && minute != null) return (hour, minute);
+  }
   final raw = value.toString().trim();
-  final date = DateTime.tryParse(raw);
-  if (date == null) return raw;
-  const months = [
-    'January',
-    'February',
-    'March',
-    'April',
-    'May',
-    'June',
-    'July',
-    'August',
-    'September',
-    'October',
-    'November',
-    'December',
+  if (raw.isEmpty) return null;
+  final array = RegExp(r'^\[(\d{1,2}),\s*(\d{1,2})').firstMatch(raw);
+  if (array != null) {
+    final hour = int.tryParse(array.group(1)!);
+    final minute = int.tryParse(array.group(2)!);
+    if (hour != null && minute != null) return (hour, minute);
+  }
+  final parts = raw.split(':');
+  if (parts.length >= 2) {
+    final hour = int.tryParse(parts[0]);
+    final minute = int.tryParse(parts[1]);
+    if (hour != null && minute != null) return (hour, minute);
+  }
+  return null;
+}
+
+String _actionError(Object error) {
+  final text = error
+      .toString()
+      .replaceFirst('ClientException: ', '')
+      .replaceFirst('Exception: ', '')
+      .trim();
+  if (text.isEmpty) {
+    return 'Please try again.';
+  }
+  return text.endsWith('.') ? text : '$text.';
+}
+
+Map<String, List<SchoolGradeLevelInfo>> _groupGradeLevels(
+  List<SchoolGradeLevelInfo> grades,
+) {
+  final grouped = <String, List<SchoolGradeLevelInfo>>{};
+  for (final grade in grades) {
+    final group = _gradeGroupLabel(grade.gradeLevelName);
+    grouped.putIfAbsent(group, () => []).add(grade);
+  }
+  const order = [
+    'Early Childhood',
+    'Primary School',
+    'Junior High School',
+    'Senior High School',
+    'Other Levels',
   ];
-  final day = date.day;
-  final suffix = day >= 11 && day <= 13
-      ? 'th'
-      : switch (day % 10) {
-          1 => 'st',
-          2 => 'nd',
-          3 => 'rd',
-          _ => 'th',
-        };
-  return '$day$suffix ${months[date.month - 1]} ${date.year}';
+  return {
+    for (final key in order)
+      if (grouped.containsKey(key)) key: grouped[key]!,
+    for (final entry in grouped.entries)
+      if (!order.contains(entry.key)) entry.key: entry.value,
+  };
+}
+
+String _gradeGroupLabel(String gradeName) {
+  final value = gradeName.trim().toUpperCase();
+  if (value.contains('CRECHE') ||
+      value.contains('NURSERY') ||
+      value.contains('KINDER') ||
+      value.contains('KG')) {
+    return 'Early Childhood';
+  }
+  if (value.contains('JHS') ||
+      value.contains('JUNIOR HIGH') ||
+      value.contains('BASIC 7') ||
+      value.contains('BASIC 8') ||
+      value.contains('BASIC 9')) {
+    return 'Junior High School';
+  }
+  if (value.contains('SHS') ||
+      value.contains('SENIOR HIGH') ||
+      value.contains('FORM ')) {
+    return 'Senior High School';
+  }
+  if (value.contains('PRIMARY') ||
+      RegExp(r'\bP[1-6]\b').hasMatch(value) ||
+      RegExp(r'\bBASIC [1-6]\b').hasMatch(value)) {
+    return 'Primary School';
+  }
+  return 'Other Levels';
 }

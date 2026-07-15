@@ -62,8 +62,28 @@ extension SchoolStatusDetails on SchoolStatus {
 
 enum PlatformRole { accountManager, superAccountManager, superAdmin }
 
+PlatformRole platformRoleFromApiRole(
+  String? value, {
+  bool isAccountManager = false,
+}) {
+  final role = value?.trim().toUpperCase() ?? '';
+  return switch (role) {
+    'SUPER_ADMIN' => PlatformRole.superAdmin,
+    'SUPER_ACCOUNT_MANAGER' => PlatformRole.superAccountManager,
+    'ACCOUNT_MANAGER' ||
+    'ACCOUNT_MANAGER_UNVERIFIED' ||
+    'ACCOUNT_MANAGER_VERIFIED_STAFF' => PlatformRole.accountManager,
+    _ when isAccountManager => PlatformRole.accountManager,
+    _ => PlatformRole.accountManager,
+  };
+}
+
 extension PlatformRoleDetails on PlatformRole {
   bool get canManageAccountManagers =>
+      this == PlatformRole.superAccountManager ||
+      this == PlatformRole.superAdmin;
+
+  bool get canViewAllSchools =>
       this == PlatformRole.superAccountManager ||
       this == PlatformRole.superAdmin;
 
@@ -72,6 +92,12 @@ extension PlatformRoleDetails on PlatformRole {
     PlatformRole.superAccountManager => 'Super Account Manager',
     PlatformRole.superAdmin => 'Super Admin',
   };
+
+  String get apiRole => switch (this) {
+    PlatformRole.accountManager => 'ACCOUNT_MANAGER',
+    PlatformRole.superAccountManager => 'SUPER_ACCOUNT_MANAGER',
+    PlatformRole.superAdmin => 'SUPER_ADMIN',
+  };
 }
 
 enum AccountManagerStatus { active, pendingApproval, invited, suspended }
@@ -79,6 +105,7 @@ enum AccountManagerStatus { active, pendingApproval, invited, suspended }
 class AccountManagerProfile {
   const AccountManagerProfile({
     this.id = '',
+    this.userId = '',
     required this.name,
     required this.email,
     required this.phone,
@@ -94,6 +121,7 @@ class AccountManagerProfile {
   });
 
   final String id;
+  final String userId;
   final String name;
   final String email;
   final String phone;
@@ -145,6 +173,7 @@ class AccountManagerDraft {
     required this.phone,
     required this.dateOfBirth,
     required this.inviteMethod,
+    required this.role,
   });
 
   final String firstName;
@@ -153,6 +182,7 @@ class AccountManagerDraft {
   final String phone;
   final DateTime dateOfBirth;
   final String inviteMethod;
+  final PlatformRole role;
 }
 
 class SchoolAdministratorInvite {
@@ -182,11 +212,13 @@ class SchoolAdministratorInviteResult {
     required this.message,
     this.username,
     this.temporaryPassword,
+    this.user,
   });
 
   final String message;
   final String? username;
   final String? temporaryPassword;
+  final SchoolUserInfo? user;
 }
 
 class SchoolUserInfo {
