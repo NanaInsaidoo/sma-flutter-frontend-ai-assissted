@@ -142,6 +142,75 @@ void main() {
     expect(student.customRequirements.single.name, 'Art sketch pad');
   });
 
+  test('summarizes prior-term physical requirement arrears', () {
+    final repository = MockClassRequirementsRepository();
+    final pending = repository.priorTermRequirements
+        .where((item) => item.status == PriorTermRequirementStatus.pending)
+        .toList();
+
+    expect(pending, hasLength(5));
+    expect(pending.map((item) => item.studentId).toSet(), hasLength(3));
+    expect(
+      pending.fold<int>(0, (sum, item) => sum + item.remainingQuantity),
+      18,
+    );
+    expect(
+      pending.fold<double>(
+        0,
+        (sum, item) => sum + item.estimatedOutstandingValue,
+      ),
+      127.5,
+    );
+  });
+
+  test('records prior-term receipts and keeps partial balances pending', () {
+    final repository = MockClassRequirementsRepository();
+
+    repository.recordPriorTermReceived(
+      requirementId: 'prior-ama-rolls',
+      quantity: 2,
+      notes: 'Two additional rolls received at the office.',
+    );
+    var requirement = repository.priorTermRequirements.firstWhere(
+      (item) => item.id == 'prior-ama-rolls',
+    );
+    expect(requirement.receivedQuantity, 12);
+    expect(requirement.remainingQuantity, 3);
+    expect(requirement.status, PriorTermRequirementStatus.pending);
+
+    repository.recordPriorTermReceived(
+      requirementId: 'prior-ama-rolls',
+      quantity: 3,
+      notes: 'Balance received.',
+    );
+    requirement = repository.priorTermRequirements.firstWhere(
+      (item) => item.id == 'prior-ama-rolls',
+    );
+    expect(requirement.receivedQuantity, 15);
+    expect(requirement.status, PriorTermRequirementStatus.fulfilled);
+    expect(requirement.resolvedAt, isNotNull);
+  });
+
+  test('converts prior-term physical items to an audited cash charge', () {
+    final repository = MockClassRequirementsRepository();
+
+    repository.resolvePriorTermRequirement(
+      requirementId: 'prior-ama-tissue',
+      status: PriorTermRequirementStatus.convertedToCash,
+      convertedCashAmount: 36,
+      notes: 'Guardian chose the approved cash equivalent.',
+      notifyGuardian: true,
+    );
+
+    final requirement = repository.priorTermRequirements.firstWhere(
+      (item) => item.id == 'prior-ama-tissue',
+    );
+    expect(requirement.status, PriorTermRequirementStatus.convertedToCash);
+    expect(requirement.convertedCashAmount, 36);
+    expect(requirement.guardianNotificationQueued, isTrue);
+    expect(requirement.resolvedAt, isNotNull);
+  });
+
   test('publishes only the selected class with its notification plan', () {
     final repository = MockClassRequirementsRepository();
     expect(repository.draftChangeCount, 1);
@@ -278,5 +347,42 @@ void main() {
     expect(find.byTooltip('Delete requirement'), findsNWidgets(3));
     expect(find.text('Ama Mensah'), findsOneWidget);
     expect(find.text('Student progress'), findsOneWidget);
+  });
+
+  testWidgets('opens the prior-term resolution queue by student', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repository = MockClassRequirementsRepository();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: ClassRequirementsScreen(
+                repository: repository,
+                termName: 'Term 2 · 2025/26',
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Prior-term outstanding requirements'), findsOneWidget);
+    expect(find.textContaining('3 students · 5 item types'), findsOneWidget);
+
+    await tester.ensureVisible(find.text('Review outstanding items'));
+    await tester.tap(find.text('Review outstanding items'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Affected students'.toUpperCase()), findsOneWidget);
+    expect(find.text('By student'), findsOneWidget);
+    expect(find.text('By item'), findsOneWidget);
+    expect(find.text('Ama Mensah'), findsOneWidget);
+    expect(find.text('Kojo Asare'), findsOneWidget);
   });
 }

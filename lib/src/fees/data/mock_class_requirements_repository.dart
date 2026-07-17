@@ -8,11 +8,26 @@ abstract class ClassRequirementsRepository extends ChangeNotifier {
   int get draftChangeCount;
   int draftChangeCountForClass(String classGroupId);
   RequirementNotificationPlan? get lastNotificationPlan;
+  List<PriorTermRequirement> get priorTermRequirements;
 
   void addClass(ClassRequirementGroup group);
   void addRequirement(String classGroupId, ClassRequirementItem item);
   void updateRequirement(String classGroupId, ClassRequirementItem item);
   void deleteRequirement(String classGroupId, String requirementId);
+  void recordPriorTermReceived({
+    required String requirementId,
+    required int quantity,
+    required String notes,
+  });
+  void resolvePriorTermRequirement({
+    required String requirementId,
+    required PriorTermRequirementStatus status,
+    int? carriedQuantity,
+    double? convertedCashAmount,
+    DateTime? carriedDueDate,
+    required String notes,
+    required bool notifyGuardian,
+  });
   void recordReceived({
     required String studentId,
     required String requirementId,
@@ -196,12 +211,80 @@ class MockClassRequirementsRepository extends ClassRequirementsRepository {
       ],
     };
     _draftChangeCount = 1;
+    _priorTermRequirements = [
+      const PriorTermRequirement(
+        id: 'prior-ama-rolls',
+        studentId: 'stu-ama',
+        studentName: 'Ama Mensah',
+        originClassName: 'Basic 1',
+        originTerm: 'Term 1 · 2025/26',
+        itemName: 'Toilet rolls',
+        category: 'Hygiene',
+        originalQuantity: 15,
+        receivedQuantity: 10,
+        unit: 'rolls',
+        estimatedUnitPrice: 4.5,
+      ),
+      const PriorTermRequirement(
+        id: 'prior-ama-tissue',
+        studentId: 'stu-ama',
+        studentName: 'Ama Mensah',
+        originClassName: 'Basic 1',
+        originTerm: 'Term 1 · 2025/26',
+        itemName: 'Boxes of tissues',
+        category: 'Hygiene',
+        originalQuantity: 2,
+        receivedQuantity: 0,
+        unit: 'boxes',
+        estimatedUnitPrice: 18,
+      ),
+      const PriorTermRequirement(
+        id: 'prior-kojo-books',
+        studentId: 'stu-kojo',
+        studentName: 'Kojo Asare',
+        originClassName: 'Basic 1',
+        originTerm: 'Term 1 · 2025/26',
+        itemName: 'Exercise books',
+        category: 'Learning materials',
+        originalQuantity: 10,
+        receivedQuantity: 6,
+        unit: 'books',
+        estimatedUnitPrice: 8,
+      ),
+      const PriorTermRequirement(
+        id: 'prior-efua-soap',
+        studentId: 'stu-efua',
+        studentName: 'Efua Owusu',
+        originClassName: 'Basic 1',
+        originTerm: 'Term 1 · 2025/26',
+        itemName: 'Liquid soap',
+        category: 'Hygiene',
+        originalQuantity: 2,
+        receivedQuantity: 1,
+        unit: 'bottles',
+        estimatedUnitPrice: 22,
+      ),
+      const PriorTermRequirement(
+        id: 'prior-efua-pencils',
+        studentId: 'stu-efua',
+        studentName: 'Efua Owusu',
+        originClassName: 'Basic 1',
+        originTerm: 'Term 1 · 2025/26',
+        itemName: 'HB pencils',
+        category: 'Learning materials',
+        originalQuantity: 6,
+        receivedQuantity: 0,
+        unit: 'pieces',
+        estimatedUnitPrice: 2.5,
+      ),
+    ];
   }
 
   late List<ClassRequirementGroup> _groups;
   late Map<String, List<StudentRequirementProgress>> _students;
   int _draftChangeCount = 0;
   RequirementNotificationPlan? _lastNotificationPlan;
+  late List<PriorTermRequirement> _priorTermRequirements;
 
   static StudentRequirementProgress _student(
     String id,
@@ -228,6 +311,10 @@ class MockClassRequirementsRepository extends ClassRequirementsRepository {
   @override
   RequirementNotificationPlan? get lastNotificationPlan =>
       _lastNotificationPlan;
+
+  @override
+  List<PriorTermRequirement> get priorTermRequirements =>
+      List.unmodifiable(_priorTermRequirements);
 
   @override
   List<StudentRequirementProgress> studentsForClass(String classGroupId) {
@@ -312,6 +399,55 @@ class MockClassRequirementsRepository extends ClassRequirementsRepository {
       }).toList(),
     };
     _draftChangeCount++;
+    notifyListeners();
+  }
+
+  @override
+  void recordPriorTermReceived({
+    required String requirementId,
+    required int quantity,
+    required String notes,
+  }) {
+    _priorTermRequirements = _priorTermRequirements.map((item) {
+      if (item.id != requirementId) return item;
+      final received = item.receivedQuantity + quantity;
+      final fulfilled = received >= item.originalQuantity;
+      return item.copyWith(
+        receivedQuantity: received > item.originalQuantity
+            ? item.originalQuantity
+            : received,
+        status: fulfilled
+            ? PriorTermRequirementStatus.fulfilled
+            : PriorTermRequirementStatus.pending,
+        resolutionNotes: notes,
+        resolvedAt: fulfilled ? DateTime.now() : null,
+      );
+    }).toList();
+    notifyListeners();
+  }
+
+  @override
+  void resolvePriorTermRequirement({
+    required String requirementId,
+    required PriorTermRequirementStatus status,
+    int? carriedQuantity,
+    double? convertedCashAmount,
+    DateTime? carriedDueDate,
+    required String notes,
+    required bool notifyGuardian,
+  }) {
+    _priorTermRequirements = _priorTermRequirements.map((item) {
+      if (item.id != requirementId) return item;
+      return item.copyWith(
+        status: status,
+        carriedQuantity: carriedQuantity,
+        convertedCashAmount: convertedCashAmount,
+        carriedDueDate: carriedDueDate,
+        resolutionNotes: notes,
+        resolvedAt: DateTime.now(),
+        guardianNotificationQueued: notifyGuardian,
+      );
+    }).toList();
     notifyListeners();
   }
 

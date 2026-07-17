@@ -140,3 +140,32 @@ Added the first desktop frontend version of physical class requirements within F
 - Class requirements are mock-backed in this pass by design. Existing Fee Management data remains live and unchanged.
 - Publishing currently updates local mock state and records the class notification plan; it does not send messages or write to the backend yet.
 - Tablet and mobile refinement is deliberately deferred until the desktop workflow is approved.
+
+---
+
+Date: 2026-07-17
+
+## Scope
+
+Added the desktop prior-term physical-requirement resolution experience to Fee Management. This pass is mock-backed and establishes the UI and business-flow contract before backend integration.
+
+## Changes Made
+
+- Added a prior-term summary banner to the Class Requirements overview showing affected students, outstanding item types, remaining units, and estimated cash-equivalent value.
+- Added a dedicated resolution workspace with local search, `By student` and `By item` views, an optional resolved-history view, and long-list tables.
+- Added a student resolution page showing every prior-term obligation, quantities required and received, outstanding units, estimated value, status, and retained resolution history.
+- Added audited resolution actions for recording received items, carrying physical items forward, converting to a current-term cash charge, adjusting quantity before carry-forward, waiving, and writing off.
+- Kept waiver and write-off as distinct outcomes: waiver records an approved exemption, while write-off records an obligation the school has closed as uncollectible.
+- Added guardian-notification selection using the household default preference for resolutions that change the obligation.
+- Kept prior-term obligations separate from the current-term class checklist so rollover records do not distort current-term completion.
+
+## Validation
+
+- `flutter analyze`: no issues found
+- Focused tests cover prior-term totals, partial and complete receipts, cash conversion, notification audit state, and opening the resolution queue from Class Requirements.
+
+## Notes
+
+- Cash conversion currently records mock state only. The backend implementation must atomically close the physical obligation and create a linked current-term charge.
+- Carry-forward, waiver, write-off, and guardian notifications currently update mock state only and require audited backend endpoints before production use.
+- Desktop was prioritized as requested. The screen uses responsive wrapping and horizontal table scrolling, but dedicated tablet/mobile refinement remains a later pass.

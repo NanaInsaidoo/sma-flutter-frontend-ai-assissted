@@ -1,5 +1,14 @@
 enum RequirementStatus { published, draft }
 
+enum PriorTermRequirementStatus {
+  pending,
+  fulfilled,
+  carriedForward,
+  convertedToCash,
+  waived,
+  writtenOff,
+}
+
 enum RequirementAdjustmentType {
   increasedQuantity,
   reducedQuantity,
@@ -166,4 +175,87 @@ class RequirementNotificationPlan {
   final bool useDefaultPreference;
   final Set<String> methods;
   final String message;
+}
+
+class PriorTermRequirement {
+  const PriorTermRequirement({
+    required this.id,
+    required this.studentId,
+    required this.studentName,
+    required this.originClassName,
+    required this.originTerm,
+    required this.itemName,
+    required this.category,
+    required this.originalQuantity,
+    required this.receivedQuantity,
+    required this.unit,
+    required this.estimatedUnitPrice,
+    this.status = PriorTermRequirementStatus.pending,
+    this.carriedQuantity,
+    this.convertedCashAmount,
+    this.carriedDueDate,
+    this.resolutionNotes = '',
+    this.resolvedAt,
+    this.guardianNotificationQueued = false,
+  });
+
+  final String id;
+  final String studentId;
+  final String studentName;
+  final String originClassName;
+  final String originTerm;
+  final String itemName;
+  final String category;
+  final int originalQuantity;
+  final int receivedQuantity;
+  final String unit;
+  final double estimatedUnitPrice;
+  final PriorTermRequirementStatus status;
+  final int? carriedQuantity;
+  final double? convertedCashAmount;
+  final DateTime? carriedDueDate;
+  final String resolutionNotes;
+  final DateTime? resolvedAt;
+  final bool guardianNotificationQueued;
+
+  int get remainingQuantity {
+    final remaining = originalQuantity - receivedQuantity;
+    return remaining < 0 ? 0 : remaining;
+  }
+
+  double get estimatedOutstandingValue =>
+      remainingQuantity * estimatedUnitPrice;
+
+  PriorTermRequirement copyWith({
+    int? receivedQuantity,
+    PriorTermRequirementStatus? status,
+    int? carriedQuantity,
+    double? convertedCashAmount,
+    DateTime? carriedDueDate,
+    String? resolutionNotes,
+    DateTime? resolvedAt,
+    bool? guardianNotificationQueued,
+  }) {
+    return PriorTermRequirement(
+      id: id,
+      studentId: studentId,
+      studentName: studentName,
+      originClassName: originClassName,
+      originTerm: originTerm,
+      itemName: itemName,
+      category: category,
+      originalQuantity: originalQuantity,
+      receivedQuantity: receivedQuantity ?? this.receivedQuantity,
+      unit: unit,
+      estimatedUnitPrice: estimatedUnitPrice,
+      status: status ?? this.status,
+      carriedQuantity: carriedQuantity ?? this.carriedQuantity,
+      convertedCashAmount: convertedCashAmount ?? this.convertedCashAmount,
+      carriedDueDate: carriedDueDate ?? this.carriedDueDate,
+      resolutionNotes: resolutionNotes ?? this.resolutionNotes,
+      resolvedAt: resolvedAt ?? this.resolvedAt,
+      guardianNotificationQueued:
+          guardianNotificationQueued ?? this.guardianNotificationQueued,
+    );
+  }
 }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../theme/app_theme.dart';
 import '../data/mock_class_requirements_repository.dart';
 import '../domain/class_requirement_models.dart';
+import 'prior_term_requirements_screen.dart';
 
 class ClassRequirementsScreen extends StatefulWidget {
   const ClassRequirementsScreen({
@@ -21,12 +22,19 @@ class ClassRequirementsScreen extends StatefulWidget {
 
 class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
   String? _selectedGroupId;
+  bool _showPriorTerm = false;
 
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: widget.repository,
       builder: (context, _) {
+        if (_showPriorTerm) {
+          return PriorTermRequirementsScreen(
+            repository: widget.repository,
+            onBack: () => setState(() => _showPriorTerm = false),
+          );
+        }
         final selected = _selectedGroupId == null
             ? null
             : widget.repository.groups
@@ -51,6 +59,7 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
           termName: widget.termName,
           onOpenClass: (group) => setState(() => _selectedGroupId = group.id),
           onAddClass: _showClassForm,
+          onOpenPriorTerm: () => setState(() => _showPriorTerm = true),
         );
       },
     );
@@ -231,12 +240,14 @@ class _RequirementsOverview extends StatelessWidget {
     required this.termName,
     required this.onOpenClass,
     required this.onAddClass,
+    required this.onOpenPriorTerm,
   });
 
   final ClassRequirementsRepository repository;
   final String termName;
   final ValueChanged<ClassRequirementGroup> onOpenClass;
   final VoidCallback onAddClass;
+  final VoidCallback onOpenPriorTerm;
 
   @override
   Widget build(BuildContext context) {
@@ -255,6 +266,21 @@ class _RequirementsOverview extends StatelessWidget {
       0,
       (sum, g) =>
           sum + g.items.where((item) => item.updatedSincePublished).length,
+    );
+    final priorTerm = repository.priorTermRequirements
+        .where((item) => item.status == PriorTermRequirementStatus.pending)
+        .toList();
+    final priorStudents = priorTerm
+        .map((item) => item.studentId)
+        .toSet()
+        .length;
+    final priorUnits = priorTerm.fold<int>(
+      0,
+      (sum, item) => sum + item.remainingQuantity,
+    );
+    final priorValue = priorTerm.fold<double>(
+      0,
+      (sum, item) => sum + item.estimatedOutstandingValue,
     );
 
     return Column(
@@ -326,6 +352,14 @@ class _RequirementsOverview extends StatelessWidget {
           },
         ),
         const SizedBox(height: 24),
+        _PriorTermBanner(
+          studentCount: priorStudents,
+          itemCount: priorTerm.length,
+          unitCount: priorUnits,
+          estimatedValue: priorValue,
+          onOpen: onOpenPriorTerm,
+        ),
+        const SizedBox(height: 24),
         Row(
           children: [
             const Expanded(
@@ -369,6 +403,110 @@ class _RequirementsOverview extends StatelessWidget {
           },
         ),
       ],
+    );
+  }
+}
+
+class _PriorTermBanner extends StatelessWidget {
+  const _PriorTermBanner({
+    required this.studentCount,
+    required this.itemCount,
+    required this.unitCount,
+    required this.estimatedValue,
+    required this.onOpen,
+  });
+
+  final int studentCount;
+  final int itemCount;
+  final int unitCount;
+  final double estimatedValue;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final clear = itemCount == 0;
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: clear
+            ? AppColors.greenSoft
+            : AppColors.amber.withValues(alpha: .08),
+        border: Border.all(
+          color: clear
+              ? AppColors.green.withValues(alpha: .24)
+              : AppColors.amber.withValues(alpha: .32),
+        ),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 720;
+          final icon = Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(13),
+            ),
+            child: Icon(
+              clear ? Icons.task_alt_rounded : Icons.history_rounded,
+              color: clear ? AppColors.green : AppColors.amber,
+            ),
+          );
+          final copy = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                clear
+                    ? 'Prior-term requirements are clear'
+                    : 'Prior-term outstanding requirements',
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 5),
+              Text(
+                clear
+                    ? 'There are no unresolved physical items from completed terms.'
+                    : '$studentCount students · $itemCount item types · $unitCount units outstanding · ${_money(estimatedValue)} estimated value',
+                style: const TextStyle(color: AppColors.muted, height: 1.4),
+              ),
+            ],
+          );
+          final button = OutlinedButton.icon(
+            onPressed: onOpen,
+            icon: const Icon(Icons.arrow_forward_rounded),
+            label: Text(clear ? 'View history' : 'Review outstanding items'),
+          );
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    icon,
+                    const SizedBox(width: 14),
+                    Expanded(child: copy),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                button,
+              ],
+            );
+          }
+          return Row(
+            children: [
+              icon,
+              const SizedBox(width: 16),
+              Expanded(child: copy),
+              const SizedBox(width: 18),
+              button,
+            ],
+          );
+        },
+      ),
     );
   }
 }
