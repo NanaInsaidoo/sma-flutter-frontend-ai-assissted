@@ -3,6 +3,10 @@ import 'package:flutter/material.dart';
 import '../../theme/app_theme.dart';
 import '../data/dashboard_repository.dart';
 import '../domain/dashboard_models.dart';
+import '../../admissions/presentation/admissions_screen.dart';
+import '../../fees/presentation/fee_management_screen.dart';
+
+enum _SchoolAdminPage { dashboard, admissions, households, fees }
 
 class AdministratorDashboard extends StatefulWidget {
   const AdministratorDashboard({
@@ -12,6 +16,8 @@ class AdministratorDashboard extends StatefulWidget {
     this.schoolName,
     this.userDisplayName,
     this.role,
+    this.accessToken,
+    this.onRefreshAccessToken,
     this.onLogout,
   });
 
@@ -20,6 +26,8 @@ class AdministratorDashboard extends StatefulWidget {
   final String? schoolName;
   final String? userDisplayName;
   final String? role;
+  final String? accessToken;
+  final Future<String?> Function()? onRefreshAccessToken;
   final VoidCallback? onLogout;
 
   @override
@@ -29,6 +37,7 @@ class AdministratorDashboard extends StatefulWidget {
 class _AdministratorDashboardState extends State<AdministratorDashboard> {
   late Future<DashboardSnapshot> _dashboard;
   bool _sidebarCollapsed = false;
+  _SchoolAdminPage _selectedPage = _SchoolAdminPage.dashboard;
 
   @override
   void initState() {
@@ -74,6 +83,9 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                       collapsed: _sidebarCollapsed,
                       schoolName: widget.schoolName,
                       role: widget.role,
+                      selectedPage: _selectedPage,
+                      onSelectPage: (page) =>
+                          setState(() => _selectedPage = page),
                       onLogout: widget.onLogout,
                       onCollapse: () => setState(
                         () => _sidebarCollapsed = !_sidebarCollapsed,
@@ -84,6 +96,11 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                         data: data,
                         onRefresh: _refresh,
                         userDisplayName: widget.userDisplayName,
+                        selectedPage: _selectedPage,
+                        schoolId: _schoolId,
+                        schoolName: widget.schoolName,
+                        accessToken: widget.accessToken,
+                        onRefreshAccessToken: widget.onRefreshAccessToken,
                       ),
                     ),
                   ],
@@ -98,6 +115,11 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                   isDrawer: true,
                   schoolName: widget.schoolName,
                   role: widget.role,
+                  selectedPage: _selectedPage,
+                  onSelectPage: (page) {
+                    setState(() => _selectedPage = page);
+                    Navigator.pop(context);
+                  },
                   onLogout: widget.onLogout,
                 ),
               ),
@@ -106,6 +128,11 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                 onRefresh: _refresh,
                 userDisplayName: widget.userDisplayName,
                 showMenu: true,
+                selectedPage: _selectedPage,
+                schoolId: _schoolId,
+                schoolName: widget.schoolName,
+                accessToken: widget.accessToken,
+                onRefreshAccessToken: widget.onRefreshAccessToken,
               ),
             );
           },
@@ -121,12 +148,22 @@ class _DashboardBody extends StatelessWidget {
     required this.onRefresh,
     this.userDisplayName,
     this.showMenu = false,
+    required this.selectedPage,
+    required this.schoolId,
+    this.schoolName,
+    this.accessToken,
+    this.onRefreshAccessToken,
   });
 
   final DashboardSnapshot data;
   final VoidCallback onRefresh;
   final String? userDisplayName;
   final bool showMenu;
+  final _SchoolAdminPage selectedPage;
+  final String schoolId;
+  final String? schoolName;
+  final String? accessToken;
+  final Future<String?> Function()? onRefreshAccessToken;
 
   @override
   Widget build(BuildContext context) {
@@ -137,31 +174,60 @@ class _DashboardBody extends StatelessWidget {
           showMenu: showMenu,
           userDisplayName: userDisplayName,
         ),
-        Expanded(
-          child: RefreshIndicator(
-            onRefresh: () async => onRefresh(),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final padding = constraints.maxWidth < 650 ? 16.0 : 28.0;
-                return SingleChildScrollView(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  padding: EdgeInsets.all(padding),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _OfflineBanner(lastUpdated: data.lastUpdated),
-                      const SizedBox(height: 18),
-                      _MetricGrid(metrics: data.metrics),
-                      const SizedBox(height: 20),
-                      _DashboardGrid(data: data),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
+        Expanded(child: _content()),
       ],
+    );
+  }
+
+  Widget _content() {
+    if (selectedPage == _SchoolAdminPage.admissions) {
+      return AdmissionsScreen(
+        customSchoolId: schoolId,
+        accessToken: accessToken,
+        onRefreshAccessToken: onRefreshAccessToken,
+      );
+    }
+
+    if (selectedPage == _SchoolAdminPage.households) {
+      return HouseholdsGuardiansScreen(
+        customSchoolId: schoolId,
+        accessToken: accessToken,
+        onRefreshAccessToken: onRefreshAccessToken,
+      );
+    }
+
+    if (selectedPage == _SchoolAdminPage.fees) {
+      return FeeManagementScreen(
+        customSchoolId: schoolId,
+        schoolName: schoolName?.trim().isNotEmpty == true
+            ? schoolName!.trim()
+            : data.schoolName,
+        accessToken: accessToken,
+        onRefreshAccessToken: onRefreshAccessToken,
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: () async => onRefresh(),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final padding = constraints.maxWidth < 650 ? 16.0 : 28.0;
+          return SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: EdgeInsets.all(padding),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _OfflineBanner(lastUpdated: data.lastUpdated),
+                const SizedBox(height: 18),
+                _MetricGrid(metrics: data.metrics),
+                const SizedBox(height: 20),
+                _DashboardGrid(data: data),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 }
@@ -1061,6 +1127,8 @@ class _Sidebar extends StatelessWidget {
     this.isDrawer = false,
     this.schoolName,
     this.role,
+    required this.selectedPage,
+    required this.onSelectPage,
     this.onLogout,
     this.onCollapse,
   });
@@ -1069,6 +1137,8 @@ class _Sidebar extends StatelessWidget {
   final bool isDrawer;
   final String? schoolName;
   final String? role;
+  final _SchoolAdminPage selectedPage;
+  final ValueChanged<_SchoolAdminPage> onSelectPage;
   final VoidCallback? onLogout;
   final VoidCallback? onCollapse;
 
@@ -1157,17 +1227,22 @@ class _Sidebar extends StatelessWidget {
                     icon: Icons.dashboard_rounded,
                     label: 'Dashboard',
                     collapsed: collapsed,
-                    active: true,
+                    active: selectedPage == _SchoolAdminPage.dashboard,
+                    onTap: () => onSelectPage(_SchoolAdminPage.dashboard),
                   ),
                   _SidebarButton(
                     icon: Icons.assignment_ind_rounded,
                     label: 'Admissions',
                     collapsed: collapsed,
+                    active: selectedPage == _SchoolAdminPage.admissions,
+                    onTap: () => onSelectPage(_SchoolAdminPage.admissions),
                   ),
                   _SidebarButton(
                     icon: Icons.groups_rounded,
-                    label: 'People',
+                    label: 'Households & Guardians',
                     collapsed: collapsed,
+                    active: selectedPage == _SchoolAdminPage.households,
+                    onTap: () => onSelectPage(_SchoolAdminPage.households),
                   ),
                   _SidebarButton(
                     icon: Icons.menu_book_rounded,
@@ -1176,8 +1251,10 @@ class _Sidebar extends StatelessWidget {
                   ),
                   _SidebarButton(
                     icon: Icons.account_balance_wallet_rounded,
-                    label: 'Finance',
+                    label: 'Fee Management',
                     collapsed: collapsed,
+                    active: selectedPage == _SchoolAdminPage.fees,
+                    onTap: () => onSelectPage(_SchoolAdminPage.fees),
                   ),
                   _SidebarButton(
                     icon: Icons.campaign_rounded,
