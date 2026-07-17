@@ -1251,7 +1251,7 @@ class _Sidebar extends StatelessWidget {
                   ),
                   _SidebarButton(
                     icon: Icons.account_balance_wallet_rounded,
-                    label: 'Fee Management',
+                    label: 'Fees & Requirements',
                     collapsed: collapsed,
                     active: selectedPage == _SchoolAdminPage.fees,
                     onTap: () => onSelectPage(_SchoolAdminPage.fees),

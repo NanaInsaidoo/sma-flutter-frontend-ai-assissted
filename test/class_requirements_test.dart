@@ -329,7 +329,7 @@ void main() {
       ),
     );
 
-    expect(find.text('Class Requirements'), findsOneWidget);
+    expect(find.text('Items & Supplies'), findsOneWidget);
     expect(find.text('Add class'), findsOneWidget);
     expect(find.text('Basic 1'), findsOneWidget);
 

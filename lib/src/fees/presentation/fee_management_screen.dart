@@ -451,7 +451,7 @@ class _FeeTabs extends StatelessWidget {
     (_FeeTab.overview, 'Overview'),
     (_FeeTab.studentFees, 'Student Fees'),
     (_FeeTab.feeStructure, 'Fee Structure'),
-    (_FeeTab.classRequirements, 'Class Requirements'),
+    (_FeeTab.classRequirements, 'Items & Supplies'),
     (_FeeTab.waivers, 'Waivers'),
   ];
 
@@ -554,7 +554,7 @@ class _FeeOverviewContent extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Fee Management',
+          'Fees & Requirements',
           style: Theme.of(context).textTheme.headlineSmall,
         ),
         const SizedBox(height: 6),
@@ -4185,7 +4185,7 @@ class _FeeErrorState extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               const Text(
-                'Unable to load fee management',
+                'Unable to load fees and requirements',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 8),

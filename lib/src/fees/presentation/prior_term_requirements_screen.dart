@@ -75,7 +75,7 @@ class _PriorTermRequirementsScreenState
         TextButton.icon(
           onPressed: widget.onBack,
           icon: const Icon(Icons.arrow_back_rounded),
-          label: const Text('Back to class requirements'),
+          label: const Text('Back to items & supplies'),
         ),
         const SizedBox(height: 10),
         const Text(

@@ -60,7 +60,7 @@ class MockDashboardRepository implements DashboardRepository {
       alerts: const [
         SchoolAlert(
           message: '23 students have outstanding fees for over 30 days',
-          context: 'Fee management · now',
+          context: 'Fees & requirements · now',
           level: AlertLevel.critical,
         ),
         SchoolAlert(

@@ -287,7 +287,7 @@ class _RequirementsOverview extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _PageHeading(
-          title: 'Class Requirements',
+          title: 'Items & Supplies',
           subtitle:
               '$termName · Add a class, then define the items its students must supply.',
           actions: [
@@ -542,7 +542,7 @@ class _ClassTracker extends StatelessWidget {
         TextButton.icon(
           onPressed: onBack,
           icon: const Icon(Icons.arrow_back_rounded),
-          label: const Text('Back to class requirements'),
+          label: const Text('Back to items & supplies'),
         ),
         const SizedBox(height: 8),
         _PageHeading(
@@ -1406,7 +1406,7 @@ class _AddClassDialogState extends State<_AddClassDialog> {
         .where((name) => !widget.existingNames.contains(name))
         .toList();
     return AlertDialog(
-      title: const Text('Set up class requirements'),
+      title: const Text('Set up items & supplies'),
       content: SizedBox(
         width: 500,
         child: Column(
