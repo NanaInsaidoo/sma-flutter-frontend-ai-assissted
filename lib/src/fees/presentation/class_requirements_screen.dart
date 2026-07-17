@@ -978,6 +978,29 @@ class _ClassRequirementCard extends StatelessWidget {
                       ),
                     ),
                   ),
+              if (group.items.length > 3)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2, bottom: 3),
+                  child: Row(
+                    children: [
+                      const SizedBox(width: 25),
+                      Text(
+                        '+ ${group.items.length - 3} more item${group.items.length - 3 == 1 ? '' : 's'}',
+                        style: const TextStyle(
+                          color: AppColors.green,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const Spacer(),
+                      const Icon(
+                        Icons.arrow_forward_rounded,
+                        size: 16,
+                        color: AppColors.green,
+                      ),
+                    ],
+                  ),
+                ),
               if (group.items.isNotEmpty) ...[
                 const Divider(height: 22),
                 Row(

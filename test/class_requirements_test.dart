@@ -385,4 +385,44 @@ void main() {
     expect(find.text('Ama Mensah'), findsOneWidget);
     expect(find.text('Kojo Asare'), findsOneWidget);
   });
+
+  testWidgets('class cards preview only three items and show the remainder', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repository = MockClassRequirementsRepository();
+    repository.addRequirement(
+      'basic-1',
+      ClassRequirementItem(
+        id: 'b1-crayons',
+        name: 'Colouring crayons',
+        category: 'Learning materials',
+        quantity: 1,
+        unit: 'pack',
+        estimatedUnitPrice: 15,
+        dueDate: DateTime(2026, 8, 1),
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: ClassRequirementsScreen(
+                repository: repository,
+                termName: 'Term 2 · 2025/26',
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('+ 1 more item'), findsOneWidget);
+    expect(find.text('Colouring crayons'), findsNothing);
+  });
 }
