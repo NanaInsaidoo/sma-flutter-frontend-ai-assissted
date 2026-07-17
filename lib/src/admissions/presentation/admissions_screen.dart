@@ -5,6 +5,8 @@ import '../data/admissions_api_client.dart';
 import '../../platform/presentation/document_opener.dart';
 import '../../theme/app_theme.dart';
 
+const _allClassesFilter = 'All classes';
+
 enum AdmissionStatusFilter {
   all('All'),
   draft('Draft'),
@@ -48,6 +50,7 @@ class AdmissionsScreen extends StatefulWidget {
 class _AdmissionsScreenState extends State<AdmissionsScreen> {
   AdmissionStatusFilter _filter = AdmissionStatusFilter.all;
   String _search = '';
+  String _selectedClass = _allClassesFilter;
   late final AdmissionsApiClient _api;
   late final Future<AdmissionTermContext> _termFuture;
   late Future<List<_StudentApplication>> _applicationsFuture;
@@ -120,6 +123,10 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
           application.status == StudentApplicationStatus.active,
       };
       if (!matchesFilter) return false;
+      if (_selectedClass != _allClassesFilter &&
+          application.applyingFor != _selectedClass) {
+        return false;
+      }
       if (query.isEmpty) return true;
       return application.studentName.toLowerCase().contains(query) ||
           application.guardianName.toLowerCase().contains(query) ||
@@ -129,7 +136,10 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
   }
 
   void _reloadApplications() {
-    setState(() => _applicationsFuture = _loadApplications());
+    final nextApplications = _loadApplications();
+    setState(() {
+      _applicationsFuture = nextApplications;
+    });
   }
 
   @override
@@ -165,7 +175,17 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
                   _SummaryCards(applications: applications),
                   const SizedBox(height: 18),
                   _AdmissionsFilters(
+                    selectedClass: _selectedClass,
+                    classes: {
+                      _allClassesFilter,
+                      _selectedClass,
+                      ...applications
+                          .map((item) => item.applyingFor)
+                          .where((item) => item != 'Class pending'),
+                    }.toList(),
                     onSearchChanged: (value) => setState(() => _search = value),
+                    onClassChanged: (value) =>
+                        setState(() => _selectedClass = value),
                   ),
                   const SizedBox(height: 12),
                   if (snapshot.connectionState == ConnectionState.waiting)
@@ -269,6 +289,13 @@ class _HouseholdsGuardiansScreenState extends State<HouseholdsGuardiansScreen> {
     }).toList();
   }
 
+  void _reloadHouseholds() {
+    final nextHouseholds = _loadHouseholds();
+    setState(() {
+      _householdsFuture = nextHouseholds;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -302,8 +329,7 @@ class _HouseholdsGuardiansScreenState extends State<HouseholdsGuardiansScreen> {
                   else if (snapshot.hasError)
                     _AdmissionsErrorCard(
                       message: snapshot.error.toString(),
-                      onRetry: () =>
-                          setState(() => _householdsFuture = _loadHouseholds()),
+                      onRetry: _reloadHouseholds,
                     )
                   else
                     _HouseholdsTable(
@@ -731,15 +757,66 @@ class _SummaryCard extends StatelessWidget {
 }
 
 class _AdmissionsFilters extends StatelessWidget {
-  const _AdmissionsFilters({required this.onSearchChanged});
+  const _AdmissionsFilters({
+    required this.selectedClass,
+    required this.classes,
+    required this.onSearchChanged,
+    required this.onClassChanged,
+  });
+
+  final String selectedClass;
+  final List<String> classes;
   final ValueChanged<String> onSearchChanged;
+  final ValueChanged<String> onClassChanged;
 
   @override
   Widget build(BuildContext context) {
-    return _FilterBar(
-      searchHint: 'Search by student, guardian, class, or application ID',
-      onSearchChanged: onSearchChanged,
-      filters: const ['All classes', 'All types', 'Current year'],
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final compact = constraints.maxWidth < 720;
+            final search = TextField(
+              onChanged: onSearchChanged,
+              decoration: const InputDecoration(
+                labelText: 'Search applications',
+                hintText: 'Student, guardian, class, or application ID',
+                prefixIcon: Icon(Icons.search_rounded),
+                contentPadding: EdgeInsets.symmetric(vertical: 13),
+              ),
+            );
+            final classFilter = DropdownButtonFormField<String>(
+              value: selectedClass,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Class',
+                prefixIcon: Icon(Icons.school_outlined),
+              ),
+              items: classes
+                  .map(
+                    (item) => DropdownMenuItem(value: item, child: Text(item)),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                if (value != null) onClassChanged(value);
+              },
+            );
+            if (compact) {
+              return Column(
+                children: [search, const SizedBox(height: 10), classFilter],
+              );
+            }
+            return Row(
+              children: [
+                Expanded(child: search),
+                const SizedBox(width: 12),
+                SizedBox(width: 230, child: classFilter),
+              ],
+            );
+          },
+        ),
+      ),
     );
   }
 }
@@ -944,22 +1021,77 @@ class _ApplicationRow extends StatelessWidget {
   final AdmissionsApiClient api;
   final VoidCallback onChanged;
 
+  Future<void> _openApplication(BuildContext context) async {
+    if (application.status == StudentApplicationStatus.pendingApproval) {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => _ApplicantDetailScreen(
+            application: application,
+            customSchoolId: customSchoolId,
+            api: api,
+          ),
+        ),
+      );
+      onChanged();
+      return;
+    }
+
+    if (application.status == StudentApplicationStatus.approved ||
+        application.status == StudentApplicationStatus.active) {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => _StudentProfileScreen(
+            application: application,
+            customSchoolId: customSchoolId,
+            api: api,
+          ),
+        ),
+      );
+      onChanged();
+      return;
+    }
+
+    final householdId = application.householdId;
+    if (householdId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This application has no household information yet.'),
+        ),
+      );
+      return;
+    }
+    final guardianName = application.guardianName == 'Guardian details pending'
+        ? 'Applicant'
+        : application.guardianName;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _HouseholdDashboardScreen(
+          household: _HouseholdRecord(
+            householdId: householdId,
+            householdName: '$guardianName Household',
+            primaryGuardian: application.guardianName,
+            phone: application.guardianPhone.isEmpty
+                ? 'No phone yet'
+                : application.guardianPhone,
+            status: application.status.label,
+            statusColor: application.status.color,
+            students: 1,
+            pendingGuardians: 0,
+            started: application.appliedDate,
+          ),
+          customSchoolId: customSchoolId,
+          api: api,
+        ),
+      ),
+    );
+    onChanged();
+  }
+
   @override
   Widget build(BuildContext context) {
     return InkWell(
       onTap: application.studentId.startsWith('STU-')
-          ? () async {
-              await Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => _ApplicantDetailScreen(
-                    application: application,
-                    customSchoolId: customSchoolId,
-                    api: api,
-                  ),
-                ),
-              );
-              onChanged();
-            }
+          ? () => _openApplication(context)
           : null,
       child: _ResponsiveRow(
         leadingTitle: application.studentName,
@@ -984,6 +1116,243 @@ class _ApplicationRow extends StatelessWidget {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _StudentProfileScreen extends StatefulWidget {
+  const _StudentProfileScreen({
+    required this.application,
+    required this.customSchoolId,
+    required this.api,
+  });
+
+  final _StudentApplication application;
+  final String customSchoolId;
+  final AdmissionsApiClient api;
+
+  @override
+  State<_StudentProfileScreen> createState() => _StudentProfileScreenState();
+}
+
+class _StudentProfileScreenState extends State<_StudentProfileScreen> {
+  late Future<AdmissionStudent> _studentFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _studentFuture = _loadStudent();
+  }
+
+  Future<AdmissionStudent> _loadStudent() => widget.api.getStudentDetails(
+    customSchoolId: widget.customSchoolId,
+    customStudentId: widget.application.studentId,
+  );
+
+  void _reloadStudent() {
+    final nextStudent = _loadStudent();
+    setState(() => _studentFuture = nextStudent);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF5F8F7),
+      body: SafeArea(
+        child: Column(
+          children: [
+            _AdmissionFlowTopBar(
+              title: 'Student profile',
+              subtitle: 'Student identity and enrollment information',
+              onClose: () => Navigator.pop(context),
+            ),
+            Expanded(
+              child: FutureBuilder<AdmissionStudent>(
+                future: _studentFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: _AdmissionsLoadingCard(),
+                    );
+                  }
+                  if (snapshot.hasError || snapshot.data == null) {
+                    return Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: _AdmissionsErrorCard(
+                        message: snapshot.error.toString(),
+                        onRetry: _reloadStudent,
+                      ),
+                    );
+                  }
+                  return _StudentProfileOverview(
+                    student: snapshot.data!,
+                    application: widget.application,
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StudentProfileOverview extends StatelessWidget {
+  const _StudentProfileOverview({
+    required this.student,
+    required this.application,
+  });
+
+  final AdmissionStudent student;
+  final _StudentApplication application;
+
+  @override
+  Widget build(BuildContext context) {
+    final displayName = student.displayName.trim().isEmpty
+        ? application.studentName
+        : student.displayName;
+    final status = student.status.trim().isEmpty
+        ? application.status
+        : _studentStatusFromApi(student.status);
+    final values = [
+      ('Applying for', _value(student.gradeLevel)),
+      ('Gender', _value(student.gender)),
+      ('Date of birth', _dateValue(student.dateOfBirth)),
+      ('Guardian', _value(application.guardianName)),
+      ('Household ID', '${student.householdId ?? 'Not provided'}'),
+      ('Application status', status.label),
+    ];
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1120),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(22),
+                  child: Wrap(
+                    spacing: 18,
+                    runSpacing: 14,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Container(
+                        width: 62,
+                        height: 62,
+                        decoration: BoxDecoration(
+                          color: AppColors.greenSoft,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          _initialsForText(displayName),
+                          style: const TextStyle(
+                            color: AppColors.green,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(minWidth: 230),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              displayName,
+                              style: Theme.of(context).textTheme.headlineSmall
+                                  ?.copyWith(fontWeight: FontWeight.w900),
+                            ),
+                            const SizedBox(height: 5),
+                            Text(
+                              student.customStudentId,
+                              style: const TextStyle(color: AppColors.muted),
+                            ),
+                          ],
+                        ),
+                      ),
+                      _StatusPill(label: status.label, color: status.color),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final columns = constraints.maxWidth >= 820 ? 3 : 1;
+                  const gap = 12.0;
+                  final cardWidth =
+                      (constraints.maxWidth - gap * (columns - 1)) / columns;
+                  return Wrap(
+                    spacing: gap,
+                    runSpacing: gap,
+                    children: values
+                        .map(
+                          (item) => SizedBox(
+                            width: cardWidth,
+                            child: _StudentProfileValueCard(
+                              label: item.$1,
+                              value: item.$2,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _value(String value) =>
+      value.trim().isEmpty ? 'Not provided' : value;
+
+  static String _dateValue(String value) =>
+      value.trim().isEmpty ? 'Not provided' : _formatDateText(value);
+}
+
+class _StudentProfileValueCard extends StatelessWidget {
+  const _StudentProfileValueCard({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label.toUpperCase(),
+              style: const TextStyle(
+                color: AppColors.muted,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: .7,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              value,
+              style: const TextStyle(
+                color: AppColors.text,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1253,6 +1622,13 @@ class _HouseholdPickerScreenState extends State<_HouseholdPickerScreen> {
     );
   }
 
+  void _reloadHouseholds() {
+    final nextHouseholds = _loadHouseholds();
+    setState(() {
+      _householdsFuture = nextHouseholds;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1286,9 +1662,7 @@ class _HouseholdPickerScreenState extends State<_HouseholdPickerScreen> {
                           if (snapshot.hasError) {
                             return _AdmissionsErrorCard(
                               message: snapshot.error.toString(),
-                              onRetry: () => setState(
-                                () => _householdsFuture = _loadHouseholds(),
-                              ),
+                              onRetry: _reloadHouseholds,
                             );
                           }
                           return _ExistingHouseholdSearchForm(
@@ -1340,6 +1714,7 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
   late Future<_HouseholdDashboardData> _dashboardFuture;
   late _HouseholdRecord _household;
   String? _primaryGuardianKey;
+  String? _settingPrimaryGuardianKey;
 
   @override
   void initState() {
@@ -1405,6 +1780,13 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
     return _HouseholdDashboardData(guardians: guardians, students: students);
   }
 
+  void _reloadDashboard() {
+    final nextDashboard = _loadDashboard();
+    setState(() {
+      _dashboardFuture = nextDashboard;
+    });
+  }
+
   Future<void> _openDrawer(
     _AdmissionFlowKind flow, {
     AdmissionGuardian? existingGuardian,
@@ -1428,6 +1810,7 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
             existingGuardian: existingGuardian,
             existingStudent: existingStudent,
             onSaved: (savedHouseholdId) {
+              final nextDashboard = _loadDashboard();
               setState(() {
                 if (_household.householdId == null &&
                     savedHouseholdId != null) {
@@ -1437,7 +1820,7 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
                     statusColor: AppColors.green,
                   );
                 }
-                _dashboardFuture = _loadDashboard();
+                _dashboardFuture = nextDashboard;
               });
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
@@ -1519,7 +1902,7 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
         householdId: householdId,
       );
       if (!mounted) return;
-      setState(() => _dashboardFuture = _loadDashboard());
+      _reloadDashboard();
       _showHouseholdMessage('Guardian deleted.');
     } on AdmissionsApiException catch (error) {
       if (!mounted) return;
@@ -1547,10 +1930,37 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
         customStudentId: student.customStudentId,
       );
       if (!mounted) return;
-      setState(() => _dashboardFuture = _loadDashboard());
+      _reloadDashboard();
       _showHouseholdMessage('Student application deleted.');
     } on AdmissionsApiException catch (error) {
       if (!mounted) return;
+      _showHouseholdMessage(error.message);
+    }
+  }
+
+  Future<void> _setPrimaryGuardian(AdmissionGuardian guardian) async {
+    final guardianKey = _guardianKey(guardian);
+    if (_settingPrimaryGuardianKey != null || guardianKey.isEmpty) return;
+
+    setState(() => _settingPrimaryGuardianKey = guardianKey);
+    try {
+      final updated = await widget.api.setPrimaryGuardian(
+        customSchoolId: widget.customSchoolId,
+        customGuardianId: guardian.customGuardianId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _primaryGuardianKey = guardianKey;
+        _settingPrimaryGuardianKey = null;
+      });
+      _reloadDashboard();
+      final guardianName = updated.displayName.trim().isEmpty
+          ? guardian.displayName
+          : updated.displayName;
+      _showHouseholdMessage('$guardianName is now the primary guardian.');
+    } on AdmissionsApiException catch (error) {
+      if (!mounted) return;
+      setState(() => _settingPrimaryGuardianKey = null);
       _showHouseholdMessage(error.message);
     }
   }
@@ -1615,8 +2025,7 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
                       padding: const EdgeInsets.all(24),
                       child: _AdmissionsErrorCard(
                         message: snapshot.error.toString(),
-                        onRetry: () =>
-                            setState(() => _dashboardFuture = _loadDashboard()),
+                        onRetry: _reloadDashboard,
                       ),
                     );
                   }
@@ -1627,9 +2036,10 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
                     students:
                         snapshot.data?.students ?? const <AdmissionStudent>[],
                     primaryGuardianKey: _primaryGuardianKey,
-                    onSetPrimaryGuardian: (guardian) => setState(
-                      () => _primaryGuardianKey = _guardianKey(guardian),
-                    ),
+                    settingPrimaryGuardianKey: _settingPrimaryGuardianKey,
+                    onSetPrimaryGuardian: (guardian) {
+                      _setPrimaryGuardian(guardian);
+                    },
                     onAddGuardian: () => _openDrawer(
                       (snapshot.data?.guardians ?? const <AdmissionGuardian>[])
                               .isEmpty
@@ -1658,6 +2068,7 @@ class _HouseholdWorkspace extends StatelessWidget {
     required this.guardians,
     required this.students,
     required this.primaryGuardianKey,
+    required this.settingPrimaryGuardianKey,
     required this.onSetPrimaryGuardian,
     required this.onAddGuardian,
     required this.onAddStudent,
@@ -1671,6 +2082,7 @@ class _HouseholdWorkspace extends StatelessWidget {
   final List<AdmissionGuardian> guardians;
   final List<AdmissionStudent> students;
   final String? primaryGuardianKey;
+  final String? settingPrimaryGuardianKey;
   final ValueChanged<AdmissionGuardian> onSetPrimaryGuardian;
   final VoidCallback onAddGuardian;
   final VoidCallback onAddStudent;
@@ -1713,6 +2125,9 @@ class _HouseholdWorkspace extends StatelessWidget {
                             isPrimary: primaryGuardianKey == null
                                 ? guardian.isPrimary
                                 : _guardianKey(guardian) == primaryGuardianKey,
+                            isSettingPrimary:
+                                _guardianKey(guardian) ==
+                                settingPrimaryGuardianKey,
                             onSetPrimary: () => onSetPrimaryGuardian(guardian),
                             onEdit: () => onEditGuardian(guardian),
                             onDelete: () => onDeleteGuardian(guardian),
@@ -2012,6 +2427,7 @@ class _GuardianWorkspaceRow extends StatelessWidget {
   const _GuardianWorkspaceRow({
     required this.guardian,
     required this.isPrimary,
+    required this.isSettingPrimary,
     required this.onSetPrimary,
     required this.onEdit,
     required this.onDelete,
@@ -2019,6 +2435,7 @@ class _GuardianWorkspaceRow extends StatelessWidget {
 
   final AdmissionGuardian guardian;
   final bool isPrimary;
+  final bool isSettingPrimary;
   final VoidCallback onSetPrimary;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
@@ -2035,6 +2452,7 @@ class _GuardianWorkspaceRow extends StatelessWidget {
       phone: guardian.phone.isEmpty ? 'No phone yet' : guardian.phone,
       email: guardian.email.isEmpty ? 'No email yet' : guardian.email,
       isPrimary: isPrimary,
+      isSettingPrimary: isSettingPrimary,
       onSetPrimary: onSetPrimary,
       status: _guardianStatusLabel(guardian.status),
       statusColor: _guardianStatusColor(guardian.status),
@@ -2086,6 +2504,7 @@ class _ContactRecordRow extends StatelessWidget {
     required this.phone,
     required this.email,
     required this.isPrimary,
+    required this.isSettingPrimary,
     required this.onSetPrimary,
     required this.status,
     required this.statusColor,
@@ -2099,6 +2518,7 @@ class _ContactRecordRow extends StatelessWidget {
   final String phone;
   final String email;
   final bool isPrimary;
+  final bool isSettingPrimary;
   final VoidCallback onSetPrimary;
   final String status;
   final Color statusColor;
@@ -2181,7 +2601,7 @@ class _ContactRecordRow extends StatelessWidget {
           const SizedBox(width: 6),
           if (!isPrimary)
             OutlinedButton(
-              onPressed: onSetPrimary,
+              onPressed: isSettingPrimary ? null : onSetPrimary,
               style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 10,
@@ -2189,7 +2609,20 @@ class _ContactRecordRow extends StatelessWidget {
                 ),
                 visualDensity: VisualDensity.compact,
               ),
-              child: const Text('Set Primary'),
+              child: isSettingPrimary
+                  ? const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        SizedBox(width: 7),
+                        Text('Saving...'),
+                      ],
+                    )
+                  : const Text('Set Primary'),
             ),
           if (!isPrimary) const SizedBox(width: 6),
           _RecordActionButton(
@@ -2618,6 +3051,7 @@ class _AdmissionSideDrawer extends StatefulWidget {
     this.householdId,
     this.existingGuardian,
     this.existingStudent,
+    this.initialStep = 0,
   });
 
   final _AdmissionFlowKind flow;
@@ -2628,6 +3062,7 @@ class _AdmissionSideDrawer extends StatefulWidget {
   final int? householdId;
   final AdmissionGuardian? existingGuardian;
   final AdmissionStudent? existingStudent;
+  final int initialStep;
 
   @override
   State<_AdmissionSideDrawer> createState() => _AdmissionSideDrawerState();
@@ -3575,6 +4010,7 @@ class _AdmissionSideDrawerState extends State<_AdmissionSideDrawer> {
   @override
   void initState() {
     super.initState();
+    _step = widget.initialStep.clamp(0, _steps.length - 1).toInt();
     _guardianDraft = _GuardianAdmissionDraft();
     _studentDraft = _StudentAdmissionDraft();
     final guardian = widget.existingGuardian;
@@ -7938,7 +8374,10 @@ class _StudentDocumentsFormState extends State<_StudentDocumentsForm> {
   }
 
   void _reloadDocuments() {
-    setState(() => _documentsFuture = _loadDocuments());
+    final nextDocuments = _loadDocuments();
+    setState(() {
+      _documentsFuture = nextDocuments;
+    });
   }
 
   Future<void> _pickAndUpload(String documentType) async {
@@ -8658,10 +9097,16 @@ class _ApplicantDetailScreenState extends State<_ApplicantDetailScreen> {
   }
 
   void _reloadDetail() {
-    setState(() => _detailFuture = _loadDetail());
+    final nextDetail = _loadDetail();
+    setState(() {
+      _detailFuture = nextDetail;
+    });
   }
 
-  Future<void> _editApplication(AdmissionStudent student) async {
+  Future<void> _editApplication(
+    AdmissionStudent student, {
+    int initialStep = 0,
+  }) async {
     await showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
@@ -8680,6 +9125,7 @@ class _ApplicantDetailScreenState extends State<_ApplicantDetailScreen> {
             customSchoolId: widget.customSchoolId,
             api: widget.api,
             existingStudent: student,
+            initialStep: initialStep,
             onSaved: (_) => _reloadDetail(),
           ),
         );
@@ -8811,6 +9257,8 @@ class _ApplicantDetailScreenState extends State<_ApplicantDetailScreen> {
                     status: _status,
                     updatingStatus: _updatingStatus,
                     onEdit: () => _editApplication(data.student),
+                    onEditStep: (step) =>
+                        _editApplication(data.student, initialStep: step),
                     onApprove: () => _changeStatus(
                       StudentApplicationStatus.approved,
                       title: 'Approve application?',
@@ -8912,6 +9360,7 @@ class _ApplicantDetailWorkspace extends StatelessWidget {
     required this.status,
     required this.updatingStatus,
     required this.onEdit,
+    required this.onEditStep,
     required this.onApprove,
     required this.onReject,
     required this.onRevert,
@@ -8923,6 +9372,7 @@ class _ApplicantDetailWorkspace extends StatelessWidget {
   final StudentApplicationStatus status;
   final bool updatingStatus;
   final VoidCallback onEdit;
+  final ValueChanged<int> onEditStep;
   final VoidCallback onApprove;
   final VoidCallback onReject;
   final VoidCallback onRevert;
@@ -8936,7 +9386,7 @@ class _ApplicantDetailWorkspace extends StatelessWidget {
         final content = _ApplicantInformationColumn(
           application: application,
           data: data,
-          onEdit: onEdit,
+          onEditStep: onEditStep,
           onViewDocument: onViewDocument,
         );
         final sidebar = _ApplicantDecisionSidebar(
@@ -8977,13 +9427,13 @@ class _ApplicantInformationColumn extends StatelessWidget {
   const _ApplicantInformationColumn({
     required this.application,
     required this.data,
-    required this.onEdit,
+    required this.onEditStep,
     required this.onViewDocument,
   });
 
   final _StudentApplication application;
   final _ApplicantDetailData data;
-  final VoidCallback onEdit;
+  final ValueChanged<int> onEditStep;
   final ValueChanged<AdmissionStudentDocument> onViewDocument;
 
   @override
@@ -8997,7 +9447,7 @@ class _ApplicantInformationColumn extends StatelessWidget {
         _ApplicantSectionCard(
           number: 1,
           title: 'Student Information',
-          onEdit: onEdit,
+          onEdit: () => onEditStep(0),
           child: _ApplicantDetailGrid(
             fields: [
               ('First name', _value(raw['firstName'])),
@@ -9020,24 +9470,28 @@ class _ApplicantInformationColumn extends StatelessWidget {
         _ApplicantSectionCard(
           number: 2,
           title: 'Medical Conditions & Allergies',
+          onEdit: () => onEditStep(2),
           child: _ApplicantMedicalContent(data: data),
         ),
         const SizedBox(height: 14),
         _ApplicantSectionCard(
           number: 3,
           title: 'Vaccination Records',
+          onEdit: () => onEditStep(3),
           child: _ApplicantVaccinationContent(data: data),
         ),
         const SizedBox(height: 14),
         _ApplicantSectionCard(
           number: 4,
           title: 'School History',
+          onEdit: () => onEditStep(4),
           child: _ApplicantSchoolHistory(student: student),
         ),
         const SizedBox(height: 14),
         _ApplicantSectionCard(
           number: 5,
           title: 'Required Documents',
+          onEdit: () => onEditStep(5),
           child: _ApplicantDocuments(
             documents: data.documents,
             onViewDocument: onViewDocument,

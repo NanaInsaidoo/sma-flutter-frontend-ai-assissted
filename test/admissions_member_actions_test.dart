@@ -69,6 +69,43 @@ void main() {
       );
     });
 
+    test('sets a guardian as primary for their household', () async {
+      late http.Request captured;
+      final api = AdmissionsApiClient(
+        accessToken: 'token',
+        client: MockClient((request) async {
+          captured = request;
+          return http.Response(
+            jsonEncode({
+              'customGuardianId': 'GUA-123',
+              'firstName': 'John',
+              'lastName': 'Mensah',
+              'isPrimary': true,
+              'householdId': 19,
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }),
+      );
+
+      final guardian = await api.setPrimaryGuardian(
+        customSchoolId: 'SCH-001',
+        customGuardianId: 'GUA-123',
+      );
+
+      expect(captured.method, 'PUT');
+      expect(
+        captured.url.path,
+        endsWith(
+          '/api/v1/guardians/schools/SCH-001/guardians/GUA-123/set-primary',
+        ),
+      );
+      expect(guardian.displayName, 'John Mensah');
+      expect(guardian.isPrimary, isTrue);
+      expect(guardian.householdId, 19);
+    });
+
     test('deletes a non-active student admission from its household', () async {
       late http.Request captured;
       final api = AdmissionsApiClient(

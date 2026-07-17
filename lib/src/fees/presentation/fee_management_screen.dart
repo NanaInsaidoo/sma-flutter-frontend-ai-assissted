@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../../theme/app_theme.dart';
 import '../data/fee_api_client.dart';
+import '../data/mock_class_requirements_repository.dart';
 import '../domain/fee_models.dart';
+import 'class_requirements_screen.dart';
 
-enum _FeeTab { overview, studentFees, feeStructure, waivers }
+enum _FeeTab { overview, studentFees, feeStructure, classRequirements, waivers }
 
 enum _FeeOverviewPage { main, collectionByClass, outstandingArrears }
 
@@ -28,6 +30,8 @@ class FeeManagementScreen extends StatefulWidget {
 
 class _FeeManagementScreenState extends State<FeeManagementScreen> {
   late FeeApiClient _api;
+  final MockClassRequirementsRepository _classRequirements =
+      MockClassRequirementsRepository();
   late Future<void> _initialLoad;
   FeeManagementOverview? _overview;
   FeeStudentFeesPage? _studentFeesPage;
@@ -56,6 +60,12 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
     if (oldWidget.accessToken != widget.accessToken) {
       _api.accessToken = widget.accessToken;
     }
+  }
+
+  @override
+  void dispose() {
+    _classRequirements.dispose();
+    super.dispose();
   }
 
   Future<void> _loadInitial() async {
@@ -238,6 +248,10 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
         onPaymentSaved: _reloadFees,
       ),
       _FeeTab.feeStructure => _buildFeeStructureContent(),
+      _FeeTab.classRequirements => ClassRequirementsScreen(
+        repository: _classRequirements,
+        termName: _termName,
+      ),
       _FeeTab.waivers => _WaiversContent(waivers: _waivers, money: _money),
     };
   }
@@ -437,6 +451,7 @@ class _FeeTabs extends StatelessWidget {
     (_FeeTab.overview, 'Overview'),
     (_FeeTab.studentFees, 'Student Fees'),
     (_FeeTab.feeStructure, 'Fee Structure'),
+    (_FeeTab.classRequirements, 'Class Requirements'),
     (_FeeTab.waivers, 'Waivers'),
   ];
 

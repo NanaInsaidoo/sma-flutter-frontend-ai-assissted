@@ -97,6 +97,17 @@ class AdmissionsApiClient {
     );
   }
 
+  Future<AdmissionGuardian> setPrimaryGuardian({
+    required String customSchoolId,
+    required String customGuardianId,
+  }) async {
+    final response = await _send(
+      'PUT',
+      '/api/v1/guardians/schools/$customSchoolId/guardians/$customGuardianId/set-primary',
+    );
+    return AdmissionGuardian.fromJson(_decodeMap(response));
+  }
+
   Future<List<AdmissionStudent>> getStudents({
     required String customSchoolId,
     int? householdId,
