@@ -5,8 +5,16 @@ import '../data/fee_api_client.dart';
 import '../data/mock_class_requirements_repository.dart';
 import '../domain/fee_models.dart';
 import 'class_requirements_screen.dart';
+import 'fee_adjustments_content.dart';
 
-enum _FeeTab { overview, studentFees, feeStructure, classRequirements, waivers }
+enum _FeeTab {
+  overview,
+  studentFees,
+  feeStructure,
+  adjustments,
+  classRequirements,
+  waivers,
+}
 
 enum _FeeOverviewPage { main, collectionByClass, outstandingArrears }
 
@@ -248,6 +256,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
         onPaymentSaved: _reloadFees,
       ),
       _FeeTab.feeStructure => _buildFeeStructureContent(),
+      _FeeTab.adjustments => const FeeAdjustmentsContent(),
       _FeeTab.classRequirements => ClassRequirementsScreen(
         repository: _classRequirements,
         termName: _termName,
@@ -451,6 +460,7 @@ class _FeeTabs extends StatelessWidget {
     (_FeeTab.overview, 'Overview'),
     (_FeeTab.studentFees, 'Student Fees'),
     (_FeeTab.feeStructure, 'Fee Structure'),
+    (_FeeTab.adjustments, 'Fee Adjustments'),
     (_FeeTab.classRequirements, 'Items & Supplies'),
     (_FeeTab.waivers, 'Waivers'),
   ];

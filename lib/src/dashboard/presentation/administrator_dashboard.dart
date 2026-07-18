@@ -4,9 +4,18 @@ import '../../theme/app_theme.dart';
 import '../data/dashboard_repository.dart';
 import '../domain/dashboard_models.dart';
 import '../../admissions/presentation/admissions_screen.dart';
+import '../../attendance/presentation/attendance_dashboard_screen.dart';
 import '../../fees/presentation/fee_management_screen.dart';
+import '../../students/presentation/students_screen.dart';
 
-enum _SchoolAdminPage { dashboard, admissions, households, fees }
+enum _SchoolAdminPage {
+  dashboard,
+  admissions,
+  students,
+  attendance,
+  households,
+  fees,
+}
 
 class AdministratorDashboard extends StatefulWidget {
   const AdministratorDashboard({
@@ -97,6 +106,8 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                         onRefresh: _refresh,
                         userDisplayName: widget.userDisplayName,
                         selectedPage: _selectedPage,
+                        onSelectPage: (page) =>
+                            setState(() => _selectedPage = page),
                         schoolId: _schoolId,
                         schoolName: widget.schoolName,
                         accessToken: widget.accessToken,
@@ -129,6 +140,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                 userDisplayName: widget.userDisplayName,
                 showMenu: true,
                 selectedPage: _selectedPage,
+                onSelectPage: (page) => setState(() => _selectedPage = page),
                 schoolId: _schoolId,
                 schoolName: widget.schoolName,
                 accessToken: widget.accessToken,
@@ -149,6 +161,7 @@ class _DashboardBody extends StatelessWidget {
     this.userDisplayName,
     this.showMenu = false,
     required this.selectedPage,
+    required this.onSelectPage,
     required this.schoolId,
     this.schoolName,
     this.accessToken,
@@ -160,6 +173,7 @@ class _DashboardBody extends StatelessWidget {
   final String? userDisplayName;
   final bool showMenu;
   final _SchoolAdminPage selectedPage;
+  final ValueChanged<_SchoolAdminPage> onSelectPage;
   final String schoolId;
   final String? schoolName;
   final String? accessToken;
@@ -193,6 +207,22 @@ class _DashboardBody extends StatelessWidget {
         customSchoolId: schoolId,
         accessToken: accessToken,
         onRefreshAccessToken: onRefreshAccessToken,
+      );
+    }
+
+    if (selectedPage == _SchoolAdminPage.students) {
+      return StudentsScreen(
+        term: data.term,
+        academicYear: data.academicYear,
+        onOpenHousehold: () => onSelectPage(_SchoolAdminPage.households),
+      );
+    }
+
+    if (selectedPage == _SchoolAdminPage.attendance) {
+      return AttendanceDashboardScreen(
+        customSchoolId: schoolId,
+        term: data.term,
+        academicYear: data.academicYear,
       );
     }
 
@@ -1236,6 +1266,20 @@ class _Sidebar extends StatelessWidget {
                     collapsed: collapsed,
                     active: selectedPage == _SchoolAdminPage.admissions,
                     onTap: () => onSelectPage(_SchoolAdminPage.admissions),
+                  ),
+                  _SidebarButton(
+                    icon: Icons.school_rounded,
+                    label: 'Students',
+                    collapsed: collapsed,
+                    active: selectedPage == _SchoolAdminPage.students,
+                    onTap: () => onSelectPage(_SchoolAdminPage.students),
+                  ),
+                  _SidebarButton(
+                    icon: Icons.fact_check_outlined,
+                    label: 'Attendance',
+                    collapsed: collapsed,
+                    active: selectedPage == _SchoolAdminPage.attendance,
+                    onTap: () => onSelectPage(_SchoolAdminPage.attendance),
                   ),
                   _SidebarButton(
                     icon: Icons.groups_rounded,
