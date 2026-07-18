@@ -111,11 +111,15 @@ class CurrentAcademicTerm {
   final String name;
 
   factory CurrentAcademicTerm.fromJson(Map<String, dynamic> json) {
-    final termType = json['termType'];
+    final academicTerm = json['academicTerm'];
+    final termSource = academicTerm is Map<String, dynamic>
+        ? academicTerm
+        : json;
+    final termType = termSource['termType'];
     final academicYear = json['academicYear'];
     final termName = termType is Map<String, dynamic>
         ? '${termType['name'] ?? termType['termName'] ?? ''}'
-        : '${json['name'] ?? json['termName'] ?? ''}';
+        : '${termSource['name'] ?? termSource['termName'] ?? ''}';
     final yearName = academicYear is Map<String, dynamic>
         ? '${academicYear['year'] ?? academicYear['name'] ?? ''}'
         : '';
@@ -124,7 +128,7 @@ class CurrentAcademicTerm {
       if (yearName.trim().isNotEmpty) yearName.trim(),
     ].join(' · ');
     return CurrentAcademicTerm(
-      id: _intValue(json['id'] ?? json['termId']),
+      id: _intValue(termSource['id'] ?? termSource['termId']),
       name: label.isEmpty ? 'Current term' : label,
     );
   }

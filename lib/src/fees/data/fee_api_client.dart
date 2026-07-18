@@ -59,7 +59,10 @@ class FeeApiClient {
   }
 
   Future<CurrentAcademicTerm> getCurrentTerm(String customSchoolId) async {
-    final response = await _send('GET', '/api/v1/current-term/$customSchoolId');
+    final response = await _send(
+      'GET',
+      '/api/schools/$customSchoolId/academic-context/current',
+    );
     return CurrentAcademicTerm.fromJson(_decodeMap(response));
   }
 
