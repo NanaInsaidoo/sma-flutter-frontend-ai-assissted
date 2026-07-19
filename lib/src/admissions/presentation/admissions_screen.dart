@@ -6,6 +6,7 @@ import '../../fees/data/fee_api_client.dart';
 import '../../fees/domain/fee_models.dart';
 import '../../platform/presentation/document_opener.dart';
 import '../../students/domain/student_models.dart';
+import '../../students/data/api_students_repository.dart';
 import '../../students/presentation/students_screen.dart';
 import '../../theme/app_theme.dart';
 
@@ -84,19 +85,17 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
             householdId: item.householdId,
             admissionId: item.admissionId,
             studentName: item.displayName.isEmpty
-                ? 'Unnamed applicant'
+                ? 'Name not provided'
                 : item.displayName,
-            studentId: item.customStudentId.isNotEmpty
-                ? item.customStudentId
-                : item.id == null
-                ? 'Admission pending'
-                : 'ADM-${item.id}',
-            guardianName: item.guardianName.isNotEmpty
-                ? item.guardianName
-                : 'Guardian details pending',
+            studentId: item.customStudentId.isEmpty
+                ? 'Student ID not assigned'
+                : item.customStudentId,
+            guardianName: item.guardianName.isEmpty
+                ? 'Guardian not provided'
+                : item.guardianName,
             guardianPhone: item.guardianPhone,
             applyingFor: item.gradeLevelName.isEmpty
-                ? 'Class pending'
+                ? 'Class not provided'
                 : item.gradeLevelName,
             type: _titleCase(item.personType),
             appliedDate: _formatDateText(item.createdAt),
@@ -185,7 +184,7 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
                       _selectedClass,
                       ...applications
                           .map((item) => item.applyingFor)
-                          .where((item) => item != 'Class pending'),
+                          .where((item) => item != 'Class not provided'),
                     }.toList(),
                     onSearchChanged: (value) => setState(() => _search = value),
                     onClassChanged: (value) =>
@@ -1849,7 +1848,8 @@ class _StudentProfileScreenState extends State<_StudentProfileScreen> {
       customStudentId: widget.application.studentId,
     );
     final householdId = student.householdId ?? widget.application.householdId;
-    final feeApi = FeeApiClient(
+    final studentsRepository = ApiStudentsRepository(
+      customSchoolId: widget.customSchoolId,
       accessToken: widget.api.accessToken,
       onRefreshAccessToken: widget.api.onRefreshAccessToken,
     );
@@ -1869,27 +1869,12 @@ class _StudentProfileScreenState extends State<_StudentProfileScreen> {
         )
       else
         Future.value(const <AdmissionStudent>[]),
-      widget.api.getStudentDocuments(
-        customSchoolId: widget.customSchoolId,
-        customStudentId: student.customStudentId,
-      ),
-      _loadStudentFeeRow(feeApi, student.customStudentId),
-      _loadStudentPayments(feeApi, student.customStudentId),
+      studentsRepository.getStudent(student.customStudentId),
     ]);
     final term = results[0] as AdmissionTermContext;
     final guardians = results[1] as List<AdmissionGuardian>;
     final householdStudents = results[2] as List<AdmissionStudent>;
-    final documents = results[3] as List<AdmissionStudentDocument>;
-    final fee = results[4] as FeeStudentFeeRow?;
-    final payments = results[5] as List<FeeStudentPayment>;
-    final enrolledStudent = _mapEnrolledStudent(
-      student: student,
-      guardians: guardians,
-      householdStudents: householdStudents,
-      documents: documents,
-      fee: fee,
-      payments: payments,
-    );
+    final enrolledStudent = results[3] as EnrolledStudent;
     return _LiveStudentProfileData(
       student: enrolledStudent,
       admissionStudent: student,
@@ -1897,36 +1882,6 @@ class _StudentProfileScreenState extends State<_StudentProfileScreen> {
       householdStudents: householdStudents,
       term: term,
     );
-  }
-
-  Future<FeeStudentFeeRow?> _loadStudentFeeRow(
-    FeeApiClient api,
-    String studentId,
-  ) async {
-    try {
-      final page = await api.getFeeManagementStudents(
-        customSchoolId: widget.customSchoolId,
-        search: studentId,
-        size: 10,
-      );
-      for (final row in page.content) {
-        if (row.customStudentId == studentId) return row;
-      }
-    } catch (_) {
-      return null;
-    }
-    return null;
-  }
-
-  Future<List<FeeStudentPayment>> _loadStudentPayments(
-    FeeApiClient api,
-    String studentId,
-  ) async {
-    try {
-      return await api.getStudentPayments(customStudentId: studentId);
-    } catch (_) {
-      return const [];
-    }
   }
 
   void _reloadStudent() {
@@ -2043,168 +1998,6 @@ class _LiveStudentProfileData {
   final AdmissionTermContext term;
 }
 
-EnrolledStudent _mapEnrolledStudent({
-  required AdmissionStudent student,
-  required List<AdmissionGuardian> guardians,
-  required List<AdmissionStudent> householdStudents,
-  required List<AdmissionStudentDocument> documents,
-  required FeeStudentFeeRow? fee,
-  required List<FeeStudentPayment> payments,
-}) {
-  final raw = student.rawJson;
-  final medical = _admissionMap(raw['medicalCondition']);
-  final address = _admissionMap(raw['address']);
-  final primaryGuardian = guardians.where((item) => item.isPrimary).firstOrNull;
-  final guardian = primaryGuardian ?? guardians.firstOrNull;
-  final dateOfBirth = _profileDate(student.dateOfBirth);
-  final enrolledOn = _profileDate(
-    _admissionText(raw['enrolledOn'] ?? raw['approvedAt'] ?? raw['createdAt']),
-  );
-  final conditionItems = _admissionList(medical?['medicalConditions'])
-      .map(_admissionMap)
-      .whereType<Map<String, dynamic>>()
-      .map((item) {
-        final value = _admissionText(item['value']).toUpperCase();
-        return StudentMedicalCondition(
-          name: _admissionText(item['conditionName'] ?? item['name']),
-          hasCondition: value == '1' || value == 'YES' || item['value'] == true,
-          notes: _admissionText(item['notes']),
-        );
-      })
-      .where((item) => item.name.isNotEmpty)
-      .toList();
-  final vaccinations = _admissionList(raw['vaccinationRecords'])
-      .map(_admissionMap)
-      .whereType<Map<String, dynamic>>()
-      .map((item) {
-        final vaccination = _admissionMap(item['vaccination']);
-        final status = _admissionText(item['status']).toUpperCase();
-        return StudentVaccination(
-          name: _admissionText(item['vaccinationName'] ?? vaccination?['name']),
-          status: switch (status) {
-            'YES' ||
-            '1' ||
-            'RECEIVED' ||
-            'VACCINATED' => StudentVaccinationStatus.received,
-            'NO' ||
-            '2' ||
-            'NOT_RECEIVED' ||
-            'NOT VACCINATED' => StudentVaccinationStatus.notReceived,
-            _ => StudentVaccinationStatus.pending,
-          },
-          required:
-              item['required'] == true || vaccination?['required'] == true,
-          receivedOn: _nullableProfileDate(
-            _admissionText(item['dateReceived']),
-          ),
-          notes: _admissionText(item['notes']),
-        );
-      })
-      .where((item) => item.name.isNotEmpty)
-      .toList();
-  final members = <StudentHouseholdMember>[
-    ...guardians.map(
-      (item) => StudentHouseholdMember(
-        id: item.customGuardianId,
-        name: item.displayName,
-        relationship: item.relationship.isEmpty
-            ? 'Guardian'
-            : item.relationship,
-        type: StudentHouseholdMemberType.guardian,
-        subtitle: item.phone,
-        primary: item.isPrimary,
-      ),
-    ),
-    ...householdStudents.map(
-      (item) => StudentHouseholdMember(
-        id: item.customStudentId,
-        name: item.displayName,
-        relationship: item.customStudentId == student.customStudentId
-            ? 'Student'
-            : 'Sibling',
-        type: StudentHouseholdMemberType.student,
-        subtitle: item.gradeLevel,
-      ),
-    ),
-  ];
-  final feeItems = fee == null
-      ? const <StudentFeeItem>[]
-      : [
-          StudentFeeItem(
-            name: 'Term fees',
-            amount: fee.totalFees + fee.totalAdjustments,
-            paid: fee.paid,
-          ),
-        ];
-  final mappedPayments = payments
-      .map(
-        (item) => StudentPayment(
-          date: item.paymentDate ?? DateTime.fromMillisecondsSinceEpoch(0),
-          amount: item.amount,
-          method: item.paymentMethod,
-          receiptNumber: item.referenceNumber,
-        ),
-      )
-      .toList();
-  final mappedDocuments = documents
-      .map(
-        (item) => StudentDocument(
-          name: item.documentType.isEmpty
-              ? 'Student document'
-              : item.documentType,
-          fileName: item.fileName,
-          status: item.status.isEmpty ? 'Uploaded' : item.status,
-          updatedOn: DateTime.fromMillisecondsSinceEpoch(0),
-        ),
-      )
-      .toList();
-
-  return EnrolledStudent(
-    id: student.customStudentId,
-    name: student.displayName,
-    className: fee?.className.isNotEmpty == true
-        ? fee!.className
-        : student.gradeLevel,
-    gender: student.gender,
-    dateOfBirth: dateOfBirth,
-    guardianName: guardian?.displayName ?? 'Not provided',
-    guardianRelationship: guardian?.relationship ?? 'Guardian',
-    guardianPhone: guardian?.phone ?? 'Not provided',
-    householdId: '${student.householdId ?? 'Not provided'}',
-    status: _profileStatus(student.status),
-    enrolledOn: enrolledOn,
-    newThisTerm: false,
-    attendanceRate: 0,
-    feeBalance: fee?.balance ?? 0,
-    requirementsCompleted: 0,
-    requirementsTotal: 0,
-    countryOfBirth: _guardianNamedValue(raw['countryOfBirth']),
-    cityOfBirth: _guardianNamedValue(raw['cityOfBirth']),
-    religion: _guardianNamedValue(raw['religion']),
-    address: _profileAddress(address),
-    bloodGroup: _guardianNamedValue(raw['bloodGroup']),
-    medicalAlerts: conditionItems
-        .where((item) => item.hasCondition)
-        .map((item) => item.name)
-        .toList(),
-    medicalConditions: conditionItems,
-    allergies: StudentAllergies(
-      food: _profileStrings(medical?['foodAllergies']),
-      medication: _profileStrings(medical?['medicalAllergies']),
-      environmental: _profileStrings(medical?['environmentalAllergies']),
-    ),
-    vaccinations: vaccinations,
-    householdMembers: members,
-    attendance: const [],
-    fees: feeItems,
-    feeAdjustments: const [],
-    payments: mappedPayments,
-    requirements: const [],
-    documents: mappedDocuments,
-    activity: const [],
-  );
-}
-
 _StudentApplication _studentApplicationFromAdmission(
   AdmissionStudent student,
   AdmissionGuardian? guardian,
@@ -2225,52 +2018,6 @@ _StudentApplication _studentApplicationFromAdmission(
     rawStatus: student.status,
     status: _studentStatusFromApi(student.status),
   );
-}
-
-DateTime _profileDate(String value) =>
-    _nullableProfileDate(value) ?? DateTime.fromMillisecondsSinceEpoch(0);
-
-DateTime? _nullableProfileDate(String value) {
-  final normalized = value.trim();
-  if (normalized.isEmpty) return null;
-  final direct = DateTime.tryParse(normalized);
-  if (direct != null) return direct;
-  final parts = normalized
-      .replaceAll('[', '')
-      .replaceAll(']', '')
-      .split(',')
-      .map((item) => int.tryParse(item.trim()))
-      .toList();
-  if (parts.length >= 3 && parts.take(3).every((item) => item != null)) {
-    return DateTime(parts[0]!, parts[1]!, parts[2]!);
-  }
-  return null;
-}
-
-EnrolledStudentStatus _profileStatus(String value) {
-  return switch (value.trim().toUpperCase()) {
-    'INACTIVE' => EnrolledStudentStatus.inactive,
-    'TRANSFERRED' => EnrolledStudentStatus.transferred,
-    _ => EnrolledStudentStatus.active,
-  };
-}
-
-List<String> _profileStrings(Object? value) => _admissionList(value)
-    .map(_admissionText)
-    .map((item) => item.trim())
-    .where((item) => item.isNotEmpty)
-    .toList();
-
-String _profileAddress(Map<String, dynamic>? address) {
-  if (address == null) return 'Not provided';
-  final parts = [
-    _admissionText(address['houseNumber']),
-    _admissionText(address['streetName']),
-    _guardianNamedValue(address['city']),
-    _guardianNamedValue(address['district']),
-    _guardianNamedValue(address['region']),
-  ].where((item) => item.isNotEmpty && item != 'Not provided').toList();
-  return parts.isEmpty ? 'Not provided' : parts.join(', ');
 }
 
 class _StudentProfileValueCard extends StatelessWidget {
@@ -9974,30 +9721,42 @@ class _AdmissionsErrorCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(28),
-        child: Column(
-          children: [
-            const Icon(Icons.cloud_off_rounded, color: AppColors.red, size: 34),
-            const SizedBox(height: 10),
-            const Text(
-              'Unable to load admissions data',
-              style: TextStyle(fontWeight: FontWeight.w900),
+    return SizedBox(
+      width: double.infinity,
+      child: Card(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 230),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 36),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(
+                  Icons.cloud_off_rounded,
+                  color: AppColors.red,
+                  size: 44,
+                ),
+                const SizedBox(height: 14),
+                const Text(
+                  'Unable to load admissions data',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: AppColors.muted),
+                ),
+                const SizedBox(height: 18),
+                FilledButton.icon(
+                  onPressed: onRetry,
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('Try again'),
+                ),
+              ],
             ),
-            const SizedBox(height: 6),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: AppColors.muted),
-            ),
-            const SizedBox(height: 14),
-            FilledButton.icon(
-              onPressed: onRetry,
-              icon: const Icon(Icons.refresh_rounded),
-              label: const Text('Try again'),
-            ),
-          ],
+          ),
         ),
       ),
     );

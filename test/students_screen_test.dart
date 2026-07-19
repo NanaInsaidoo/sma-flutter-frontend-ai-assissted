@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:school_management_app/src/students/presentation/students_screen.dart';
 import 'package:school_management_app/src/theme/app_theme.dart';
 
+import 'support/fake_students_repository.dart';
+
 void main() {
   Future<void> pumpStudents(
     WidgetTester tester, {
@@ -20,6 +22,7 @@ void main() {
           body: StudentsScreen(
             term: 'Term 2',
             academicYear: '2025/26',
+            repository: const FakeStudentsRepository(),
             onOpenHousehold: onOpenHousehold,
           ),
         ),

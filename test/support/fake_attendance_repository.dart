@@ -1,6 +1,6 @@
-import '../domain/attendance_models.dart';
+import 'package:school_management_app/src/attendance/domain/attendance_models.dart';
 
-class DemoAttendanceRepository implements AttendanceRepository {
+class FakeAttendanceRepository implements AttendanceRepository {
   final Map<String, List<AttendanceRecord>> _savedRecords = {};
 
   static const grades = [
@@ -44,6 +44,57 @@ class DemoAttendanceRepository implements AttendanceRepository {
     ('Abena', 'Amoah'),
     ('Fiifi', 'Antwi'),
   ];
+
+  @override
+  Future<AttendanceDashboardOverview> getOverview(String customSchoolId) async {
+    await _pause();
+    final classes = streams
+        .map(
+          (stream) => AttendanceClassSummary(
+            gradeId: stream.gradeLevelId,
+            gradeName: grades
+                .firstWhere((grade) => grade.id == stream.gradeLevelId)
+                .name,
+            streamId: stream.id,
+            streamName: stream.name,
+            totalStudents: 15,
+            teacherName: '',
+            present: 0,
+            absent: 0,
+            late: 0,
+            attendanceRate: 0,
+            submitted: false,
+          ),
+        )
+        .toList();
+    return AttendanceDashboardOverview(
+      currentDate: DateTime.now(),
+      today: const AttendancePeriodSummary(
+        attendanceRate: 0,
+        present: 0,
+        absent: 0,
+        late: 0,
+        totalStudents: 330,
+      ),
+      week: const AttendancePeriodSummary(
+        attendanceRate: 0,
+        present: 0,
+        absent: 0,
+        late: 0,
+        totalStudents: 330,
+      ),
+      month: const AttendancePeriodSummary(
+        attendanceRate: 0,
+        present: 0,
+        absent: 0,
+        late: 0,
+        totalStudents: 330,
+      ),
+      classes: classes,
+      alerts: const [],
+      streamsPending: classes.length,
+    );
+  }
 
   @override
   Future<List<AttendanceGradeLevel>> getGradeLevels(

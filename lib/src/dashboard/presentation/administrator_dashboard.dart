@@ -4,8 +4,10 @@ import '../../theme/app_theme.dart';
 import '../data/dashboard_repository.dart';
 import '../domain/dashboard_models.dart';
 import '../../admissions/presentation/admissions_screen.dart';
+import '../../attendance/data/attendance_api_client.dart';
 import '../../attendance/presentation/attendance_dashboard_screen.dart';
 import '../../fees/presentation/fee_management_screen.dart';
+import '../../students/data/api_students_repository.dart';
 import '../../students/presentation/students_screen.dart';
 
 enum _SchoolAdminPage {
@@ -61,8 +63,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   }
 
   String get _schoolId {
-    final fromSession = widget.schoolId?.trim() ?? '';
-    return fromSession.isEmpty ? 'demo-school' : fromSession;
+    return widget.schoolId?.trim() ?? '';
   }
 
   @override
@@ -214,6 +215,11 @@ class _DashboardBody extends StatelessWidget {
       return StudentsScreen(
         term: data.term,
         academicYear: data.academicYear,
+        repository: ApiStudentsRepository(
+          customSchoolId: schoolId,
+          accessToken: accessToken,
+          onRefreshAccessToken: onRefreshAccessToken,
+        ),
         onOpenHousehold: () => onSelectPage(_SchoolAdminPage.households),
       );
     }
@@ -223,6 +229,10 @@ class _DashboardBody extends StatelessWidget {
         customSchoolId: schoolId,
         term: data.term,
         academicYear: data.academicYear,
+        repository: AttendanceApiClient(
+          accessToken: accessToken,
+          onRefreshAccessToken: onRefreshAccessToken,
+        ),
       );
     }
 
@@ -634,9 +644,21 @@ class _AdmissionsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (groups.isEmpty) {
+      return const _SectionCard(
+        title: 'New admissions this term',
+        action: 'View admissions →',
+        child: _DashboardEmptyState(
+          icon: Icons.person_add_alt_1_outlined,
+          message: 'No admissions recorded for this term yet.',
+        ),
+      );
+    }
+
     final maxValue = groups
         .map((item) => item.value)
-        .reduce((a, b) => a > b ? a : b);
+        .reduce((a, b) => a > b ? a : b)
+        .clamp(1, 1 << 31);
     return _SectionCard(
       title: 'New admissions this term',
       action: 'View admissions →',
@@ -698,62 +720,77 @@ class _AttentionCard extends StatelessWidget {
     return _SectionCard(
       title: 'Attention required',
       action: 'View all →',
-      child: Column(
-        children: alerts.map((alert) {
-          final color = switch (alert.level) {
-            AlertLevel.critical => AppColors.red,
-            AlertLevel.warning => AppColors.amber,
-            AlertLevel.info => AppColors.blue,
-          };
-          return Container(
-            width: double.infinity,
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: .07),
-              border: Border.all(color: color.withValues(alpha: .25)),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: 7,
-                  height: 7,
-                  margin: const EdgeInsets.only(top: 5),
+      child: alerts.isEmpty
+          ? const _DashboardEmptyState(
+              icon: Icons.task_alt_rounded,
+              message: 'Nothing requires attention right now.',
+            )
+          : Column(
+              children: alerts.map((alert) {
+                final color = switch (alert.level) {
+                  AlertLevel.critical => AppColors.red,
+                  AlertLevel.warning => AppColors.amber,
+                  AlertLevel.info => AppColors.blue,
+                };
+                return Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: color,
-                    shape: BoxShape.circle,
+                    color: color.withValues(alpha: .07),
+                    border: Border.all(color: color.withValues(alpha: .25)),
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
+                  child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        alert.message,
-                        style: const TextStyle(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w600,
+                      Container(
+                        width: 7,
+                        height: 7,
+                        margin: const EdgeInsets.only(top: 5),
+                        decoration: BoxDecoration(
+                          color: color,
+                          shape: BoxShape.circle,
                         ),
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        alert.context,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: AppColors.muted,
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (alert.title.isNotEmpty) ...[
+                              Text(
+                                alert.title,
+                                style: const TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 3),
+                            ],
+                            Text(
+                              alert.message,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppColors.muted,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              alert.context,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: AppColors.muted,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
                   ),
-                ),
-              ],
+                );
+              }).toList(),
             ),
-          );
-        }).toList(),
-      ),
     );
   }
 }
@@ -974,65 +1011,72 @@ class _EventsCard extends StatelessWidget {
     return _SectionCard(
       title: 'Upcoming events',
       action: 'Calendar →',
-      child: Column(
-        children: events
-            .map(
-              (event) => Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 42,
-                      padding: const EdgeInsets.symmetric(vertical: 7),
-                      decoration: BoxDecoration(
-                        color: AppColors.background,
-                        borderRadius: BorderRadius.circular(9),
-                      ),
-                      child: Column(
-                        children: [
-                          Text(
-                            event.day,
-                            style: const TextStyle(fontWeight: FontWeight.w800),
-                          ),
-                          Text(
-                            event.month,
-                            style: const TextStyle(
-                              fontSize: 9,
-                              color: AppColors.muted,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            event.title,
-                            style: const TextStyle(
-                              fontSize: 12.5,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          Text(
-                            event.category,
-                            style: const TextStyle(
-                              color: AppColors.green,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+      child: events.isEmpty
+          ? const _DashboardEmptyState(
+              icon: Icons.event_available_outlined,
+              message: 'No upcoming events have been added.',
             )
-            .toList(),
-      ),
+          : Column(
+              children: events
+                  .map(
+                    (event) => Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 42,
+                            padding: const EdgeInsets.symmetric(vertical: 7),
+                            decoration: BoxDecoration(
+                              color: AppColors.background,
+                              borderRadius: BorderRadius.circular(9),
+                            ),
+                            child: Column(
+                              children: [
+                                Text(
+                                  event.day,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                Text(
+                                  event.month,
+                                  style: const TextStyle(
+                                    fontSize: 9,
+                                    color: AppColors.muted,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  event.title,
+                                  style: const TextStyle(
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                Text(
+                                  event.category,
+                                  style: const TextStyle(
+                                    color: AppColors.green,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                  .toList(),
+            ),
     );
   }
 }
@@ -1091,60 +1135,97 @@ class _ActivityCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return _SectionCard(
       title: 'Recent activity',
-      child: Column(
-        children: activities
-            .map(
-              (activity) => Padding(
-                padding: const EdgeInsets.only(bottom: 14),
-                child: Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 18,
-                      backgroundColor: AppColors.greenSoft,
-                      child: Text(
-                        activity.initials,
-                        style: const TextStyle(
-                          color: AppColors.green,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+      child: activities.isEmpty
+          ? const _DashboardEmptyState(
+              icon: Icons.history_rounded,
+              message: 'No recent activity to display.',
+            )
+          : Column(
+              children: activities
+                  .map(
+                    (activity) => Padding(
+                      padding: const EdgeInsets.only(bottom: 14),
+                      child: Row(
                         children: [
-                          Text.rich(
-                            TextSpan(
+                          CircleAvatar(
+                            radius: 18,
+                            backgroundColor: AppColors.greenSoft,
+                            child: Text(
+                              activity.initials,
+                              style: const TextStyle(
+                                color: AppColors.green,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                TextSpan(
-                                  text: '${activity.name} ',
+                                Text.rich(
+                                  TextSpan(
+                                    children: [
+                                      TextSpan(
+                                        text: '${activity.name} ',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                      TextSpan(text: activity.detail),
+                                    ],
+                                  ),
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  activity.time,
                                   style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.muted,
+                                    fontSize: 10,
                                   ),
                                 ),
-                                TextSpan(text: activity.detail),
                               ],
-                            ),
-                            style: const TextStyle(fontSize: 12),
-                          ),
-                          const SizedBox(height: 3),
-                          Text(
-                            activity.time,
-                            style: const TextStyle(
-                              color: AppColors.muted,
-                              fontSize: 10,
                             ),
                           ),
                         ],
                       ),
                     ),
-                  ],
-                ),
-              ),
-            )
-            .toList(),
+                  )
+                  .toList(),
+            ),
+    );
+  }
+}
+
+class _DashboardEmptyState extends StatelessWidget {
+  const _DashboardEmptyState({required this.icon, required this.message});
+
+  final IconData icon;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      constraints: const BoxConstraints(minHeight: 120),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+      decoration: BoxDecoration(
+        color: AppColors.background,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, color: AppColors.muted, size: 28),
+          const SizedBox(height: 10),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: AppColors.muted, fontSize: 12),
+          ),
+        ],
       ),
     );
   }

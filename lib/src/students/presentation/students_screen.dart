@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../../theme/app_theme.dart';
-import '../data/mock_students_repository.dart';
 import '../domain/student_models.dart';
 
 const _allClasses = 'All classes';
@@ -12,7 +11,7 @@ class StudentsScreen extends StatefulWidget {
     super.key,
     required this.term,
     required this.academicYear,
-    this.repository = const MockStudentsRepository(),
+    required this.repository,
     this.onOpenHousehold,
   });
 
@@ -32,7 +31,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
   String _selectedStatus = _allStatuses;
   bool _newThisTermOnly = false;
   EnrolledStudent? _selectedStudent;
-  List<EnrolledStudent> _loadedStudents = const [];
+  Future<EnrolledStudent>? _selectedStudentFuture;
+  String? _selectedStudentId;
 
   @override
   void initState() {
@@ -43,6 +43,22 @@ class _StudentsScreenState extends State<StudentsScreen> {
   void _retry() {
     setState(() {
       _studentsFuture = widget.repository.getEnrolledStudents();
+    });
+  }
+
+  void _openStudent(String studentId) {
+    setState(() {
+      _selectedStudent = null;
+      _selectedStudentId = studentId;
+      _selectedStudentFuture = widget.repository.getStudent(studentId);
+    });
+  }
+
+  void _closeStudent() {
+    setState(() {
+      _selectedStudent = null;
+      _selectedStudentId = null;
+      _selectedStudentFuture = null;
     });
   }
 
@@ -68,18 +84,38 @@ class _StudentsScreenState extends State<StudentsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_selectedStudentFuture case final future?) {
+      return FutureBuilder<EnrolledStudent>(
+        future: future,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const _StudentProfileLoadingView();
+          }
+          if (snapshot.hasError || !snapshot.hasData) {
+            return _StudentProfileErrorView(
+              onBack: _closeStudent,
+              onRetry: () => _openStudent(_selectedStudentId!),
+            );
+          }
+          _selectedStudent = snapshot.requireData;
+          return StudentProfileView(
+            student: snapshot.requireData,
+            term: widget.term,
+            academicYear: widget.academicYear,
+            onBack: _closeStudent,
+            onOpenStudent: _openStudent,
+            onOpenHousehold: widget.onOpenHousehold,
+          );
+        },
+      );
+    }
     if (_selectedStudent != null) {
       return StudentProfileView(
         student: _selectedStudent!,
         term: widget.term,
         academicYear: widget.academicYear,
-        onBack: () => setState(() => _selectedStudent = null),
-        onOpenStudent: (studentId) {
-          final student = _loadedStudents.where((item) => item.id == studentId);
-          if (student.isNotEmpty) {
-            setState(() => _selectedStudent = student.first);
-          }
-        },
+        onBack: _closeStudent,
+        onOpenStudent: _openStudent,
         onOpenHousehold: widget.onOpenHousehold,
       );
     }
@@ -95,7 +131,6 @@ class _StudentsScreenState extends State<StudentsScreen> {
         }
 
         final students = snapshot.data ?? const <EnrolledStudent>[];
-        _loadedStudents = students;
         final classes = students.map((student) => student.className).toSet()
           ..add(_allClasses);
         final visible = _visibleStudents(students);
@@ -138,8 +173,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                     students: visible,
                     totalStudents: students.length,
                     compact: compact,
-                    onSelected: (student) =>
-                        setState(() => _selectedStudent = student),
+                    onSelected: (student) => _openStudent(student.id),
                   ),
                 ],
               ),
@@ -3489,6 +3523,75 @@ class _StudentsLoadingView extends StatelessWidget {
   }
 }
 
+class _StudentProfileLoadingView extends StatelessWidget {
+  const _StudentProfileLoadingView();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CircularProgressIndicator(),
+          SizedBox(height: 14),
+          Text(
+            'Loading the student profile...',
+            style: TextStyle(color: AppColors.muted),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StudentProfileErrorView extends StatelessWidget {
+  const _StudentProfileErrorView({required this.onBack, required this.onRetry});
+
+  final VoidCallback onBack;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.cloud_off_rounded,
+                size: 44,
+                color: AppColors.red,
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Unable to load this student profile',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 10,
+                children: [
+                  OutlinedButton(
+                    onPressed: onBack,
+                    child: const Text('Back to students'),
+                  ),
+                  FilledButton.icon(
+                    onPressed: onRetry,
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('Try again'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _StudentsErrorView extends StatelessWidget {
   const _StudentsErrorView({required this.onRetry});
 
@@ -3541,7 +3644,8 @@ String _requirementStatusLabel(StudentRequirementStatus status) =>
       StudentRequirementStatus.waived => 'Waived',
     };
 
-String _formatDate(DateTime value) {
+String _formatDate(DateTime? value) {
+  if (value == null) return 'Not provided';
   const months = [
     'Jan',
     'Feb',

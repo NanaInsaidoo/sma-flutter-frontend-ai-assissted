@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:school_management_app/src/attendance/data/demo_attendance_repository.dart';
 import 'package:school_management_app/src/attendance/presentation/attendance_dashboard_screen.dart';
 import 'package:school_management_app/src/theme/app_theme.dart';
+
+import 'support/fake_attendance_repository.dart';
 
 void main() {
   Future<void> pumpDashboard(WidgetTester tester) async {
@@ -19,7 +20,7 @@ void main() {
             customSchoolId: 'SCH-001',
             academicYear: '2025/2026',
             term: 'Term 2',
-            repository: DemoAttendanceRepository(),
+            repository: FakeAttendanceRepository(),
           ),
         ),
       ),
@@ -34,7 +35,7 @@ void main() {
 
     expect(find.text('School Attendance'), findsOneWidget);
     expect(
-      find.text('3 classes have not submitted attendance today'),
+      find.text('22 classes have not submitted attendance today'),
       findsOneWidget,
     );
     expect(find.text('Overall attendance'), findsOneWidget);
@@ -42,7 +43,7 @@ void main() {
 
     await tester.tap(find.text('This week'));
     await tester.pumpAndSettle();
-    expect(find.text('2590'), findsOneWidget);
+    expect(find.text('Daily average this week'), findsNWidgets(2));
 
     final classRow = find.byKey(const ValueKey('attendance-class-11'));
     await tester.tap(classRow);

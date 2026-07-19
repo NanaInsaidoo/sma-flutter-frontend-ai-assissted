@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../theme/app_theme.dart';
-import '../data/mock_class_requirements_repository.dart';
+import '../data/class_requirements_repository.dart';
 import '../domain/class_requirement_models.dart';
 
 class PriorTermRequirementsScreen extends StatefulWidget {
@@ -228,11 +228,19 @@ class _PriorTermRequirementsScreenState
     if (result == null) return;
 
     if (result.action == _ResolutionAction.recordReceived) {
-      widget.repository.recordPriorTermReceived(
-        requirementId: requirement.id,
-        quantity: result.quantity!,
-        notes: result.notes,
-      );
+      try {
+        await widget.repository.recordPriorTermReceived(
+          requirementId: requirement.id,
+          quantity: result.quantity!,
+          notes: result.notes,
+        );
+      } catch (error) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+        return;
+      }
     } else {
       final status = switch (result.action) {
         _ResolutionAction.carryForward || _ResolutionAction.adjustAndCarry =>
@@ -243,15 +251,23 @@ class _PriorTermRequirementsScreenState
         _ResolutionAction.writeOff => PriorTermRequirementStatus.writtenOff,
         _ResolutionAction.recordReceived => PriorTermRequirementStatus.pending,
       };
-      widget.repository.resolvePriorTermRequirement(
-        requirementId: requirement.id,
-        status: status,
-        carriedQuantity: result.quantity,
-        convertedCashAmount: result.cashAmount,
-        carriedDueDate: result.dueDate,
-        notes: result.notes,
-        notifyGuardian: result.notifyGuardian,
-      );
+      try {
+        await widget.repository.resolvePriorTermRequirement(
+          requirementId: requirement.id,
+          status: status,
+          carriedQuantity: result.quantity,
+          convertedCashAmount: result.cashAmount,
+          carriedDueDate: result.dueDate,
+          notes: result.notes,
+          notifyGuardian: result.notifyGuardian,
+        );
+      } catch (error) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+        return;
+      }
     }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(

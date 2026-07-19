@@ -23,7 +23,8 @@ class AdmissionsApiClient {
 
   Future<List<AdmissionListItem>> getAdmissions({
     required String customSchoolId,
-    String status = 'DRAFT,PENDING_REVIEW,APPROVED,REJECTED',
+    String status =
+        'DRAFT,PENDING_APPROVAL,PENDING_REVIEW,APPROVED,REJECTED,ACTIVE',
     String personType = 'STUDENT',
     String? startDate,
     String? endDate,

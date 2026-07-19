@@ -1,7 +1,7 @@
-import '../domain/student_models.dart';
+import 'package:school_management_app/src/students/domain/student_models.dart';
 
-class MockStudentsRepository implements StudentsRepository {
-  const MockStudentsRepository();
+class FakeStudentsRepository implements StudentsRepository {
+  const FakeStudentsRepository();
 
   static final List<EnrolledStudent> _students = [
     _student(

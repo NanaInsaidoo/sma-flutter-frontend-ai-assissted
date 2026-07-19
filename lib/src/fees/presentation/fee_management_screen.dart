@@ -1,8 +1,11 @@
+import 'dart:async';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../theme/app_theme.dart';
+import '../data/api_class_requirements_repository.dart';
 import '../data/fee_api_client.dart';
-import '../data/mock_class_requirements_repository.dart';
 import '../domain/fee_models.dart';
 import 'class_requirements_screen.dart';
 import 'fee_adjustments_content.dart';
@@ -38,8 +41,7 @@ class FeeManagementScreen extends StatefulWidget {
 
 class _FeeManagementScreenState extends State<FeeManagementScreen> {
   late FeeApiClient _api;
-  final MockClassRequirementsRepository _classRequirements =
-      MockClassRequirementsRepository();
+  ApiClassRequirementsRepository? _classRequirements;
   late Future<void> _initialLoad;
   FeeManagementOverview? _overview;
   FeeStudentFeesPage? _studentFeesPage;
@@ -47,10 +49,28 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
   List<FeeClassCollectionSummary> _classCollections = const [];
   List<FeeStudentFeeRow> _arrears = const [];
   List<FeeClassStructure> _feeStructures = const [];
-  List<FeeWaiverSummary> _waivers = const [];
+  List<FeeGradeLevel> _gradeLevels = const [];
+  List<FeeWaiverType> _waiverTypes = const [];
+  List<FeeWaiverAssignment> _waiverAssignments = const [];
+  bool _studentFeesLoaded = false;
+  bool _studentFeesLoading = false;
+  Object? _studentFeesError;
+  Timer? _studentFeeSearchDebounce;
+  String _studentFeeSearch = '';
+  int? _studentFeeGradeLevelId;
+  String? _studentFeePaymentStatus;
+  bool _feeStructuresLoaded = false;
+  bool _feeStructuresLoading = false;
+  Object? _feeStructuresError;
+  Future<void>? _gradeLevelsFuture;
+  bool _waiversLoaded = false;
+  bool _waiversLoading = false;
+  Object? _waiversError;
   List<FeePaymentMethod> _paymentMethods = const [];
   _FeeTab _selectedTab = _FeeTab.overview;
   _FeeOverviewPage _overviewPage = _FeeOverviewPage.main;
+  bool _overviewDetailLoading = false;
+  Object? _overviewDetailError;
 
   @override
   void initState() {
@@ -72,90 +92,42 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
 
   @override
   void dispose() {
-    _classRequirements.dispose();
+    _studentFeeSearchDebounce?.cancel();
+    _classRequirements?.dispose();
     super.dispose();
   }
 
   Future<void> _loadInitial() async {
+    final currentTerm = await _api.getCurrentTerm(widget.customSchoolId);
     final overview = await _api.getFeeManagementOverview(
       customSchoolId: widget.customSchoolId,
+      termId: currentTerm.id,
     );
-    final termId = overview.termId > 0 ? overview.termId : null;
-    final results = await Future.wait<Object>([
-      _api.getCurrentTerm(widget.customSchoolId),
-      _api.getFeeManagementStudents(
-        customSchoolId: widget.customSchoolId,
-        termId: termId,
-        size: 100,
-      ),
-      _api.getFeeManagementClasses(
-        customSchoolId: widget.customSchoolId,
-        termId: termId,
-      ),
-      _api.getFeeManagementArrears(
-        customSchoolId: widget.customSchoolId,
-        termId: termId,
-      ),
-      _api.getFeeStructuresForTerm(
-        customSchoolId: widget.customSchoolId,
-        termId: termId,
-      ),
-      _api.getFeeManagementWaivers(
-        customSchoolId: widget.customSchoolId,
-        termId: termId,
-      ),
-      _api.getPaymentMethods(),
-    ]);
     if (!mounted) return;
     setState(() {
       _overview = overview;
-      _currentTerm = results[0] as CurrentAcademicTerm;
-      _studentFeesPage = results[1] as FeeStudentFeesPage;
-      _classCollections = results[2] as List<FeeClassCollectionSummary>;
-      _arrears = results[3] as List<FeeStudentFeeRow>;
-      _feeStructures = results[4] as List<FeeClassStructure>;
-      _waivers = results[5] as List<FeeWaiverSummary>;
-      _paymentMethods = results[6] as List<FeePaymentMethod>;
+      _currentTerm = currentTerm;
+      _classCollections = overview.collectionByClass;
+      _arrears = overview.outstandingArrears;
     });
   }
 
   Future<void> _reloadFees() async {
+    final termId = _activeTermId;
+    if (termId <= 0) return;
     final overview = await _api.getFeeManagementOverview(
       customSchoolId: widget.customSchoolId,
+      termId: termId,
     );
-    final termId = overview.termId > 0 ? overview.termId : null;
-    final results = await Future.wait<Object>([
-      _api.getFeeManagementStudents(
-        customSchoolId: widget.customSchoolId,
-        termId: termId,
-        size: 100,
-      ),
-      _api.getFeeManagementClasses(
-        customSchoolId: widget.customSchoolId,
-        termId: termId,
-      ),
-      _api.getFeeManagementArrears(
-        customSchoolId: widget.customSchoolId,
-        termId: termId,
-      ),
-      _api.getFeeStructuresForTerm(
-        customSchoolId: widget.customSchoolId,
-        termId: termId,
-      ),
-      _api.getFeeManagementWaivers(
-        customSchoolId: widget.customSchoolId,
-        termId: termId,
-      ),
-    ]);
     if (!mounted) return;
     setState(() {
       _overview = overview;
-      _studentFeesPage = results[0] as FeeStudentFeesPage;
-      _classCollections = results[1] as List<FeeClassCollectionSummary>;
-      _arrears = results[2] as List<FeeStudentFeeRow>;
-      _feeStructures = results[3] as List<FeeClassStructure>;
-      _waivers = results[4] as List<FeeWaiverSummary>;
+      _classCollections = overview.collectionByClass;
+      _arrears = overview.outstandingArrears;
     });
+    if (_studentFeesLoaded) await _loadStudentFees(force: true);
+    if (_feeStructuresLoaded) await _loadFeeStructures(force: true);
+    if (_waiversLoaded) await _loadWaivers(force: true);
   }
 
   String _money(double amount) {
@@ -204,13 +176,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _FeeTabs(
-                  selected: _selectedTab,
-                  onChanged: (tab) => setState(() {
-                    _selectedTab = tab;
-                    _overviewPage = _FeeOverviewPage.main;
-                  }),
-                ),
+                _FeeTabs(selected: _selectedTab, onChanged: _selectTab),
                 const SizedBox(height: 18),
                 _selectedContent(overview),
               ],
@@ -234,34 +200,41 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
         arrearsRows: _arrears.isEmpty ? overview.outstandingArrears : _arrears,
         money: _money,
         onRecordPayment: _showRecordPaymentForm,
-        onOpenStudentFees: () =>
-            setState(() => _selectedTab = _FeeTab.studentFees),
-        onOpenStructure: () =>
-            setState(() => _selectedTab = _FeeTab.feeStructure),
-        onOpenWaivers: () => setState(() => _selectedTab = _FeeTab.waivers),
+        onOpenStudentFees: () => _selectTab(_FeeTab.studentFees),
+        onOpenStructure: () => _selectTab(_FeeTab.feeStructure),
+        onOpenWaivers: () => _selectTab(_FeeTab.waivers),
+        loadingDetails: _overviewDetailLoading,
+        detailError: _overviewDetailError,
+        onRetryDetails: () => _openOverviewPage(_overviewPage),
         onViewAllCollection: () =>
-            setState(() => _overviewPage = _FeeOverviewPage.collectionByClass),
+            _openOverviewPage(_FeeOverviewPage.collectionByClass),
         onViewAllArrears: () =>
-            setState(() => _overviewPage = _FeeOverviewPage.outstandingArrears),
+            _openOverviewPage(_FeeOverviewPage.outstandingArrears),
         onBackToOverview: () =>
             setState(() => _overviewPage = _FeeOverviewPage.main),
       ),
-      _FeeTab.studentFees => _StudentFeesContent(
-        rows: _studentFeeRows(),
-        paymentMethods: _paymentMethods,
+      _FeeTab.studentFees => _buildStudentFeesContent(),
+      _FeeTab.feeStructure => _buildFeeStructureContent(),
+      _FeeTab.adjustments => FeeAdjustmentsContent(
+        api: _api,
         customSchoolId: widget.customSchoolId,
         termId: _activeTermId,
-        api: _api,
-        money: _money,
-        onPaymentSaved: _reloadFees,
+        onChanged: _reloadFees,
       ),
-      _FeeTab.feeStructure => _buildFeeStructureContent(),
-      _FeeTab.adjustments => const FeeAdjustmentsContent(),
-      _FeeTab.classRequirements => ClassRequirementsScreen(
-        repository: _classRequirements,
-        termName: _termName,
-      ),
-      _FeeTab.waivers => _WaiversContent(waivers: _waivers, money: _money),
+      _FeeTab.classRequirements =>
+        _classRequirements == null
+            ? const Center(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 96),
+                  child: CircularProgressIndicator(),
+                ),
+              )
+            : ClassRequirementsScreen(
+                repository: _classRequirements!,
+                termName: _termName,
+                gradeLevels: _gradeLevels,
+              ),
+      _FeeTab.waivers => _buildWaiversContent(),
     };
   }
 
@@ -283,26 +256,602 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
 
   int get _activeTermId => _overview?.termId ?? _currentTerm?.id ?? 0;
 
+  void _selectTab(_FeeTab tab) {
+    setState(() {
+      _selectedTab = tab;
+      _overviewPage = _FeeOverviewPage.main;
+    });
+    if (tab == _FeeTab.studentFees) {
+      unawaited(_ensureGradeLevels());
+      _loadStudentFees();
+    }
+    if (tab == _FeeTab.feeStructure) {
+      _loadFeeStructures();
+    }
+    if (tab == _FeeTab.classRequirements && _classRequirements == null) {
+      _loadClassRequirements();
+    }
+    if (tab == _FeeTab.waivers && !_waiversLoaded && !_waiversLoading) {
+      _loadWaivers();
+    }
+  }
+
+  Widget _buildStudentFeesContent() {
+    if (_studentFeesLoading && !_studentFeesLoaded) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 96),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_studentFeesError != null && !_studentFeesLoaded) {
+      return _FeeErrorState(
+        message: 'Could not load student fees. $_studentFeesError',
+        onRetry: () => _loadStudentFees(force: true),
+      );
+    }
+    return _StudentFeesContent(
+      rows: _studentFeeRows(),
+      gradeLevels: _gradeLevels,
+      selectedGradeLevelId: _studentFeeGradeLevelId,
+      selectedPaymentStatus: _studentFeePaymentStatus,
+      search: _studentFeeSearch,
+      termName: _termName,
+      paymentMethods: _paymentMethods,
+      customSchoolId: widget.customSchoolId,
+      termId: _activeTermId,
+      api: _api,
+      money: _money,
+      onSearchChanged: _onStudentFeeSearchChanged,
+      onGradeLevelChanged: (value) {
+        _studentFeeGradeLevelId = value;
+        _reloadStudentFeesForFilters();
+      },
+      onPaymentStatusChanged: (value) {
+        _studentFeePaymentStatus = value;
+        _reloadStudentFeesForFilters();
+      },
+      onPaymentSaved: _reloadFees,
+    );
+  }
+
+  void _onStudentFeeSearchChanged(String value) {
+    _studentFeeSearchDebounce?.cancel();
+    _studentFeeSearchDebounce = Timer(const Duration(milliseconds: 350), () {
+      if (!mounted || value.trim() == _studentFeeSearch) return;
+      _studentFeeSearch = value.trim();
+      _reloadStudentFeesForFilters();
+    });
+  }
+
+  void _reloadStudentFeesForFilters() {
+    if (!mounted) return;
+    setState(() {
+      _studentFeesLoaded = false;
+      _studentFeesError = null;
+    });
+    unawaited(_loadStudentFees(force: true));
+  }
+
+  Future<void> _loadStudentFees({bool force = false}) async {
+    if (_studentFeesLoading || (_studentFeesLoaded && !force)) return;
+    final termId = _activeTermId;
+    if (termId <= 0) return;
+    setState(() {
+      _studentFeesLoading = true;
+      _studentFeesError = null;
+    });
+    try {
+      final results = await Future.wait<Object>([
+        _api.getFeeManagementStudents(
+          customSchoolId: widget.customSchoolId,
+          termId: termId,
+          gradeLevelId: _studentFeeGradeLevelId,
+          paymentStatus: _studentFeePaymentStatus,
+          search: _studentFeeSearch,
+          size: 100,
+        ),
+        if (_paymentMethods.isEmpty) _api.getPaymentMethods(),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _studentFeesPage = results.first as FeeStudentFeesPage;
+        if (results.length > 1) {
+          _paymentMethods = results[1] as List<FeePaymentMethod>;
+        }
+        _studentFeesLoaded = true;
+      });
+    } catch (error) {
+      if (mounted) setState(() => _studentFeesError = error);
+    } finally {
+      if (mounted) setState(() => _studentFeesLoading = false);
+    }
+  }
+
+  Future<void> _loadFeeStructures({bool force = false}) async {
+    if (_feeStructuresLoading || (_feeStructuresLoaded && !force)) return;
+    final termId = _activeTermId;
+    if (termId <= 0) return;
+    setState(() {
+      _feeStructuresLoading = true;
+      _feeStructuresError = null;
+    });
+    try {
+      final structures = await _api.getFeeStructuresForTerm(
+        customSchoolId: widget.customSchoolId,
+        termId: termId,
+      );
+      await _ensureGradeLevels();
+      if (!mounted) return;
+      setState(() {
+        _feeStructures = structures;
+        _feeStructuresLoaded = true;
+      });
+    } catch (error) {
+      if (mounted) setState(() => _feeStructuresError = error);
+    } finally {
+      if (mounted) setState(() => _feeStructuresLoading = false);
+    }
+  }
+
+  Future<void> _ensureGradeLevels() {
+    if (_gradeLevels.isNotEmpty) return Future<void>.value();
+    return _gradeLevelsFuture ??= _loadGradeLevels().whenComplete(
+      () => _gradeLevelsFuture = null,
+    );
+  }
+
+  Future<void> _loadGradeLevels() async {
+    final grades = await _api.getSchoolGradeLevels(widget.customSchoolId);
+    if (mounted) setState(() => _gradeLevels = grades);
+  }
+
+  Future<void> _loadClassRequirements() async {
+    final termId = _activeTermId;
+    if (termId <= 0) return;
+    try {
+      await _ensureGradeLevels();
+      if (!mounted || _classRequirements != null) return;
+      final repository = ApiClassRequirementsRepository(
+        api: _api,
+        customSchoolId: widget.customSchoolId,
+        academicTermId: termId,
+      );
+      setState(() => _classRequirements = repository);
+      await repository.load();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$error')));
+    }
+  }
+
+  Widget _buildWaiversContent() {
+    if (_waiversLoading && !_waiversLoaded) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 96),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_waiversError != null && !_waiversLoaded) {
+      return _FeeErrorState(
+        message: 'Could not load waivers. $_waiversError',
+        onRetry: () => _loadWaivers(force: true),
+      );
+    }
+    return _WaiversContent(
+      types: _waiverTypes,
+      assignments: _waiverAssignments,
+      money: _money,
+      onAddType: () => _showWaiverTypeDialog(),
+      onEditType: (type) => _showWaiverTypeDialog(type),
+      onDeleteType: _deleteWaiverType,
+      onAssignWaiver: () => _showWaiverAssignmentSheet(),
+      onEditAssignment: (assignment) => _showWaiverAssignmentSheet(assignment),
+      onRevokeAssignment: _revokeWaiver,
+    );
+  }
+
+  Future<void> _loadWaivers({bool force = false}) async {
+    if (_waiversLoading || (_waiversLoaded && !force)) return;
+    final termId = _activeTermId;
+    if (termId <= 0) return;
+    setState(() {
+      _waiversLoading = true;
+      _waiversError = null;
+    });
+    try {
+      final results = await Future.wait<Object>([
+        _api.getWaiverTypes(customSchoolId: widget.customSchoolId),
+        _api.getStudentWaivers(
+          customSchoolId: widget.customSchoolId,
+          academicTermId: termId,
+        ),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _waiverTypes = results[0] as List<FeeWaiverType>;
+        _waiverAssignments = results[1] as List<FeeWaiverAssignment>;
+        _waiversLoaded = true;
+      });
+    } catch (error) {
+      if (mounted) setState(() => _waiversError = error);
+    } finally {
+      if (mounted) setState(() => _waiversLoading = false);
+    }
+  }
+
+  Future<void> _showWaiverTypeDialog([FeeWaiverType? existing]) async {
+    final name = TextEditingController(text: existing?.name ?? '');
+    final description = TextEditingController(
+      text: existing?.description ?? '',
+    );
+    final value = TextEditingController(
+      text: existing == null ? '' : '${existing.defaultValue}',
+    );
+    var valueType = existing?.valueType ?? 'PERCENTAGE';
+    var scope = existing?.scope ?? 'ALL_FEES';
+    var saving = false;
+    String? error;
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(
+            existing == null ? 'Create waiver type' : 'Edit waiver type',
+          ),
+          content: SizedBox(
+            width: 520,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: name,
+                    decoration: const InputDecoration(
+                      labelText: 'Waiver name *',
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: description,
+                    maxLines: 2,
+                    decoration: const InputDecoration(labelText: 'Description'),
+                  ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    value: valueType,
+                    decoration: const InputDecoration(
+                      labelText: 'Reduction method *',
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'PERCENTAGE',
+                        child: Text('Percentage'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'FIXED_AMOUNT',
+                        child: Text('Fixed amount'),
+                      ),
+                    ],
+                    onChanged: saving
+                        ? null
+                        : (next) => setDialogState(() => valueType = next!),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: value,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: InputDecoration(
+                      labelText: valueType == 'PERCENTAGE'
+                          ? 'Default percentage *'
+                          : 'Default amount (GH₵) *',
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    value: scope,
+                    decoration: const InputDecoration(
+                      labelText: 'Applies to *',
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'ALL_FEES',
+                        child: Text('All assessed fees'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'SELECTED_FEE_ITEMS',
+                        child: Text('Selected fee items'),
+                      ),
+                    ],
+                    onChanged: saving
+                        ? null
+                        : (next) => setDialogState(() => scope = next!),
+                  ),
+                  if (error != null) ...[
+                    const SizedBox(height: 12),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        error!,
+                        style: const TextStyle(color: AppColors.red),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving
+                  ? null
+                  : () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      final amount = double.tryParse(value.text.trim());
+                      if (name.text.trim().isEmpty ||
+                          amount == null ||
+                          amount <= 0) {
+                        setDialogState(
+                          () => error =
+                              'Enter a name and a value greater than zero.',
+                        );
+                        return;
+                      }
+                      setDialogState(() {
+                        saving = true;
+                        error = null;
+                      });
+                      try {
+                        await _api.saveWaiverType(
+                          customSchoolId: widget.customSchoolId,
+                          waiverTypeId: existing?.id,
+                          name: name.text,
+                          description: description.text,
+                          valueType: valueType,
+                          defaultValue: amount,
+                          scope: scope,
+                        );
+                        if (dialogContext.mounted) {
+                          Navigator.pop(dialogContext, true);
+                        }
+                      } catch (caught) {
+                        setDialogState(() {
+                          saving = false;
+                          error = '$caught';
+                        });
+                      }
+                    },
+              child: Text(saving ? 'Saving...' : 'Save waiver type'),
+            ),
+          ],
+        ),
+      ),
+    );
+    name.dispose();
+    description.dispose();
+    value.dispose();
+    if (saved == true) await _loadWaivers(force: true);
+  }
+
+  Future<void> _deleteWaiverType(FeeWaiverType type) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove waiver type?'),
+        content: Text(
+          'Remove “${type.name}”? Existing active assignments must be revoked first.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await _api.deleteWaiverType(
+        customSchoolId: widget.customSchoolId,
+        waiverTypeId: type.id,
+      );
+      await _loadWaivers(force: true);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+      }
+    }
+  }
+
+  Future<void> _showWaiverAssignmentSheet([
+    FeeWaiverAssignment? existing,
+  ]) async {
+    if (_waiverTypes.isEmpty) {
+      await _showWaiverTypeDialog();
+      if (_waiverTypes.isEmpty || !mounted) return;
+    }
+    await _loadStudentFees(force: !_studentFeesLoaded);
+    if (!mounted || !_studentFeesLoaded) return;
+    final saved = await showGeneralDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      barrierLabel: 'Close waiver editor',
+      barrierColor: Colors.black.withValues(alpha: .45),
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (context, animation, secondaryAnimation) => Align(
+        alignment: Alignment.centerRight,
+        child: _WaiverAssignmentSheet(
+          api: _api,
+          customSchoolId: widget.customSchoolId,
+          academicTermId: _activeTermId,
+          students: _studentFeesPage?.content ?? const [],
+          types: _waiverTypes,
+          existing: existing,
+          money: _money,
+        ),
+      ),
+      transitionBuilder: (context, animation, secondaryAnimation, child) =>
+          SlideTransition(
+            position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
+                .animate(
+                  CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeOutCubic,
+                  ),
+                ),
+            child: child,
+          ),
+    );
+    if (saved == true) {
+      await _loadWaivers(force: true);
+      await _reloadFees();
+    }
+  }
+
+  Future<void> _openOverviewPage(_FeeOverviewPage page) async {
+    setState(() {
+      _overviewPage = page;
+      _overviewDetailLoading = true;
+      _overviewDetailError = null;
+    });
+    try {
+      if (page == _FeeOverviewPage.collectionByClass) {
+        final rows = await _api.getFeeManagementClasses(
+          customSchoolId: widget.customSchoolId,
+          termId: _activeTermId,
+        );
+        if (mounted) setState(() => _classCollections = rows);
+      } else if (page == _FeeOverviewPage.outstandingArrears) {
+        final rows = await _api.getFeeManagementArrears(
+          customSchoolId: widget.customSchoolId,
+          termId: _activeTermId,
+        );
+        if (mounted) setState(() => _arrears = rows);
+      }
+    } catch (error) {
+      if (mounted) setState(() => _overviewDetailError = error);
+    } finally {
+      if (mounted) setState(() => _overviewDetailLoading = false);
+    }
+  }
+
+  Future<void> _revokeWaiver(FeeWaiverAssignment assignment) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Revoke waiver?'),
+        content: Text(
+          'The waiver will stop reducing ${assignment.studentName}’s balance.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Revoke'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await _api.revokeStudentWaiver(
+        customSchoolId: widget.customSchoolId,
+        customStudentId: assignment.customStudentId,
+        waiverId: assignment.id,
+      );
+      await _loadWaivers(force: true);
+      await _reloadFees();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+      }
+    }
+  }
+
   Widget _buildFeeStructureContent() {
+    if (_feeStructuresLoading && !_feeStructuresLoaded) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 96),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_feeStructuresError != null && !_feeStructuresLoaded) {
+      return _FeeErrorState(
+        message: 'Could not load the fee structure. $_feeStructuresError',
+        onRetry: () => _loadFeeStructures(force: true),
+      );
+    }
     return _FeeStructureContent(
       termName: _termName,
       classFees: _classFees(),
       money: _money,
       onAddClassLevel: _openClassLevelSheet,
       onEditClassLevel: _openClassLevelSheet,
-      onDeleteClassLevel: () {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Fee setup deletion needs the backend delete endpoint.',
-            ),
-          ),
-        );
-      },
+      onPublishClassLevel: _publishFeeStructure,
+      onDeleteClassLevel: _deleteFeeStructure,
     );
   }
 
   Future<void> _openClassLevelSheet([_ClassFee? classFee]) async {
+    FeeGradeLevel? selectedGradeLevel;
+    if (classFee == null) {
+      final availableGradeLevels = _gradeLevels
+          .where(
+            (grade) => !_feeStructures.any(
+              (structure) => structure.gradeLevelId == grade.id,
+            ),
+          )
+          .toList();
+      if (availableGradeLevels.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('All class levels already have a fee setup.'),
+          ),
+        );
+        return;
+      }
+      selectedGradeLevel = await showDialog<FeeGradeLevel>(
+        context: context,
+        builder: (context) => SimpleDialog(
+          title: const Text('Select class level'),
+          children: availableGradeLevels
+              .map(
+                (grade) => SimpleDialogOption(
+                  onPressed: () => Navigator.pop(context, grade),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Text(
+                      grade.name,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ),
+              )
+              .toList(),
+        ),
+      );
+      if (selectedGradeLevel == null || !mounted) return;
+    }
     final saved = await showGeneralDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -314,6 +863,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
           alignment: Alignment.centerRight,
           child: _ClassLevelFeeSheet(
             classFee: classFee,
+            selectedGradeLevel: selectedGradeLevel,
             money: _money,
             customSchoolId: widget.customSchoolId,
             termId: _activeTermId,
@@ -345,7 +895,93 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
     }
   }
 
+  Future<void> _publishFeeStructure(_ClassFee classFee) async {
+    if (classFee.structureId <= 0 || !classFee.isDraft) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Publish fee structure?'),
+        content: Text(
+          'Publish ${classFee.title} fees for $_termName? The published version will become the active structure for this class.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Publish'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await _api.publishFeeStructure(
+        customSchoolId: widget.customSchoolId,
+        structureId: classFee.structureId,
+      );
+      await _reloadFees();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Fee structure published.'),
+          backgroundColor: AppColors.green,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$error'), backgroundColor: AppColors.red),
+      );
+    }
+  }
+
+  Future<void> _deleteFeeStructure(_ClassFee classFee) async {
+    if (classFee.structureId <= 0 || !classFee.isDraft) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete draft fee structure?'),
+        content: Text(
+          'Delete the unpublished ${classFee.title} fee structure? This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete draft'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await _api.deleteFeeStructure(
+        customSchoolId: widget.customSchoolId,
+        structureId: classFee.structureId,
+      );
+      await _reloadFees();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Draft fee structure deleted.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$error'), backgroundColor: AppColors.red),
+      );
+    }
+  }
+
   Future<void> _showRecordPaymentForm() async {
+    await _loadStudentFees(force: !_studentFeesLoaded);
+    if (!mounted || !_studentFeesLoaded) return;
     final saved = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -394,6 +1030,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
     return _feeStructures
         .map(
           (structure) => _ClassFee(
+            structureId: structure.structureId,
             gradeLevelId: structure.gradeLevelId,
             level: structure.levelCode.trim().isEmpty
                 ? structure.fullName
@@ -401,6 +1038,8 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
             title: structure.fullName.trim().isEmpty
                 ? structure.levelCode
                 : structure.fullName,
+            version: structure.version,
+            status: structure.status,
             items: structure.feeItems
                 .map(
                   (item) => _ClassFeeItem(
@@ -426,6 +1065,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
       'PAID' => 'Paid',
       'PARTIAL' || 'PARTIALLY_PAID' => 'Partial',
       'UNPAID' => 'Unpaid',
+      'NO_FEES' => 'No fees',
       _ => value.trim().isEmpty ? 'Unpaid' : value,
     };
   }
@@ -517,6 +1157,9 @@ class _FeeOverviewContent extends StatelessWidget {
     required this.onOpenStudentFees,
     required this.onOpenStructure,
     required this.onOpenWaivers,
+    required this.loadingDetails,
+    required this.detailError,
+    required this.onRetryDetails,
     required this.onViewAllCollection,
     required this.onViewAllArrears,
     required this.onBackToOverview,
@@ -533,6 +1176,9 @@ class _FeeOverviewContent extends StatelessWidget {
   final VoidCallback onOpenStudentFees;
   final VoidCallback onOpenStructure;
   final VoidCallback onOpenWaivers;
+  final bool loadingDetails;
+  final Object? detailError;
+  final VoidCallback onRetryDetails;
   final VoidCallback onViewAllCollection;
   final VoidCallback onViewAllArrears;
   final VoidCallback onBackToOverview;
@@ -540,6 +1186,20 @@ class _FeeOverviewContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (page == _FeeOverviewPage.collectionByClass) {
+      if (loadingDetails) {
+        return _OverviewDetailLoading(
+          title: 'Collection by class',
+          onBack: onBackToOverview,
+        );
+      }
+      if (detailError != null) {
+        return _OverviewDetailError(
+          title: 'Collection by class',
+          message: 'Could not load class collections. $detailError',
+          onBack: onBackToOverview,
+          onRetry: onRetryDetails,
+        );
+      }
       return _CollectionByClassPage(
         rows: collectionRows,
         money: money,
@@ -547,6 +1207,20 @@ class _FeeOverviewContent extends StatelessWidget {
       );
     }
     if (page == _FeeOverviewPage.outstandingArrears) {
+      if (loadingDetails) {
+        return _OverviewDetailLoading(
+          title: 'Outstanding arrears',
+          onBack: onBackToOverview,
+        );
+      }
+      if (detailError != null) {
+        return _OverviewDetailError(
+          title: 'Outstanding arrears',
+          message: 'Could not load outstanding arrears. $detailError',
+          onBack: onBackToOverview,
+          onRetry: onRetryDetails,
+        );
+      }
       return _OutstandingArrearsPage(
         rows: arrearsRows,
         money: money,
@@ -668,6 +1342,65 @@ class _FeeOverviewContent extends StatelessWidget {
           money: money,
           onViewAll: onViewAllArrears,
         ),
+      ],
+    );
+  }
+}
+
+class _OverviewDetailLoading extends StatelessWidget {
+  const _OverviewDetailLoading({required this.title, required this.onBack});
+
+  final String title;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SubPageHeader(
+          title: title,
+          subtitle: 'Loading current-term data...',
+          onBack: onBack,
+        ),
+        const SizedBox(height: 18),
+        const Card(
+          child: SizedBox(
+            height: 220,
+            width: double.infinity,
+            child: Center(child: CircularProgressIndicator()),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _OverviewDetailError extends StatelessWidget {
+  const _OverviewDetailError({
+    required this.title,
+    required this.message,
+    required this.onBack,
+    required this.onRetry,
+  });
+
+  final String title;
+  final String message;
+  final VoidCallback onBack;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SubPageHeader(
+          title: title,
+          subtitle: 'Current-term detail could not be loaded.',
+          onBack: onBack,
+        ),
+        const SizedBox(height: 18),
+        _FeeErrorState(message: message, onRetry: onRetry),
       ],
     );
   }
@@ -1297,9 +2030,11 @@ class _OutstandingArrearsPage extends StatelessWidget {
 }
 
 class _FeeEmptyCard extends StatelessWidget {
-  const _FeeEmptyCard({required this.message});
+  const _FeeEmptyCard({required this.message, this.actionLabel, this.onAction});
 
   final String message;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -1311,7 +2046,20 @@ class _FeeEmptyCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppColors.border),
       ),
-      child: Text(message, style: const TextStyle(color: AppColors.muted)),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(color: AppColors.muted),
+            ),
+          ),
+          if (actionLabel != null && onAction != null) ...[
+            const SizedBox(width: 16),
+            OutlinedButton(onPressed: onAction, child: Text(actionLabel!)),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -1457,6 +2205,7 @@ class _FeeStructureContent extends StatelessWidget {
     required this.money,
     required this.onAddClassLevel,
     required this.onEditClassLevel,
+    required this.onPublishClassLevel,
     required this.onDeleteClassLevel,
   });
 
@@ -1465,7 +2214,8 @@ class _FeeStructureContent extends StatelessWidget {
   final String Function(double amount) money;
   final VoidCallback? onAddClassLevel;
   final ValueChanged<_ClassFee>? onEditClassLevel;
-  final VoidCallback? onDeleteClassLevel;
+  final ValueChanged<_ClassFee>? onPublishClassLevel;
+  final ValueChanged<_ClassFee>? onDeleteClassLevel;
 
   @override
   Widget build(BuildContext context) {
@@ -1551,7 +2301,12 @@ class _FeeStructureContent extends StatelessWidget {
                     onEdit: onEditClassLevel == null
                         ? null
                         : () => onEditClassLevel!(fee),
-                    onDelete: onDeleteClassLevel,
+                    onPublish: onPublishClassLevel == null || !fee.isDraft
+                        ? null
+                        : () => onPublishClassLevel!(fee),
+                    onDelete: onDeleteClassLevel == null || !fee.isDraft
+                        ? null
+                        : () => onDeleteClassLevel!(fee),
                   ),
                 );
               }).toList(),
@@ -1568,12 +2323,14 @@ class _ClassFeeCard extends StatelessWidget {
     required this.classFee,
     required this.money,
     required this.onEdit,
+    required this.onPublish,
     required this.onDelete,
   });
 
   final _ClassFee classFee;
   final String Function(double amount) money;
   final VoidCallback? onEdit;
+  final VoidCallback? onPublish;
   final VoidCallback? onDelete;
 
   @override
@@ -1587,14 +2344,44 @@ class _ClassFeeCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  classFee.level.toUpperCase(),
-                  style: const TextStyle(
-                    color: AppColors.muted,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: .5,
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        classFee.level.toUpperCase(),
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: .5,
+                        ),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 9,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: classFee.isDraft
+                            ? AppColors.amber.withValues(alpha: .12)
+                            : AppColors.greenSoft,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        classFee.isDraft
+                            ? 'Draft v${classFee.version}'
+                            : 'Published v${classFee.version}',
+                        style: TextStyle(
+                          color: classFee.isDraft
+                              ? AppColors.amber
+                              : AppColors.green,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 8),
                 Text(
@@ -1602,7 +2389,7 @@ class _ClassFeeCard extends StatelessWidget {
                   style: const TextStyle(fontWeight: FontWeight.w900),
                 ),
                 const SizedBox(height: 16),
-                ...classFee.items.map(
+                ...classFee.activeItems.map(
                   (item) => Padding(
                     padding: const EdgeInsets.only(bottom: 12),
                     child: Row(
@@ -1621,6 +2408,18 @@ class _ClassFeeCard extends StatelessWidget {
                     ),
                   ),
                 ),
+                if (classFee.discontinuedItemCount > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Text(
+                      '${classFee.discontinuedItemCount} discontinued fee ${classFee.discontinuedItemCount == 1 ? 'item' : 'items'}',
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
                 const Divider(height: 26),
                 Row(
                   children: [
@@ -1655,14 +2454,25 @@ class _ClassFeeCard extends StatelessWidget {
                     label: const Text('Edit'),
                   ),
                 ),
-                Expanded(
-                  child: TextButton.icon(
-                    style: TextButton.styleFrom(foregroundColor: AppColors.red),
-                    onPressed: onDelete,
-                    icon: const Icon(Icons.delete_outline_rounded, size: 16),
-                    label: const Text('Delete'),
+                if (classFee.isDraft) ...[
+                  Expanded(
+                    child: TextButton.icon(
+                      onPressed: onPublish,
+                      icon: const Icon(Icons.publish_rounded, size: 16),
+                      label: const Text('Publish'),
+                    ),
                   ),
-                ),
+                  Expanded(
+                    child: TextButton.icon(
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppColors.red,
+                      ),
+                      onPressed: onDelete,
+                      icon: const Icon(Icons.delete_outline_rounded, size: 16),
+                      label: const Text('Delete'),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1674,18 +2484,28 @@ class _ClassFeeCard extends StatelessWidget {
 
 class _ClassFee {
   const _ClassFee({
+    required this.structureId,
     required this.gradeLevelId,
     required this.level,
     required this.title,
+    required this.version,
+    required this.status,
     required this.items,
   });
 
+  final int structureId;
   final int gradeLevelId;
   final String level;
   final String title;
+  final int version;
+  final String status;
   final List<_ClassFeeItem> items;
 
-  double get total => items.fold(0, (sum, item) => sum + item.amount);
+  bool get isDraft => status.trim().toUpperCase() == 'DRAFT';
+  List<_ClassFeeItem> get activeItems =>
+      items.where((item) => item.isActive).toList();
+  int get discontinuedItemCount => items.length - activeItems.length;
+  double get total => activeItems.fold(0, (sum, item) => sum + item.amount);
 }
 
 class _ClassFeeItem {
@@ -1708,11 +2528,14 @@ class _ClassFeeItem {
   final String description;
   final String status;
   final DateTime? dueDate;
+
+  bool get isActive => status.trim().toUpperCase() != 'INACTIVE';
 }
 
 class _ClassLevelFeeSheet extends StatefulWidget {
   const _ClassLevelFeeSheet({
     required this.classFee,
+    required this.selectedGradeLevel,
     required this.money,
     required this.customSchoolId,
     required this.termId,
@@ -1720,6 +2543,7 @@ class _ClassLevelFeeSheet extends StatefulWidget {
   });
 
   final _ClassFee? classFee;
+  final FeeGradeLevel? selectedGradeLevel;
   final String Function(double amount) money;
   final String customSchoolId;
   final int termId;
@@ -1731,9 +2555,8 @@ class _ClassLevelFeeSheet extends StatefulWidget {
 
 class _ClassLevelFeeSheetState extends State<_ClassLevelFeeSheet> {
   final _formKey = GlobalKey<FormState>();
-  late final TextEditingController _levelCodeController;
-  late final TextEditingController _fullNameController;
   late final List<_EditableFeeItem> _items;
+  int? _selectedGradeLevelId;
   bool _saving = false;
 
   bool get _editing => widget.classFee != null;
@@ -1747,13 +2570,13 @@ class _ClassLevelFeeSheetState extends State<_ClassLevelFeeSheet> {
   void initState() {
     super.initState();
     final fee = widget.classFee;
-    _levelCodeController = TextEditingController(text: fee?.level ?? '');
-    _fullNameController = TextEditingController(text: fee?.title ?? '');
+    _selectedGradeLevelId = fee?.gradeLevelId ?? widget.selectedGradeLevel?.id;
     _items = (fee?.items ?? const [_ClassFeeItem('Tuition Fee', 0)])
         .map(
           (item) => _EditableFeeItem(
             name: TextEditingController(text: item.name),
             amount: TextEditingController(text: item.amount.toStringAsFixed(0)),
+            active: item.isActive,
             original: item,
           ),
         )
@@ -1762,8 +2585,6 @@ class _ClassLevelFeeSheetState extends State<_ClassLevelFeeSheet> {
 
   @override
   void dispose() {
-    _levelCodeController.dispose();
-    _fullNameController.dispose();
     for (final item in _items) {
       item.dispose();
     }
@@ -1821,36 +2642,35 @@ class _ClassLevelFeeSheetState extends State<_ClassLevelFeeSheet> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextFormField(
-                                controller: _levelCodeController,
-                                decoration: const InputDecoration(
-                                  labelText: 'Level Code (short label)',
-                                  hintText: 'e.g. JHS 3',
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: AppColors.greenSoft,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'CLASS LEVEL',
+                                style: TextStyle(
+                                  color: AppColors.muted,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w900,
                                 ),
-                                validator: (value) =>
-                                    value == null || value.trim().isEmpty
-                                    ? 'Enter level code'
-                                    : null,
                               ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: TextFormField(
-                                controller: _fullNameController,
-                                decoration: const InputDecoration(
-                                  labelText: 'Full Name',
-                                  hintText: 'e.g. JHS 3 (Forms 3)',
+                              const SizedBox(height: 5),
+                              Text(
+                                widget.classFee?.title ??
+                                    widget.selectedGradeLevel?.name ??
+                                    'Class level',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w900,
                                 ),
-                                validator: (value) =>
-                                    value == null || value.trim().isEmpty
-                                    ? 'Enter full name'
-                                    : null,
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                         const SizedBox(height: 22),
                         const Row(
@@ -1909,9 +2729,18 @@ class _ClassLevelFeeSheetState extends State<_ClassLevelFeeSheet> {
                               child: _EditableFeeItemRow(
                                 index: index,
                                 item: _items[index],
-                                canRemove: _items.length > 1,
+                                canRemove: _items[index].active
+                                    ? _items
+                                              .where((item) => item.active)
+                                              .length >
+                                          1
+                                    : true,
+                                discontinueMode:
+                                    widget.classFee?.isDraft == false,
                                 onChanged: () => setState(() {}),
                                 onRemove: () => _removeItem(index),
+                                onRestore: () =>
+                                    setState(() => _items[index].active = true),
                               ),
                             );
                           },
@@ -1998,16 +2827,42 @@ class _ClassLevelFeeSheetState extends State<_ClassLevelFeeSheet> {
         _EditableFeeItem(
           name: TextEditingController(),
           amount: TextEditingController(text: '0'),
+          active: true,
           original: null,
         ),
       );
     });
   }
 
-  void _removeItem(int index) {
+  Future<void> _removeItem(int index) async {
+    final item = _items[index];
+    if (widget.classFee?.isDraft == false && item.active) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Discontinue fee item?'),
+          content: Text(
+            '${item.name.text.trim()} will be excluded from the replacement fee structure. The published version remains unchanged until you publish the new draft.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Discontinue'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      setState(() => item.active = false);
+      return;
+    }
     setState(() {
-      final item = _items.removeAt(index);
-      item.dispose();
+      final removedItem = _items.removeAt(index);
+      removedItem.dispose();
     });
   }
 
@@ -2021,13 +2876,20 @@ class _ClassLevelFeeSheetState extends State<_ClassLevelFeeSheet> {
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
-    final classFee = widget.classFee;
-    if (classFee == null || classFee.gradeLevelId <= 0 || widget.termId <= 0) {
+    if (!_items.any((item) => item.active)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-            'Select an existing class level before saving fee setup.',
-          ),
+          content: Text('Keep at least one active fee item in this setup.'),
+        ),
+      );
+      return;
+    }
+    final classFee = widget.classFee;
+    final gradeLevelId = classFee?.gradeLevelId ?? _selectedGradeLevelId ?? 0;
+    if (gradeLevelId <= 0 || widget.termId <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Select a class level before saving fee setup.'),
         ),
       );
       return;
@@ -2036,7 +2898,8 @@ class _ClassLevelFeeSheetState extends State<_ClassLevelFeeSheet> {
     try {
       await widget.api.saveFeeStructure(
         customSchoolId: widget.customSchoolId,
-        gradeLevelId: classFee.gradeLevelId,
+        structureId: classFee?.structureId ?? 0,
+        gradeLevelId: gradeLevelId,
         termId: widget.termId,
         feeItems: _items.map((item) {
           final original = item.original;
@@ -2047,7 +2910,7 @@ class _ClassLevelFeeSheetState extends State<_ClassLevelFeeSheet> {
             feeName: item.name.text.trim(),
             amount: double.tryParse(item.amount.text.trim()) ?? 0,
             description: original?.description ?? '',
-            status: original?.status ?? 'ACTIVE',
+            status: item.active ? 'ACTIVE' : 'INACTIVE',
             dueDate: original?.dueDate,
           );
         }).toList(),
@@ -2070,11 +2933,13 @@ class _EditableFeeItem {
   _EditableFeeItem({
     required this.name,
     required this.amount,
+    required this.active,
     required this.original,
   });
 
   final TextEditingController name;
   final TextEditingController amount;
+  bool active;
   final _ClassFeeItem? original;
 
   void dispose() {
@@ -2088,15 +2953,19 @@ class _EditableFeeItemRow extends StatelessWidget {
     required this.index,
     required this.item,
     required this.canRemove,
+    required this.discontinueMode,
     required this.onChanged,
     required this.onRemove,
+    required this.onRestore,
   });
 
   final int index;
   final _EditableFeeItem item;
   final bool canRemove;
+  final bool discontinueMode;
   final VoidCallback onChanged;
   final VoidCallback onRemove;
+  final VoidCallback onRestore;
 
   @override
   Widget build(BuildContext context) {
@@ -2123,7 +2992,11 @@ class _EditableFeeItemRow extends StatelessWidget {
         Expanded(
           child: TextFormField(
             controller: item.name,
-            decoration: const InputDecoration(hintText: 'Fee item name'),
+            enabled: item.active,
+            decoration: InputDecoration(
+              hintText: 'Fee item name',
+              suffixText: item.active ? null : 'Discontinued',
+            ),
             validator: (value) => value == null || value.trim().isEmpty
                 ? 'Enter fee item name'
                 : null,
@@ -2134,6 +3007,7 @@ class _EditableFeeItemRow extends StatelessWidget {
           width: 118,
           child: TextFormField(
             controller: item.amount,
+            enabled: item.active,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: const InputDecoration(
               prefixText: 'GH₵ ',
@@ -2149,12 +3023,26 @@ class _EditableFeeItemRow extends StatelessWidget {
             },
           ),
         ),
-        IconButton(
-          onPressed: canRemove ? onRemove : null,
-          color: AppColors.red,
-          icon: const Icon(Icons.close_rounded),
-          tooltip: 'Remove fee item',
-        ),
+        if (item.active)
+          IconButton(
+            onPressed: canRemove ? onRemove : null,
+            color: AppColors.red,
+            icon: Icon(
+              discontinueMode
+                  ? Icons.do_not_disturb_on_outlined
+                  : Icons.close_rounded,
+            ),
+            tooltip: discontinueMode
+                ? 'Discontinue fee item'
+                : 'Remove fee item',
+          )
+        else
+          IconButton(
+            onPressed: onRestore,
+            color: AppColors.green,
+            icon: const Icon(Icons.restore_rounded),
+            tooltip: 'Restore fee item',
+          ),
       ],
     );
   }
@@ -2163,20 +3051,36 @@ class _EditableFeeItemRow extends StatelessWidget {
 class _StudentFeesContent extends StatelessWidget {
   const _StudentFeesContent({
     required this.rows,
+    required this.gradeLevels,
+    required this.selectedGradeLevelId,
+    required this.selectedPaymentStatus,
+    required this.search,
+    required this.termName,
     required this.paymentMethods,
     required this.customSchoolId,
     required this.termId,
     required this.api,
     required this.money,
+    required this.onSearchChanged,
+    required this.onGradeLevelChanged,
+    required this.onPaymentStatusChanged,
     required this.onPaymentSaved,
   });
 
   final List<_StudentFeeRow> rows;
+  final List<FeeGradeLevel> gradeLevels;
+  final int? selectedGradeLevelId;
+  final String? selectedPaymentStatus;
+  final String search;
+  final String termName;
   final List<FeePaymentMethod> paymentMethods;
   final String customSchoolId;
   final int termId;
   final FeeApiClient api;
   final String Function(double amount) money;
+  final ValueChanged<String> onSearchChanged;
+  final ValueChanged<int?> onGradeLevelChanged;
+  final ValueChanged<String?> onPaymentStatusChanged;
   final Future<void> Function() onPaymentSaved;
 
   @override
@@ -2196,7 +3100,7 @@ class _StudentFeesContent extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    '${rows.length} Students',
+                    '${rows.length} ${rows.length == 1 ? 'Student' : 'Students'}',
                     style: const TextStyle(
                       color: AppColors.green,
                       fontWeight: FontWeight.w900,
@@ -2213,7 +3117,16 @@ class _StudentFeesContent extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 18),
-        _StudentFeeFilters(),
+        _StudentFeeFilters(
+          gradeLevels: gradeLevels,
+          selectedGradeLevelId: selectedGradeLevelId,
+          selectedPaymentStatus: selectedPaymentStatus,
+          search: search,
+          termName: termName,
+          onSearchChanged: onSearchChanged,
+          onGradeLevelChanged: onGradeLevelChanged,
+          onPaymentStatusChanged: onPaymentStatusChanged,
+        ),
         const SizedBox(height: 18),
         if (rows.isEmpty)
           const _FeeEmptyCard(message: 'No student fee records found.')
@@ -2301,6 +3214,7 @@ class _StudentFeesContent extends StatelessWidget {
             row: row,
             money: money,
             api: api,
+            customSchoolId: customSchoolId,
             termId: termId,
             onRecordPayment: () =>
                 _showRecordPaymentForm(context, rows, selectedStudent: row),
@@ -2349,6 +3263,26 @@ class _StudentFeesContent extends StatelessWidget {
 }
 
 class _StudentFeeFilters extends StatelessWidget {
+  const _StudentFeeFilters({
+    required this.gradeLevels,
+    required this.selectedGradeLevelId,
+    required this.selectedPaymentStatus,
+    required this.search,
+    required this.termName,
+    required this.onSearchChanged,
+    required this.onGradeLevelChanged,
+    required this.onPaymentStatusChanged,
+  });
+
+  final List<FeeGradeLevel> gradeLevels;
+  final int? selectedGradeLevelId;
+  final String? selectedPaymentStatus;
+  final String search;
+  final String termName;
+  final ValueChanged<String> onSearchChanged;
+  final ValueChanged<int?> onGradeLevelChanged;
+  final ValueChanged<String?> onPaymentStatusChanged;
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -2359,45 +3293,66 @@ class _StudentFeeFilters extends StatelessWidget {
             : constraints.maxWidth * .40;
         final filterWidth = compact
             ? constraints.maxWidth
-            : (constraints.maxWidth - searchWidth - 30) / 3;
+            : (constraints.maxWidth - searchWidth - 20) / 2;
         return Wrap(
           spacing: 10,
           runSpacing: 10,
           children: [
             SizedBox(
               width: searchWidth,
-              child: TextField(
+              child: TextFormField(
+                key: ValueKey('student-fee-search-$search'),
+                initialValue: search,
+                onChanged: onSearchChanged,
                 decoration: const InputDecoration(
                   prefixIcon: Icon(Icons.search_rounded),
                   hintText: 'Search by name or ID',
                 ),
               ),
             ),
-            _FilterSelect(width: filterWidth, value: 'All Classes'),
-            _FilterSelect(width: filterWidth, value: 'All Subjects'),
-            _FilterSelect(width: filterWidth, value: 'Term 1'),
+            SizedBox(
+              width: filterWidth,
+              child: DropdownButtonFormField<int?>(
+                value: selectedGradeLevelId,
+                decoration: const InputDecoration(labelText: 'Class'),
+                items: [
+                  const DropdownMenuItem<int?>(
+                    value: null,
+                    child: Text('All classes'),
+                  ),
+                  ...gradeLevels.map(
+                    (grade) => DropdownMenuItem<int?>(
+                      value: grade.curriculumGradeLevelId,
+                      child: Text(grade.name),
+                    ),
+                  ),
+                ],
+                onChanged: onGradeLevelChanged,
+              ),
+            ),
+            SizedBox(
+              width: filterWidth,
+              child: DropdownButtonFormField<String?>(
+                value: selectedPaymentStatus,
+                decoration: InputDecoration(
+                  labelText: 'Payment status · $termName',
+                ),
+                items: const [
+                  DropdownMenuItem<String?>(
+                    value: null,
+                    child: Text('All statuses'),
+                  ),
+                  DropdownMenuItem(value: 'NO_FEES', child: Text('No fees')),
+                  DropdownMenuItem(value: 'UNPAID', child: Text('Unpaid')),
+                  DropdownMenuItem(value: 'PARTIAL', child: Text('Partial')),
+                  DropdownMenuItem(value: 'PAID', child: Text('Paid')),
+                ],
+                onChanged: onPaymentStatusChanged,
+              ),
+            ),
           ],
         );
       },
-    );
-  }
-}
-
-class _FilterSelect extends StatelessWidget {
-  const _FilterSelect({required this.width, required this.value});
-
-  final double width;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: width,
-      child: DropdownButtonFormField<String>(
-        value: value,
-        items: [DropdownMenuItem(value: value, child: Text(value))],
-        onChanged: (_) {},
-      ),
     );
   }
 }
@@ -2497,6 +3452,7 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
   bool _saving = false;
   bool _success = false;
   _PaymentReceipt? _receipt;
+  PlatformFile? _receiptPhoto;
 
   bool get _isScopedToStudent => widget.selectedStudent != null;
 
@@ -2693,6 +3649,12 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
                       : null,
                 ),
                 const SizedBox(height: 14),
+                _ReceiptPhotoField(
+                  file: _receiptPhoto,
+                  onChoose: _pickReceiptPhoto,
+                  onRemove: () => setState(() => _receiptPhoto = null),
+                ),
+                const SizedBox(height: 14),
                 TextFormField(
                   controller: _notesController,
                   minLines: 2,
@@ -2738,6 +3700,30 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
     if (picked != null) setState(() => _paymentDate = picked);
   }
 
+  Future<void> _pickReceiptPhoto() async {
+    final result = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['jpg', 'jpeg', 'png', 'webp'],
+      allowMultiple: false,
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty || !mounted) return;
+    final file = result.files.single;
+    if (file.bytes == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not read the selected image.')),
+      );
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Receipt photo must be 5 MB or smaller.')),
+      );
+      return;
+    }
+    setState(() => _receiptPhoto = file);
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     final student = _student;
@@ -2769,6 +3755,8 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
           description: _notesController.text.trim(),
           termId: widget.termId,
           physicalReceiptNumber: physicalReceipt,
+          receiptPhotoBytes: _receiptPhoto?.bytes,
+          receiptPhotoFileName: _receiptPhoto?.name,
         ),
       );
       if (!mounted) return;
@@ -2840,6 +3828,7 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
       _method = null;
       _momoReferenceController.clear();
       _receiptController.clear();
+      _receiptPhoto = null;
       _notesController.clear();
       _paymentDate = DateTime.now();
     });
@@ -2908,6 +3897,76 @@ class _PaymentSectionTitle extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           const Expanded(child: Divider(color: AppColors.border)),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReceiptPhotoField extends StatelessWidget {
+  const _ReceiptPhotoField({
+    required this.file,
+    required this.onChoose,
+    required this.onRemove,
+  });
+
+  final PlatformFile? file;
+  final VoidCallback onChoose;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: AppColors.greenSoft,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.image_outlined, color: AppColors.green),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  file?.name ?? 'Receipt photo (optional)',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  file == null
+                      ? 'Attach a JPG, PNG, or WebP image up to 5 MB.'
+                      : '${(file!.size / 1024).ceil()} KB selected',
+                  style: const TextStyle(color: AppColors.muted, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          if (file != null)
+            IconButton(
+              tooltip: 'Remove receipt photo',
+              onPressed: onRemove,
+              icon: const Icon(Icons.close_rounded),
+            ),
+          OutlinedButton.icon(
+            onPressed: onChoose,
+            icon: Icon(file == null ? Icons.attach_file : Icons.swap_horiz),
+            label: Text(file == null ? 'Attach' : 'Replace'),
+          ),
         ],
       ),
     );
@@ -3323,6 +4382,7 @@ class _StudentFeeDetailPanel extends StatelessWidget {
     required this.row,
     required this.money,
     required this.api,
+    required this.customSchoolId,
     required this.termId,
     required this.onRecordPayment,
   });
@@ -3330,16 +4390,9 @@ class _StudentFeeDetailPanel extends StatelessWidget {
   final _StudentFeeRow row;
   final String Function(double amount) money;
   final FeeApiClient api;
+  final String customSchoolId;
   final int termId;
   final VoidCallback onRecordPayment;
-
-  static const _feeItems = [
-    _ClassFeeItem('Tuition Fee', 200),
-    _ClassFeeItem('PTA Levy', 50),
-    _ClassFeeItem('Sports Fund', 30),
-    _ClassFeeItem('ICT / Computer', 40),
-    _ClassFeeItem('Examination Fee', 80),
-  ];
 
   @override
   Widget build(BuildContext context) {
@@ -3398,81 +4451,83 @@ class _StudentFeeDetailPanel extends StatelessWidget {
               ),
               const Divider(height: 1),
               Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(22),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+                child: FutureBuilder<FeeStudentAccount>(
+                  future: api.getStudentFeeAccount(
+                    customSchoolId: customSchoolId,
+                    customStudentId: row.id,
+                    academicTermId: termId,
+                  ),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState != ConnectionState.done) {
+                      return const Padding(
+                        padding: EdgeInsets.all(22),
+                        child: _InlineLoadingState(
+                          message: 'Loading student fee account...',
+                        ),
+                      );
+                    }
+                    if (snapshot.hasError || snapshot.data == null) {
+                      return Padding(
+                        padding: const EdgeInsets.all(22),
+                        child: _FeeEmptyCard(
+                          message:
+                              'Could not load this fee account: ${snapshot.error ?? 'No data returned'}',
+                        ),
+                      );
+                    }
+                    final account = snapshot.data!;
+                    return SingleChildScrollView(
+                      padding: const EdgeInsets.all(22),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Expanded(
-                            child: _StudentFeeTotalCard(
-                              label: 'Total fees',
-                              value: money(row.totalFees),
-                              color: AppColors.text,
-                            ),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _StudentFeeTotalCard(
+                                  label: 'Expected',
+                                  value: money(account.totalExpected),
+                                  color: AppColors.text,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: _StudentFeeTotalCard(
+                                  label: 'Paid',
+                                  value: money(account.totalPaid),
+                                  color: AppColors.green,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: _StudentFeeTotalCard(
+                                  label: 'Balance',
+                                  value: money(account.balance),
+                                  color: account.balance > 0
+                                      ? AppColors.red
+                                      : AppColors.green,
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: _StudentFeeTotalCard(
-                              label: 'Paid',
-                              value: money(row.paid),
-                              color: AppColors.green,
+                          const SizedBox(height: 24),
+                          _FeeBreakdownSection(account: account, money: money),
+                          const SizedBox(height: 18),
+                          if (account.payments.isEmpty)
+                            const _FeeEmptyCard(
+                              message: 'No payments recorded for this student.',
+                            )
+                          else
+                            _PaymentHistorySection(
+                              payments: account.payments
+                                  .map(_historyFromPayment)
+                                  .toList(),
+                              money: money,
                             ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: _StudentFeeTotalCard(
-                              label: 'Balance',
-                              value: money(row.balance),
-                              color: row.balance > 0
-                                  ? AppColors.red
-                                  : AppColors.green,
-                            ),
-                          ),
                         ],
                       ),
-                      const SizedBox(height: 24),
-                      _FeeBreakdownSection(
-                        feeItems: _feeItems,
-                        row: row,
-                        money: money,
-                      ),
-                      const SizedBox(height: 18),
-                      FutureBuilder<List<FeeStudentPayment>>(
-                        future: api.getStudentPayments(
-                          customStudentId: row.id,
-                          termId: termId,
-                        ),
-                        builder: (context, snapshot) {
-                          if (snapshot.connectionState !=
-                              ConnectionState.done) {
-                            return const _InlineLoadingState(
-                              message: 'Loading payment history...',
-                            );
-                          }
-                          if (snapshot.hasError) {
-                            return _FeeEmptyCard(
-                              message:
-                                  'Could not load payment history: ${snapshot.error}',
-                            );
-                          }
-                          final payments = snapshot.data ?? const [];
-                          if (payments.isEmpty) {
-                            return const _FeeEmptyCard(
-                              message: 'No payments recorded for this student.',
-                            );
-                          }
-                          return _PaymentHistorySection(
-                            payments: payments
-                                .map(_historyFromPayment)
-                                .toList(),
-                            money: money,
-                          );
-                        },
-                      ),
-                    ],
-                  ),
+                    );
+                  },
                 ),
               ),
               const Divider(height: 1),
@@ -3513,7 +4568,7 @@ class _StudentFeeDetailPanel extends StatelessWidget {
       receiptNumber: payment.referenceNumber.trim().isEmpty
           ? 'PAY-${payment.id}'
           : payment.referenceNumber,
-      amount: payment.amount,
+      amount: payment.netAmount,
       date: _formatDateLabel(payment.paymentDate),
       term: payment.termId > 0 ? 'Term ${payment.termId}' : 'Current term',
       recordedBy: payment.receivedBy.trim().isEmpty
@@ -3558,14 +4613,9 @@ class _InlineLoadingState extends StatelessWidget {
 }
 
 class _FeeBreakdownSection extends StatelessWidget {
-  const _FeeBreakdownSection({
-    required this.feeItems,
-    required this.row,
-    required this.money,
-  });
+  const _FeeBreakdownSection({required this.account, required this.money});
 
-  final List<_ClassFeeItem> feeItems;
-  final _StudentFeeRow row;
+  final FeeStudentAccount account;
   final String Function(double amount) money;
 
   @override
@@ -3582,13 +4632,67 @@ class _FeeBreakdownSection extends StatelessWidget {
           style: TextStyle(fontWeight: FontWeight.w900),
         ),
         subtitle: Text(
-          '${feeItems.length} fee items · ${money(row.totalFees)} total',
+          '${account.assessments.length} fee items · ${money(account.totalExpected)} expected',
           style: const TextStyle(color: AppColors.muted),
         ),
-        children: feeItems.map((item) {
-          final paid = row.paid >= row.totalFees || item.amount <= row.paid;
-          return _FeeBreakdownRow(item: item, paid: paid, money: money);
-        }).toList(),
+        children: [
+          if (account.assessments.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 14),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'No fee assessments exist for this student in this term.',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+              ),
+            )
+          else
+            ...account.assessments.map(
+              (item) => _FeeAssessmentRow(item: item, money: money),
+            ),
+          if (account.adjustments.isNotEmpty) ...[
+            const Padding(
+              padding: EdgeInsets.only(top: 14, bottom: 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'ADJUSTMENTS',
+                  style: TextStyle(
+                    color: AppColors.muted,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: .5,
+                  ),
+                ),
+              ),
+            ),
+            ...account.adjustments.map(
+              (adjustment) =>
+                  _FeeAdjustmentRow(adjustment: adjustment, money: money),
+            ),
+          ],
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Expected this term',
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
+                Text(
+                  money(account.totalExpected),
+                  style: const TextStyle(
+                    color: AppColors.green,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -3641,15 +4745,10 @@ class _StudentFeeTotalCard extends StatelessWidget {
   }
 }
 
-class _FeeBreakdownRow extends StatelessWidget {
-  const _FeeBreakdownRow({
-    required this.item,
-    required this.paid,
-    required this.money,
-  });
+class _FeeAssessmentRow extends StatelessWidget {
+  const _FeeAssessmentRow({required this.item, required this.money});
 
-  final _ClassFeeItem item;
-  final bool paid;
+  final FeeAssessmentLine item;
   final String Function(double amount) money;
 
   @override
@@ -3662,26 +4761,115 @@ class _FeeBreakdownRow extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: Text(
-              item.name,
-              style: const TextStyle(fontWeight: FontWeight.w800),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.feeName,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                if (item.categoryName.trim().isNotEmpty ||
+                    item.dueDate != null) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    [
+                      if (item.categoryName.trim().isNotEmpty)
+                        item.categoryName.trim(),
+                      if (item.dueDate != null)
+                        'Due ${_formatDateLabel(item.dueDate)}',
+                    ].join(' · '),
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
+          Text(
+            money(item.amount),
+            style: const TextStyle(fontWeight: FontWeight.w900),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FeeAdjustmentRow extends StatelessWidget {
+  const _FeeAdjustmentRow({required this.adjustment, required this.money});
+
+  final FeeAccountAdjustment adjustment;
+  final String Function(double amount) money;
+
+  @override
+  Widget build(BuildContext context) {
+    final status = adjustment.status.trim().toUpperCase();
+    final affectsBalance =
+        status == 'APPROVED' || status == 'COMPLETE' || status == 'COMPLETED';
+    final title = adjustment.feeName.trim().isEmpty
+        ? adjustment.adjustmentType
+        : '${adjustment.adjustmentType} · ${adjustment.feeName}';
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppColors.border)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                if (adjustment.description.trim().isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    adjustment.description,
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
-                money(item.amount),
-                style: const TextStyle(fontWeight: FontWeight.w900),
-              ),
-              const SizedBox(height: 3),
-              Text(
-                paid
-                    ? '${money(item.amount)} paid'
-                    : '${money(item.amount)} due',
+                '${adjustment.amount >= 0 ? '+' : '-'}${money(adjustment.amount.abs())}',
                 style: TextStyle(
-                  color: paid ? AppColors.green : AppColors.red,
-                  fontSize: 12,
+                  color: adjustment.amount < 0
+                      ? AppColors.green
+                      : AppColors.text,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: affectsBalance
+                      ? AppColors.greenSoft
+                      : const Color(0xFFFFF3DF),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  status.isEmpty ? 'PENDING' : status.replaceAll('_', ' '),
+                  style: TextStyle(
+                    color: affectsBalance
+                        ? AppColors.green
+                        : const Color(0xFFB66A00),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
               ),
             ],
@@ -3855,26 +5043,33 @@ class _StudentFeeRow {
 }
 
 class _WaiversContent extends StatelessWidget {
-  const _WaiversContent({required this.waivers, required this.money});
+  const _WaiversContent({
+    required this.types,
+    required this.assignments,
+    required this.money,
+    required this.onAddType,
+    required this.onEditType,
+    required this.onDeleteType,
+    required this.onAssignWaiver,
+    required this.onEditAssignment,
+    required this.onRevokeAssignment,
+  });
 
-  final List<FeeWaiverSummary> waivers;
+  final List<FeeWaiverType> types;
+  final List<FeeWaiverAssignment> assignments;
   final String Function(double amount) money;
+  final VoidCallback onAddType;
+  final ValueChanged<FeeWaiverType> onEditType;
+  final ValueChanged<FeeWaiverType> onDeleteType;
+  final VoidCallback onAssignWaiver;
+  final ValueChanged<FeeWaiverAssignment> onEditAssignment;
+  final ValueChanged<FeeWaiverAssignment> onRevokeAssignment;
 
   @override
   Widget build(BuildContext context) {
-    final waiverTypes = _waiverTypesFromApi();
-    final waiverStudents = waivers.map((waiver) {
-      return _WaiverStudent(
-        name: waiver.studentName.trim().isEmpty
-            ? 'Unknown student'
-            : waiver.studentName,
-        id: waiver.customStudentId,
-        className: waiver.className,
-        waiverType: waiver.waiverType,
-        originalFee: waiver.amount,
-        afterWaiver: 0,
-      );
-    }).toList();
+    final activeAssignments = assignments
+        .where((item) => item.status == 'ACTIVE')
+        .toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -3890,25 +5085,25 @@ class _WaiversContent extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    '${waiverTypes.length} Active Types',
+                    '${types.length} active ${types.length == 1 ? 'type' : 'types'} · ${activeAssignments.length} active ${activeAssignments.length == 1 ? 'student waiver' : 'student waivers'}',
                     style: const TextStyle(
-                      color: AppColors.green,
-                      fontWeight: FontWeight.w900,
+                      color: AppColors.muted,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ],
               ),
             ),
+            OutlinedButton.icon(
+              onPressed: onAddType,
+              icon: const Icon(Icons.tune_rounded),
+              label: const Text('New waiver type'),
+            ),
+            const SizedBox(width: 10),
             FilledButton.icon(
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('New waiver flow will be added next.'),
-                  ),
-                );
-              },
+              onPressed: onAssignWaiver,
               icon: const Icon(Icons.add_rounded),
-              label: const Text('New Waiver'),
+              label: const Text('Assign waiver'),
             ),
           ],
         ),
@@ -3923,14 +5118,24 @@ class _WaiversContent extends StatelessWidget {
                   'Waiver Types',
                   style: TextStyle(fontWeight: FontWeight.w900),
                 ),
-                const SizedBox(height: 18),
-                if (waiverTypes.isEmpty)
-                  const _FeeEmptyCard(message: 'No waiver types found yet.')
+                const SizedBox(height: 16),
+                if (types.isEmpty)
+                  _FeeEmptyCard(
+                    message:
+                        'No waiver types configured. Create a type before assigning a waiver.',
+                    actionLabel: 'Create waiver type',
+                    onAction: onAddType,
+                  )
                 else
-                  ...waiverTypes.map(
+                  ...types.map(
                     (type) => Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: _WaiverTypeTile(type: type),
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _WaiverTypeTile(
+                        type: type,
+                        money: money,
+                        onEdit: () => onEditType(type),
+                        onDelete: () => onDeleteType(type),
+                      ),
                     ),
                   ),
               ],
@@ -3938,35 +5143,29 @@ class _WaiversContent extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 18),
-        _StudentsWithWaiversTable(students: waiverStudents, money: money),
+        _StudentsWithWaiversTable(
+          assignments: assignments,
+          money: money,
+          onEdit: onEditAssignment,
+          onRevoke: onRevokeAssignment,
+        ),
       ],
     );
-  }
-
-  List<_WaiverType> _waiverTypesFromApi() {
-    final byType = <String, double>{};
-    for (final waiver in waivers) {
-      final name = waiver.waiverType.trim().isEmpty
-          ? 'Waiver'
-          : waiver.waiverType.trim();
-      byType[name] = (byType[name] ?? 0) + waiver.amount;
-    }
-    return byType.entries
-        .map(
-          (entry) => _WaiverType(
-            name: entry.key,
-            description: 'Total waived ${money(entry.value)}',
-            percent: 0,
-          ),
-        )
-        .toList();
   }
 }
 
 class _WaiverTypeTile extends StatelessWidget {
-  const _WaiverTypeTile({required this.type});
+  const _WaiverTypeTile({
+    required this.type,
+    required this.money,
+    required this.onEdit,
+    required this.onDelete,
+  });
 
-  final _WaiverType type;
+  final FeeWaiverType type;
+  final String Function(double amount) money;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -3996,12 +5195,23 @@ class _WaiverTypeTile extends StatelessWidget {
             ),
           ),
           Text(
-            '${type.percent}%',
+            type.isPercentage
+                ? '${type.defaultValue % 1 == 0 ? type.defaultValue.toStringAsFixed(0) : type.defaultValue.toStringAsFixed(2)}%'
+                : money(type.defaultValue),
             style: const TextStyle(
               color: AppColors.purple,
-              fontSize: 24,
+              fontSize: 20,
               fontWeight: FontWeight.w900,
             ),
+          ),
+          const SizedBox(width: 10),
+          PopupMenuButton<String>(
+            tooltip: 'Waiver type actions',
+            onSelected: (value) => value == 'edit' ? onEdit() : onDelete(),
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: 'edit', child: Text('Edit type')),
+              PopupMenuItem(value: 'delete', child: Text('Remove type')),
+            ],
           ),
         ],
       ),
@@ -4011,12 +5221,16 @@ class _WaiverTypeTile extends StatelessWidget {
 
 class _StudentsWithWaiversTable extends StatelessWidget {
   const _StudentsWithWaiversTable({
-    required this.students,
+    required this.assignments,
     required this.money,
+    required this.onEdit,
+    required this.onRevoke,
   });
 
-  final List<_WaiverStudent> students;
+  final List<FeeWaiverAssignment> assignments;
   final String Function(double amount) money;
+  final ValueChanged<FeeWaiverAssignment> onEdit;
+  final ValueChanged<FeeWaiverAssignment> onRevoke;
 
   @override
   Widget build(BuildContext context) {
@@ -4035,7 +5249,7 @@ class _StudentsWithWaiversTable extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  '${students.length == 1 ? 18 : students.length} Students',
+                  '${assignments.length} ${assignments.length == 1 ? 'assignment' : 'assignments'}',
                   style: const TextStyle(
                     color: AppColors.muted,
                     fontSize: 12,
@@ -4045,46 +5259,82 @@ class _StudentsWithWaiversTable extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: DataTable(
-                headingRowColor: WidgetStateProperty.all(
-                  const Color(0xFFF8FAF9),
-                ),
-                headingTextStyle: const TextStyle(
-                  color: AppColors.muted,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: .5,
-                ),
-                columnSpacing: 86,
-                columns: const [
-                  DataColumn(label: Text('STUDENT')),
-                  DataColumn(label: Text('CLASS')),
-                  DataColumn(label: Text('WAIVER TYPE')),
-                  DataColumn(label: Text('ORIGINAL FEE')),
-                  DataColumn(label: Text('AFTER WAIVER')),
-                ],
-                rows: students.map((student) {
-                  return DataRow(
-                    cells: [
-                      DataCell(
-                        _StudentNameCell(name: student.name, id: student.id),
-                      ),
-                      DataCell(Text(student.className)),
-                      DataCell(_WaiverBadge(label: student.waiverType)),
-                      DataCell(Text(money(student.originalFee))),
-                      DataCell(
-                        Text(
-                          money(student.afterWaiver),
-                          style: const TextStyle(color: AppColors.green),
+            if (assignments.isEmpty)
+              const _FeeEmptyCard(
+                message: 'No waivers have been assigned for this term.',
+              )
+            else
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: DataTable(
+                  headingRowColor: WidgetStateProperty.all(
+                    const Color(0xFFF8FAF9),
+                  ),
+                  headingTextStyle: const TextStyle(
+                    color: AppColors.muted,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: .5,
+                  ),
+                  columnSpacing: 86,
+                  columns: const [
+                    DataColumn(label: Text('STUDENT')),
+                    DataColumn(label: Text('CLASS')),
+                    DataColumn(label: Text('WAIVER TYPE')),
+                    DataColumn(label: Text('ELIGIBLE FEES')),
+                    DataColumn(label: Text('WAIVED')),
+                    DataColumn(label: Text('STATUS')),
+                    DataColumn(label: Text('ACTIONS')),
+                  ],
+                  rows: assignments.map((assignment) {
+                    return DataRow(
+                      cells: [
+                        DataCell(
+                          _StudentNameCell(
+                            name: assignment.studentName,
+                            id: assignment.customStudentId,
+                          ),
                         ),
-                      ),
-                    ],
-                  );
-                }).toList(),
+                        DataCell(Text(assignment.className)),
+                        DataCell(_WaiverBadge(label: assignment.waiverType)),
+                        DataCell(Text(money(assignment.eligibleAmount))),
+                        DataCell(
+                          Text(
+                            '−${money(assignment.waivedAmount)}',
+                            style: const TextStyle(color: AppColors.green),
+                          ),
+                        ),
+                        DataCell(
+                          _StatusPill(
+                            label: assignment.status == 'ACTIVE'
+                                ? 'Active'
+                                : 'Revoked',
+                            color: assignment.status == 'ACTIVE'
+                                ? AppColors.green
+                                : AppColors.muted,
+                          ),
+                        ),
+                        DataCell(
+                          assignment.status == 'ACTIVE'
+                              ? Row(
+                                  children: [
+                                    TextButton(
+                                      onPressed: () => onEdit(assignment),
+                                      child: const Text('Edit'),
+                                    ),
+                                    TextButton(
+                                      onPressed: () => onRevoke(assignment),
+                                      child: const Text('Revoke'),
+                                    ),
+                                  ],
+                                )
+                              : const Text('—'),
+                        ),
+                      ],
+                    );
+                  }).toList(),
+                ),
               ),
-            ),
           ],
         ),
       ),
@@ -4118,34 +5368,443 @@ class _WaiverBadge extends StatelessWidget {
   }
 }
 
-class _WaiverType {
-  const _WaiverType({
-    required this.name,
-    required this.description,
-    required this.percent,
-  });
+class _StatusPill extends StatelessWidget {
+  const _StatusPill({required this.label, required this.color});
 
-  final String name;
-  final String description;
-  final int percent;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .10),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
 }
 
-class _WaiverStudent {
-  const _WaiverStudent({
-    required this.name,
-    required this.id,
-    required this.className,
-    required this.waiverType,
-    required this.originalFee,
-    required this.afterWaiver,
+class _WaiverAssignmentSheet extends StatefulWidget {
+  const _WaiverAssignmentSheet({
+    required this.api,
+    required this.customSchoolId,
+    required this.academicTermId,
+    required this.students,
+    required this.types,
+    required this.existing,
+    required this.money,
   });
 
-  final String name;
-  final String id;
-  final String className;
-  final String waiverType;
-  final double originalFee;
-  final double afterWaiver;
+  final FeeApiClient api;
+  final String customSchoolId;
+  final int academicTermId;
+  final List<FeeStudentFeeRow> students;
+  final List<FeeWaiverType> types;
+  final FeeWaiverAssignment? existing;
+  final String Function(double amount) money;
+
+  @override
+  State<_WaiverAssignmentSheet> createState() => _WaiverAssignmentSheetState();
+}
+
+class _WaiverAssignmentSheetState extends State<_WaiverAssignmentSheet> {
+  late final TextEditingController _value;
+  late final TextEditingController _reason;
+  String? _studentId;
+  int? _typeId;
+  FeeStudentAccount? _account;
+  Set<int> _assessmentIds = {};
+  bool _loadingAccount = false;
+  bool _saving = false;
+  String? _error;
+
+  FeeWaiverType? get _type {
+    for (final type in widget.types) {
+      if (type.id == _typeId) return type;
+    }
+    return null;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    _studentId = existing?.customStudentId;
+    _typeId =
+        existing?.waiverTypeId ??
+        (widget.types.isEmpty ? null : widget.types.first.id);
+    _value = TextEditingController(
+      text: existing == null
+          ? '${_type?.defaultValue ?? ''}'
+          : '${existing.value}',
+    );
+    _reason = TextEditingController(text: existing?.reason ?? '');
+    _assessmentIds =
+        existing?.assessments.map((item) => item.assessmentId).toSet() ?? {};
+    if (_studentId != null) _loadAccount();
+  }
+
+  @override
+  void dispose() {
+    _value.dispose();
+    _reason.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadAccount() async {
+    final studentId = _studentId;
+    if (studentId == null || studentId.isEmpty) return;
+    setState(() {
+      _loadingAccount = true;
+      _error = null;
+    });
+    try {
+      final account = await widget.api.getStudentFeeAccount(
+        customSchoolId: widget.customSchoolId,
+        customStudentId: studentId,
+        academicTermId: widget.academicTermId,
+      );
+      if (mounted) setState(() => _account = account);
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
+    } finally {
+      if (mounted) setState(() => _loadingAccount = false);
+    }
+  }
+
+  double get _eligibleAmount {
+    final assessments = _account?.assessments ?? const <FeeAssessmentLine>[];
+    final type = _type;
+    if (type == null) return 0;
+    if (type.appliesToAllFees) {
+      return assessments.fold(0, (total, item) => total + item.amount);
+    }
+    return assessments
+        .where((item) => _assessmentIds.contains(item.assessmentId))
+        .fold(0, (total, item) => total + item.amount);
+  }
+
+  double get _waivedAmount {
+    final type = _type;
+    final value = double.tryParse(_value.text.trim()) ?? 0;
+    if (type == null) return 0;
+    return type.isPercentage ? _eligibleAmount * value / 100 : value;
+  }
+
+  Future<void> _save() async {
+    final type = _type;
+    final studentId = _studentId;
+    final value = double.tryParse(_value.text.trim());
+    if (studentId == null ||
+        type == null ||
+        value == null ||
+        value <= 0 ||
+        _reason.text.trim().isEmpty) {
+      setState(
+        () => _error =
+            'Select a student and waiver type, then enter a value and reason.',
+      );
+      return;
+    }
+    if (!type.appliesToAllFees && _assessmentIds.isEmpty) {
+      setState(() => _error = 'Select at least one fee item.');
+      return;
+    }
+    if (_waivedAmount > _eligibleAmount) {
+      setState(() => _error = 'The waiver cannot exceed the selected fees.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.api.saveStudentWaiver(
+        customSchoolId: widget.customSchoolId,
+        customStudentId: studentId,
+        waiverId: widget.existing?.id,
+        academicTermId: widget.academicTermId,
+        waiverTypeId: type.id,
+        value: value,
+        assessmentIds: type.appliesToAllFees
+            ? const []
+            : _assessmentIds.toList(),
+        reason: _reason.text,
+      );
+      if (mounted) Navigator.pop(context, true);
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error = '$error';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final type = _type;
+    return Material(
+      color: Colors.white,
+      child: SafeArea(
+        child: SizedBox(
+          width: 560,
+          height: double.infinity,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 20, 14, 16),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.existing == null
+                                ? 'Assign student waiver'
+                                : 'Edit student waiver',
+                            style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'Reduce selected fees without changing the original assessments.',
+                            style: TextStyle(
+                              color: AppColors.muted,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: _saving
+                          ? null
+                          : () => Navigator.pop(context, false),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      DropdownButtonFormField<String>(
+                        value: _studentId,
+                        decoration: const InputDecoration(
+                          labelText: 'Student *',
+                        ),
+                        items: widget.students
+                            .map(
+                              (student) => DropdownMenuItem(
+                                value: student.customStudentId,
+                                child: Text(
+                                  '${student.studentName} · ${student.className}',
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: widget.existing != null || _saving
+                            ? null
+                            : (next) {
+                                setState(() {
+                                  _studentId = next;
+                                  _account = null;
+                                  _assessmentIds.clear();
+                                });
+                                _loadAccount();
+                              },
+                      ),
+                      const SizedBox(height: 16),
+                      DropdownButtonFormField<int>(
+                        value: _typeId,
+                        decoration: const InputDecoration(
+                          labelText: 'Waiver type *',
+                        ),
+                        items: widget.types
+                            .map(
+                              (item) => DropdownMenuItem(
+                                value: item.id,
+                                child: Text(item.name),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: _saving
+                            ? null
+                            : (next) => setState(() {
+                                _typeId = next;
+                                _assessmentIds.clear();
+                                final selected = _type;
+                                _value.text = selected == null
+                                    ? ''
+                                    : '${selected.defaultValue}';
+                              }),
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: _value,
+                        onChanged: (_) => setState(() {}),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration: InputDecoration(
+                          labelText: type?.isPercentage == true
+                              ? 'Percentage *'
+                              : 'Amount (GH₵) *',
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      if (_loadingAccount)
+                        const Center(child: CircularProgressIndicator())
+                      else if (_account != null) ...[
+                        Text(
+                          type?.appliesToAllFees == true
+                              ? 'Included fee items'
+                              : 'Select fee items *',
+                          style: const TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                        const SizedBox(height: 8),
+                        ..._account!.assessments.map(
+                          (assessment) => CheckboxListTile(
+                            contentPadding: EdgeInsets.zero,
+                            controlAffinity: ListTileControlAffinity.leading,
+                            value:
+                                type?.appliesToAllFees == true ||
+                                _assessmentIds.contains(
+                                  assessment.assessmentId,
+                                ),
+                            onChanged: type?.appliesToAllFees == true || _saving
+                                ? null
+                                : (selected) => setState(() {
+                                    selected == true
+                                        ? _assessmentIds.add(
+                                            assessment.assessmentId,
+                                          )
+                                        : _assessmentIds.remove(
+                                            assessment.assessmentId,
+                                          );
+                                  }),
+                            title: Text(assessment.feeName),
+                            secondary: Text(
+                              widget.money(assessment.amount),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: _reason,
+                        maxLines: 3,
+                        decoration: const InputDecoration(
+                          labelText: 'Reason *',
+                          hintText: 'Why is this waiver being granted?',
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: AppColors.green.withValues(alpha: .08),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: AppColors.green.withValues(alpha: .25),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'Fee impact',
+                                    style: TextStyle(
+                                      color: AppColors.muted,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '${widget.money(_eligibleAmount)} eligible · ${widget.money((_eligibleAmount - _waivedAmount).clamp(0, double.infinity))} after waiver',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Text(
+                              '−${widget.money(_waivedAmount)}',
+                              style: const TextStyle(
+                                color: AppColors.green,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (_error != null) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          _error!,
+                          style: const TextStyle(color: AppColors.red),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.all(18),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: _saving
+                            ? null
+                            : () => Navigator.pop(context, false),
+                        child: const Text('Cancel'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: _saving ? null : _save,
+                        child: Text(_saving ? 'Saving...' : 'Save waiver'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _FeePageSkeleton extends StatelessWidget {

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../theme/app_theme.dart';
-import '../data/demo_attendance_repository.dart';
+import '../domain/attendance_models.dart';
 import 'attendance_screen.dart';
 
 enum _AttendancePeriod { today, week, month }
@@ -10,15 +10,15 @@ class AttendanceDashboardScreen extends StatefulWidget {
   const AttendanceDashboardScreen({
     super.key,
     required this.customSchoolId,
+    required this.repository,
     this.academicYear,
     this.term,
-    this.repository,
   });
 
   final String customSchoolId;
   final String? academicYear;
   final String? term;
-  final DemoAttendanceRepository? repository;
+  final AttendanceRepository repository;
 
   @override
   State<AttendanceDashboardScreen> createState() =>
@@ -26,154 +26,24 @@ class AttendanceDashboardScreen extends StatefulWidget {
 }
 
 class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
-  late final DemoAttendanceRepository _repository;
+  late Future<AttendanceDashboardOverview> _overviewFuture;
+  AttendanceDashboardOverview? _overview;
   _AttendancePeriod _period = _AttendancePeriod.today;
   _ClassAttendanceSummary? _openClass;
   bool _showSubmissionBanner = true;
   bool _showAllClasses = false;
 
-  static const _classes = [
-    _ClassAttendanceSummary(
-      group: 'Kindergarten',
-      gradeId: 1,
-      streamId: 11,
-      code: 'KG1-A',
-      name: 'KG 1 · Stream A',
-      teacher: 'Mrs. Grace Johnson',
-      present: 42,
-      absent: 2,
-      late: 1,
-      percentage: 95.6,
-    ),
-    _ClassAttendanceSummary(
-      group: 'Kindergarten',
-      gradeId: 2,
-      streamId: 22,
-      code: 'KG2-B',
-      name: 'KG 2 · Stream B',
-      teacher: 'Mr. James Osei',
-      present: 40,
-      absent: 3,
-      late: 1,
-      percentage: 94.2,
-    ),
-    _ClassAttendanceSummary(
-      group: 'Lower Primary',
-      gradeId: 3,
-      streamId: 31,
-      code: 'B1-A',
-      name: 'Basic 1 · Stream A',
-      teacher: 'Mr. Kwame Asante',
-      present: 47,
-      absent: 1,
-      late: 1,
-      percentage: 97.9,
-    ),
-    _ClassAttendanceSummary(
-      group: 'Lower Primary',
-      gradeId: 3,
-      streamId: 32,
-      code: 'B1-B',
-      name: 'Basic 1 · Stream B',
-      teacher: 'Mrs. Ama Mensah',
-      present: 0,
-      absent: 0,
-      late: 0,
-      percentage: 0,
-      pending: true,
-    ),
-    _ClassAttendanceSummary(
-      group: 'Lower Primary',
-      gradeId: 4,
-      streamId: 41,
-      code: 'B2-A',
-      name: 'Basic 2 · Stream A',
-      teacher: 'Ms. Abena Frimpong',
-      present: 48,
-      absent: 2,
-      late: 0,
-      percentage: 96,
-    ),
-    _ClassAttendanceSummary(
-      group: 'Upper Primary',
-      gradeId: 6,
-      streamId: 61,
-      code: 'B4-A',
-      name: 'Basic 4 · Stream A',
-      teacher: 'Mr. Emmanuel Ofori',
-      present: 46,
-      absent: 4,
-      late: 2,
-      percentage: 92.3,
-    ),
-    _ClassAttendanceSummary(
-      group: 'Upper Primary',
-      gradeId: 6,
-      streamId: 62,
-      code: 'B4-B',
-      name: 'Basic 4 · Stream B',
-      teacher: 'Ms. Serwa Tetteh',
-      present: 0,
-      absent: 0,
-      late: 0,
-      percentage: 0,
-      pending: true,
-    ),
-    _ClassAttendanceSummary(
-      group: 'Upper Primary',
-      gradeId: 8,
-      streamId: 81,
-      code: 'B6-A',
-      name: 'Basic 6 · Stream A',
-      teacher: 'Mr. Fiifi Antwi',
-      present: 49,
-      absent: 2,
-      late: 1,
-      percentage: 94.2,
-    ),
-    _ClassAttendanceSummary(
-      group: 'Junior High',
-      gradeId: 9,
-      streamId: 91,
-      code: 'J1-A',
-      name: 'JHS 1 · Stream A',
-      teacher: 'Mr. Kwabena Amponsah',
-      present: 43,
-      absent: 3,
-      late: 1,
-      percentage: 91.5,
-    ),
-    _ClassAttendanceSummary(
-      group: 'Junior High',
-      gradeId: 10,
-      streamId: 101,
-      code: 'J2-A',
-      name: 'JHS 2 · Stream A',
-      teacher: 'Mrs. Maame Sarpong',
-      present: 0,
-      absent: 0,
-      late: 0,
-      percentage: 0,
-      pending: true,
-    ),
-    _ClassAttendanceSummary(
-      group: 'Junior High',
-      gradeId: 11,
-      streamId: 111,
-      code: 'J3-A',
-      name: 'JHS 3 · Stream A',
-      teacher: 'Mr. Kweku Boadu',
-      present: 41,
-      absent: 4,
-      late: 2,
-      percentage: 87.2,
-    ),
-  ];
-
   @override
   void initState() {
     super.initState();
-    _repository = widget.repository ?? DemoAttendanceRepository();
+    _overviewFuture = widget.repository.getOverview(widget.customSchoolId);
+  }
+
+  void _reloadOverview() {
+    setState(() {
+      _overview = null;
+      _overviewFuture = widget.repository.getOverview(widget.customSchoolId);
+    });
   }
 
   @override
@@ -184,7 +54,7 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
         customSchoolId: widget.customSchoolId,
         academicYear: widget.academicYear,
         term: widget.term,
-        repository: _repository,
+        repository: widget.repository,
         initialGradeLevelId: selected.gradeId,
         initialStreamId: selected.streamId,
         showClassSelectors: false,
@@ -192,57 +62,119 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
       );
     }
 
-    return ColoredBox(
-      color: AppColors.background,
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(28),
-        child: Align(
-          alignment: Alignment.topCenter,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1420),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _header(),
-                if (_showSubmissionBanner) ...[
-                  const SizedBox(height: 18),
-                  _submissionBanner(),
+    return FutureBuilder<AttendanceDashboardOverview>(
+      future: _overviewFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const ColoredBox(
+            color: AppColors.background,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        if (snapshot.hasError || snapshot.data == null) {
+          return ColoredBox(
+            color: AppColors.background,
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.cloud_off_outlined,
+                    color: AppColors.red,
+                    size: 42,
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Unable to load attendance',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    onPressed: _reloadOverview,
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('Try again'),
+                  ),
                 ],
-                const SizedBox(height: 18),
-                _dateAndPeriod(),
-                const SizedBox(height: 14),
-                _stats(),
-                const SizedBox(height: 16),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    if (constraints.maxWidth < 980) {
-                      return Column(
-                        children: [
-                          _classesCard(),
-                          const SizedBox(height: 16),
-                          _alertsCard(),
-                        ],
-                      );
-                    }
-                    return Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(child: _classesCard()),
-                        const SizedBox(width: 16),
-                        SizedBox(width: 350, child: _alertsCard()),
-                      ],
-                    );
-                  },
+              ),
+            ),
+          );
+        }
+        _overview = snapshot.data;
+        return ColoredBox(
+          color: AppColors.background,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(28),
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1420),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _header(),
+                    if (_showSubmissionBanner &&
+                        _liveClasses.any((item) => item.pending)) ...[
+                      const SizedBox(height: 18),
+                      _submissionBanner(),
+                    ],
+                    const SizedBox(height: 18),
+                    _dateAndPeriod(),
+                    const SizedBox(height: 14),
+                    _stats(),
+                    const SizedBox(height: 16),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        if (constraints.maxWidth < 980) {
+                          return Column(
+                            children: [
+                              _classesCard(),
+                              const SizedBox(height: 16),
+                              _alertsCard(),
+                            ],
+                          );
+                        }
+                        return Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(child: _classesCard()),
+                            const SizedBox(width: 16),
+                            SizedBox(width: 350, child: _alertsCard()),
+                          ],
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    _quickActions(),
+                  ],
                 ),
-                const SizedBox(height: 16),
-                _quickActions(),
-              ],
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
+
+  List<_ClassAttendanceSummary> get _liveClasses =>
+      (_overview?.classes ?? const <AttendanceClassSummary>[])
+          .map(
+            (item) => _ClassAttendanceSummary(
+              group: _gradeGroup(item.gradeName),
+              gradeId: item.gradeId,
+              streamId: item.streamId,
+              code: _classCode(item.gradeName, item.streamName),
+              name: '${item.gradeName} · ${item.streamName}',
+              teacher: item.teacherName.isEmpty
+                  ? 'Class teacher not assigned'
+                  : item.teacherName,
+              present: item.present,
+              absent: item.absent,
+              late: item.late,
+              percentage: item.attendanceRate,
+              pending: !item.submitted,
+            ),
+          )
+          .toList();
 
   Widget _header() {
     return Row(
@@ -275,7 +207,7 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
   }
 
   Widget _submissionBanner() {
-    final pending = _classes.where((item) => item.pending).toList();
+    final pending = _liveClasses.where((item) => item.pending).toList();
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -369,7 +301,7 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
         const SizedBox(width: 8),
         Expanded(
           child: Text(
-            _friendlyDate(DateTime.now()),
+            _friendlyDate(_overview?.currentDate ?? DateTime.now()),
             style: const TextStyle(fontWeight: FontWeight.w700),
           ),
         ),
@@ -395,39 +327,44 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
   }
 
   Widget _stats() {
-    final multiplier = switch (_period) {
-      _AttendancePeriod.today => 1,
-      _AttendancePeriod.week => 5,
-      _AttendancePeriod.month => 18,
+    final summary = switch (_period) {
+      _AttendancePeriod.today => _overview!.today,
+      _AttendancePeriod.week => _overview!.week,
+      _AttendancePeriod.month => _overview!.month,
     };
+    final periodDetail = _period == _AttendancePeriod.today
+        ? 'Today'
+        : _period == _AttendancePeriod.week
+        ? 'Daily average this week'
+        : 'Recorded this month';
     final items = [
       _DashboardStat(
         label: 'Overall attendance',
-        value: _period == _AttendancePeriod.today ? '94.8%' : '94.1%',
-        detail: '↑ 2.3% from previous period',
+        value: '${summary.attendanceRate.toStringAsFixed(1)}%',
+        detail: periodDetail,
         icon: Icons.insights_rounded,
         color: AppColors.green,
         accent: true,
       ),
       _DashboardStat(
         label: 'Present',
-        value: '${518 * multiplier}',
+        value: '${summary.present}',
         detail: _period == _AttendancePeriod.today
-            ? 'of 552 students'
-            : 'attendance marks',
+            ? 'of ${summary.totalStudents} students'
+            : periodDetail,
         icon: Icons.check_circle_outline_rounded,
         color: AppColors.green,
       ),
       _DashboardStat(
         label: 'Absent',
-        value: '${26 * multiplier}',
+        value: '${summary.absent}',
         detail: 'Requires follow-up',
         icon: Icons.person_off_outlined,
         color: AppColors.red,
       ),
       _DashboardStat(
         label: 'Late',
-        value: '${8 * multiplier}',
+        value: '${summary.late}',
         detail: 'Arrived after roll call',
         icon: Icons.schedule_outlined,
         color: AppColors.amber,
@@ -519,7 +456,9 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
   }
 
   Widget _classesCard() {
-    final visible = _showAllClasses ? _classes : _classes.take(7).toList();
+    final visible = _showAllClasses
+        ? _liveClasses
+        : _liveClasses.take(7).toList();
     String? currentGroup;
     final rows = <Widget>[];
     for (final item in visible) {
@@ -665,36 +604,23 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
   }
 
   Widget _alertsCard() {
-    const alerts = [
-      (
-        'KG 1 Stream B has 3 students absent for 3 consecutive days',
-        'Last week',
-        AppColors.red,
-      ),
-      (
-        'Basic 1 Stream B attendance has not been submitted',
-        'Today',
-        AppColors.amber,
-      ),
-      (
-        'JHS 2 Stream A has 5 students below 80% attendance',
-        '2 days ago',
-        AppColors.red,
-      ),
-      (
-        'Basic 4 Stream B was not submitted yesterday',
-        'Yesterday',
-        AppColors.amber,
-      ),
-    ];
+    final alerts = _overview?.alerts ?? const <AttendanceAlert>[];
     return Card(
       child: Column(
         children: [
           _cardHeader(
             icon: Icons.notifications_none_rounded,
             title: 'Recent alerts',
-            action: _smallPill('4 active', AppColors.red),
+            action: _smallPill('${alerts.length} active', AppColors.red),
           ),
+          if (alerts.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                'No attendance alerts for this period.',
+                style: TextStyle(color: AppColors.muted),
+              ),
+            ),
           for (final alert in alerts)
             Container(
               padding: const EdgeInsets.all(15),
@@ -709,7 +635,9 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
                     height: 8,
                     margin: const EdgeInsets.only(top: 5),
                     decoration: BoxDecoration(
-                      color: alert.$3,
+                      color: alert.severity.toLowerCase() == 'high'
+                          ? AppColors.red
+                          : AppColors.amber,
                       shape: BoxShape.circle,
                     ),
                   ),
@@ -718,10 +646,28 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(alert.$1, style: const TextStyle(fontSize: 13)),
+                        if (alert.title.isNotEmpty) ...[
+                          Text(
+                            alert.title,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                        ],
+                        Text(
+                          alert.message,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppColors.muted,
+                          ),
+                        ),
                         const SizedBox(height: 4),
                         Text(
-                          alert.$2,
+                          alert.timestamp == null
+                              ? 'Attendance alert'
+                              : _friendlyDate(alert.timestamp!),
                           style: const TextStyle(
                             color: AppColors.muted,
                             fontSize: 11,
@@ -874,7 +820,7 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
   Future<void> _openClassChooser() async {
     final selected = await showDialog<_ClassAttendanceSummary>(
       context: context,
-      builder: (context) => const _ClassChooserDialog(classes: _classes),
+      builder: (context) => _ClassChooserDialog(classes: _liveClasses),
     );
     if (selected != null) _openRegister(selected);
   }
@@ -893,6 +839,25 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
     widget.term,
     widget.academicYear,
   ].where((value) => value?.trim().isNotEmpty == true).join(' · ');
+
+  static String _gradeGroup(String gradeName) {
+    final normalized = gradeName.toUpperCase();
+    if (normalized.startsWith('KG')) return 'Kindergarten';
+    if (normalized.startsWith('JHS')) return 'Junior High';
+    final gradeNumber = int.tryParse(
+      RegExp(r'\d+').firstMatch(normalized)?.group(0) ?? '',
+    );
+    if (gradeNumber != null && gradeNumber <= 3) return 'Lower Primary';
+    return 'Upper Primary';
+  }
+
+  static String _classCode(String gradeName, String streamName) {
+    final grade = gradeName
+        .replaceAll(RegExp(r'[^A-Za-z0-9]'), '')
+        .toUpperCase();
+    final section = RegExp(r'(\d+)\s*$').firstMatch(streamName)?.group(1);
+    return section == null ? grade : '$grade-$section';
+  }
 
   static String _friendlyDate(DateTime value) {
     const weekdays = [

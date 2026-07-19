@@ -1,56 +1,8 @@
-import 'package:flutter/foundation.dart';
+import 'package:school_management_app/src/fees/data/class_requirements_repository.dart';
+import 'package:school_management_app/src/fees/domain/class_requirement_models.dart';
 
-import '../domain/class_requirement_models.dart';
-
-abstract class ClassRequirementsRepository extends ChangeNotifier {
-  List<ClassRequirementGroup> get groups;
-  List<StudentRequirementProgress> studentsForClass(String classGroupId);
-  int get draftChangeCount;
-  int draftChangeCountForClass(String classGroupId);
-  RequirementNotificationPlan? get lastNotificationPlan;
-  List<PriorTermRequirement> get priorTermRequirements;
-
-  void addClass(ClassRequirementGroup group);
-  void addRequirement(String classGroupId, ClassRequirementItem item);
-  void updateRequirement(String classGroupId, ClassRequirementItem item);
-  void deleteRequirement(String classGroupId, String requirementId);
-  void recordPriorTermReceived({
-    required String requirementId,
-    required int quantity,
-    required String notes,
-  });
-  void resolvePriorTermRequirement({
-    required String requirementId,
-    required PriorTermRequirementStatus status,
-    int? carriedQuantity,
-    double? convertedCashAmount,
-    DateTime? carriedDueDate,
-    required String notes,
-    required bool notifyGuardian,
-  });
-  void recordReceived({
-    required String studentId,
-    required String requirementId,
-    required int quantity,
-  });
-  void adjustRequirement({
-    required String studentId,
-    required String requirementId,
-    required StudentRequirementAdjustment adjustment,
-  });
-  void addStudentRequirement({
-    required String studentId,
-    required StudentCustomRequirement requirement,
-  });
-  void publishChanges(RequirementNotificationPlan notificationPlan);
-  void publishClass(
-    String classGroupId,
-    RequirementNotificationPlan notificationPlan,
-  );
-}
-
-class MockClassRequirementsRepository extends ClassRequirementsRepository {
-  MockClassRequirementsRepository() {
+class FakeClassRequirementsRepository extends ClassRequirementsRepository {
+  FakeClassRequirementsRepository() {
     final now = DateTime.now();
     _groups = [
       ClassRequirementGroup(
@@ -306,6 +258,18 @@ class MockClassRequirementsRepository extends ClassRequirementsRepository {
   List<ClassRequirementGroup> get groups => List.unmodifiable(_groups);
 
   @override
+  bool get isLoading => false;
+
+  @override
+  String? get errorMessage => null;
+
+  @override
+  Future<void> load() async {}
+
+  @override
+  Future<void> loadStudentsForClass(String classGroupId) async {}
+
+  @override
   int get draftChangeCount => _draftChangeCount;
 
   @override
@@ -315,6 +279,9 @@ class MockClassRequirementsRepository extends ClassRequirementsRepository {
   @override
   List<PriorTermRequirement> get priorTermRequirements =>
       List.unmodifiable(_priorTermRequirements);
+
+  @override
+  Future<void> loadPriorTermRequirements() async {}
 
   @override
   List<StudentRequirementProgress> studentsForClass(String classGroupId) {
@@ -329,14 +296,18 @@ class MockClassRequirementsRepository extends ClassRequirementsRepository {
   }
 
   @override
-  void addClass(ClassRequirementGroup group) {
+  Future<ClassRequirementGroup> addClass(ClassRequirementGroup group) async {
     _groups = [..._groups, group];
     _students = {..._students, group.id: const []};
     notifyListeners();
+    return group;
   }
 
   @override
-  void addRequirement(String classGroupId, ClassRequirementItem item) {
+  Future<ClassRequirementGroup> addRequirement(
+    String classGroupId,
+    ClassRequirementItem item,
+  ) async {
     _groups = _groups.map((group) {
       if (group.id != classGroupId) return group;
       return group.copyWith(
@@ -352,10 +323,14 @@ class MockClassRequirementsRepository extends ClassRequirementsRepository {
     }).toList();
     _draftChangeCount++;
     notifyListeners();
+    return _groups.firstWhere((group) => group.id == classGroupId);
   }
 
   @override
-  void updateRequirement(String classGroupId, ClassRequirementItem item) {
+  Future<ClassRequirementGroup> updateRequirement(
+    String classGroupId,
+    ClassRequirementItem item,
+  ) async {
     _groups = _groups.map((group) {
       if (group.id != classGroupId) return group;
       final replacement = group.hasPublishedVersion
@@ -371,10 +346,14 @@ class MockClassRequirementsRepository extends ClassRequirementsRepository {
     }).toList();
     _draftChangeCount++;
     notifyListeners();
+    return _groups.firstWhere((group) => group.id == classGroupId);
   }
 
   @override
-  void deleteRequirement(String classGroupId, String requirementId) {
+  Future<ClassRequirementGroup> deleteRequirement(
+    String classGroupId,
+    String requirementId,
+  ) async {
     _groups = _groups.map((group) {
       if (group.id != classGroupId) return group;
       return group.copyWith(
@@ -400,14 +379,15 @@ class MockClassRequirementsRepository extends ClassRequirementsRepository {
     };
     _draftChangeCount++;
     notifyListeners();
+    return _groups.firstWhere((group) => group.id == classGroupId);
   }
 
   @override
-  void recordPriorTermReceived({
+  Future<void> recordPriorTermReceived({
     required String requirementId,
     required int quantity,
     required String notes,
-  }) {
+  }) async {
     _priorTermRequirements = _priorTermRequirements.map((item) {
       if (item.id != requirementId) return item;
       final received = item.receivedQuantity + quantity;
@@ -427,7 +407,7 @@ class MockClassRequirementsRepository extends ClassRequirementsRepository {
   }
 
   @override
-  void resolvePriorTermRequirement({
+  Future<void> resolvePriorTermRequirement({
     required String requirementId,
     required PriorTermRequirementStatus status,
     int? carriedQuantity,
@@ -449,14 +429,15 @@ class MockClassRequirementsRepository extends ClassRequirementsRepository {
       );
     }).toList();
     notifyListeners();
+    return Future.value();
   }
 
   @override
-  void recordReceived({
+  Future<void> recordReceived({
     required String studentId,
     required String requirementId,
     required int quantity,
-  }) {
+  }) async {
     _updateStudent(studentId, (student) {
       return student.copyWith(
         receivedQuantities: {
@@ -468,11 +449,11 @@ class MockClassRequirementsRepository extends ClassRequirementsRepository {
   }
 
   @override
-  void adjustRequirement({
+  Future<void> adjustRequirement({
     required String studentId,
     required String requirementId,
     required StudentRequirementAdjustment adjustment,
-  }) {
+  }) async {
     _updateStudent(studentId, (student) {
       return student.copyWith(
         adjustments: {...student.adjustments, requirementId: adjustment},
@@ -481,10 +462,10 @@ class MockClassRequirementsRepository extends ClassRequirementsRepository {
   }
 
   @override
-  void addStudentRequirement({
+  Future<void> addStudentRequirement({
     required String studentId,
     required StudentCustomRequirement requirement,
-  }) {
+  }) async {
     _updateStudent(studentId, (student) {
       return student.copyWith(
         customRequirements: [...student.customRequirements, requirement],
@@ -529,10 +510,10 @@ class MockClassRequirementsRepository extends ClassRequirementsRepository {
   }
 
   @override
-  void publishClass(
+  Future<ClassRequirementGroup> publishClass(
     String classGroupId,
     RequirementNotificationPlan notificationPlan,
-  ) {
+  ) async {
     _groups = _groups.map((group) {
       if (group.id != classGroupId) return group;
       return group.copyWith(
@@ -550,5 +531,6 @@ class MockClassRequirementsRepository extends ClassRequirementsRepository {
       (sum, group) => sum + group.draftChangeCount,
     );
     notifyListeners();
+    return _groups.firstWhere((group) => group.id == classGroupId);
   }
 }

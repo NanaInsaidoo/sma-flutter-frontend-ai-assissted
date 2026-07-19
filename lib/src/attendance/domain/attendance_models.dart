@@ -64,6 +64,88 @@ class AttendanceRoster {
   bool get hasExistingAttendance => records.isNotEmpty;
 }
 
+class AttendanceDashboardOverview {
+  const AttendanceDashboardOverview({
+    required this.currentDate,
+    required this.today,
+    required this.week,
+    required this.month,
+    required this.classes,
+    required this.alerts,
+    required this.streamsPending,
+  });
+
+  final DateTime currentDate;
+  final AttendancePeriodSummary today;
+  final AttendancePeriodSummary week;
+  final AttendancePeriodSummary month;
+  final List<AttendanceClassSummary> classes;
+  final List<AttendanceAlert> alerts;
+  final int streamsPending;
+}
+
+class AttendancePeriodSummary {
+  const AttendancePeriodSummary({
+    required this.attendanceRate,
+    required this.present,
+    required this.absent,
+    required this.late,
+    required this.totalStudents,
+  });
+
+  final double attendanceRate;
+  final int present;
+  final int absent;
+  final int late;
+  final int totalStudents;
+}
+
+class AttendanceClassSummary {
+  const AttendanceClassSummary({
+    required this.gradeId,
+    required this.gradeName,
+    required this.streamId,
+    required this.streamName,
+    required this.totalStudents,
+    required this.teacherName,
+    required this.present,
+    required this.absent,
+    required this.late,
+    required this.attendanceRate,
+    required this.submitted,
+  });
+
+  final int gradeId;
+  final String gradeName;
+  final int streamId;
+  final String streamName;
+  final int totalStudents;
+  final String teacherName;
+  final int present;
+  final int absent;
+  final int late;
+  final double attendanceRate;
+  final bool submitted;
+}
+
+class AttendanceAlert {
+  const AttendanceAlert({
+    required this.title,
+    required this.message,
+    required this.severity,
+    required this.timestamp,
+    this.gradeId,
+    this.streamId,
+  });
+
+  final String title;
+  final String message;
+  final String severity;
+  final DateTime? timestamp;
+  final int? gradeId;
+  final int? streamId;
+}
+
 class AttendanceEntry {
   const AttendanceEntry({
     required this.student,
@@ -96,6 +178,8 @@ class AttendanceEntry {
 }
 
 abstract class AttendanceRepository {
+  Future<AttendanceDashboardOverview> getOverview(String customSchoolId);
+
   Future<List<AttendanceGradeLevel>> getGradeLevels(String customSchoolId);
 
   Future<List<AttendanceStream>> getStreams({

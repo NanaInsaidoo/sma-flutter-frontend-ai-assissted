@@ -977,45 +977,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       );
     }
 
-    const demoPatterns = [
-      (
-        'High absences',
-        'Absent 6 times this term. Last absence was 2 days ago.',
-        AppColors.red,
-      ),
-      (
-        'Frequently late',
-        'Late 45 minutes across 5 incidents this term.',
-        AppColors.amber,
-      ),
-      (
-        '3 days straight',
-        'Absent for 3 consecutive school days.',
-        AppColors.red,
-      ),
-      (
-        'Low attendance',
-        'Current attendance rate is 78% for this term.',
-        AppColors.blue,
-      ),
-    ];
-    for (
-      var index = 0;
-      index < demoPatterns.length && index < _entries.length;
-      index++
-    ) {
-      final student = _entries[index].student;
-      if (currentConcernIds.contains(student.customStudentId)) continue;
-      final pattern = demoPatterns[index];
-      items.add(
-        _StudentAttentionItem(
-          student: student,
-          label: pattern.$1,
-          detail: pattern.$2,
-          color: pattern.$3,
-        ),
-      );
-    }
     return items;
   }
 

@@ -1,5 +1,5 @@
-import '../domain/platform_models.dart';
-import 'platform_repository.dart';
+import 'package:school_management_app/src/platform/data/platform_repository.dart';
+import 'package:school_management_app/src/platform/domain/platform_models.dart';
 
 const _mockOnboardingSteps = [
   'BASIC_INFO',
@@ -13,7 +13,7 @@ const _mockOnboardingSteps = [
   'REVIEW',
 ];
 
-class MockPlatformRepository implements PlatformRepository {
+class FakePlatformRepository implements PlatformRepository {
   final List<AccountManagerProfile> _accountManagers = [
     const AccountManagerProfile(
       id: '4',

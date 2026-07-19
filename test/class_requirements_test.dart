@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:school_management_app/src/fees/data/mock_class_requirements_repository.dart';
+import 'support/fake_class_requirements_repository.dart';
 import 'package:school_management_app/src/fees/domain/class_requirement_models.dart';
 import 'package:school_management_app/src/fees/presentation/class_requirements_screen.dart';
 import 'package:school_management_app/src/theme/app_theme.dart';
 
 void main() {
   test('records received quantities and student-specific adjustments', () {
-    final repository = MockClassRequirementsRepository();
+    final repository = FakeClassRequirementsRepository();
 
     repository.recordReceived(
       studentId: 'stu-kojo',
@@ -33,7 +33,7 @@ void main() {
   });
 
   test('supports full waiver with cash-equivalent audit notes', () {
-    final repository = MockClassRequirementsRepository();
+    final repository = FakeClassRequirementsRepository();
 
     repository.adjustRequirement(
       studentId: 'stu-efua',
@@ -55,7 +55,7 @@ void main() {
   });
 
   test('supports increasing a requirement for an individual student', () {
-    final repository = MockClassRequirementsRepository();
+    final repository = FakeClassRequirementsRepository();
 
     repository.adjustRequirement(
       studentId: 'stu-kojo',
@@ -77,7 +77,7 @@ void main() {
   });
 
   test('edits and deletes class requirements as draft changes', () {
-    final repository = MockClassRequirementsRepository();
+    final repository = FakeClassRequirementsRepository();
     final original = repository.groups
         .firstWhere((group) => group.id == 'basic-1')
         .items
@@ -123,7 +123,7 @@ void main() {
   });
 
   test('adds individual student requirements', () {
-    final repository = MockClassRequirementsRepository();
+    final repository = FakeClassRequirementsRepository();
     repository.addStudentRequirement(
       studentId: 'stu-ama',
       requirement: StudentCustomRequirement(
@@ -143,7 +143,7 @@ void main() {
   });
 
   test('summarizes prior-term physical requirement arrears', () {
-    final repository = MockClassRequirementsRepository();
+    final repository = FakeClassRequirementsRepository();
     final pending = repository.priorTermRequirements
         .where((item) => item.status == PriorTermRequirementStatus.pending)
         .toList();
@@ -164,7 +164,7 @@ void main() {
   });
 
   test('records prior-term receipts and keeps partial balances pending', () {
-    final repository = MockClassRequirementsRepository();
+    final repository = FakeClassRequirementsRepository();
 
     repository.recordPriorTermReceived(
       requirementId: 'prior-ama-rolls',
@@ -192,7 +192,7 @@ void main() {
   });
 
   test('converts prior-term physical items to an audited cash charge', () {
-    final repository = MockClassRequirementsRepository();
+    final repository = FakeClassRequirementsRepository();
 
     repository.resolvePriorTermRequirement(
       requirementId: 'prior-ama-tissue',
@@ -212,7 +212,7 @@ void main() {
   });
 
   test('publishes only the selected class with its notification plan', () {
-    final repository = MockClassRequirementsRepository();
+    final repository = FakeClassRequirementsRepository();
     expect(repository.draftChangeCount, 1);
 
     repository.addRequirement(
@@ -272,7 +272,7 @@ void main() {
   test(
     'adds a class before requirements and preserves estimated unit price',
     () {
-      final repository = MockClassRequirementsRepository();
+      final repository = FakeClassRequirementsRepository();
       repository.addClass(
         const ClassRequirementGroup(
           id: 'basic-3',
@@ -311,7 +311,7 @@ void main() {
   testWidgets('class requirements overview opens class student tracker', (
     tester,
   ) async {
-    final repository = MockClassRequirementsRepository();
+    final repository = FakeClassRequirementsRepository();
     await tester.pumpWidget(
       MaterialApp(
         theme: AppTheme.light,
@@ -354,7 +354,7 @@ void main() {
   ) async {
     await tester.binding.setSurfaceSize(const Size(1400, 1000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final repository = MockClassRequirementsRepository();
+    final repository = FakeClassRequirementsRepository();
     await tester.pumpWidget(
       MaterialApp(
         theme: AppTheme.light,
@@ -391,7 +391,7 @@ void main() {
   ) async {
     await tester.binding.setSurfaceSize(const Size(1400, 1000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final repository = MockClassRequirementsRepository();
+    final repository = FakeClassRequirementsRepository();
     repository.addRequirement(
       'basic-1',
       ClassRequirementItem(

@@ -20,6 +20,103 @@ class AttendanceApiClient implements AttendanceRepository {
   final http.Client _client;
 
   @override
+  Future<AttendanceDashboardOverview> getOverview(String customSchoolId) async {
+    final response = await _send(
+      'GET',
+      '/api/schools/$customSchoolId/attendance/overview',
+    );
+    final json = _map(_decode(response));
+    if (json == null) {
+      throw const AttendanceApiException(
+        'The attendance overview response was empty.',
+      );
+    }
+
+    final schoolStats = _map(json['schoolStats']) ?? const {};
+    final summary = _map(json['summary']) ?? const {};
+    final todaySummary = _map(summary['today']) ?? const {};
+    final todayStats = _map(schoolStats['today']) ?? const {};
+    final weekStats = _map(schoolStats['week']) ?? const {};
+    final monthStats = _map(schoolStats['month']) ?? const {};
+
+    final classes = _list(json['gradeStreamBreakdown'])
+        .whereType<Map<String, dynamic>>()
+        .map((item) {
+          final teacher = _map(item['teacher']) ?? const {};
+          final stats = _map(item['todayStats']) ?? const {};
+          return AttendanceClassSummary(
+            gradeId: _integer(item['gradeId']),
+            gradeName: _string(item['grade']),
+            streamId: _integer(item['streamId']),
+            streamName: _string(item['stream']),
+            totalStudents: _integer(item['totalStudents']),
+            teacherName: _string(teacher['teacherName']),
+            present: _integer(stats['present']),
+            absent: _integer(stats['absent']),
+            late: _integer(stats['late']),
+            attendanceRate: _decimal(stats['rate']),
+            submitted: stats['submitted'] == true,
+          );
+        })
+        .where((item) => item.gradeId > 0 && item.streamId > 0)
+        .toList();
+
+    final alerts = _list(json['alerts'])
+        .whereType<Map<String, dynamic>>()
+        .map((item) {
+          final rawMessage = _string(item['message']);
+          final explicitTitle = _string(item['title']);
+          final separator = rawMessage.indexOf(':');
+          final title = explicitTitle.isNotEmpty
+              ? explicitTitle
+              : separator > 0
+              ? rawMessage.substring(0, separator).trim()
+              : '';
+          final message = explicitTitle.isEmpty && separator > 0
+              ? rawMessage.substring(separator + 1).trim()
+              : rawMessage;
+          return AttendanceAlert(
+            title: title,
+            message: message,
+            severity: _string(item['severity']),
+            timestamp: DateTime.tryParse(_string(item['timestamp'])),
+            gradeId: _nullableInteger(item['gradeId']),
+            streamId: _nullableInteger(item['streamId']),
+          );
+        })
+        .where((item) => item.message.isNotEmpty)
+        .toList();
+
+    return AttendanceDashboardOverview(
+      currentDate: _dateTime(json['currentDate']) ?? DateTime.now(),
+      today: AttendancePeriodSummary(
+        attendanceRate: _decimal(todayStats['attendanceRate']),
+        present: _integer(todayStats['present']),
+        absent: _integer(todayStats['absent']),
+        late: _integer(todayStats['late']),
+        totalStudents: _integer(todayStats['totalStudents']),
+      ),
+      week: AttendancePeriodSummary(
+        attendanceRate: _decimal(weekStats['attendanceRate']),
+        present: _integer(weekStats['avgPresent']),
+        absent: _integer(weekStats['avgAbsent']),
+        late: _integer(weekStats['avgLate']),
+        totalStudents: _integer(weekStats['totalStudents']),
+      ),
+      month: AttendancePeriodSummary(
+        attendanceRate: _decimal(monthStats['avgAttendanceRate']),
+        present: 0,
+        absent: _integer(monthStats['totalAbsences']),
+        late: _integer(monthStats['totalLateArrivals']),
+        totalStudents: _integer(monthStats['totalStudents']),
+      ),
+      classes: classes,
+      alerts: alerts,
+      streamsPending: _integer(todaySummary['streamsPending']),
+    );
+  }
+
+  @override
   Future<List<AttendanceGradeLevel>> getGradeLevels(
     String customSchoolId,
   ) async {
@@ -283,11 +380,36 @@ class AttendanceApiClient implements AttendanceRepository {
   static Map<String, dynamic>? _map(dynamic value) =>
       value is Map<String, dynamic> ? value : null;
 
+  static List<dynamic> _list(dynamic value) =>
+      value is List ? value : const <dynamic>[];
+
   static String _string(dynamic value) => '${value ?? ''}'.trim();
 
   static int _integer(dynamic value, {int fallback = 0}) {
     if (value is num) return value.toInt();
     return int.tryParse('${value ?? ''}') ?? fallback;
+  }
+
+  static int? _nullableInteger(dynamic value) {
+    if (value == null) return null;
+    if (value is num) return value.toInt();
+    return int.tryParse('$value');
+  }
+
+  static double _decimal(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse('${value ?? ''}') ?? 0;
+  }
+
+  static DateTime? _dateTime(dynamic value) {
+    if (value is List && value.length >= 3) {
+      return DateTime(
+        _integer(value[0]),
+        _integer(value[1]),
+        _integer(value[2]),
+      );
+    }
+    return DateTime.tryParse(_string(value));
   }
 }
 

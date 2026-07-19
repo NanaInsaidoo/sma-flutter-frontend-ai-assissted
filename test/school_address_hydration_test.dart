@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:school_management_app/src/platform/data/mock_platform_repository.dart';
 import 'package:school_management_app/src/platform/data/platform_api_client.dart';
 import 'package:school_management_app/src/platform/domain/platform_models.dart';
 import 'package:school_management_app/src/platform/presentation/school_creation_screen.dart';
+
+import 'support/fake_platform_repository.dart';
 
 void main() {
   testWidgets('hydrates the live district and address response', (
@@ -153,7 +154,7 @@ const _addressRecord = SchoolOnboardingRecord(
   ),
 );
 
-class _AddressRepository extends MockPlatformRepository {
+class _AddressRepository extends FakePlatformRepository {
   @override
   Future<SchoolOnboardingRecord> getSchoolOnboardingRecord(
     String customSchoolId,

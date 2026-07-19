@@ -47,7 +47,7 @@ class EnrolledStudent {
   final String guardianPhone;
   final String householdId;
   final EnrolledStudentStatus status;
-  final DateTime enrolledOn;
+  final DateTime? enrolledOn;
   final bool newThisTerm;
   final double attendanceRate;
   final double feeBalance;
@@ -277,7 +277,7 @@ class StudentDocument {
   final String name;
   final String fileName;
   final String status;
-  final DateTime updatedOn;
+  final DateTime? updatedOn;
 }
 
 class StudentActivity {

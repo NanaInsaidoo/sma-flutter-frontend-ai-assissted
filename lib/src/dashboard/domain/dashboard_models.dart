@@ -28,11 +28,13 @@ class AdmissionGroup {
 
 class SchoolAlert {
   const SchoolAlert({
+    required this.title,
     required this.message,
     required this.context,
     required this.level,
   });
 
+  final String title;
   final String message;
   final String context;
   final AlertLevel level;

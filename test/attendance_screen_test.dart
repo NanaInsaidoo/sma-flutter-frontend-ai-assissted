@@ -33,17 +33,8 @@ void main() {
     expect(find.text('Basic 2'), findsOneWidget);
     expect(find.text('Stream 2'), findsOneWidget);
     expect(find.text('Kofi Agyemang'), findsWidgets);
-    expect(find.text('High absences'), findsOneWidget);
-    expect(find.text('Frequently late'), findsOneWidget);
-    expect(find.text('3 days straight'), findsOneWidget);
+    expect(find.text('No concerns yet.'), findsOneWidget);
     expect(find.text('Mark 3 more students to submit.'), findsOneWidget);
-
-    await tester.tap(find.text('High absences'));
-    await tester.pump();
-    expect(
-      tester.widget<TextField>(find.byType(TextField).first).controller?.text,
-      'Kofi Agyemang',
-    );
 
     await tester.tap(find.text('Mark all present'));
     await tester.pump();
@@ -58,6 +49,14 @@ void main() {
     await tester.tap(find.text('Mark late'));
     await tester.pumpAndSettle();
     expect(find.text('Arrived 15 minutes late today.'), findsOneWidget);
+    expect(find.text('Late today'), findsOneWidget);
+
+    await tester.tap(find.text('Late today'));
+    await tester.pump();
+    expect(
+      tester.widget<TextField>(find.byType(TextField).first).controller?.text,
+      'Kofi Agyemang',
+    );
 
     await tester.tap(find.byKey(const ValueKey('submit-attendance')));
     await tester.pumpAndSettle();
@@ -70,6 +69,37 @@ void main() {
 class _FakeAttendanceRepository implements AttendanceRepository {
   int saveCount = 0;
   bool? lastUpdateExisting;
+
+  @override
+  Future<AttendanceDashboardOverview> getOverview(String customSchoolId) async {
+    return AttendanceDashboardOverview(
+      currentDate: DateTime(2026, 7, 18),
+      today: const AttendancePeriodSummary(
+        attendanceRate: 0,
+        present: 0,
+        absent: 0,
+        late: 0,
+        totalStudents: 3,
+      ),
+      week: const AttendancePeriodSummary(
+        attendanceRate: 0,
+        present: 0,
+        absent: 0,
+        late: 0,
+        totalStudents: 3,
+      ),
+      month: const AttendancePeriodSummary(
+        attendanceRate: 0,
+        present: 0,
+        absent: 0,
+        late: 0,
+        totalStudents: 3,
+      ),
+      classes: const [],
+      alerts: const [],
+      streamsPending: 0,
+    );
+  }
 
   @override
   Future<List<AttendanceGradeLevel>> getGradeLevels(

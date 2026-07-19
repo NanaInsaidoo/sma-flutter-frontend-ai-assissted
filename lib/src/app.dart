@@ -4,10 +4,9 @@ import 'package:go_router/go_router.dart';
 import 'auth/data/auth_api_client.dart';
 import 'auth/data/session_store.dart';
 import 'auth/presentation/auth_screen.dart';
-import 'dashboard/data/mock_dashboard_repository.dart';
+import 'dashboard/data/api_dashboard_repository.dart';
 import 'dashboard/presentation/administrator_dashboard.dart';
 import 'platform/data/live_platform_repository.dart';
-import 'platform/data/mock_platform_repository.dart';
 import 'platform/data/platform_repository.dart';
 import 'platform/domain/platform_models.dart';
 import 'platform/presentation/platform_admin_shell.dart';
@@ -35,8 +34,6 @@ class _PlatformRouteConfig {
 }
 
 class _SchoolManagementAppState extends State<SchoolManagementApp> {
-  static const bool _useE2eMocks = bool.fromEnvironment('SMA_E2E_MOCKS');
-
   bool _showSchoolAdministrator = false;
   AuthSession? _session;
   final AuthApiClient _authApi = AuthApiClient();
@@ -285,7 +282,12 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
   Widget _schoolStaffDashboard() {
     final session = _session;
     return AdministratorDashboard(
-      repository: MockDashboardRepository(),
+      repository: ApiDashboardRepository(
+        accessToken: session?.accessToken,
+        administratorName: session?.displayName ?? '',
+        schoolName: session?.schoolName,
+        onRefreshAccessToken: _refreshAccessToken,
+      ),
       schoolId: session?.customSchoolId,
       schoolName: session?.schoolName,
       userDisplayName: session?.displayName,
@@ -309,9 +311,6 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
   }
 
   PlatformRepository get _currentPlatformRepository {
-    if (_useE2eMocks) {
-      return _platformRepository ??= MockPlatformRepository();
-    }
     return _platformRepository ??= LivePlatformRepository(
       accessToken: _session?.accessToken,
       userDisplayName: _session?.displayName ?? 'Super Admin',

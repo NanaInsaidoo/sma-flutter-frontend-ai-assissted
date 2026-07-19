@@ -1,10 +1,22 @@
 import 'package:flutter/material.dart';
 
 import '../../theme/app_theme.dart';
-import '../domain/fee_adjustment_workflow_models.dart';
+import '../data/fee_api_client.dart';
+import '../domain/fee_models.dart';
 
 class FeeAdjustmentsContent extends StatefulWidget {
-  const FeeAdjustmentsContent({super.key});
+  const FeeAdjustmentsContent({
+    super.key,
+    required this.api,
+    required this.customSchoolId,
+    required this.termId,
+    this.onChanged,
+  });
+
+  final FeeApiClient api;
+  final String customSchoolId;
+  final int termId;
+  final Future<void> Function()? onChanged;
 
   @override
   State<FeeAdjustmentsContent> createState() => _FeeAdjustmentsContentState();
@@ -12,15 +24,29 @@ class FeeAdjustmentsContent extends StatefulWidget {
 
 class _FeeAdjustmentsContentState extends State<FeeAdjustmentsContent> {
   final _searchController = TextEditingController();
-  late List<WorkflowFeeAdjustment> _adjustments;
-  FeeAdjustmentWorkflowStatus? _statusFilter;
-  FeeAdjustmentWorkflowType? _typeFilter;
-  String _classFilter = 'All classes';
+  FeeAdjustmentsPage? _page;
+  Object? _error;
+  bool _loading = true;
+  int _pageIndex = 0;
+  static const _pageSize = 20;
+  String? _statusFilter;
+  _AdjustmentKind? _typeFilter;
 
   @override
   void initState() {
     super.initState();
-    _adjustments = [..._mockAdjustments];
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant FeeAdjustmentsContent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.customSchoolId != widget.customSchoolId ||
+        oldWidget.termId != widget.termId) {
+      _pageIndex = 0;
+      _page = null;
+      _load();
+    }
   }
 
   @override
@@ -29,28 +55,62 @@ class _FeeAdjustmentsContentState extends State<FeeAdjustmentsContent> {
     super.dispose();
   }
 
-  List<WorkflowFeeAdjustment> get _filtered {
+  List<FeeAdjustment> get _filtered {
     final query = _searchController.text.trim().toLowerCase();
-    return _adjustments
+    return (_page?.content ?? const <FeeAdjustment>[])
         .where((item) {
+          final kind = _kind(item);
           final matchesSearch =
               query.isEmpty ||
               item.studentName.toLowerCase().contains(query) ||
               item.customStudentId.toLowerCase().contains(query) ||
-              item.feeItem.toLowerCase().contains(query) ||
-              item.id.toLowerCase().contains(query);
+              item.feeName.toLowerCase().contains(query) ||
+              '${item.id}'.contains(query);
           return matchesSearch &&
-              (_statusFilter == null || item.status == _statusFilter) &&
-              (_typeFilter == null || item.type == _typeFilter) &&
-              (_classFilter == 'All classes' || item.className == _classFilter);
+              (_statusFilter == null ||
+                  item.status.trim().toUpperCase() == _statusFilter) &&
+              (_typeFilter == null || kind == _typeFilter);
         })
         .toList(growable: false);
   }
 
-  int _count(FeeAdjustmentWorkflowStatus status) =>
-      _adjustments.where((item) => item.status == status).length;
+  Future<void> _load() async {
+    if (widget.termId <= 0 || widget.customSchoolId.trim().isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'The current academic term is unavailable.';
+      });
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final page = await widget.api.getFeeAdjustmentsPage(
+        customSchoolId: widget.customSchoolId,
+        termId: widget.termId,
+        page: _pageIndex,
+        size: _pageSize,
+      );
+      if (!mounted) return;
+      setState(() {
+        _page = page;
+        _pageIndex = page.page;
+      });
+    } catch (error) {
+      if (mounted) setState(() => _error = error);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
 
-  Future<void> _openAdjustment(WorkflowFeeAdjustment adjustment) async {
+  int _count(String status) => (_page?.content ?? const <FeeAdjustment>[])
+      .where((item) => item.status.trim().toUpperCase() == status)
+      .length;
+
+  Future<void> _openAdjustment(FeeAdjustment adjustment) async {
     await showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
@@ -67,110 +127,96 @@ class _FeeAdjustmentsContentState extends State<FeeAdjustmentsContent> {
           },
         ),
       ),
-      transitionBuilder: (context, animation, secondaryAnimation, child) {
-        return SlideTransition(
-          position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
-              .animate(
-                CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
-              ),
-          child: child,
-        );
-      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) =>
+          SlideTransition(
+            position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
+                .animate(
+                  CurvedAnimation(
+                    parent: animation,
+                    curve: Curves.easeOutCubic,
+                  ),
+                ),
+            child: child,
+          ),
     );
   }
 
   Future<void> _handleAction(
-    WorkflowFeeAdjustment adjustment,
+    FeeAdjustment adjustment,
     _ReviewAction action,
   ) async {
     if (action == _ReviewAction.delete) {
       final confirmed = await _confirm(
         title: 'Delete draft adjustment?',
-        message: 'This removes the unsubmitted adjustment permanently.',
+        message: 'This permanently removes the unsubmitted adjustment.',
         actionLabel: 'Delete',
       );
-      if (!confirmed || !mounted) return;
-      setState(
-        () => _adjustments.removeWhere((item) => item.id == adjustment.id),
+      if (!confirmed) return;
+      await _mutate(
+        () => widget.api.deleteFeeAdjustment(
+          customSchoolId: widget.customSchoolId,
+          adjustmentId: adjustment.id,
+        ),
+        'Draft adjustment deleted.',
       );
-      _notify('Draft adjustment deleted.');
       return;
     }
 
-    if (action == _ReviewAction.duplicate) {
-      final copy = adjustment.copyWith(
-        id: 'ADJ-${DateTime.now().millisecondsSinceEpoch}',
-        status: FeeAdjustmentWorkflowStatus.draft,
-        createdOn: DateTime.now(),
-        createdBy: 'Current administrator',
-        clearReview: true,
+    final nextStatus = switch (action) {
+      _ReviewAction.submit => 'PENDING',
+      _ReviewAction.approve => 'APPROVED',
+      _ReviewAction.reject => 'REJECTED',
+      _ReviewAction.complete => 'COMPLETE',
+      _ReviewAction.cancel => 'CANCELLED',
+      _ReviewAction.delete => adjustment.status,
+    };
+    if (action == _ReviewAction.reject || action == _ReviewAction.cancel) {
+      final confirmed = await _confirm(
+        title: action == _ReviewAction.reject
+            ? 'Reject adjustment?'
+            : 'Cancel adjustment?',
+        message: action == _ReviewAction.reject
+            ? 'The adjustment will not affect the student fee balance.'
+            : 'The adjustment will remain visible as a cancelled audit record.',
+        actionLabel: action == _ReviewAction.reject ? 'Reject' : 'Cancel',
       );
-      setState(() => _adjustments.insert(0, copy));
-      _notify('A draft copy was created for revision.');
-      return;
+      if (!confirmed) return;
     }
-
-    final note = switch (action) {
-      _ReviewAction.requestChanges => await _requestNote(
-        title: 'Request changes',
-        label: 'Explain what must be corrected',
-        actionLabel: 'Request changes',
+    await _mutate(
+      () => widget.api.updateFeeAdjustment(
+        customSchoolId: widget.customSchoolId,
+        adjustmentId: adjustment.id,
+        status: nextStatus,
       ),
-      _ReviewAction.reject => await _requestNote(
-        title: 'Reject adjustment',
-        label: 'Reason for rejection',
-        actionLabel: 'Reject',
-      ),
-      _ReviewAction.reverse => await _requestNote(
-        title: 'Reverse adjustment',
-        label: 'Reason for reversal',
-        actionLabel: 'Reverse',
-      ),
-      _ => '',
-    };
-    if (note == null || !mounted) return;
-
-    final status = switch (action) {
-      _ReviewAction.approve => FeeAdjustmentWorkflowStatus.approved,
-      _ReviewAction.requestChanges =>
-        FeeAdjustmentWorkflowStatus.changesRequested,
-      _ReviewAction.reject => FeeAdjustmentWorkflowStatus.rejected,
-      _ReviewAction.reverse => FeeAdjustmentWorkflowStatus.reversed,
-      _ => adjustment.status,
-    };
-    final updated = adjustment.copyWith(
-      status: status,
-      reviewedOn: DateTime.now(),
-      reviewedBy: 'Current administrator',
-      reviewNote: note,
+      switch (action) {
+        _ReviewAction.submit => 'Adjustment submitted for approval.',
+        _ReviewAction.approve => 'Adjustment approved.',
+        _ReviewAction.reject => 'Adjustment rejected.',
+        _ReviewAction.complete => 'Adjustment marked complete.',
+        _ReviewAction.cancel => 'Adjustment cancelled.',
+        _ReviewAction.delete => 'Adjustment deleted.',
+      },
     );
-    setState(() {
-      final index = _adjustments.indexWhere((item) => item.id == adjustment.id);
-      if (index >= 0) _adjustments[index] = updated;
-      if (action == _ReviewAction.reverse) {
-        _adjustments.insert(
-          0,
-          adjustment.copyWith(
-            id: 'REV-${DateTime.now().millisecondsSinceEpoch}',
-            type: adjustment.type == FeeAdjustmentWorkflowType.discount
-                ? FeeAdjustmentWorkflowType.surcharge
-                : FeeAdjustmentWorkflowType.discount,
-            reason: 'Reversal of ${adjustment.id}: $note',
-            status: FeeAdjustmentWorkflowStatus.complete,
-            createdOn: DateTime.now(),
-            createdBy: 'Current administrator',
-            clearReview: true,
-          ),
+  }
+
+  Future<void> _mutate(
+    Future<Object?> Function() action,
+    String message,
+  ) async {
+    setState(() => _loading = true);
+    try {
+      await action();
+      await _load();
+      await widget.onChanged?.call();
+      _notify(message);
+    } catch (error) {
+      if (mounted) {
+        setState(() => _loading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$error'), backgroundColor: AppColors.red),
         );
       }
-    });
-    _notify(switch (action) {
-      _ReviewAction.approve => 'Adjustment approved.',
-      _ReviewAction.requestChanges => 'Changes requested from the creator.',
-      _ReviewAction.reject => 'Adjustment rejected.',
-      _ReviewAction.reverse => 'Adjustment reversed.',
-      _ => 'Adjustment updated.',
-    });
+    }
   }
 
   Future<bool> _confirm({
@@ -186,7 +232,7 @@ class _FeeAdjustmentsContentState extends State<FeeAdjustmentsContent> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
+                child: const Text('Keep adjustment'),
               ),
               FilledButton(
                 onPressed: () => Navigator.pop(context, true),
@@ -198,48 +244,6 @@ class _FeeAdjustmentsContentState extends State<FeeAdjustmentsContent> {
         false;
   }
 
-  Future<String?> _requestNote({
-    required String title,
-    required String label,
-    required String actionLabel,
-  }) async {
-    final key = GlobalKey<FormState>();
-    var note = '';
-    final result = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title),
-        content: Form(
-          key: key,
-          child: TextFormField(
-            key: const Key('adjustment-review-note'),
-            minLines: 3,
-            maxLines: 5,
-            decoration: InputDecoration(labelText: label),
-            onChanged: (value) => note = value,
-            validator: (value) =>
-                value == null || value.trim().isEmpty ? 'Enter a reason' : null,
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              if (key.currentState?.validate() ?? false) {
-                Navigator.pop(context, note.trim());
-              }
-            },
-            child: Text(actionLabel),
-          ),
-        ],
-      ),
-    );
-    return result;
-  }
-
   void _notify(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -247,12 +251,24 @@ class _FeeAdjustmentsContentState extends State<FeeAdjustmentsContent> {
     );
   }
 
+  Future<void> _changePage(int page) async {
+    if (_loading || page < 0 || page >= (_page?.totalPages ?? 0)) return;
+    setState(() => _pageIndex = page);
+    await _load();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final classes = <String>{
-      'All classes',
-      ..._adjustments.map((item) => item.className),
-    }.toList();
+    final page = _page;
+    final start = page == null || page.totalElements == 0
+        ? 0
+        : page.page * page.size + 1;
+    final end = page == null
+        ? 0
+        : (page.page * page.size + page.content.length).clamp(
+            0,
+            page.totalElements,
+          );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -268,253 +284,326 @@ class _FeeAdjustmentsContentState extends State<FeeAdjustmentsContent> {
                   ),
                   SizedBox(height: 5),
                   Text(
-                    'Review discounts, surcharges, corrections, and reversals.',
+                    'Review term discounts and surcharges before they affect student balances.',
                     style: TextStyle(color: AppColors.muted),
                   ),
                 ],
               ),
             ),
-            const _MockDataBadge(),
+            IconButton(
+              tooltip: 'Refresh adjustments',
+              onPressed: _loading ? null : _load,
+              icon: const Icon(Icons.refresh_rounded),
+            ),
           ],
         ),
         const SizedBox(height: 18),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final width = (constraints.maxWidth - 36) / 4;
-            return Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                _AdjustmentMetric(
-                  width: width,
-                  label: 'Pending approval',
-                  value: _count(FeeAdjustmentWorkflowStatus.pending),
-                  color: AppColors.amber,
-                ),
-                _AdjustmentMetric(
-                  width: width,
-                  label: 'Changes requested',
-                  value: _count(FeeAdjustmentWorkflowStatus.changesRequested),
-                  color: AppColors.purple,
-                ),
-                _AdjustmentMetric(
-                  width: width,
-                  label: 'Approved',
-                  value: _count(FeeAdjustmentWorkflowStatus.approved),
-                  color: AppColors.green,
-                ),
-                _AdjustmentMetric(
-                  width: width,
-                  label: 'Reversed',
-                  value: _count(FeeAdjustmentWorkflowStatus.reversed),
-                  color: AppColors.red,
-                ),
-              ],
-            );
-          },
-        ),
-        const SizedBox(height: 18),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                SizedBox(
-                  width: 360,
-                  child: TextField(
-                    key: const Key('adjustments-search'),
-                    controller: _searchController,
-                    onChanged: (_) => setState(() {}),
-                    decoration: const InputDecoration(
-                      prefixIcon: Icon(Icons.search_rounded),
-                      hintText:
-                          'Search student, ID, fee item, or adjustment ID',
+        if (_loading && page == null)
+          const _AdjustmentLoading()
+        else if (_error != null && page == null)
+          _AdjustmentError(error: _error!, onRetry: _load)
+        else ...[
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final cardWidth = constraints.maxWidth >= 900
+                  ? (constraints.maxWidth - 36) / 4
+                  : (constraints.maxWidth - 12) / 2;
+              return Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  _AdjustmentMetric(
+                    width: cardWidth,
+                    label: 'Pending on this page',
+                    value: _count('PENDING'),
+                    color: AppColors.amber,
+                  ),
+                  _AdjustmentMetric(
+                    width: cardWidth,
+                    label: 'Approved on this page',
+                    value: _count('APPROVED'),
+                    color: AppColors.green,
+                  ),
+                  _AdjustmentMetric(
+                    width: cardWidth,
+                    label: 'Complete on this page',
+                    value: _count('COMPLETE'),
+                    color: AppColors.blue,
+                  ),
+                  _AdjustmentMetric(
+                    width: cardWidth,
+                    label: 'Rejected or cancelled',
+                    value: _count('REJECTED') + _count('CANCELLED'),
+                    color: AppColors.red,
+                  ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 18),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 400,
+                    child: TextField(
+                      key: const Key('adjustments-search'),
+                      controller: _searchController,
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search_rounded),
+                        hintText:
+                            'Search the current page by student, fee, or ID',
+                      ),
                     ),
                   ),
-                ),
-                SizedBox(
-                  width: 205,
-                  child: DropdownButtonFormField<FeeAdjustmentWorkflowStatus?>(
-                    value: _statusFilter,
-                    isExpanded: true,
-                    decoration: const InputDecoration(labelText: 'Status'),
-                    hint: const Text('All statuses'),
-                    items: [
-                      ...FeeAdjustmentWorkflowStatus.values.map(
-                        (value) => DropdownMenuItem(
-                          value: value,
-                          child: Text(_statusLabel(value)),
+                  SizedBox(
+                    width: 205,
+                    child: DropdownButtonFormField<String?>(
+                      value: _statusFilter,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: 'Status'),
+                      hint: const Text('All statuses'),
+                      items: _statusOptions
+                          .map(
+                            (value) => DropdownMenuItem(
+                              value: value,
+                              child: Text(_statusLabel(value)),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) =>
+                          setState(() => _statusFilter = value),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 180,
+                    child: DropdownButtonFormField<_AdjustmentKind?>(
+                      value: _typeFilter,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: 'Type'),
+                      hint: const Text('All types'),
+                      items: const [
+                        DropdownMenuItem(
+                          value: _AdjustmentKind.discount,
+                          child: Text('Discount'),
                         ),
-                      ),
-                    ],
-                    onChanged: (value) => setState(() => _statusFilter = value),
+                        DropdownMenuItem(
+                          value: _AdjustmentKind.surcharge,
+                          child: Text('Surcharge'),
+                        ),
+                      ],
+                      onChanged: (value) => setState(() => _typeFilter = value),
+                    ),
                   ),
-                ),
-                SizedBox(
-                  width: 180,
-                  child: DropdownButtonFormField<FeeAdjustmentWorkflowType?>(
-                    value: _typeFilter,
-                    isExpanded: true,
-                    decoration: const InputDecoration(labelText: 'Type'),
-                    hint: const Text('All types'),
-                    items: const [
-                      DropdownMenuItem(
-                        value: FeeAdjustmentWorkflowType.discount,
-                        child: Text('Discount'),
-                      ),
-                      DropdownMenuItem(
-                        value: FeeAdjustmentWorkflowType.surcharge,
-                        child: Text('Surcharge'),
-                      ),
-                    ],
-                    onChanged: (value) => setState(() => _typeFilter = value),
-                  ),
-                ),
-                SizedBox(
-                  width: 180,
-                  child: DropdownButtonFormField<String>(
-                    value: _classFilter,
-                    isExpanded: true,
-                    decoration: const InputDecoration(labelText: 'Class'),
-                    items: classes
-                        .map(
-                          (value) => DropdownMenuItem(
-                            value: value,
-                            child: Text(value),
+                  if (_searchController.text.trim().isNotEmpty ||
+                      _statusFilter != null ||
+                      _typeFilter != null)
+                    TextButton.icon(
+                      key: const Key('clear-adjustment-filters'),
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() {
+                          _statusFilter = null;
+                          _typeFilter = null;
+                        });
+                      },
+                      icon: const Icon(Icons.filter_alt_off_rounded),
+                      label: const Text('Clear filters'),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Card(
+            clipBehavior: Clip.antiAlias,
+            child: Stack(
+              children: [
+                if ((page?.content.isEmpty ?? true))
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 72, horizontal: 24),
+                    child: Center(
+                      child: Column(
+                        children: [
+                          Icon(
+                            Icons.tune_rounded,
+                            size: 36,
+                            color: AppColors.muted,
                           ),
-                        )
-                        .toList(),
-                    onChanged: (value) => setState(() => _classFilter = value!),
+                          SizedBox(height: 12),
+                          Text(
+                            'No fee adjustments for this term',
+                            style: TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            'Adjustments created from a student fee account will appear here.',
+                            style: TextStyle(color: AppColors.muted),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                else if (_filtered.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(40),
+                    child: Center(
+                      child: Text(
+                        'No adjustments on this page match the filters.',
+                      ),
+                    ),
+                  )
+                else
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minWidth: 1060),
+                      child: DataTable(
+                        horizontalMargin: 18,
+                        columnSpacing: 24,
+                        dataRowMinHeight: 72,
+                        dataRowMaxHeight: 76,
+                        headingRowColor: const WidgetStatePropertyAll(
+                          AppColors.background,
+                        ),
+                        columns: const [
+                          DataColumn(label: Text('STUDENT')),
+                          DataColumn(label: Text('APPLIES TO')),
+                          DataColumn(label: Text('TYPE')),
+                          DataColumn(label: Text('AMOUNT'), numeric: true),
+                          DataColumn(label: Text('CREATED BY')),
+                          DataColumn(label: Text('DATE')),
+                          DataColumn(label: Text('STATUS')),
+                          DataColumn(label: Text('')),
+                        ],
+                        rows: _filtered.map((item) {
+                          final type = _kind(item);
+                          return DataRow(
+                            onSelectChanged: (_) => _openAdjustment(item),
+                            cells: [
+                              DataCell(
+                                SizedBox(
+                                  width: 205,
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        _provided(item.studentName, 'Student'),
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                      Text(
+                                        _provided(
+                                          item.customStudentId,
+                                          'ID unavailable',
+                                        ),
+                                        style: const TextStyle(
+                                          color: AppColors.muted,
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              DataCell(
+                                Text(
+                                  _provided(
+                                    item.feeName,
+                                    'Fee item unavailable',
+                                  ),
+                                ),
+                              ),
+                              DataCell(Text(_kindLabel(type))),
+                              DataCell(
+                                Text(
+                                  _adjustmentMoney(item),
+                                  style: TextStyle(
+                                    color: type == _AdjustmentKind.discount
+                                        ? AppColors.green
+                                        : AppColors.red,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                              DataCell(Text(_createdBy(item))),
+                              DataCell(Text(_date(item.createdDate))),
+                              DataCell(_StatusPill(status: item.status)),
+                              DataCell(
+                                OutlinedButton(
+                                  key: Key('review-adjustment-${item.id}'),
+                                  onPressed: () => _openAdjustment(item),
+                                  child: const Text('Review'),
+                                ),
+                              ),
+                            ],
+                          );
+                        }).toList(),
+                      ),
+                    ),
                   ),
-                ),
-                if (_searchController.text.trim().isNotEmpty ||
-                    _statusFilter != null ||
-                    _typeFilter != null ||
-                    _classFilter != 'All classes')
-                  TextButton.icon(
-                    key: const Key('clear-adjustment-filters'),
-                    onPressed: () {
-                      _searchController.clear();
-                      setState(() {
-                        _statusFilter = null;
-                        _typeFilter = null;
-                        _classFilter = 'All classes';
-                      });
-                    },
-                    icon: const Icon(Icons.filter_alt_off_rounded),
-                    label: const Text('Clear filters'),
+                if (_loading)
+                  const Positioned.fill(
+                    child: ColoredBox(
+                      color: Color(0x55FFFFFF),
+                      child: Center(child: CircularProgressIndicator()),
+                    ),
                   ),
               ],
             ),
           ),
-        ),
-        const SizedBox(height: 14),
-        Card(
-          clipBehavior: Clip.antiAlias,
-          child: _filtered.isEmpty
-              ? const Padding(
-                  padding: EdgeInsets.all(32),
-                  child: Center(
-                    child: Text('No adjustments match these filters.'),
-                  ),
-                )
-              : SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(minWidth: 1080),
-                    child: DataTable(
-                      horizontalMargin: 18,
-                      columnSpacing: 24,
-                      dataRowMinHeight: 72,
-                      dataRowMaxHeight: 76,
-                      headingRowColor: const WidgetStatePropertyAll(
-                        AppColors.background,
-                      ),
-                      columns: const [
-                        DataColumn(label: Text('STUDENT')),
-                        DataColumn(label: Text('APPLIES TO')),
-                        DataColumn(label: Text('TYPE')),
-                        DataColumn(label: Text('AMOUNT'), numeric: true),
-                        DataColumn(label: Text('REQUESTED BY')),
-                        DataColumn(label: Text('DATE')),
-                        DataColumn(label: Text('STATUS')),
-                        DataColumn(label: Text('')),
-                      ],
-                      rows: _filtered.map((item) {
-                        return DataRow(
-                          onSelectChanged: (_) => _openAdjustment(item),
-                          cells: [
-                            DataCell(
-                              SizedBox(
-                                width: 190,
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      item.studentName,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
-                                    Text(
-                                      '${item.customStudentId} · ${item.className}',
-                                      style: const TextStyle(
-                                        color: AppColors.muted,
-                                        fontSize: 11,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            DataCell(Text(item.feeItem)),
-                            DataCell(Text(_typeLabel(item.type))),
-                            DataCell(
-                              Text(
-                                _adjustmentMoney(item),
-                                style: TextStyle(
-                                  color:
-                                      item.type ==
-                                          FeeAdjustmentWorkflowType.discount
-                                      ? AppColors.green
-                                      : AppColors.red,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                            ),
-                            DataCell(Text(item.createdBy)),
-                            DataCell(Text(_date(item.createdOn))),
-                            DataCell(_StatusPill(status: item.status)),
-                            DataCell(
-                              OutlinedButton(
-                                key: Key('review-adjustment-${item.id}'),
-                                onPressed: () => _openAdjustment(item),
-                                child: const Text('Review'),
-                              ),
-                            ),
-                          ],
-                        );
-                      }).toList(),
-                    ),
+          if (page != null && page.totalElements > 0) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Showing $start-$end of ${page.totalElements} adjustments',
+                    style: const TextStyle(color: AppColors.muted),
                   ),
                 ),
-        ),
+                OutlinedButton.icon(
+                  onPressed: page.page > 0 && !_loading
+                      ? () => _changePage(page.page - 1)
+                      : null,
+                  icon: const Icon(Icons.chevron_left_rounded),
+                  label: const Text('Previous'),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Page ${page.page + 1} of ${page.totalPages}',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: page.page + 1 < page.totalPages && !_loading
+                      ? () => _changePage(page.page + 1)
+                      : null,
+                  iconAlignment: IconAlignment.end,
+                  icon: const Icon(Icons.chevron_right_rounded),
+                  label: const Text('Next'),
+                ),
+              ],
+            ),
+          ],
+        ],
       ],
     );
   }
 }
 
-enum _ReviewAction {
-  approve,
-  requestChanges,
-  reject,
-  reverse,
-  delete,
-  duplicate,
-}
+enum _AdjustmentKind { discount, surcharge }
+
+enum _ReviewAction { submit, approve, reject, complete, cancel, delete }
 
 class _AdjustmentReviewPanel extends StatelessWidget {
   const _AdjustmentReviewPanel({
@@ -522,20 +611,16 @@ class _AdjustmentReviewPanel extends StatelessWidget {
     required this.onAction,
   });
 
-  final WorkflowFeeAdjustment adjustment;
+  final FeeAdjustment adjustment;
   final ValueChanged<_ReviewAction> onAction;
 
   @override
   Widget build(BuildContext context) {
-    final actions = switch (adjustment.status) {
-      FeeAdjustmentWorkflowStatus.pending => const [
-        _ReviewAction.approve,
-        _ReviewAction.requestChanges,
-        _ReviewAction.reject,
-      ],
-      FeeAdjustmentWorkflowStatus.approved => const [_ReviewAction.reverse],
-      FeeAdjustmentWorkflowStatus.draft => const [_ReviewAction.delete],
-      FeeAdjustmentWorkflowStatus.rejected => const [_ReviewAction.duplicate],
+    final status = adjustment.status.trim().toUpperCase();
+    final actions = switch (status) {
+      'DRAFT' => const [_ReviewAction.submit, _ReviewAction.delete],
+      'PENDING' => const [_ReviewAction.approve, _ReviewAction.reject],
+      'APPROVED' => const [_ReviewAction.complete, _ReviewAction.cancel],
       _ => const <_ReviewAction>[],
     };
     return Material(
@@ -577,7 +662,7 @@ class _AdjustmentReviewPanel extends StatelessWidget {
                         children: [
                           Expanded(
                             child: Text(
-                              adjustment.studentName,
+                              _provided(adjustment.studentName, 'Student'),
                               style: const TextStyle(
                                 fontSize: 19,
                                 fontWeight: FontWeight.w900,
@@ -589,39 +674,49 @@ class _AdjustmentReviewPanel extends StatelessWidget {
                       ),
                       const SizedBox(height: 5),
                       Text(
-                        '${adjustment.customStudentId} · ${adjustment.className}',
+                        _provided(
+                          adjustment.customStudentId,
+                          'Student ID unavailable',
+                        ),
                         style: const TextStyle(color: AppColors.muted),
                       ),
                       const SizedBox(height: 20),
-                      _ReviewInfo(label: 'Adjustment ID', value: adjustment.id),
+                      _ReviewInfo(
+                        label: 'Adjustment ID',
+                        value: '${adjustment.id}',
+                      ),
                       _ReviewInfo(
                         label: 'Applies to',
-                        value: adjustment.feeItem,
+                        value: _provided(
+                          adjustment.feeName,
+                          'Fee item unavailable',
+                        ),
                       ),
                       _ReviewInfo(
                         label: 'Type',
-                        value: _typeLabel(adjustment.type),
+                        value: _kindLabel(_kind(adjustment)),
                       ),
                       _ReviewInfo(
                         label: 'Amount',
                         value: _adjustmentMoney(adjustment),
                       ),
-                      _ReviewInfo(label: 'Reason', value: adjustment.reason),
                       _ReviewInfo(
-                        label: 'Requested',
-                        value:
-                            '${adjustment.createdBy} · ${_date(adjustment.createdOn)}',
-                      ),
-                      if (adjustment.reviewedBy != null)
-                        _ReviewInfo(
-                          label: 'Reviewed',
-                          value:
-                              '${adjustment.reviewedBy} · ${_date(adjustment.reviewedOn!)}',
+                        label: 'Reason',
+                        value: _provided(
+                          adjustment.description,
+                          'No description provided',
                         ),
-                      if (adjustment.reviewNote?.trim().isNotEmpty == true)
+                      ),
+                      _ReviewInfo(
+                        label: 'Created',
+                        value:
+                            '${_createdBy(adjustment)} · ${_date(adjustment.createdDate)}',
+                      ),
+                      if (adjustment.updatedDate != null)
                         _ReviewInfo(
-                          label: 'Review note',
-                          value: adjustment.reviewNote!,
+                          label: 'Last updated',
+                          value:
+                              '${_updatedBy(adjustment)} · ${_date(adjustment.updatedDate)}',
                         ),
                       const SizedBox(height: 12),
                       Container(
@@ -631,7 +726,7 @@ class _AdjustmentReviewPanel extends StatelessWidget {
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: const Text(
-                          'Approved adjustments affect the student fee balance. Pending and rejected records remain visible for audit.',
+                          'Approved and completed adjustments affect the student fee account. Rejected and cancelled records remain visible for audit.',
                           style: TextStyle(color: AppColors.muted),
                         ),
                       ),
@@ -647,22 +742,24 @@ class _AdjustmentReviewPanel extends StatelessWidget {
                     alignment: WrapAlignment.end,
                     spacing: 8,
                     runSpacing: 8,
-                    children: actions
-                        .map(
-                          (action) => action == _ReviewAction.approve
-                              ? FilledButton.icon(
-                                  key: const Key('approve-adjustment'),
-                                  onPressed: () => onAction(action),
-                                  icon: const Icon(Icons.check_rounded),
-                                  label: const Text('Approve'),
-                                )
-                              : OutlinedButton(
-                                  key: Key('adjustment-action-${action.name}'),
-                                  onPressed: () => onAction(action),
-                                  child: Text(_actionLabel(action)),
-                                ),
-                        )
-                        .toList(),
+                    children: actions.map((action) {
+                      final primary =
+                          action == _ReviewAction.approve ||
+                          action == _ReviewAction.submit ||
+                          action == _ReviewAction.complete;
+                      return primary
+                          ? FilledButton.icon(
+                              key: Key('adjustment-action-${action.name}'),
+                              onPressed: () => onAction(action),
+                              icon: const Icon(Icons.check_rounded),
+                              label: Text(_actionLabel(action)),
+                            )
+                          : OutlinedButton(
+                              key: Key('adjustment-action-${action.name}'),
+                              onPressed: () => onAction(action),
+                              child: Text(_actionLabel(action)),
+                            );
+                    }).toList(),
                   ),
                 ),
               ],
@@ -768,7 +865,7 @@ class _AdjustmentMetric extends StatelessWidget {
 class _StatusPill extends StatelessWidget {
   const _StatusPill({required this.status});
 
-  final FeeAdjustmentWorkflowStatus status;
+  final String status;
 
   @override
   Widget build(BuildContext context) {
@@ -791,58 +888,122 @@ class _StatusPill extends StatelessWidget {
   }
 }
 
-class _MockDataBadge extends StatelessWidget {
-  const _MockDataBadge();
+class _AdjustmentLoading extends StatelessWidget {
+  const _AdjustmentLoading();
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: BoxDecoration(
-        color: AppColors.amber.withValues(alpha: .1),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: const Text(
-        'Prototype data',
-        style: TextStyle(color: AppColors.amber, fontWeight: FontWeight.w800),
+    return Column(
+      children: List.generate(
+        5,
+        (index) => Container(
+          height: index == 0 ? 108 : 72,
+          margin: const EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(
+            color: AppColors.border.withValues(alpha: .55),
+            borderRadius: BorderRadius.circular(14),
+          ),
+        ),
       ),
     );
   }
 }
 
-String _money(double amount) => 'GH₵ ${amount.abs().toStringAsFixed(0)}';
+class _AdjustmentError extends StatelessWidget {
+  const _AdjustmentError({required this.error, required this.onRetry});
 
-String _adjustmentMoney(WorkflowFeeAdjustment item) =>
-    item.type == FeeAdjustmentWorkflowType.discount
+  final Object error;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 60, horizontal: 24),
+        child: Column(
+          children: [
+            const Icon(Icons.cloud_off_rounded, size: 38, color: AppColors.red),
+            const SizedBox(height: 12),
+            const Text(
+              'Unable to load fee adjustments',
+              style: TextStyle(fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '$error',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColors.muted),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Try again'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+const _statusOptions = [
+  'DRAFT',
+  'PENDING',
+  'APPROVED',
+  'REJECTED',
+  'COMPLETE',
+  'CANCELLED',
+];
+
+_AdjustmentKind _kind(FeeAdjustment item) {
+  final type = item.adjustmentType.trim().toLowerCase();
+  if (type.contains('discount')) return _AdjustmentKind.discount;
+  if (type.contains('surcharge')) return _AdjustmentKind.surcharge;
+  return item.amount < 0 ? _AdjustmentKind.discount : _AdjustmentKind.surcharge;
+}
+
+String _kindLabel(_AdjustmentKind type) =>
+    type == _AdjustmentKind.discount ? 'Discount' : 'Surcharge';
+
+String _money(double amount) {
+  final absolute = amount.abs();
+  final value = absolute % 1 == 0
+      ? absolute.toStringAsFixed(0)
+      : absolute.toStringAsFixed(2);
+  return 'GH₵ $value';
+}
+
+String _adjustmentMoney(FeeAdjustment item) =>
+    _kind(item) == _AdjustmentKind.discount
     ? '(${_money(item.amount)})'
     : _money(item.amount);
 
-String _typeLabel(FeeAdjustmentWorkflowType type) =>
-    type == FeeAdjustmentWorkflowType.discount ? 'Discount' : 'Surcharge';
+String _statusLabel(String status) {
+  final normalized = status.trim().toUpperCase();
+  return switch (normalized) {
+    'DRAFT' => 'Draft',
+    'PENDING' => 'Pending approval',
+    'APPROVED' => 'Approved',
+    'REJECTED' => 'Rejected',
+    'COMPLETE' => 'Complete',
+    'CANCELLED' => 'Cancelled',
+    _ => normalized.isEmpty ? 'Not provided' : normalized.replaceAll('_', ' '),
+  };
+}
 
-String _statusLabel(FeeAdjustmentWorkflowStatus status) => switch (status) {
-  FeeAdjustmentWorkflowStatus.draft => 'Draft',
-  FeeAdjustmentWorkflowStatus.pending => 'Pending approval',
-  FeeAdjustmentWorkflowStatus.changesRequested => 'Changes requested',
-  FeeAdjustmentWorkflowStatus.approved => 'Approved',
-  FeeAdjustmentWorkflowStatus.rejected => 'Rejected',
-  FeeAdjustmentWorkflowStatus.complete => 'Complete',
-  FeeAdjustmentWorkflowStatus.reversed => 'Reversed',
-  FeeAdjustmentWorkflowStatus.cancelled => 'Cancelled',
+Color _statusColor(String status) => switch (status.trim().toUpperCase()) {
+  'DRAFT' => AppColors.muted,
+  'PENDING' => AppColors.amber,
+  'APPROVED' => AppColors.green,
+  'REJECTED' => AppColors.red,
+  'COMPLETE' => AppColors.blue,
+  'CANCELLED' => AppColors.muted,
+  _ => AppColors.muted,
 };
 
-Color _statusColor(FeeAdjustmentWorkflowStatus status) => switch (status) {
-  FeeAdjustmentWorkflowStatus.draft => AppColors.muted,
-  FeeAdjustmentWorkflowStatus.pending => AppColors.amber,
-  FeeAdjustmentWorkflowStatus.changesRequested => AppColors.purple,
-  FeeAdjustmentWorkflowStatus.approved => AppColors.green,
-  FeeAdjustmentWorkflowStatus.rejected => AppColors.red,
-  FeeAdjustmentWorkflowStatus.complete => AppColors.blue,
-  FeeAdjustmentWorkflowStatus.reversed => AppColors.red,
-  FeeAdjustmentWorkflowStatus.cancelled => AppColors.muted,
-};
-
-String _date(DateTime date) {
+String _date(DateTime? date) {
+  if (date == null) return 'Date unavailable';
   const months = [
     'Jan',
     'Feb',
@@ -860,87 +1021,26 @@ String _date(DateTime date) {
   return '${date.day} ${months[date.month - 1]} ${date.year}';
 }
 
-String _actionLabel(_ReviewAction action) => switch (action) {
-  _ReviewAction.approve => 'Approve',
-  _ReviewAction.requestChanges => 'Request changes',
-  _ReviewAction.reject => 'Reject',
-  _ReviewAction.reverse => 'Reverse',
-  _ReviewAction.delete => 'Delete',
-  _ReviewAction.duplicate => 'Duplicate and revise',
-};
+String _createdBy(FeeAdjustment item) {
+  final type = item.createdByType.trim().replaceAll('_', ' ');
+  if (type.isEmpty) return 'Creator unavailable';
+  return item.createdById > 0 ? '$type #${item.createdById}' : type;
+}
 
-final _mockAdjustments = <WorkflowFeeAdjustment>[
-  WorkflowFeeAdjustment(
-    id: 'ADJ-2026-0042',
-    customStudentId: 'STU-FA1BC0-9043',
-    studentName: 'Kwame Yaw Asante',
-    className: 'JHS 1A',
-    feeItem: 'Tuition fee',
-    type: FeeAdjustmentWorkflowType.discount,
-    amount: 50,
-    reason: 'Sibling discount for two enrolled children.',
-    status: FeeAdjustmentWorkflowStatus.pending,
-    createdOn: DateTime(2026, 7, 16),
-    createdBy: 'Ama Owusu',
-  ),
-  WorkflowFeeAdjustment(
-    id: 'ADJ-2026-0041',
-    customStudentId: 'STU-FA1BC0-3391',
-    studentName: 'Abena Asante',
-    className: 'Basic 4B',
-    feeItem: 'Overall fee account',
-    type: FeeAdjustmentWorkflowType.discount,
-    amount: 80,
-    reason: 'Approved staff-child concession.',
-    status: FeeAdjustmentWorkflowStatus.approved,
-    createdOn: DateTime(2026, 7, 14),
-    createdBy: 'Eric Amozini',
-    reviewedOn: DateTime(2026, 7, 15),
-    reviewedBy: 'Ama Owusu',
-  ),
-  WorkflowFeeAdjustment(
-    id: 'ADJ-2026-0039',
-    customStudentId: 'STU-FA1BC0-7702',
-    studentName: 'Akosua Owusu',
-    className: 'JHS 2A',
-    feeItem: 'ICT / Computer',
-    type: FeeAdjustmentWorkflowType.discount,
-    amount: 25,
-    reason: 'Supporting document must be attached.',
-    status: FeeAdjustmentWorkflowStatus.changesRequested,
-    createdOn: DateTime(2026, 7, 12),
-    createdBy: 'Kofi Mensah',
-    reviewedOn: DateTime(2026, 7, 13),
-    reviewedBy: 'Ama Owusu',
-    reviewNote: 'Attach the signed bursary approval letter.',
-  ),
-  WorkflowFeeAdjustment(
-    id: 'ADJ-2026-0036',
-    customStudentId: 'STU-FA1BC0-5512',
-    studentName: 'Yaw Boateng',
-    className: 'Basic 6A',
-    feeItem: 'Tuition fee',
-    type: FeeAdjustmentWorkflowType.surcharge,
-    amount: 20,
-    reason: 'Late payment charge entered after the grace period.',
-    status: FeeAdjustmentWorkflowStatus.rejected,
-    createdOn: DateTime(2026, 7, 9),
-    createdBy: 'Kofi Mensah',
-    reviewedOn: DateTime(2026, 7, 10),
-    reviewedBy: 'Ama Owusu',
-    reviewNote: 'The approved grace period had not ended.',
-  ),
-  WorkflowFeeAdjustment(
-    id: 'ADJ-2026-0032',
-    customStudentId: 'STU-FA1BC0-1184',
-    studentName: 'Esi Addo',
-    className: 'KG 2',
-    feeItem: 'PTA levy',
-    type: FeeAdjustmentWorkflowType.discount,
-    amount: 30,
-    reason: 'Draft hardship-support adjustment.',
-    status: FeeAdjustmentWorkflowStatus.draft,
-    createdOn: DateTime(2026, 7, 7),
-    createdBy: 'Ama Owusu',
-  ),
-];
+String _updatedBy(FeeAdjustment item) {
+  final type = item.updatedByType.trim().replaceAll('_', ' ');
+  if (type.isEmpty) return 'Updater unavailable';
+  return item.updatedById > 0 ? '$type #${item.updatedById}' : type;
+}
+
+String _provided(String value, String otherwise) =>
+    value.trim().isEmpty ? otherwise : value.trim();
+
+String _actionLabel(_ReviewAction action) => switch (action) {
+  _ReviewAction.submit => 'Submit for approval',
+  _ReviewAction.approve => 'Approve',
+  _ReviewAction.reject => 'Reject',
+  _ReviewAction.complete => 'Mark complete',
+  _ReviewAction.cancel => 'Cancel adjustment',
+  _ReviewAction.delete => 'Delete draft',
+};

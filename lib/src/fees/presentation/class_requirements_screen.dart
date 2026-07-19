@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../theme/app_theme.dart';
-import '../data/mock_class_requirements_repository.dart';
+import '../data/class_requirements_repository.dart';
 import '../domain/class_requirement_models.dart';
+import '../domain/fee_models.dart';
 import 'prior_term_requirements_screen.dart';
 
 class ClassRequirementsScreen extends StatefulWidget {
@@ -10,10 +11,12 @@ class ClassRequirementsScreen extends StatefulWidget {
     super.key,
     required this.repository,
     required this.termName,
+    this.gradeLevels = const [],
   });
 
   final ClassRequirementsRepository repository;
   final String termName;
+  final List<FeeGradeLevel> gradeLevels;
 
   @override
   State<ClassRequirementsScreen> createState() =>
@@ -29,6 +32,21 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
     return AnimatedBuilder(
       animation: widget.repository,
       builder: (context, _) {
+        if (widget.repository.isLoading && widget.repository.groups.isEmpty) {
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 96),
+              child: CircularProgressIndicator(),
+            ),
+          );
+        }
+        if (widget.repository.errorMessage != null &&
+            widget.repository.groups.isEmpty) {
+          return _RequirementLoadError(
+            message: widget.repository.errorMessage!,
+            onRetry: widget.repository.load,
+          );
+        }
         if (_showPriorTerm) {
           return PriorTermRequirementsScreen(
             repository: widget.repository,
@@ -57,12 +75,31 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
         return _RequirementsOverview(
           repository: widget.repository,
           termName: widget.termName,
-          onOpenClass: (group) => setState(() => _selectedGroupId = group.id),
+          onOpenClass: _openClass,
           onAddClass: _showClassForm,
-          onOpenPriorTerm: () => setState(() => _showPriorTerm = true),
+          onOpenPriorTerm: _openPriorTerm,
         );
       },
     );
+  }
+
+  Future<void> _openPriorTerm() async {
+    try {
+      await widget.repository.loadPriorTermRequirements();
+      if (mounted) setState(() => _showPriorTerm = true);
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
+  Future<void> _openClass(ClassRequirementGroup group) async {
+    setState(() => _selectedGroupId = group.id);
+    try {
+      await widget.repository.loadStudentsForClass(group.id);
+    } catch (error) {
+      if (mounted) setState(() => _selectedGroupId = null);
+      _showError(error);
+    }
   }
 
   Future<void> _showRequirementForm(
@@ -79,9 +116,27 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
     );
     if (result == null) return;
     if (initialItem == null) {
-      widget.repository.addRequirement(result.groupId, result.item);
+      try {
+        final saved = await widget.repository.addRequirement(
+          result.groupId,
+          result.item,
+        );
+        _selectedGroupId = saved.id;
+      } catch (error) {
+        _showError(error);
+        return;
+      }
     } else {
-      widget.repository.updateRequirement(result.groupId, result.item);
+      try {
+        final saved = await widget.repository.updateRequirement(
+          result.groupId,
+          result.item,
+        );
+        _selectedGroupId = saved.id;
+      } catch (error) {
+        _showError(error);
+        return;
+      }
     }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -121,7 +176,16 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
       ),
     );
     if (confirmed != true) return;
-    widget.repository.deleteRequirement(group.id, item.id);
+    try {
+      final saved = await widget.repository.deleteRequirement(
+        group.id,
+        item.id,
+      );
+      _selectedGroupId = saved.id;
+    } catch (error) {
+      _showError(error);
+      return;
+    }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('${item.name} removed as a draft change.')),
@@ -134,11 +198,18 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
         .toSet();
     final group = await showDialog<ClassRequirementGroup>(
       context: context,
-      builder: (context) => _AddClassDialog(existingNames: existingNames),
+      builder: (context) => _AddClassDialog(
+        existingNames: existingNames,
+        gradeLevels: widget.gradeLevels,
+      ),
     );
     if (group == null) return;
-    widget.repository.addClass(group);
-    setState(() => _selectedGroupId = group.id);
+    try {
+      final saved = await widget.repository.addClass(group);
+      setState(() => _selectedGroupId = saved.id);
+    } catch (error) {
+      _showError(error);
+    }
   }
 
   Future<void> _showPublishDialog(ClassRequirementGroup group) async {
@@ -150,7 +221,13 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
       ),
     );
     if (plan == null) return;
-    widget.repository.publishClass(group.id, plan);
+    try {
+      final published = await widget.repository.publishClass(group.id, plan);
+      _selectedGroupId = published.id;
+    } catch (error) {
+      _showError(error);
+      return;
+    }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -172,7 +249,11 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
         builder: (context, _) {
           final updated = widget.repository
               .studentsForClass(group.id)
-              .firstWhere((item) => item.id == student.id);
+              .where((item) => item.id == student.id)
+              .firstOrNull;
+          if (updated == null) {
+            return const Center(child: CircularProgressIndicator());
+          }
           return _StudentRequirementDialog(
             group: group,
             student: updated,
@@ -198,11 +279,15 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
       ),
     );
     if (quantity == null) return;
-    widget.repository.recordReceived(
-      studentId: student.id,
-      requirementId: item.id,
-      quantity: quantity,
-    );
+    try {
+      await widget.repository.recordReceived(
+        studentId: student.id,
+        requirementId: item.id,
+        quantity: quantity,
+      );
+    } catch (error) {
+      _showError(error);
+    }
   }
 
   Future<void> _adjustRequirement(
@@ -214,11 +299,15 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
       builder: (context) => _AdjustmentDialog(item: item),
     );
     if (adjustment == null) return;
-    widget.repository.adjustRequirement(
-      studentId: student.id,
-      requirementId: item.id,
-      adjustment: adjustment,
-    );
+    try {
+      await widget.repository.adjustRequirement(
+        studentId: student.id,
+        requirementId: item.id,
+        adjustment: adjustment,
+      );
+    } catch (error) {
+      _showError(error);
+    }
   }
 
   Future<void> _addCustomRequirement(StudentRequirementProgress student) async {
@@ -227,9 +316,61 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
       builder: (context) => const _StudentCustomRequirementDialog(),
     );
     if (requirement == null) return;
-    widget.repository.addStudentRequirement(
-      studentId: student.id,
-      requirement: requirement,
+    try {
+      await widget.repository.addStudentRequirement(
+        studentId: student.id,
+        requirement: requirement,
+      );
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
+  void _showError(Object error) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('$error'), backgroundColor: AppColors.red),
+    );
+  }
+}
+
+class _RequirementLoadError extends StatelessWidget {
+  const _RequirementLoadError({required this.message, required this.onRetry});
+
+  final String message;
+  final Future<void> Function() onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 72),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Column(
+            children: [
+              const Icon(
+                Icons.cloud_off_outlined,
+                size: 42,
+                color: AppColors.red,
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                'Unable to load items & supplies',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 8),
+              Text(message, textAlign: TextAlign.center),
+              const SizedBox(height: 18),
+              OutlinedButton.icon(
+                onPressed: () => onRetry(),
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('Try again'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -591,7 +732,15 @@ class _ClassTracker extends StatelessWidget {
           clipBehavior: Clip.antiAlias,
           child: Column(
             children: [
-              if (students.isEmpty)
+              if (repository.isLoading && students.isEmpty)
+                const SizedBox(
+                  width: double.infinity,
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 42),
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                )
+              else if (students.isEmpty)
                 SizedBox(
                   width: double.infinity,
                   child: Padding(
@@ -653,56 +802,62 @@ class _ClassChecklistTable extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: EdgeInsets.zero,
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(20, 18, 20, 16),
-            child: Text(
-              'Class checklist',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
-            ),
-          ),
-          if (items.isEmpty)
+    return SizedBox(
+      width: double.infinity,
+      child: Card(
+        margin: EdgeInsets.zero,
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
             const Padding(
-              padding: EdgeInsets.fromLTRB(20, 0, 20, 20),
+              padding: EdgeInsets.fromLTRB(20, 18, 20, 16),
               child: Text(
-                'No class items have been added yet.',
-                style: TextStyle(color: AppColors.muted),
+                'Class checklist',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
               ),
-            )
-          else ...[
-            const Divider(height: 1),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final tableWidth = constraints.maxWidth < 1160
-                    ? 1160.0
-                    : constraints.maxWidth;
-                return SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: SizedBox(
-                    width: tableWidth,
-                    child: Column(
-                      children: [
-                        const _ChecklistHeader(),
-                        ...items.map(
-                          (item) => _ChecklistRow(
-                            item,
-                            onEdit: () => onEdit(item),
-                            onDelete: () => onDelete(item),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
             ),
+            if (items.isEmpty)
+              const SizedBox(
+                width: double.infinity,
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(20, 0, 20, 22),
+                  child: Text(
+                    'No class items have been added yet.',
+                    style: TextStyle(color: AppColors.muted),
+                  ),
+                ),
+              )
+            else ...[
+              const Divider(height: 1),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final tableWidth = constraints.maxWidth < 1160
+                      ? 1160.0
+                      : constraints.maxWidth;
+                  return SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: SizedBox(
+                      width: tableWidth,
+                      child: Column(
+                        children: [
+                          const _ChecklistHeader(),
+                          ...items.map(
+                            (item) => _ChecklistRow(
+                              item,
+                              onEdit: () => onEdit(item),
+                              onDelete: () => onDelete(item),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -1398,35 +1553,25 @@ class _StudentRequirementItemCard extends StatelessWidget {
 }
 
 class _AddClassDialog extends StatefulWidget {
-  const _AddClassDialog({required this.existingNames});
+  const _AddClassDialog({
+    required this.existingNames,
+    required this.gradeLevels,
+  });
 
   final Set<String> existingNames;
+  final List<FeeGradeLevel> gradeLevels;
 
   @override
   State<_AddClassDialog> createState() => _AddClassDialogState();
 }
 
 class _AddClassDialogState extends State<_AddClassDialog> {
-  static const _classNames = [
-    'KG 1',
-    'KG 2',
-    'Basic 1',
-    'Basic 2',
-    'Basic 3',
-    'Basic 4',
-    'Basic 5',
-    'Basic 6',
-    'JHS 1',
-    'JHS 2',
-    'JHS 3',
-  ];
-
-  String? _selectedClass;
+  FeeGradeLevel? _selectedClass;
 
   @override
   Widget build(BuildContext context) {
-    final available = _classNames
-        .where((name) => !widget.existingNames.contains(name))
+    final available = widget.gradeLevels
+        .where((grade) => !widget.existingNames.contains(grade.name))
         .toList();
     return AlertDialog(
       title: const Text('Set up items & supplies'),
@@ -1454,7 +1599,7 @@ class _AddClassDialogState extends State<_AddClassDialog> {
                 ),
               )
             else
-              DropdownButtonFormField<String>(
+              DropdownButtonFormField<FeeGradeLevel>(
                 value: _selectedClass,
                 decoration: const InputDecoration(
                   labelText: 'Class *',
@@ -1462,8 +1607,10 @@ class _AddClassDialogState extends State<_AddClassDialog> {
                 ),
                 items: available
                     .map(
-                      (name) =>
-                          DropdownMenuItem(value: name, child: Text(name)),
+                      (grade) => DropdownMenuItem(
+                        value: grade,
+                        child: Text(grade.name),
+                      ),
                     )
                     .toList(),
                 onChanged: (value) => setState(() => _selectedClass = value),
@@ -1485,12 +1632,13 @@ class _AddClassDialogState extends State<_AddClassDialog> {
           onPressed: _selectedClass == null
               ? null
               : () {
-                  final name = _selectedClass!;
+                  final grade = _selectedClass!;
                   Navigator.pop(
                     context,
                     ClassRequirementGroup(
-                      id: '${name.toLowerCase().replaceAll(' ', '-')}-${DateTime.now().microsecondsSinceEpoch}',
-                      className: name,
+                      id: 'new-${grade.id}',
+                      className: grade.name,
+                      gradeLevelId: grade.id,
                       studentCount: 0,
                       items: const [],
                       status: RequirementStatus.draft,
@@ -1917,7 +2065,7 @@ class _AdjustmentDialogState extends State<_AdjustmentDialog> {
         _type == RequirementAdjustmentType.increasedQuantity ||
         _type == RequirementAdjustmentType.reducedQuantity ||
         _type == RequirementAdjustmentType.partialWaiver;
-    final cashEquivalent = _reason == 'Cash equivalent paid';
+    final cashEquivalent = _type == RequirementAdjustmentType.cashEquivalent;
     return AlertDialog(
       title: const Text('Adjust or waive requirement'),
       content: SizedBox(
@@ -1947,7 +2095,14 @@ class _AdjustmentDialogState extends State<_AdjustmentDialog> {
                         ),
                       )
                       .toList(),
-                  onChanged: (value) => setState(() => _type = value!),
+                  onChanged: (value) => setState(() {
+                    _type = value!;
+                    if (_type == RequirementAdjustmentType.cashEquivalent) {
+                      _reason = 'Cash equivalent paid';
+                    } else if (_reason == 'Cash equivalent paid') {
+                      _reason = 'Administrator decision';
+                    }
+                  }),
                 ),
                 if (needsQuantity) ...[
                   const SizedBox(height: 14),
@@ -2078,7 +2233,8 @@ class _AdjustmentDialogState extends State<_AdjustmentDialog> {
         notes: _notes.text.trim(),
         adjustedQuantity:
             _type == RequirementAdjustmentType.fullWaiver ||
-                _type == RequirementAdjustmentType.dueDateExtension
+                _type == RequirementAdjustmentType.dueDateExtension ||
+                _type == RequirementAdjustmentType.cashEquivalent
             ? null
             : int.parse(_quantity.text),
         extendedDueDate: _type == RequirementAdjustmentType.dueDateExtension
@@ -2575,7 +2731,8 @@ int _targetQuantity(
   final adjustment = student.adjustments[item.id];
   if (adjustment == null) return item.quantity;
   return switch (adjustment.type) {
-    RequirementAdjustmentType.fullWaiver => 0,
+    RequirementAdjustmentType.fullWaiver ||
+    RequirementAdjustmentType.cashEquivalent => 0,
     RequirementAdjustmentType.increasedQuantity ||
     RequirementAdjustmentType.reducedQuantity ||
     RequirementAdjustmentType.partialWaiver =>
@@ -2591,6 +2748,7 @@ String _adjustmentLabel(RequirementAdjustmentType type) {
     RequirementAdjustmentType.partialWaiver => 'Partial waiver',
     RequirementAdjustmentType.fullWaiver => 'Full waiver',
     RequirementAdjustmentType.dueDateExtension => 'Due date extension',
+    RequirementAdjustmentType.cashEquivalent => 'Cash equivalent received',
   };
 }
 
