@@ -42,16 +42,75 @@ class SchoolAlert {
 
 class SchoolEvent {
   const SchoolEvent({
-    required this.day,
-    required this.month,
+    this.id,
+    required this.startDate,
+    required this.endDate,
     required this.title,
     required this.category,
+    this.eventTypeId,
+    this.academicTermId,
+    this.description = '',
+    this.isSchoolDay = true,
   });
 
-  final String day;
-  final String month;
+  final String? id;
+  final DateTime startDate;
+  final DateTime endDate;
   final String title;
   final String category;
+  final int? eventTypeId;
+  final int? academicTermId;
+  final String description;
+  final bool isSchoolDay;
+
+  String get day => startDate.day.toString().padLeft(2, '0');
+  String get month => _shortMonth(startDate.month);
+
+  static String _shortMonth(int month) {
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    if (month < 1 || month > 12) return '';
+    return months[month - 1];
+  }
+}
+
+class CalendarEventType {
+  const CalendarEventType({required this.id, required this.name});
+
+  final int id;
+  final String name;
+}
+
+class CalendarEventPayload {
+  const CalendarEventPayload({
+    required this.name,
+    required this.description,
+    required this.startDate,
+    required this.endDate,
+    required this.eventTypeId,
+    required this.isSchoolDay,
+    this.academicTermId,
+  });
+
+  final String name;
+  final String description;
+  final DateTime startDate;
+  final DateTime endDate;
+  final int eventTypeId;
+  final bool isSchoolDay;
+  final int? academicTermId;
 }
 
 class RecentActivity {
@@ -106,12 +165,16 @@ class DashboardSnapshot {
     required this.schoolName,
     required this.administratorName,
     required this.term,
+    this.academicTermId,
     required this.academicYear,
+    required this.termStartDate,
+    required this.termEndDate,
     required this.lastUpdated,
     required this.metrics,
     required this.admissions,
     required this.alerts,
     required this.events,
+    required this.calendarEvents,
     required this.activities,
     required this.attendance,
     required this.fees,
@@ -120,13 +183,32 @@ class DashboardSnapshot {
   final String schoolName;
   final String administratorName;
   final String term;
+  final int? academicTermId;
   final String academicYear;
+  final String termStartDate;
+  final String termEndDate;
   final DateTime lastUpdated;
   final List<DashboardMetric> metrics;
   final List<AdmissionGroup> admissions;
   final List<SchoolAlert> alerts;
   final List<SchoolEvent> events;
+  final List<SchoolEvent> calendarEvents;
   final List<RecentActivity> activities;
   final AttendanceSummary attendance;
   final FeeSummary fees;
+
+  String get termLabel {
+    final termParts = [
+      if (term.trim().isNotEmpty) term.trim(),
+      if (academicYear.trim().isNotEmpty) academicYear.trim(),
+    ];
+    return termParts.isEmpty ? 'Current term' : termParts.join(' · ');
+  }
+
+  String get termDateRange {
+    if (termStartDate.trim().isEmpty || termEndDate.trim().isEmpty) {
+      return '';
+    }
+    return '$termStartDate to $termEndDate';
+  }
 }

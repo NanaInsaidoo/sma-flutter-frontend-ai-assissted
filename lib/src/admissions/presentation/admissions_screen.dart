@@ -42,11 +42,15 @@ class AdmissionsScreen extends StatefulWidget {
     required this.customSchoolId,
     this.accessToken,
     this.onRefreshAccessToken,
+    this.openStartAdmissionOnLoad = false,
+    this.onStartAdmissionRequestConsumed,
   });
 
   final String customSchoolId;
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
+  final bool openStartAdmissionOnLoad;
+  final VoidCallback? onStartAdmissionRequestConsumed;
 
   @override
   State<AdmissionsScreen> createState() => _AdmissionsScreenState();
@@ -59,6 +63,7 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
   late final AdmissionsApiClient _api;
   late final Future<AdmissionTermContext> _termFuture;
   late Future<List<_StudentApplication>> _applicationsFuture;
+  bool _openingStartAdmissionRequest = false;
 
   @override
   void initState() {
@@ -69,6 +74,28 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
     );
     _termFuture = _api.getCurrentTerm(widget.customSchoolId);
     _applicationsFuture = _loadApplications();
+    _maybeOpenStartAdmissionRequest();
+  }
+
+  @override
+  void didUpdateWidget(covariant AdmissionsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!oldWidget.openStartAdmissionOnLoad &&
+        widget.openStartAdmissionOnLoad) {
+      _maybeOpenStartAdmissionRequest();
+    }
+  }
+
+  void _maybeOpenStartAdmissionRequest() {
+    if (!widget.openStartAdmissionOnLoad || _openingStartAdmissionRequest) {
+      return;
+    }
+    _openingStartAdmissionRequest = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      widget.onStartAdmissionRequestConsumed?.call();
+      if (mounted) await _showStartAdmissionSheet();
+      _openingStartAdmissionRequest = false;
+    });
   }
 
   Future<List<_StudentApplication>> _loadApplications() async {
@@ -2415,6 +2442,8 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
   late _HouseholdRecord _household;
   String? _primaryGuardianKey;
   String? _settingPrimaryGuardianKey;
+  bool _approvingHousehold = false;
+  bool _deletingHousehold = false;
 
   @override
   void initState() {
@@ -2682,10 +2711,67 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
     }
   }
 
+  Future<void> _approvePendingHousehold() async {
+    final householdId = _household.householdId;
+    if (householdId == null || _approvingHousehold) return;
+    final confirmed = await _confirmMemberDeletion(
+      title: 'Approve pending household members?',
+      message:
+          'This will mark all pending guardians and student applications in this household as approved.',
+      confirmLabel: 'Approve members',
+      confirmColor: AppColors.green,
+    );
+    if (!confirmed || !mounted) return;
+    setState(() => _approvingHousehold = true);
+    try {
+      await widget.api.updateHouseholdStatus(
+        customSchoolId: widget.customSchoolId,
+        householdId: householdId,
+        status: 'APPROVED',
+        reason: 'Approved from household dashboard',
+      );
+      if (!mounted) return;
+      _reloadDashboard();
+      _showHouseholdMessage('Pending household members approved.');
+    } on AdmissionsApiException catch (error) {
+      if (!mounted) return;
+      _showHouseholdMessage(error.message);
+    } finally {
+      if (mounted) setState(() => _approvingHousehold = false);
+    }
+  }
+
+  Future<void> _deleteEmptyHousehold() async {
+    final householdId = _household.householdId;
+    if (householdId == null || _deletingHousehold) return;
+    final confirmed = await _confirmMemberDeletion(
+      title: 'Delete empty household?',
+      message:
+          'This will permanently delete this household record. Remove all guardians and students first.',
+      confirmLabel: 'Delete household',
+    );
+    if (!confirmed || !mounted) return;
+    setState(() => _deletingHousehold = true);
+    try {
+      await widget.api.deleteEmptyHousehold(
+        customSchoolId: widget.customSchoolId,
+        householdId: householdId,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } on AdmissionsApiException catch (error) {
+      if (!mounted) return;
+      _showHouseholdMessage(error.message);
+    } finally {
+      if (mounted) setState(() => _deletingHousehold = false);
+    }
+  }
+
   Future<bool> _confirmMemberDeletion({
     required String title,
     required String message,
     required String confirmLabel,
+    Color confirmColor = AppColors.red,
   }) async {
     return await showDialog<bool>(
           context: context,
@@ -2699,7 +2785,7 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
               ),
               FilledButton(
                 onPressed: () => Navigator.pop(context, true),
-                style: FilledButton.styleFrom(backgroundColor: AppColors.red),
+                style: FilledButton.styleFrom(backgroundColor: confirmColor),
                 child: Text(confirmLabel),
               ),
             ],
@@ -2769,6 +2855,10 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
                     onDeleteGuardian: _deleteGuardian,
                     onEditStudent: _editStudent,
                     onDeleteStudent: _deleteStudent,
+                    approvingHousehold: _approvingHousehold,
+                    deletingHousehold: _deletingHousehold,
+                    onApprovePendingHousehold: _approvePendingHousehold,
+                    onDeleteEmptyHousehold: _deleteEmptyHousehold,
                   );
                 },
               ),
@@ -2795,6 +2885,10 @@ class _HouseholdWorkspace extends StatelessWidget {
     required this.onDeleteGuardian,
     required this.onEditStudent,
     required this.onDeleteStudent,
+    required this.approvingHousehold,
+    required this.deletingHousehold,
+    required this.onApprovePendingHousehold,
+    required this.onDeleteEmptyHousehold,
   });
 
   final _HouseholdRecord household;
@@ -2810,6 +2904,10 @@ class _HouseholdWorkspace extends StatelessWidget {
   final ValueChanged<AdmissionGuardian> onDeleteGuardian;
   final ValueChanged<AdmissionStudent> onEditStudent;
   final ValueChanged<AdmissionStudent> onDeleteStudent;
+  final bool approvingHousehold;
+  final bool deletingHousehold;
+  final VoidCallback onApprovePendingHousehold;
+  final VoidCallback onDeleteEmptyHousehold;
 
   bool get _hasGuardian => guardians.isNotEmpty;
   bool get _hasStudent => students.isNotEmpty;
@@ -2887,6 +2985,18 @@ class _HouseholdWorkspace extends StatelessWidget {
                 household: household,
                 guardians: guardians.length,
                 students: students.length,
+                hasPendingMembers:
+                    guardians.any((guardian) {
+                      return _isPendingReviewGuardian(guardian.status);
+                    }) ||
+                    students.any((student) {
+                      return _isPendingReviewGuardian(student.status);
+                    }),
+                canDeleteHousehold: guardians.isEmpty && students.isEmpty,
+                approvingMembers: approvingHousehold,
+                deletingHousehold: deletingHousehold,
+                onApprovePendingMembers: onApprovePendingHousehold,
+                onDeleteEmptyHousehold: onDeleteEmptyHousehold,
               );
 
               return SingleChildScrollView(
@@ -3567,11 +3677,23 @@ class _HouseholdSidebar extends StatelessWidget {
     required this.household,
     required this.guardians,
     required this.students,
+    required this.hasPendingMembers,
+    required this.canDeleteHousehold,
+    required this.approvingMembers,
+    required this.deletingHousehold,
+    required this.onApprovePendingMembers,
+    required this.onDeleteEmptyHousehold,
   });
 
   final _HouseholdRecord household;
   final int guardians;
   final int students;
+  final bool hasPendingMembers;
+  final bool canDeleteHousehold;
+  final bool approvingMembers;
+  final bool deletingHousehold;
+  final VoidCallback onApprovePendingMembers;
+  final VoidCallback onDeleteEmptyHousehold;
 
   @override
   Widget build(BuildContext context) {
@@ -3606,6 +3728,63 @@ class _HouseholdSidebar extends StatelessWidget {
               _SummaryRow(
                 label: 'Applications',
                 value: students == 0 ? '0' : '$students pending',
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _SideCard(
+          title: 'Actions',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              FilledButton.icon(
+                onPressed: hasPendingMembers && !approvingMembers
+                    ? onApprovePendingMembers
+                    : null,
+                icon: approvingMembers
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.verified_user_rounded, size: 18),
+                label: Text(
+                  approvingMembers ? 'Approving...' : 'Approve pending members',
+                ),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: canDeleteHousehold && !deletingHousehold
+                    ? onDeleteEmptyHousehold
+                    : null,
+                icon: deletingHousehold
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.delete_outline_rounded, size: 18),
+                label: Text(
+                  deletingHousehold ? 'Deleting...' : 'Delete household',
+                ),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.red,
+                  side: BorderSide(
+                    color: AppColors.red.withValues(alpha: 0.42),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                canDeleteHousehold
+                    ? 'This household has no members and can be deleted.'
+                    : 'Remove all guardians and students before deleting this household.',
+                style: const TextStyle(
+                  color: AppColors.muted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ],
           ),

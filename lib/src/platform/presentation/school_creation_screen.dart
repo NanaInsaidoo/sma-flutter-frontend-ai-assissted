@@ -3945,7 +3945,7 @@ class _CalendarSetup extends StatelessWidget {
     final duration = startDate != null && endDate != null
         ? endDate!.difference(startDate!).inDays + 1
         : null;
-    final hasDraftEvent = events.any((event) => event.isDraft);
+    final hasIncompleteEvent = events.any((event) => !event.isComplete);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -4066,7 +4066,7 @@ class _CalendarSetup extends StatelessWidget {
         _CalendarCard(
           title: 'Events (optional)',
           action: OutlinedButton.icon(
-            onPressed: hasDraftEvent
+            onPressed: hasIncompleteEvent
                 ? null
                 : () {
                     final next = [
@@ -4084,7 +4084,7 @@ class _CalendarSetup extends StatelessWidget {
                   },
             icon: const Icon(Icons.add_rounded, size: 18),
             label: Text(
-              hasDraftEvent ? 'Complete open event first' : 'Add event',
+              hasIncompleteEvent ? 'Complete open event first' : 'Add event',
             ),
           ),
           child: events.isEmpty
@@ -4092,9 +4092,9 @@ class _CalendarSetup extends StatelessWidget {
               : Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (hasDraftEvent) ...[
+                    if (hasIncompleteEvent) ...[
                       const Text(
-                        'Save this calendar step or delete the open new event before adding another.',
+                        'Complete or delete the open event before adding another.',
                         style: TextStyle(
                           color: AppColors.muted,
                           fontSize: 12,
@@ -4110,7 +4110,9 @@ class _CalendarSetup extends StatelessWidget {
                         eventTypes: eventTypes,
                         onChanged: (event) {
                           final next = [...events];
-                          next[entry.key] = event;
+                          next[entry.key] = event.copy(
+                            isDraft: !event.isComplete,
+                          );
                           onChanged(
                             academicYear: academicYear,
                             academicTerm: academicTerm,
@@ -5248,6 +5250,12 @@ class _CalendarEvent {
   String get shortStart =>
       '${startDate!.day}-${startDate!.month}-${startDate!.year}';
   String get shortEnd => '${endDate!.day}-${endDate!.month}-${endDate!.year}';
+  bool get isComplete {
+    if (type.trim().isEmpty) return false;
+    if (type == 'Other' && otherName.trim().isEmpty) return false;
+    return startDate != null && endDate != null;
+  }
+
   _CalendarEvent copy({
     String? type,
     String? otherName,

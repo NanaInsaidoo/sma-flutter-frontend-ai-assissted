@@ -28,12 +28,16 @@ class FeeManagementScreen extends StatefulWidget {
     required this.schoolName,
     required this.accessToken,
     this.onRefreshAccessToken,
+    this.openRecordPaymentOnLoad = false,
+    this.onRecordPaymentRequestConsumed,
   });
 
   final String customSchoolId;
   final String schoolName;
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
+  final bool openRecordPaymentOnLoad;
+  final VoidCallback? onRecordPaymentRequestConsumed;
 
   @override
   State<FeeManagementScreen> createState() => _FeeManagementScreenState();
@@ -71,6 +75,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
   _FeeOverviewPage _overviewPage = _FeeOverviewPage.main;
   bool _overviewDetailLoading = false;
   Object? _overviewDetailError;
+  bool _openingRecordPaymentRequest = false;
 
   @override
   void initState() {
@@ -80,6 +85,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
       onRefreshAccessToken: widget.onRefreshAccessToken,
     );
     _initialLoad = _loadInitial();
+    _maybeOpenRecordPaymentRequest();
   }
 
   @override
@@ -87,6 +93,9 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.accessToken != widget.accessToken) {
       _api.accessToken = widget.accessToken;
+    }
+    if (!oldWidget.openRecordPaymentOnLoad && widget.openRecordPaymentOnLoad) {
+      _maybeOpenRecordPaymentRequest();
     }
   }
 
@@ -109,6 +118,19 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
       _currentTerm = currentTerm;
       _classCollections = overview.collectionByClass;
       _arrears = overview.outstandingArrears;
+    });
+  }
+
+  void _maybeOpenRecordPaymentRequest() {
+    if (!widget.openRecordPaymentOnLoad || _openingRecordPaymentRequest) {
+      return;
+    }
+    _openingRecordPaymentRequest = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      widget.onRecordPaymentRequestConsumed?.call();
+      await _initialLoad;
+      if (mounted) await _showRecordPaymentForm();
+      _openingRecordPaymentRequest = false;
     });
   }
 

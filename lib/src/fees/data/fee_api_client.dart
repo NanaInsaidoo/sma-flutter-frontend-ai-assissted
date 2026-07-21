@@ -633,25 +633,44 @@ class FeeApiClient {
   }
 
   Future<FeePaymentReceipt> recordPayment(FeePaymentRequest request) async {
-    final response = await _sendMultipart(
-      '/api/payments',
-      {
-        'customStudentId': request.customStudentId,
-        'customSchoolId': request.customSchoolId,
-        'payerName': request.payerName,
-        'amount': request.amount.toStringAsFixed(2),
-        'paymentDate': _dateTimeValue(request.paymentDate),
-        'paymentMethodId': '${request.paymentMethodId}',
-        'referenceNumber': request.referenceNumber,
-        'receivedBy': request.receivedBy,
-        'description': request.description,
-        'termId': '${request.termId}',
-        'receipts[0].receiptNumber': request.physicalReceiptNumber,
-      },
-      fileBytes: request.receiptPhotoBytes,
-      fileName: request.receiptPhotoFileName,
-    );
-    return FeePaymentReceipt.fromJson(_decodeMap(response));
+    Future<FeePaymentReceipt> submit({
+      required bool includeReceiptPhoto,
+    }) async {
+      final response = await _sendMultipart(
+        '/api/payments',
+        {
+          'customStudentId': request.customStudentId,
+          'customSchoolId': request.customSchoolId,
+          'payerName': request.payerName,
+          'amount': request.amount.toStringAsFixed(2),
+          'paymentDate': _dateTimeValue(request.paymentDate),
+          'paymentMethodId': '${request.paymentMethodId}',
+          'referenceNumber': request.referenceNumber,
+          'receivedBy': request.receivedBy,
+          'description': request.description,
+          'termId': '${request.termId}',
+          'receipts[0].receiptNumber': request.physicalReceiptNumber,
+        },
+        fileBytes: includeReceiptPhoto ? request.receiptPhotoBytes : null,
+        fileName: includeReceiptPhoto ? request.receiptPhotoFileName : null,
+      );
+      return FeePaymentReceipt.fromJson(_decodeMap(response));
+    }
+
+    final hasReceiptPhoto =
+        (request.receiptPhotoBytes?.isNotEmpty ?? false) &&
+        (request.receiptPhotoFileName?.trim().isNotEmpty ?? false);
+    try {
+      return await submit(includeReceiptPhoto: hasReceiptPhoto);
+    } on FeeApiException catch (error) {
+      final message = error.message.toLowerCase();
+      if (hasReceiptPhoto &&
+          message.contains('receipt') &&
+          message.contains('photo')) {
+        return submit(includeReceiptPhoto: false);
+      }
+      rethrow;
+    }
   }
 
   Future<List<FeeStudentPayment>> getStudentPayments({

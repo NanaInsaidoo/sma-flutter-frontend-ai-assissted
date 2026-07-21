@@ -43,7 +43,10 @@ class _EmptyDashboardRepository implements DashboardRepository {
       schoolName: 'Test School',
       administratorName: 'Eric',
       term: 'Second Term',
+      academicTermId: 1,
       academicYear: '2026-2027',
+      termStartDate: '1 Jul 2026',
+      termEndDate: '31 Jul 2026',
       lastUpdated: DateTime(2026, 7, 19, 9),
       metrics: const [
         DashboardMetric(
@@ -58,6 +61,7 @@ class _EmptyDashboardRepository implements DashboardRepository {
       admissions: const [],
       alerts: const [],
       events: const [],
+      calendarEvents: const [],
       activities: const [],
       attendance: const AttendanceSummary(
         total: 0,
@@ -67,5 +71,33 @@ class _EmptyDashboardRepository implements DashboardRepository {
       ),
       fees: const FeeSummary(collected: 0, outstanding: 0, waivers: 0),
     );
+  }
+
+  @override
+  Future<List<CalendarEventType>> getCalendarEventTypes() async => const [];
+
+  @override
+  Future<SchoolEvent> createCalendarEvent({
+    required String schoolId,
+    required CalendarEventPayload event,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<SchoolEvent> updateCalendarEvent({
+    required String schoolId,
+    required String eventId,
+    required CalendarEventPayload event,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> deleteCalendarEvent({
+    required String schoolId,
+    required String eventId,
+  }) {
+    throw UnimplementedError();
   }
 }

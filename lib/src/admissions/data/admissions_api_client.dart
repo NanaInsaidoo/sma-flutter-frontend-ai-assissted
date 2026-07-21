@@ -164,6 +164,39 @@ class AdmissionsApiClient {
     }
   }
 
+  Future<void> updateHouseholdStatus({
+    required String customSchoolId,
+    required int householdId,
+    required String status,
+    String? reason,
+  }) async {
+    final response = await _send(
+      'PUT',
+      '/api/v1/guardians/schools/$customSchoolId/households/$householdId/status',
+      body: {
+        'status': status,
+        if (reason?.trim().isNotEmpty == true) 'reason': reason!.trim(),
+      },
+    );
+    final payload = _decodeMap(response);
+    final updated = _intValue(payload['totalMembersUpdated']);
+    if (updated != null && updated < 1) {
+      throw const AdmissionsApiException(
+        'No pending household members were updated.',
+      );
+    }
+  }
+
+  Future<void> deleteEmptyHousehold({
+    required String customSchoolId,
+    required int householdId,
+  }) async {
+    await _send(
+      'DELETE',
+      '/api/v1/guardians/schools/$customSchoolId/households/$householdId',
+    );
+  }
+
   Future<void> deleteStudent({
     required String customSchoolId,
     required int householdId,
