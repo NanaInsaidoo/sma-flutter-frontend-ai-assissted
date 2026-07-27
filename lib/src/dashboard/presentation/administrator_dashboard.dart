@@ -8,6 +8,7 @@ import '../../admissions/presentation/admissions_screen.dart';
 import '../../attendance/data/attendance_api_client.dart';
 import '../../attendance/presentation/attendance_dashboard_screen.dart';
 import '../../classes/presentation/grade_streams_screen.dart';
+import '../../expenses/presentation/expenses_screen.dart';
 import '../../fees/presentation/fee_management_screen.dart';
 import '../../settings/presentation/school_settings_screen.dart';
 import '../../staff/presentation/staff_screen.dart';
@@ -23,6 +24,7 @@ enum _SchoolAdminPage {
   staff,
   classes,
   fees,
+  expenses,
   calendar,
   settings,
 }
@@ -366,6 +368,17 @@ class _DashboardBody extends StatelessWidget {
         onRefreshAccessToken: onRefreshAccessToken,
         openRecordPaymentOnLoad: openRecordPaymentOnNextFees,
         onRecordPaymentRequestConsumed: onRecordPaymentRequestConsumed,
+      );
+    }
+
+    if (selectedPage == _SchoolAdminPage.expenses) {
+      return ExpensesScreen(
+        customSchoolId: schoolId,
+        accessToken: accessToken,
+        onRefreshAccessToken: onRefreshAccessToken,
+        recordedBy: userDisplayName?.trim().isNotEmpty == true
+            ? userDisplayName!.trim()
+            : data.administratorName,
       );
     }
 
@@ -3327,6 +3340,13 @@ class _Sidebar extends StatelessWidget {
                     collapsed: collapsed,
                     active: selectedPage == _SchoolAdminPage.fees,
                     onTap: () => onSelectPage(_SchoolAdminPage.fees),
+                  ),
+                  _SidebarButton(
+                    icon: Icons.receipt_long_rounded,
+                    label: 'Expenses & Petty Cash',
+                    collapsed: collapsed,
+                    active: selectedPage == _SchoolAdminPage.expenses,
+                    onTap: () => onSelectPage(_SchoolAdminPage.expenses),
                   ),
                   _SidebarButton(
                     icon: Icons.campaign_rounded,
