@@ -178,6 +178,41 @@ void main() {
       expect(requests.last.url.path, endsWith('/assessments/ASM-100'));
     });
 
+    test('updates assessment metadata and curriculum selections', () async {
+      late http.Request request;
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((value) async {
+          request = value;
+          return http.Response(
+            '{"assessmentId":"ASM-100","title":"Fractions revised","description":"Updated notes","isOfficialSBA":true}',
+            200,
+          );
+        }),
+      );
+
+      final result = await api.updateAssessment(
+        customSchoolId: 'SCHOOL-1',
+        assessmentId: 'ASM-100',
+        body: {
+          'title': 'Fractions revised',
+          'type': 'CAT1',
+          'date': '2026-07-30',
+          'maxScore': 10,
+          'term': 2,
+          'description': 'Updated notes',
+          'isOfficialSBA': true,
+          'curriculumIndicatorCodes': ['B5.1.2.1'],
+        },
+      );
+
+      expect(request.method, 'PUT');
+      expect(request.url.path, endsWith('/assessments/ASM-100'));
+      expect(request.body, contains('"description":"Updated notes"'));
+      expect(request.body, contains('"isOfficialSBA":true'));
+      expect(result['title'], 'Fractions revised');
+    });
+
     test('loads the roster and saves a partial score sheet', () async {
       final requests = <http.Request>[];
       final api = AssessmentApiClient(
@@ -186,7 +221,7 @@ void main() {
           requests.add(request);
           if (request.method == 'PUT') {
             return http.Response(
-              '{"success":true,"assessmentId":"ASM-100","scoresEntered":1,"totalStudents":2,"completionStatus":"PARTIAL"}',
+              '{"success":true,"assessmentId":"ASM-100","scoresEntered":1,"totalStudents":2,"completionStatus":"IN_PROGRESS"}',
               200,
             );
           }
@@ -226,7 +261,7 @@ void main() {
       expect(requests.last.method, 'PUT');
       expect(requests.last.body, contains('"submittedBy":"teacher-1"'));
       expect(requests.last.body, contains('"studentId":"STU-2"'));
-      expect(saved['completionStatus'], 'PARTIAL');
+      expect(saved['completionStatus'], 'IN_PROGRESS');
     });
 
     test('resets a persisted student score', () async {

@@ -67,6 +67,28 @@ void main() {
     expect(find.text('CAT 1 – Number & Algebra'), findsNothing);
   });
 
+  testWidgets('assessment form exposes all required GES components', (
+    tester,
+  ) async {
+    await pumpWorkflow(tester);
+
+    await tester.tap(find.text('Enter Assessment').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byType(DropdownButtonFormField<String>).hitTestable().at(2),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('CAT 1'), findsWidgets);
+    expect(find.text('CAT 2'), findsWidgets);
+    expect(find.text('CAT 3'), findsWidgets);
+    expect(find.text('CAT 4 – Project/Assignment'), findsWidgets);
+    expect(find.text('End-of-Term Exam'), findsWidgets);
+  });
+
   testWidgets(
     'evaluation class selection opens its student register directly',
     (tester) async {

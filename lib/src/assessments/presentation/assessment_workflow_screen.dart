@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../data/assessment_api_client.dart';
 import '../../theme/app_theme.dart';
+import 'assessment_csv_export.dart';
 
 enum _Route {
   dashboard,
@@ -231,8 +232,8 @@ class _CompleteAssessmentWorkflowState
       grading: entered == 0
           ? 'Not started'
           : total > 0 && entered >= total
-          ? 'Complete'
-          : '$entered of $total',
+          ? 'Fully graded'
+          : 'In progress ($entered of $total)',
       term: setup.termName,
       academicYear: item['academicYear']?.toString() ?? setup.academicYearName,
       curriculumIndicators: indicators
@@ -250,6 +251,8 @@ class _CompleteAssessmentWorkflowState
       streamId: streamId,
       gradeLevelId: _jsonInt(item['gradeLevelId']),
       schoolSubjectId: _jsonInt(item['schoolSubjectId']),
+      description: item['description']?.toString() ?? '',
+      officialSba: item['isOfficialSBA'] == true,
       className:
           classOption?.label ??
           [
@@ -325,9 +328,8 @@ class _CompleteAssessmentWorkflowState
     'CAT1' => 'CAT 1',
     'CAT2' => 'CAT 2',
     'CAT3' => 'CAT 3',
-    'CAT4' => 'CAT 4',
-    'PROJECT' => 'Project',
-    'END_OF_TERM_EXAM' => 'End of Term',
+    'CAT4' || 'PROJECT' => 'CAT 4 – Project/Assignment',
+    'END_OF_TERM_EXAM' => 'End-of-Term Exam',
     'CLASS_EXERCISE' => 'Class Exercise',
     'HOMEWORK' => 'Homework',
     _ => 'Class Test',
@@ -408,7 +410,7 @@ class _CompleteAssessmentWorkflowState
     _AssessmentRecord(
       id: 'ASS-004',
       title: 'Environmental Science Project',
-      type: 'Project',
+      type: 'CAT 4 – Project/Assignment',
       subject: 'Integrated Science',
       date: '13 Feb 2024',
       maxScore: 50,
@@ -422,7 +424,7 @@ class _CompleteAssessmentWorkflowState
     _AssessmentRecord(
       id: 'ASS-005',
       title: 'End of Term Exam',
-      type: 'End of Term',
+      type: 'End-of-Term Exam',
       subject: 'Mathematics',
       date: '19 Mar 2024',
       maxScore: 100,
@@ -579,9 +581,8 @@ class _CompleteAssessmentWorkflowState
     'CAT 1' => 'CAT1',
     'CAT 2' => 'CAT2',
     'CAT 3' => 'CAT3',
-    'CAT 4' => 'CAT4',
-    'Project' => 'PROJECT',
-    'End of Term' => 'END_OF_TERM_EXAM',
+    'CAT 4' || 'CAT 4 – Project/Assignment' || 'Project' => 'CAT4',
+    'End of Term' || 'End-of-Term Exam' || 'Exam' => 'END_OF_TERM_EXAM',
     'Homework' => 'HOMEWORK',
     'Class Exercise' => 'CLASS_EXERCISE',
     _ => 'CLASS_TEST',
@@ -1328,7 +1329,14 @@ class _CompleteAssessmentWorkflowState
         ),
         filter(
           _assessmentTypeFilter,
-          const ['All Types', 'CAT 1', 'CAT 2', 'Project', 'End of Term'],
+          const [
+            'All Types',
+            'CAT 1',
+            'CAT 2',
+            'CAT 3',
+            'CAT 4 – Project/Assignment',
+            'End-of-Term Exam',
+          ],
           (value) => setState(() => _assessmentTypeFilter = value!),
         ),
         filter(
@@ -1358,8 +1366,8 @@ class _CompleteAssessmentWorkflowState
     final gradingLabel = assessment.entered == 0
         ? 'Not Started'
         : assessment.entered == assessment.totalStudents
-        ? 'Complete'
-        : 'Partial';
+        ? 'Fully Graded'
+        : 'In Progress';
     return DataRow(
       onSelectChanged: (_) => _openAssessment(assessment),
       cells: [
@@ -1394,14 +1402,14 @@ class _CompleteAssessmentWorkflowState
         DataCell(
           _oldRegisterBadge(
             assessment.type,
-            assessment.type == 'Project'
+            assessment.type == 'CAT 4 – Project/Assignment'
                 ? const Color(0xFFF3E8FF)
-                : assessment.type == 'End of Term'
+                : assessment.type == 'End-of-Term Exam'
                 ? const Color(0xFFFFF1E8)
                 : const Color(0xFFEFF6FF),
-            assessment.type == 'Project'
+            assessment.type == 'CAT 4 – Project/Assignment'
                 ? const Color(0xFF7C3AED)
-                : assessment.type == 'End of Term'
+                : assessment.type == 'End-of-Term Exam'
                 ? const Color(0xFFEA580C)
                 : const Color(0xFF2563EB),
           ),
@@ -1442,11 +1450,11 @@ class _CompleteAssessmentWorkflowState
         ),
         DataCell(
           Text(
-            assessment.average == 0
+            assessment.entered == 0
                 ? '—'
                 : assessment.average.toStringAsFixed(1),
             style: TextStyle(
-              color: assessment.average == 0
+              color: assessment.entered == 0
                   ? const Color(0xFF9CA3AF)
                   : const Color(0xFF111827),
               fontWeight: FontWeight.w700,
@@ -1455,11 +1463,11 @@ class _CompleteAssessmentWorkflowState
         ),
         DataCell(
           Text(
-            assessment.passRate == 0
+            assessment.entered == 0
                 ? '—'
                 : '${assessment.passRate.toStringAsFixed(1)}%',
             style: TextStyle(
-              color: assessment.passRate == 0
+              color: assessment.entered == 0
                   ? const Color(0xFF9CA3AF)
                   : const Color(0xFF009688),
               fontWeight: FontWeight.w700,
@@ -1490,12 +1498,12 @@ class _CompleteAssessmentWorkflowState
             gradingLabel,
             gradingLabel == 'Not Started'
                 ? const Color(0xFFFEF2F2)
-                : gradingLabel == 'Partial'
+                : gradingLabel == 'In Progress'
                 ? const Color(0xFFFFF7E6)
                 : const Color(0xFFDFF7EC),
             gradingLabel == 'Not Started'
                 ? const Color(0xFFDC2626)
-                : gradingLabel == 'Partial'
+                : gradingLabel == 'In Progress'
                 ? const Color(0xFFB45309)
                 : const Color(0xFF047857),
           ),
@@ -1729,7 +1737,7 @@ class _CompleteAssessmentWorkflowState
                                 Expanded(
                                   child: _oldStat(
                                     'Avg Score',
-                                    a.average == 0
+                                    a.entered == 0
                                         ? '—'
                                         : a.average.toStringAsFixed(1),
                                     const Color(0xFF009688),
@@ -1739,7 +1747,7 @@ class _CompleteAssessmentWorkflowState
                                 Expanded(
                                   child: _oldStat(
                                     'Pass Rate',
-                                    a.passRate == 0
+                                    a.entered == 0
                                         ? '—'
                                         : '${a.passRate.toStringAsFixed(1)}%',
                                     const Color(0xFF009688),
@@ -1858,11 +1866,11 @@ class _CompleteAssessmentWorkflowState
                         title: 'Record Info',
                         child: Column(
                           children: [
-                            _oldMetaRow('Grade Level ID', '5'),
-                            _oldMetaRow('Stream ID', '1'),
-                            _oldMetaRow('Subject ID', '1'),
-                            _oldMetaRow('Created At', '10 Jan 2024 08:00'),
-                            _oldMetaRow('Updated At', '01 Feb 2024 10:30'),
+                            _oldMetaRow('Grade Level ID', '${a.gradeLevelId}'),
+                            _oldMetaRow('Stream ID', '${a.streamId}'),
+                            _oldMetaRow('Subject ID', '${a.schoolSubjectId}'),
+                            _oldMetaRow('Created At', a.createdAt),
+                            _oldMetaRow('Updated At', a.updatedAt),
                           ],
                         ),
                       ),
@@ -2256,15 +2264,31 @@ class _CompleteAssessmentWorkflowState
       submittedBy: widget.viewerName,
       onBack: _back,
       onExport: (csv) async {
-        await Clipboard.setData(ClipboardData(text: csv));
+        final downloaded = await exportAssessmentCsv(
+          _assessmentCsvFileName(a),
+          csv,
+        );
         if (!mounted) return;
-        _notice('Score sheet CSV copied to the clipboard.');
+        _notice(
+          downloaded
+              ? 'Score sheet CSV downloaded.'
+              : 'Score sheet CSV copied to the clipboard.',
+        );
       },
       onSaved: () {
         _loadLiveAssessments();
         _notice('Scores saved successfully.');
       },
     );
+  }
+
+  String _assessmentCsvFileName(_AssessmentRecord assessment) {
+    final safeTitle = assessment.title
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+        .replaceAll(RegExp(r'^-+|-+$'), '');
+    return '${safeTitle.isEmpty ? assessment.id : safeTitle}-scores.csv';
   }
 
   _EvaluationDraft _evaluationFor(_StudentRecord student) {
@@ -7411,8 +7435,9 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
                               values: const [
                                 'CAT 1',
                                 'CAT 2',
-                                'Project',
-                                'Exam',
+                                'CAT 3',
+                                'CAT 4 – Project/Assignment',
+                                'End-of-Term Exam',
                               ],
                               onChanged: (value) =>
                                   setState(() => _type = value),
@@ -7437,9 +7462,13 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
                             TextFormField(
                               controller: _maxScore,
                               keyboardType: TextInputType.number,
-                              decoration: const InputDecoration(
+                              readOnly: (widget.source?.entered ?? 0) > 0,
+                              decoration: InputDecoration(
                                 labelText: 'Max Score',
                                 hintText: 'Max marks',
+                                helperText: (widget.source?.entered ?? 0) > 0
+                                    ? 'Reset entered scores before changing this value.'
+                                    : null,
                               ),
                               validator: (value) {
                                 final score = int.tryParse(value ?? '');
@@ -7845,7 +7874,13 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
               label: 'Assessment Type',
               hint: 'Select Type',
               value: _type,
-              values: const ['CAT 1', 'CAT 2', 'Project', 'Exam'],
+              values: const [
+                'CAT 1',
+                'CAT 2',
+                'CAT 3',
+                'CAT 4 – Project/Assignment',
+                'End-of-Term Exam',
+              ],
               onChanged: (value) => setState(() => _type = value),
             ),
             const SizedBox(height: 14),
@@ -7863,9 +7898,13 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
               TextFormField(
                 controller: _maxScore,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
+                readOnly: (widget.source?.entered ?? 0) > 0,
+                decoration: InputDecoration(
                   labelText: 'Maximum Score *',
                   hintText: '0',
+                  helperText: (widget.source?.entered ?? 0) > 0
+                      ? 'Reset entered scores before changing this value.'
+                      : null,
                 ),
                 validator: (value) {
                   final score = int.tryParse(value ?? '');
@@ -7890,7 +7929,7 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
                   SizedBox(width: 9),
                   Expanded(
                     child: Text(
-                      'Student scores will be converted from the assessment maximum to a 100-point scale for final calculations. Example: 8/10 = 80/100.',
+                      'Scores are normalized from this assessment maximum to the official GES cap for CAT 1, CAT 2, CAT 3, CAT 4, or the end-of-term exam.',
                       style: TextStyle(
                         fontSize: 12.5,
                         color: Color(0xFF245F59),
@@ -8419,8 +8458,9 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
   String _assessmentTypeValue(String label) => switch (label) {
     'CAT 1' => 'CAT1',
     'CAT 2' => 'CAT2',
-    'Project' => 'PROJECT',
-    'Exam' || 'End of Term' => 'END_OF_TERM_EXAM',
+    'CAT 3' => 'CAT3',
+    'CAT 4' || 'CAT 4 – Project/Assignment' || 'Project' => 'CAT4',
+    'Exam' || 'End of Term' || 'End-of-Term Exam' => 'END_OF_TERM_EXAM',
     _ => 'CLASS_TEST',
   };
 
