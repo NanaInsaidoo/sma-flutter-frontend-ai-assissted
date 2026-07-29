@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../data/assessment_api_client.dart';
+import '../../platform/presentation/document_opener.dart';
 import '../../theme/app_theme.dart';
 import 'assessment_csv_export.dart';
+import 'report_pdf_download.dart';
 
 enum _Route {
   dashboard,
@@ -85,6 +87,13 @@ class _CompleteAssessmentWorkflowState
   final Set<String> _selectedReportStudents = {};
   final Set<String> _processingReportStudents = {};
   final Set<String> _publishingReportStudents = {};
+  final Set<String> _reportPdfActions = {};
+  List<_StudentRecord>? _liveReportStudents;
+  final Map<String, int> _reportAssessmentsCompleted = {};
+  final Map<String, int> _reportAssessmentsRequired = {};
+  final Map<String, List<String>> _reportMissingComponents = {};
+  final Map<String, Map<String, dynamic>> _studentReportCards = {};
+  List<String> _configuredGradeLevels = const [];
   bool _refreshingReportCards = false;
   final Map<String, _ReportRemarksDraft> _reportRemarks = {
     'STU-24001': _ReportRemarksDraft.completed('Grade 6'),
@@ -132,6 +141,18 @@ class _CompleteAssessmentWorkflowState
               studentCount: 47,
             ),
           ],
+          gradeLevels: const [
+            AssessmentGradeLevelOption(
+              id: 5,
+              name: 'Grade 5',
+              status: 'ACTIVE',
+            ),
+            AssessmentGradeLevelOption(
+              id: 6,
+              name: 'Grade 6',
+              status: 'ACTIVE',
+            ),
+          ],
           subjects: const [
             AssessmentSubjectOption(
               id: 1,
@@ -163,6 +184,11 @@ class _CompleteAssessmentWorkflowState
     }
     try {
       final setup = await _assessmentFormSetup;
+      _configuredGradeLevels = setup.gradeLevels
+          .map((grade) => grade.name.trim())
+          .where((name) => name.isNotEmpty)
+          .toSet()
+          .toList();
       if (setup.streams.isEmpty) {
         throw const AssessmentApiException(
           'No active class streams are configured for this school.',
@@ -759,6 +785,10 @@ class _CompleteAssessmentWorkflowState
         }
         _open(_Route.assessments);
       case 'Generate Report Cards':
+        if (widget.customSchoolId.trim().isNotEmpty) {
+          await _loadLiveReportReadiness(setup, result);
+          if (!mounted) return;
+        }
         _open(_Route.reportCards);
       case 'Final Reports':
         _open(_Route.finalReports);
@@ -767,6 +797,186 @@ class _CompleteAssessmentWorkflowState
       default:
         _open(_Route.evaluations);
     }
+  }
+
+  List<_StudentRecord> get _reportCardStudents =>
+      _liveReportStudents ?? _students;
+
+  Future<void> _loadLiveReportReadiness(
+    AssessmentFormSetup setup,
+    String classLabel,
+  ) async {
+    final matching = setup.streams.where(
+      (stream) => stream.label == classLabel,
+    );
+    if (matching.isEmpty) {
+      _notice('The selected stream could not be resolved.');
+      return;
+    }
+    try {
+      final response = await _assessmentApi.getStreamReportReadiness(
+        customSchoolId: widget.customSchoolId,
+        streamId: matching.first.id,
+        term: setup.termSequence,
+        academicYearId: setup.academicYearId,
+        academicTermId: setup.termId,
+      );
+      final remarkRows = await _assessmentApi.getReportCardRemarks(
+        customSchoolId: widget.customSchoolId,
+        termId: setup.termId,
+      );
+      final gradeRows = await _assessmentApi.getStreamGrades(
+        customSchoolId: widget.customSchoolId,
+        streamId: matching.first.id,
+        term: setup.termSequence,
+        academicYearId: setup.academicYearId,
+      );
+      final gradesByStudent = <String, List<Map<String, dynamic>>>{};
+      for (final grade in gradeRows) {
+        final studentId = grade['customStudentId']?.toString() ?? '';
+        if (studentId.isNotEmpty) {
+          gradesByStudent.putIfAbsent(studentId, () => []).add(grade);
+        }
+      }
+      final values = response['studentReadinessDetails'];
+      final students = values is List
+          ? values
+                .whereType<Map<String, dynamic>>()
+                .map((item) {
+                  final ready = item['canGenerateReport'] == true;
+                  final studentId = item['customStudentId']?.toString() ?? '';
+                  final studentGrades =
+                      gradesByStudent[studentId] ??
+                      const <Map<String, dynamic>>[];
+                  final percentages = studentGrades
+                      .where((grade) => grade['percentage'] != null)
+                      .map((grade) => _jsonNumber(grade['percentage']))
+                      .toList();
+                  final average = percentages.isEmpty
+                      ? 0.0
+                      : percentages.reduce((a, b) => a + b) /
+                            percentages.length;
+                  final reportStatus = item['reportStatus']
+                      ?.toString()
+                      .trim()
+                      .toUpperCase();
+                  return _StudentRecord(
+                    id: studentId,
+                    name: item['studentName']?.toString() ?? 'Student',
+                    gender: '',
+                    average: average,
+                    grade: percentages.isEmpty
+                        ? '—'
+                        : _gesOverallGrade(classLabel, average),
+                    readiness: ready ? 'Ready' : 'Scores incomplete',
+                    reportStatus: reportStatus == 'PUBLISHED'
+                        ? 'Published'
+                        : studentGrades.isEmpty
+                        ? 'Not generated'
+                        : 'Generated',
+                    parent: '',
+                  );
+                })
+                .where((student) => student.id.isNotEmpty)
+                .toList()
+          : <_StudentRecord>[];
+      final completed = <String, int>{};
+      final required = <String, int>{};
+      final missing = <String, List<String>>{};
+      final publishedStudentIds = remarkRows
+          .where(
+            (row) =>
+                row['reportStatus']?.toString().trim().toUpperCase() ==
+                'PUBLISHED',
+          )
+          .map((row) => row['customStudentId']?.toString() ?? '')
+          .where((id) => id.isNotEmpty)
+          .toSet();
+      if (values is List) {
+        for (final value in values.whereType<Map<String, dynamic>>()) {
+          final id = value['customStudentId']?.toString() ?? '';
+          if (id.isEmpty) continue;
+          completed[id] = _jsonInt(value['assessmentsCompleted']);
+          required[id] = _jsonInt(value['totalAssessmentsRequired']);
+          final missingItems = <String>[];
+          final incomplete = value['incompleteSubjects'];
+          if (incomplete is List) {
+            for (final subject
+                in incomplete.whereType<Map<String, dynamic>>()) {
+              final subjectName = subject['subjectName']?.toString() ?? '';
+              final components = subject['missingAssessments'];
+              if (components is List) {
+                missingItems.addAll(
+                  components.map(
+                    (component) =>
+                        '${subjectName.isEmpty ? 'Subject' : subjectName}: $component',
+                  ),
+                );
+              }
+            }
+          }
+          missing[id] = missingItems;
+        }
+      }
+      setState(() {
+        _liveReportStudents = students;
+        for (final student in students) {
+          _reportStatuses[student.id] = publishedStudentIds.contains(student.id)
+              ? 'Published'
+              : student.reportStatus;
+        }
+        for (final row in remarkRows) {
+          final studentId = row['customStudentId']?.toString() ?? '';
+          if (studentId.isEmpty) continue;
+          _reportRemarks[studentId] = _ReportRemarksDraft(
+            classTeacherRemarks: row['classTeacherRemarks']?.toString() ?? '',
+            headTeacherRemarks: row['headTeacherRemarks']?.toString() ?? '',
+            promotedTo: row['promotedTo']?.toString() ?? '',
+            ignoreHeadTeacherRemark: row['ignoreHeadTeacherRemarks'] == true,
+            reportStatus: row['reportStatus']?.toString() ?? 'DRAFT',
+          );
+          _reportAudit[studentId] = _ReportAudit(
+            createdBy: row['createdBy']?.toString().trim().isNotEmpty == true
+                ? row['createdBy'].toString()
+                : widget.viewerName,
+            createdAt: _displayApiDateTime(row['createdAt']),
+            updatedBy: row['updatedBy']?.toString().trim().isNotEmpty == true
+                ? row['updatedBy'].toString()
+                : widget.viewerName,
+            updatedAt: _displayApiDateTime(row['updatedAt']),
+          );
+        }
+        _reportAssessmentsCompleted
+          ..clear()
+          ..addAll(completed);
+        _reportAssessmentsRequired
+          ..clear()
+          ..addAll(required);
+        _reportMissingComponents
+          ..clear()
+          ..addAll(missing);
+      });
+    } on AssessmentApiException catch (error) {
+      _notice(error.message);
+    }
+  }
+
+  String _gesOverallGrade(String classLabel, double average) {
+    final basicMatch = RegExp(
+      r'(?:Basic|Grade)\s*(\d+)',
+      caseSensitive: false,
+    ).firstMatch(classLabel);
+    final level = int.tryParse(basicMatch?.group(1) ?? '') ?? 1;
+    if (average >= 80) return 'HP';
+    if (level <= 6) {
+      if (average >= 66) return 'P';
+      if (average >= 50) return 'AP';
+      return 'D';
+    }
+    if (average >= 68) return 'P';
+    if (average >= 54) return 'AP';
+    if (average >= 40) return 'D';
+    return 'E';
   }
 
   @override
@@ -2310,9 +2520,9 @@ class _CompleteAssessmentWorkflowState
         attitude: 9,
         discipline: 8,
         organization: 8,
-        status: index < 4 ? 'Submitted' : 'Not started',
-        displayScore: initialScores[index],
-        lastEvaluated: evaluatedDates[index],
+        status: index >= 0 && index < 4 ? 'Submitted' : 'Not started',
+        displayScore: index >= 0 ? initialScores[index] : null,
+        lastEvaluated: index >= 0 ? evaluatedDates[index] : 'Never',
       ),
     );
   }
@@ -3415,6 +3625,10 @@ class _CompleteAssessmentWorkflowState
   String _reportStatusFor(_StudentRecord student) {
     if (_processingReportStudents.contains(student.id)) return 'Processing';
     if (_publishingReportStudents.contains(student.id)) return 'Publishing';
+    if ((_reportRemarks[student.id]?.reportStatus ?? '').trim().toUpperCase() ==
+        'PUBLISHED') {
+      return 'Published';
+    }
     return _reportStatuses[student.id] ?? student.reportStatus;
   }
 
@@ -3493,6 +3707,59 @@ class _CompleteAssessmentWorkflowState
       _reportGenerationProgress = .25;
       _processingReportStudents.addAll(ready.map((student) => student.id));
     });
+    if (widget.customSchoolId.trim().isNotEmpty) {
+      try {
+        final setup = await _assessmentFormSetup;
+        final streams = setup.streams.where(
+          (stream) => stream.label == _selectedClass,
+        );
+        if (streams.isEmpty) {
+          throw const AssessmentApiException(
+            'The selected stream could not be resolved.',
+          );
+        }
+        final response = await _assessmentApi.generateStreamReports(
+          customSchoolId: widget.customSchoolId,
+          streamId: streams.first.id,
+          term: setup.termSequence,
+          academicYearId: setup.academicYearId,
+          generatedBy: widget.viewerName,
+          customStudentIds: ready.map((student) => student.id).toList(),
+        );
+        final results = response['generationResults'];
+        final generated = results is Map<String, dynamic>
+            ? _jsonInt(results['reportsGenerated'])
+            : 0;
+        final failedRows = response['failedStudents'];
+        final failures = failedRows is List ? failedRows.length : 0;
+        await _loadLiveReportReadiness(setup, _selectedClass);
+        if (!mounted) return;
+        setState(() {
+          _processingReportStudents.removeAll(
+            ready.map((student) => student.id),
+          );
+          _isGeneratingReports = false;
+          _reportGenerationProgress = 1;
+        });
+        _notice(
+          failures == 0
+              ? '$generated report card(s) generated.'
+              : '$generated generated; $failures could not be generated.',
+        );
+        return;
+      } on AssessmentApiException catch (error) {
+        if (!mounted) return;
+        setState(() {
+          _processingReportStudents.removeAll(
+            ready.map((student) => student.id),
+          );
+          _isGeneratingReports = false;
+          _reportGenerationProgress = 0;
+        });
+        _notice(error.message);
+        return;
+      }
+    }
     await Future<void>.delayed(const Duration(milliseconds: 350));
     if (!mounted) return;
     setState(() => _reportGenerationProgress = .75);
@@ -3527,6 +3794,42 @@ class _CompleteAssessmentWorkflowState
     setState(() {
       _publishingReportStudents.addAll(generated.map((student) => student.id));
     });
+    if (widget.customSchoolId.trim().isNotEmpty) {
+      try {
+        final setup = await _assessmentFormSetup;
+        await Future.wait(
+          generated.map(
+            (student) => _assessmentApi.publishStudentReportCard(
+              customSchoolId: widget.customSchoolId,
+              customStudentId: student.id,
+              termId: setup.termId,
+              term: setup.termSequence,
+              academicYearId: setup.academicYearId,
+              publishedBy: widget.viewerName,
+            ),
+          ),
+        );
+        if (!mounted) return;
+        setState(() {
+          for (final student in generated) {
+            _reportStatuses[student.id] = 'Published';
+            _publishingReportStudents.remove(student.id);
+            _touchReportAudit(student);
+          }
+        });
+        _notice('${generated.length} report card(s) published.');
+        return;
+      } on AssessmentApiException catch (error) {
+        if (!mounted) return;
+        setState(
+          () => _publishingReportStudents.removeAll(
+            generated.map((student) => student.id),
+          ),
+        );
+        _notice(error.message);
+        return;
+      }
+    }
     await Future<void>.delayed(const Duration(milliseconds: 750));
     if (!mounted) return;
     setState(() {
@@ -3547,33 +3850,118 @@ class _CompleteAssessmentWorkflowState
   Future<void> _refreshReportCards() async {
     if (_refreshingReportCards) return;
     setState(() => _refreshingReportCards = true);
-    await Future<void>.delayed(const Duration(milliseconds: 650));
-    if (!mounted) return;
-    setState(() => _refreshingReportCards = false);
-    _notice('Report card statuses refreshed.');
+    try {
+      if (widget.customSchoolId.trim().isNotEmpty) {
+        final setup = await _assessmentFormSetup;
+        await _loadLiveReportReadiness(setup, _selectedClass);
+      } else {
+        await Future<void>.delayed(const Duration(milliseconds: 650));
+      }
+      if (mounted) _notice('Report card readiness refreshed.');
+    } on AssessmentApiException catch (error) {
+      if (mounted) _notice(error.message);
+    } finally {
+      if (mounted) setState(() => _refreshingReportCards = false);
+    }
   }
 
-  void _openStudentReport(_StudentRecord student) {
+  Future<void> _openStudentReport(_StudentRecord student) async {
     setState(() => _selectedReportStudent = student);
+    if (widget.customSchoolId.trim().isNotEmpty) {
+      try {
+        final setup = await _assessmentFormSetup;
+        final results = await Future.wait([
+          _assessmentApi.getStudentReportCard(
+            customSchoolId: widget.customSchoolId,
+            customStudentId: student.id,
+            termId: setup.termId,
+            academicYearId: setup.academicYearId,
+          ),
+          _assessmentApi.getStudentEvaluations(
+            customStudentId: student.id,
+            termId: setup.termId,
+          ),
+        ]);
+        if (mounted) {
+          setState(() {
+            _studentReportCards[student.id] =
+                results[0] as Map<String, dynamic>;
+            _hydrateLiveEvaluation(
+              student,
+              results[1] as List<Map<String, dynamic>>,
+            );
+          });
+        }
+      } on AssessmentApiException catch (error) {
+        if (mounted) _notice(error.message);
+      }
+    }
+    if (!mounted) return;
     _open(_Route.studentReport);
   }
 
+  void _hydrateLiveEvaluation(
+    _StudentRecord student,
+    List<Map<String, dynamic>> rows,
+  ) {
+    if (rows.isEmpty) return;
+    final byCriterion = {
+      for (final row in rows)
+        row['criterion']?.toString().toUpperCase() ?? '': row,
+    };
+    int score(String criterion) =>
+        _jsonInt(byCriterion[criterion]?['score']).clamp(0, 10);
+    final draft = _EvaluationDraft(
+      homework: score('HOMEWORK'),
+      punctuality: score('ATTENTIVENESS'),
+      neatness: score('TEAMWORK'),
+      attitude: score('CLASS_PARTICIPATION'),
+      discipline: score('RESPECT_AND_DISCIPLINE'),
+      organization: score('NEATNESS'),
+      status: 'Submitted',
+      lastEvaluated: _displayApiDate(
+        rows
+            .map((row) => row['updatedAt'] ?? row['createdAt'])
+            .where((value) => value != null)
+            .firstOrNull,
+      ),
+    );
+    draft.displayScore = draft.average;
+    draft.remark = rows
+        .map((row) => row['overallComment']?.toString().trim() ?? '')
+        .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+    const commentKeys = {
+      'HOMEWORK': 'homework',
+      'ATTENTIVENESS': 'punctuality',
+      'TEAMWORK': 'neatness',
+      'CLASS_PARTICIPATION': 'attitude',
+      'RESPECT_AND_DISCIPLINE': 'discipline',
+      'NEATNESS': 'organization',
+    };
+    for (final entry in commentKeys.entries) {
+      final comment =
+          byCriterion[entry.key]?['teacherComments']?.toString().trim() ?? '';
+      if (comment.isNotEmpty) draft.comments[entry.value] = comment;
+    }
+    _evaluationDrafts[student.id] = draft;
+  }
+
   Widget _reportCards() {
-    final missingGrades = _students
+    final missingGrades = _reportCardStudents
         .where((student) => !_gradesComplete(student))
         .length;
-    final missingTeacherRemarks = _students.where((student) {
+    final missingTeacherRemarks = _reportCardStudents.where((student) {
       return (_reportRemarks[student.id]?.classTeacherRemarks ?? '').isEmpty;
     }).length;
-    final pendingHeadComments = _students.where((student) {
+    final pendingHeadComments = _reportCardStudents.where((student) {
       final remarks = _reportRemarks[student.id] ?? _ReportRemarksDraft.empty();
       return !remarks.headTeacherRequirementSatisfied;
     }).length;
-    final missingPromotion = _students.where((student) {
+    final missingPromotion = _reportCardStudents.where((student) {
       return (_reportRemarks[student.id]?.promotedTo ?? '').isEmpty;
     }).length;
-    final readyToPublish = _students.where(_readyToPublish).length;
-    final filteredStudents = _students.where((student) {
+    final readyToPublish = _reportCardStudents.where(_readyToPublish).length;
+    final filteredStudents = _reportCardStudents.where((student) {
       final status = _reportStatusFor(student);
       final matchesFilter = switch (_reportCardFilter) {
         'Ready' => _readyToPublish(student),
@@ -3603,7 +3991,7 @@ class _CompleteAssessmentWorkflowState
         LayoutBuilder(
           builder: (_, c) => _reportCardStatGrid(
             c.maxWidth,
-            total: _students.length,
+            total: _reportCardStudents.length,
             readyToPublish: readyToPublish,
             missingGrades: missingGrades,
             missingTeacherRemarks: missingTeacherRemarks,
@@ -3960,6 +4348,11 @@ class _CompleteAssessmentWorkflowState
     final selected = _selectedReportStudents.contains(student.id);
     final status = _reportStatusFor(student);
     final readiness = _publicationReadiness(student);
+    final completed =
+        _reportAssessmentsCompleted[student.id] ??
+        (student.readiness == 'Scores incomplete' ? 4 : 6);
+    final required = _reportAssessmentsRequired[student.id] ?? 6;
+    final assessmentProgress = required == 0 ? 0.0 : completed / required;
     return InkWell(
       onTap: () => _openStudentReport(student),
       child: Container(
@@ -4048,9 +4441,7 @@ class _CompleteAssessmentWorkflowState
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(999),
                       child: LinearProgressIndicator(
-                        value: student.readiness == 'Scores incomplete'
-                            ? .72
-                            : 1,
+                        value: assessmentProgress.clamp(0, 1),
                         minHeight: 5,
                         backgroundColor: const Color(0xFFE5E7EB),
                       ),
@@ -4058,7 +4449,7 @@ class _CompleteAssessmentWorkflowState
                   ),
                   const SizedBox(width: 7),
                   Text(
-                    student.readiness == 'Scores incomplete' ? '4/6' : '6/6',
+                    '$completed/$required',
                     style: const TextStyle(
                       color: Color(0xFF64748B),
                       fontSize: 10,
@@ -4071,11 +4462,22 @@ class _CompleteAssessmentWorkflowState
               flex: 2,
               child: Center(child: _remarksReadinessButton(student)),
             ),
-            _reportTableValue('${student.average.toStringAsFixed(1)}%', 1),
+            _reportTableValue(
+              student.grade == '—'
+                  ? '—'
+                  : '${student.average.toStringAsFixed(1)}%',
+              1,
+            ),
             _reportTableValue(student.grade, 1),
             Expanded(
               flex: 2,
-              child: Center(child: _reportStateBadge(readiness)),
+              child: Center(
+                child: Tooltip(
+                  message: (_reportMissingComponents[student.id] ?? const [])
+                      .join('\n'),
+                  child: _reportStateBadge(readiness),
+                ),
+              ),
             ),
             Expanded(flex: 2, child: Center(child: _reportStateBadge(status))),
             Expanded(
@@ -4166,12 +4568,26 @@ class _CompleteAssessmentWorkflowState
     );
   }
 
+  List<String> _promotionGradeOptions([String? currentValue]) {
+    final values = <String>{
+      ..._configuredGradeLevels,
+      if (currentValue != null && currentValue.trim().isNotEmpty)
+        currentValue.trim(),
+    }.toList();
+    return values;
+  }
+
   Future<void> _openBulkPromotion() async {
     String? grade;
     var replaceExisting = false;
+    final gradeOptions = _promotionGradeOptions();
+    if (gradeOptions.isEmpty) {
+      _notice('No active grade levels are configured for this school.');
+      return;
+    }
     final targets = _selectedReportStudents.isEmpty
-        ? _students
-        : _students
+        ? _reportCardStudents
+        : _reportCardStudents
               .where((student) => _selectedReportStudents.contains(student.id))
               .toList();
     final applied = await showDialog<bool>(
@@ -4196,20 +4612,9 @@ class _CompleteAssessmentWorkflowState
                   value: grade,
                   decoration: const InputDecoration(labelText: 'Promoted To'),
                   hint: const Text('Select class or grade level'),
-                  items:
-                      const [
-                        'Grade 1',
-                        'Grade 2',
-                        'Grade 3',
-                        'Basic 4',
-                        'Grade 5',
-                        'Grade 6',
-                        'JHS 1',
-                        'JHS 2',
-                        'JHS 3',
-                      ].map((item) {
-                        return DropdownMenuItem(value: item, child: Text(item));
-                      }).toList(),
+                  items: gradeOptions.map((item) {
+                    return DropdownMenuItem(value: item, child: Text(item));
+                  }).toList(),
                   onChanged: (value) => setDialogState(() => grade = value),
                 ),
                 CheckboxListTile(
@@ -4414,23 +4819,14 @@ class _CompleteAssessmentWorkflowState
                                   labelText: 'Promoted To',
                                   prefixIcon: Icon(Icons.school_outlined),
                                 ),
-                                items:
-                                    const [
-                                      'Grade 1',
-                                      'Grade 2',
-                                      'Grade 3',
-                                      'Basic 4',
-                                      'Grade 5',
-                                      'Grade 6',
-                                      'JHS 1',
-                                      'JHS 2',
-                                      'JHS 3',
-                                    ].map((grade) {
-                                      return DropdownMenuItem(
-                                        value: grade,
-                                        child: Text(grade),
-                                      );
-                                    }).toList(),
+                                items: _promotionGradeOptions(promotedTo).map((
+                                  grade,
+                                ) {
+                                  return DropdownMenuItem(
+                                    value: grade,
+                                    child: Text(grade),
+                                  );
+                                }).toList(),
                                 onChanged: canEditHead
                                     ? (value) => setDrawerState(
                                         () => promotedTo = value ?? '',
@@ -4542,21 +4938,45 @@ class _CompleteAssessmentWorkflowState
     ),
   );
 
-  void _saveReportRemarks(
+  Future<void> _saveReportRemarks(
     _StudentRecord student,
     String classRemarks,
     String headRemarks,
     String promotedTo, {
     bool ignoreHeadTeacherRemark = false,
     bool draft = false,
-  }) {
+  }) async {
     final remarks = _ReportRemarksDraft(
       classTeacherRemarks: classRemarks.trim(),
       headTeacherRemarks: headRemarks.trim(),
       promotedTo: promotedTo,
       ignoreHeadTeacherRemark: ignoreHeadTeacherRemark,
+      reportStatus: _reportRemarks[student.id]?.reportStatus ?? 'DRAFT',
     );
     setState(() => _reportRemarks[student.id] = remarks);
+    if (widget.customSchoolId.trim().isNotEmpty) {
+      try {
+        final setup = await _assessmentFormSetup;
+        await _assessmentApi.saveReportCardRemarks(
+          submittedBy: widget.viewerName,
+          body: {
+            'customStudentId': student.id,
+            'customSchoolId': widget.customSchoolId,
+            'termId': setup.termId,
+            'classTeacherRemarks': remarks.classTeacherRemarks,
+            'headTeacherRemarks': remarks.headTeacherRemarks,
+            'ignoreHeadTeacherRemarks': remarks.ignoreHeadTeacherRemark,
+            'classTeacherName': widget.viewerName,
+            'classTeacherId': widget.viewerName,
+            'promotedTo': remarks.promotedTo,
+          },
+        );
+      } on AssessmentApiException catch (error) {
+        if (mounted) _notice(error.message);
+        return;
+      }
+    }
+    if (!mounted) return;
     _notice(
       draft
           ? '${student.name} remarks saved as draft.'
@@ -4598,7 +5018,7 @@ class _CompleteAssessmentWorkflowState
   }
 
   Widget _studentReportPage() {
-    final student = _selectedReportStudent ?? _students.first;
+    final student = _selectedReportStudent ?? _reportCardStudents.first;
     final remarks = _reportRemarks[student.id] ?? _ReportRemarksDraft.empty();
     final evaluation = _evaluationFor(student);
     final status = _reportStatusFor(student);
@@ -4607,6 +5027,22 @@ class _CompleteAssessmentWorkflowState
     final administrator = role.contains('admin');
     final canEditClass = administrator || role.contains('class teacher');
     final canEditHead = administrator || role.contains('head teacher');
+    final reportSubjects = _studentReportCards[student.id]?['subjects'];
+    final academicRows = reportSubjects is List
+        ? reportSubjects.whereType<Map>().map((rawSubject) {
+            final subject = Map<String, dynamic>.from(rawSubject);
+            String score(dynamic value) =>
+                _jsonNumber(value).toStringAsFixed(1);
+            return [
+              subject['subjectName']?.toString() ?? 'Subject',
+              score(subject['classScore']),
+              score(subject['examScore']),
+              score(subject['totalScore']),
+              subject['grade']?.toString() ?? '—',
+              subject['remarks']?.toString() ?? '—',
+            ];
+          }).toList()
+        : <List<String>>[];
 
     return _page(
       title: 'Student Report',
@@ -4621,7 +5057,9 @@ class _CompleteAssessmentWorkflowState
         _outlineButton(
           'Preview',
           Icons.visibility_outlined,
-          generated ? () => _showReportCard(student) : null,
+          generated && !_reportPdfActions.contains(student.id)
+              ? () => _previewReportPdf(student)
+              : null,
         ),
         if (status != 'Published')
           _filledButton(
@@ -4659,12 +5097,7 @@ class _CompleteAssessmentWorkflowState
               'GRADE',
               'REMARK',
             ],
-            rows: const [
-              ['Mathematics', '54', '35', '89', 'A', 'Excellent'],
-              ['English Language', '50', '32', '82', 'B', 'Very good'],
-              ['Integrated Science', '48', '30', '78', 'B', 'Good'],
-              ['Social Studies', '45', '29', '74', 'C', 'Good'],
-            ],
+            rows: academicRows,
           ),
         ),
         const SizedBox(height: 16),
@@ -4970,33 +5403,32 @@ class _CompleteAssessmentWorkflowState
               labelText: 'Promoted To',
               prefixIcon: Icon(Icons.school_outlined),
             ),
-            items:
-                const [
-                  'Grade 1',
-                  'Grade 2',
-                  'Grade 3',
-                  'Basic 4',
-                  'Grade 5',
-                  'Grade 6',
-                  'JHS 1',
-                  'JHS 2',
-                  'JHS 3',
-                ].map((grade) {
-                  return DropdownMenuItem(value: grade, child: Text(grade));
-                }).toList(),
+            items: _promotionGradeOptions(remarks.promotedTo).map((grade) {
+              return DropdownMenuItem(value: grade, child: Text(grade));
+            }).toList(),
             onChanged: canEdit
                 ? (value) =>
                       _updateReportRemarks(student, promotedTo: value ?? '')
                 : null,
           ),
           const SizedBox(height: 18),
-          _reportInfoLine('School days', '90'),
-          _reportInfoLine('Present', '88'),
-          _reportInfoLine('Absent', '2'),
-          _reportInfoLine('Late', '1'),
+          _reportInfoLine(
+            'School days',
+            _reportValue(student, 'totalSchoolDays'),
+          ),
+          _reportInfoLine('Present', _reportValue(student, 'daysPresent')),
+          _reportInfoLine('Absent', _reportValue(student, 'daysAbsent')),
+          _reportInfoLine('Late', _reportValue(student, 'lateness')),
+          _reportInfoLine('Punctuality', _reportValue(student, 'punctuality')),
         ],
       ),
     );
+  }
+
+  String _reportValue(_StudentRecord student, String key) {
+    final value = _studentReportCards[student.id]?[key];
+    if (value == null || value.toString().trim().isEmpty) return '—';
+    return value.toString();
   }
 
   Widget _reportInfoLine(String label, String value) {
@@ -5248,6 +5680,39 @@ class _CompleteAssessmentWorkflowState
       ),
     );
     if (saved == true && mounted) {
+      final overallComment = remarkController.text.trim();
+      final entries =
+          <(String, int, String)>[
+            ('HOMEWORK', homework, 'homework'),
+            ('ATTENTIVENESS', attentiveness, 'punctuality'),
+            ('TEAMWORK', teamwork, 'neatness'),
+            ('CLASS_PARTICIPATION', participation, 'attitude'),
+            ('RESPECT_AND_DISCIPLINE', discipline, 'discipline'),
+            ('NEATNESS', neatness, 'organization'),
+          ].map((entry) {
+            return {
+              'criterion': entry.$1,
+              'score': entry.$2,
+              'teacherComments': criterionComments[entry.$3]?.trim() ?? '',
+              'overallComment': overallComment,
+            };
+          }).toList();
+      if (widget.customSchoolId.trim().isNotEmpty) {
+        try {
+          final setup = await _assessmentFormSetup;
+          await _assessmentApi.saveStudentEvaluations(
+            customSchoolId: widget.customSchoolId,
+            customStudentId: student.id,
+            termId: setup.termId,
+            evaluatedBy: widget.viewerName,
+            evaluations: entries,
+          );
+        } on AssessmentApiException catch (error) {
+          if (mounted) _notice(error.message);
+          remarkController.dispose();
+          return;
+        }
+      }
       setState(() {
         evaluation.homework = homework;
         evaluation.punctuality = attentiveness;
@@ -5255,7 +5720,7 @@ class _CompleteAssessmentWorkflowState
         evaluation.attitude = participation;
         evaluation.discipline = discipline;
         evaluation.organization = neatness;
-        evaluation.remark = remarkController.text.trim();
+        evaluation.remark = overallComment;
         evaluation.comments
           ..clear()
           ..addAll(
@@ -6578,12 +7043,15 @@ class _CompleteAssessmentWorkflowState
                         style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
                       const SizedBox(height: 20),
-                      _reportSection('ATTENDANCE RECORD', const [
-                        ('Total school days', '90'),
-                        ('Present', '88'),
-                        ('Absent', '2'),
-                        ('Late', '1'),
-                        ('Punctuality', 'Excellent'),
+                      _reportSection('ATTENDANCE RECORD', [
+                        (
+                          'Total school days',
+                          _reportValue(student, 'totalSchoolDays'),
+                        ),
+                        ('Present', _reportValue(student, 'daysPresent')),
+                        ('Absent', _reportValue(student, 'daysAbsent')),
+                        ('Late', _reportValue(student, 'lateness')),
+                        ('Punctuality', _reportValue(student, 'punctuality')),
                       ]),
                       const SizedBox(height: 16),
                       _reportSection('CONDUCT / TERMINAL EVALUATION', const [
@@ -6652,14 +7120,17 @@ class _CompleteAssessmentWorkflowState
                     ),
                     const SizedBox(width: 10),
                     OutlinedButton.icon(
-                      onPressed: () =>
-                          _notice('Report card print preview opened.'),
+                      onPressed: _reportPdfActions.contains(student.id)
+                          ? null
+                          : () => _previewReportPdf(student),
                       icon: const Icon(Icons.print_outlined),
                       label: const Text('Print'),
                     ),
                     const SizedBox(width: 10),
                     FilledButton.icon(
-                      onPressed: () => _notice('Report card downloaded.'),
+                      onPressed: _reportPdfActions.contains(student.id)
+                          ? null
+                          : () => _downloadReportPdf(student),
                       icon: const Icon(Icons.download_outlined),
                       label: const Text('Download'),
                     ),
@@ -6671,6 +7142,73 @@ class _CompleteAssessmentWorkflowState
         ),
       ),
     );
+  }
+
+  Future<List<int>> _loadReportPdf(_StudentRecord student) async {
+    if (widget.customSchoolId.trim().isEmpty) {
+      throw const AssessmentApiException(
+        'A live school session is required to generate the PDF.',
+      );
+    }
+    final setup = await _assessmentFormSetup;
+    return _assessmentApi.getStudentReportCardPdf(
+      customSchoolId: widget.customSchoolId,
+      customStudentId: student.id,
+      termId: setup.termId,
+      academicYearId: setup.academicYearId,
+    );
+  }
+
+  Future<void> _previewReportPdf(_StudentRecord student) async {
+    if (_reportPdfActions.contains(student.id)) return;
+    prepareDocumentWindow();
+    setState(() => _reportPdfActions.add(student.id));
+    try {
+      final bytes = await _loadReportPdf(student);
+      await openDocumentBytes(
+        bytes,
+        'application/pdf',
+        _reportPdfFileName(student),
+      );
+      if (mounted) _notice('${student.name} report preview opened.');
+    } on AssessmentApiException catch (error) {
+      if (mounted) _notice(error.message);
+    } on UnsupportedError catch (error) {
+      if (mounted) _notice(error.message ?? 'PDF preview is unavailable.');
+    } finally {
+      if (mounted) setState(() => _reportPdfActions.remove(student.id));
+    }
+  }
+
+  Future<void> _downloadReportPdf(_StudentRecord student) async {
+    if (_reportPdfActions.contains(student.id)) return;
+    setState(() => _reportPdfActions.add(student.id));
+    try {
+      final bytes = await _loadReportPdf(student);
+      final downloaded = await downloadReportPdf(
+        _reportPdfFileName(student),
+        bytes,
+      );
+      if (mounted) {
+        _notice(
+          downloaded
+              ? '${student.name} report downloaded.'
+              : 'PDF download is currently available on web.',
+        );
+      }
+    } on AssessmentApiException catch (error) {
+      if (mounted) _notice(error.message);
+    } finally {
+      if (mounted) setState(() => _reportPdfActions.remove(student.id));
+    }
+  }
+
+  String _reportPdfFileName(_StudentRecord student) {
+    final safeName = student.name
+        .trim()
+        .replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_|_$'), '');
+    return 'Report_Card_${safeName.isEmpty ? student.id : safeName}.pdf';
   }
 
   Widget _reportSection(String title, List<(String, String)> entries) {
@@ -10058,6 +10596,7 @@ class _ReportRemarksDraft {
     required this.headTeacherRemarks,
     required this.promotedTo,
     this.ignoreHeadTeacherRemark = false,
+    this.reportStatus = 'DRAFT',
   });
 
   factory _ReportRemarksDraft.empty() => const _ReportRemarksDraft(
@@ -10081,12 +10620,14 @@ class _ReportRemarksDraft {
   final String headTeacherRemarks;
   final String promotedTo;
   final bool ignoreHeadTeacherRemark;
+  final String reportStatus;
 
   _ReportRemarksDraft copyWith({
     String? classTeacherRemarks,
     String? headTeacherRemarks,
     String? promotedTo,
     bool? ignoreHeadTeacherRemark,
+    String? reportStatus,
   }) {
     return _ReportRemarksDraft(
       classTeacherRemarks: classTeacherRemarks ?? this.classTeacherRemarks,
@@ -10094,6 +10635,7 @@ class _ReportRemarksDraft {
       promotedTo: promotedTo ?? this.promotedTo,
       ignoreHeadTeacherRemark:
           ignoreHeadTeacherRemark ?? this.ignoreHeadTeacherRemark,
+      reportStatus: reportStatus ?? this.reportStatus,
     );
   }
 

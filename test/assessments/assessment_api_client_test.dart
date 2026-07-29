@@ -93,6 +93,12 @@ void main() {
               200,
             );
           }
+          if (request.url.path.endsWith('/api/grade-levels/school/SCHOOL-1')) {
+            return http.Response(
+              '[{"gradeLevelId":5,"gradeLevelName":"Grade 5","status":"ACTIVE"},{"gradeLevelId":6,"gradeLevelName":"Grade 6","status":"ACTIVE"}]',
+              200,
+            );
+          }
           return http.Response(
             '{"academicYear":{"id":2,"name":"2026-2027"},"academicTerm":{"id":4,"name":"Second Term","closed":false}}',
             200,
@@ -103,6 +109,10 @@ void main() {
       final setup = await api.getFormSetup('SCHOOL-1');
 
       expect(setup.streams.single.label, 'Grade 5 - A');
+      expect(setup.gradeLevels.map((grade) => grade.name), [
+        'Grade 5',
+        'Grade 6',
+      ]);
       expect(setup.subjects.single.name, 'Mathematics');
       expect(setup.academicYearId, 2);
       expect(setup.termSequence, 2);
@@ -213,6 +223,171 @@ void main() {
       expect(result['title'], 'Fractions revised');
     });
 
+    test('loads GES report readiness for a stream', () async {
+      late http.Request request;
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((value) async {
+          request = value;
+          return http.Response(
+            '{"streamId":7,"totalStudents":2,"overallStatus":{"studentsReadyForReport":1,"studentsNotReady":1},"studentReadinessDetails":[]}',
+            200,
+          );
+        }),
+      );
+
+      final readiness = await api.getStreamReportReadiness(
+        customSchoolId: 'SCHOOL-1',
+        streamId: 7,
+        term: 2,
+        academicYearId: 3,
+      );
+
+      expect(request.url.path, endsWith('/api/grades/stream/7/readiness'));
+      expect(request.url.queryParameters['term'], '2');
+      expect(request.headers['X-School-ID'], 'SCHOOL-1');
+      expect(readiness['totalStudents'], 2);
+    });
+
+    test('loads grades and generates selected student reports', () async {
+      final requests = <http.Request>[];
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((request) async {
+          requests.add(request);
+          if (request.method == 'POST') {
+            return http.Response(
+              '{"generationResults":{"reportsGenerated":1,"reportsNotGenerated":0}}',
+              200,
+            );
+          }
+          return http.Response(
+            '[{"customStudentId":"STU-1","percentage":84,"grade":"HP"}]',
+            200,
+          );
+        }),
+      );
+
+      final grades = await api.getStreamGrades(
+        customSchoolId: 'SCHOOL-1',
+        streamId: 7,
+        term: 2,
+        academicYearId: 3,
+      );
+      await api.generateStreamReports(
+        customSchoolId: 'SCHOOL-1',
+        streamId: 7,
+        term: 2,
+        academicYearId: 3,
+        generatedBy: 'teacher-1',
+        customStudentIds: const ['STU-1'],
+      );
+
+      expect(grades.single['percentage'], 84);
+      expect(requests.first.url.path, endsWith('/all-subjects'));
+      expect(requests.last.url.path, endsWith('/stream/generate-reports'));
+      expect(requests.last.headers['X-School-ID'], 'SCHOOL-1');
+      expect(requests.last.body, contains('"customStudentIds":["STU-1"]'));
+    });
+
+    test('loads and saves report-card remarks', () async {
+      final requests = <http.Request>[];
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((request) async {
+          requests.add(request);
+          if (request.method == 'POST') {
+            return http.Response(
+              '{"customStudentId":"STU-1","ignoreHeadTeacherRemarks":true}',
+              200,
+            );
+          }
+          return http.Response(
+            '[{"customStudentId":"STU-1","classTeacherRemarks":"Good progress","promotedTo":"Grade 6"}]',
+            200,
+          );
+        }),
+      );
+
+      final rows = await api.getReportCardRemarks(
+        customSchoolId: 'SCHOOL-1',
+        termId: 4,
+      );
+      await api.saveReportCardRemarks(
+        submittedBy: 'teacher-1',
+        body: {
+          'customStudentId': 'STU-1',
+          'customSchoolId': 'SCHOOL-1',
+          'termId': 4,
+          'ignoreHeadTeacherRemarks': true,
+        },
+      );
+
+      expect(rows.single['promotedTo'], 'Grade 6');
+      expect(requests.first.url.path, endsWith('/school/SCHOOL-1/term/4'));
+      expect(requests.last.method, 'POST');
+      expect(requests.last.url.queryParameters['submittedBy'], 'teacher-1');
+      expect(requests.last.body, contains('"ignoreHeadTeacherRemarks":true'));
+    });
+
+    test(
+      'publishes a report card through the guarded lifecycle endpoint',
+      () async {
+        late http.Request request;
+        final api = AssessmentApiClient(
+          accessToken: 'test-token',
+          client: MockClient((value) async {
+            request = value;
+            return http.Response(
+              '{"customStudentId":"STU-1","reportStatus":"PUBLISHED"}',
+              200,
+            );
+          }),
+        );
+
+        final result = await api.publishStudentReportCard(
+          customSchoolId: 'SCHOOL-1',
+          customStudentId: 'STU-1',
+          termId: 4,
+          term: 2,
+          academicYearId: 3,
+          publishedBy: 'head-teacher-1',
+        );
+
+        expect(request.method, 'POST');
+        expect(request.url.path, endsWith('/student/STU-1/publish'));
+        expect(request.url.queryParameters['termId'], '4');
+        expect(result['reportStatus'], 'PUBLISHED');
+      },
+    );
+
+    test('downloads the authenticated physical report-card PDF', () async {
+      late http.Request request;
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((value) async {
+          request = value;
+          return http.Response.bytes(
+            const [0x25, 0x50, 0x44, 0x46],
+            200,
+            headers: {'content-type': 'application/pdf'},
+          );
+        }),
+      );
+
+      final bytes = await api.getStudentReportCardPdf(
+        customSchoolId: 'SCHOOL-1',
+        customStudentId: 'STU-1',
+        termId: 4,
+        academicYearId: 3,
+      );
+
+      expect(request.url.path, endsWith('/student/STU-1/pdf'));
+      expect(request.url.queryParameters['download'], 'false');
+      expect(request.headers['Accept'], 'application/pdf');
+      expect(bytes, const [0x25, 0x50, 0x44, 0x46]);
+    });
+
     test('loads the roster and saves a partial score sheet', () async {
       final requests = <http.Request>[];
       final api = AssessmentApiClient(
@@ -286,6 +461,71 @@ void main() {
       expect(request.method, 'DELETE');
       expect(request.url.path, endsWith('/assessments/ASM-100/scores/STU-1'));
       expect(result['completionStatus'], 'NOT_STARTED');
+    });
+
+    test('creates evaluations when the student has none', () async {
+      final requests = <http.Request>[];
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((request) async {
+          requests.add(request);
+          if (request.method == 'GET') return http.Response('[]', 200);
+          return http.Response('{"success":true}', 201);
+        }),
+      );
+
+      await api.saveStudentEvaluations(
+        customSchoolId: 'SCHOOL-1',
+        customStudentId: 'STU-1',
+        termId: 4,
+        evaluatedBy: 'teacher-1',
+        evaluations: [
+          {
+            'criterion': 'HOMEWORK',
+            'score': 8,
+            'teacherComments': 'Consistent',
+            'overallComment': 'Good progress',
+          },
+        ],
+      );
+
+      expect(requests, hasLength(2));
+      expect(requests.last.method, 'POST');
+      expect(requests.last.url.path, endsWith('/api/student-evaluations'));
+      expect(requests.last.url.queryParameters['evaluatedBy'], 'teacher-1');
+      expect(requests.last.body, contains('"customStudentId":"STU-1"'));
+      expect(requests.last.body, contains('"overallComment":"Good progress"'));
+    });
+
+    test('updates evaluations when the student already has entries', () async {
+      final requests = <http.Request>[];
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((request) async {
+          requests.add(request);
+          if (request.method == 'GET') {
+            return http.Response('[{"criterion":"HOMEWORK","score":5}]', 200);
+          }
+          return http.Response('{"success":true}', 200);
+        }),
+      );
+
+      await api.saveStudentEvaluations(
+        customSchoolId: 'SCHOOL-1',
+        customStudentId: 'STU-1',
+        termId: 4,
+        evaluatedBy: 'teacher-1',
+        evaluations: [
+          {'criterion': 'HOMEWORK', 'score': 9},
+        ],
+      );
+
+      expect(requests.last.method, 'PUT');
+      expect(
+        requests.last.url.path,
+        endsWith('/api/student-evaluations/STU-1'),
+      );
+      expect(requests.last.body, contains('"score":9'));
     });
   });
 }

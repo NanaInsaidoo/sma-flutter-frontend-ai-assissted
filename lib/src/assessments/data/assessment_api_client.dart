@@ -22,6 +22,7 @@ class AssessmentApiClient {
       _send('/api/grade-levels/school/$schoolPath/all-streams'),
       _send('/api/schools/$schoolPath/subjects?active=true'),
       _send('/api/schools/$schoolPath/academic-context/current'),
+      _send('/api/grade-levels/school/$schoolPath'),
     ]);
 
     final streamsBody = _decodeBody(responses[0]);
@@ -57,12 +58,47 @@ class AssessmentApiClient {
         .toList();
 
     final context = _map(_decodeBody(responses[2]));
+    final gradeLevelsBody = _decodeBody(responses[3]);
+    final gradeLevelValues = gradeLevelsBody is Map<String, dynamic>
+        ? _list(
+            gradeLevelsBody['data'] ??
+                gradeLevelsBody['gradeLevels'] ??
+                gradeLevelsBody['content'] ??
+                gradeLevelsBody['items'],
+          )
+        : _list(gradeLevelsBody);
+    final gradeLevels = gradeLevelValues
+        .map(_map)
+        .map((item) {
+          final nested = _map(item['gradeLevel']);
+          final name = _string(
+            item['gradeName'] ??
+                item['gradeLevelName'] ??
+                item['name'] ??
+                nested['gradeName'] ??
+                nested['gradeLevelName'] ??
+                nested['name'],
+          );
+          return AssessmentGradeLevelOption(
+            id: _int(item['gradeLevelId'] ?? item['id'] ?? nested['id']) ?? 0,
+            name: name,
+            status: _string(item['status']),
+          );
+        })
+        .where(
+          (item) =>
+              item.id > 0 &&
+              item.name.isNotEmpty &&
+              item.status.toUpperCase() != 'INACTIVE',
+        )
+        .toList();
     final year = _map(context['academicYear']);
     final term = _map(context['academicTerm']);
     final termId = _int(term['id']) ?? 0;
     final termName = _string(term['name']);
     return AssessmentFormSetup(
       streams: streams,
+      gradeLevels: gradeLevels,
       subjects: subjects,
       academicYearId: _int(year['id']) ?? 0,
       academicYearName: _string(year['name']),
@@ -279,10 +315,241 @@ class AssessmentApiClient {
     return indicators;
   }
 
+  Future<Map<String, dynamic>> getStreamReportReadiness({
+    required String customSchoolId,
+    required int streamId,
+    required int term,
+    required int academicYearId,
+    int? academicTermId,
+  }) async {
+    final query = Uri(
+      queryParameters: {
+        'term': '$term',
+        'academicYearId': '$academicYearId',
+        if (academicTermId != null) 'academicTermId': '$academicTermId',
+      },
+    ).query;
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/grades/stream/$streamId/readiness?$query',
+          extraHeaders: {'X-School-ID': customSchoolId},
+        ),
+      ),
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getStreamGrades({
+    required String customSchoolId,
+    required int streamId,
+    required int term,
+    required int academicYearId,
+  }) async {
+    final query = Uri(
+      queryParameters: {'term': '$term', 'academicYearId': '$academicYearId'},
+    ).query;
+    return _list(
+      _decodeBody(
+        await _send(
+          '/api/grades/stream/$streamId/all-subjects?$query',
+          extraHeaders: {'X-School-ID': customSchoolId},
+        ),
+      ),
+    ).map(_map).toList();
+  }
+
+  Future<Map<String, dynamic>> generateStreamReports({
+    required String customSchoolId,
+    required int streamId,
+    required int term,
+    required int academicYearId,
+    required String generatedBy,
+    List<String> customStudentIds = const [],
+  }) async {
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/grades/stream/generate-reports',
+          method: 'POST',
+          extraHeaders: {'X-School-ID': customSchoolId},
+          body: {
+            'streamId': streamId,
+            'term': term,
+            'academicYearId': academicYearId,
+            'strictMode': true,
+            'finalize': false,
+            'generatedBy': generatedBy,
+            if (customStudentIds.isNotEmpty)
+              'customStudentIds': customStudentIds,
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<Map<String, dynamic>> getStudentReportCard({
+    required String customSchoolId,
+    required String customStudentId,
+    required int termId,
+    required int academicYearId,
+  }) async {
+    final studentPath = Uri.encodeComponent(customStudentId);
+    final query = Uri(
+      queryParameters: {
+        'customSchoolId': customSchoolId,
+        'termId': '$termId',
+        'academicYearId': '$academicYearId',
+      },
+    ).query;
+    return _map(
+      _decodeBody(
+        await _send('/api/report-cards/student/$studentPath/data?$query'),
+      ),
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getStudentEvaluations({
+    required String customStudentId,
+    required int termId,
+  }) async {
+    final studentPath = Uri.encodeComponent(customStudentId);
+    final query = Uri(queryParameters: {'termId': '$termId'}).query;
+    return _list(
+      _decodeBody(
+        await _send('/api/student-evaluations/student/$studentPath?$query'),
+      ),
+    ).map(_map).toList();
+  }
+
+  Future<void> saveStudentEvaluations({
+    required String customSchoolId,
+    required String customStudentId,
+    required int termId,
+    required String evaluatedBy,
+    required List<Map<String, dynamic>> evaluations,
+  }) async {
+    final existing = await getStudentEvaluations(
+      customStudentId: customStudentId,
+      termId: termId,
+    );
+    if (existing.isEmpty) {
+      final query = Uri(queryParameters: {'evaluatedBy': evaluatedBy}).query;
+      await _send(
+        '/api/student-evaluations?$query',
+        method: 'POST',
+        body: {
+          'customStudentId': customStudentId,
+          'customSchoolId': customSchoolId,
+          'termId': '$termId',
+          'evaluations': evaluations,
+        },
+      );
+      return;
+    }
+
+    final studentPath = Uri.encodeComponent(customStudentId);
+    final query = Uri(
+      queryParameters: {
+        'customSchoolId': customSchoolId,
+        'termId': '$termId',
+        'evaluatedBy': evaluatedBy,
+      },
+    ).query;
+    await _send(
+      '/api/student-evaluations/$studentPath?$query',
+      method: 'PUT',
+      body: evaluations,
+    );
+  }
+
+  Future<Map<String, dynamic>> publishStudentReportCard({
+    required String customSchoolId,
+    required String customStudentId,
+    required int termId,
+    required int term,
+    required int academicYearId,
+    required String publishedBy,
+  }) async {
+    final studentPath = Uri.encodeComponent(customStudentId);
+    final query = Uri(
+      queryParameters: {
+        'customSchoolId': customSchoolId,
+        'termId': '$termId',
+        'term': '$term',
+        'academicYearId': '$academicYearId',
+        'publishedBy': publishedBy,
+      },
+    ).query;
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/report-cards/student/$studentPath/publish?$query',
+          method: 'POST',
+        ),
+      ),
+    );
+  }
+
+  Future<List<int>> getStudentReportCardPdf({
+    required String customSchoolId,
+    required String customStudentId,
+    required int termId,
+    required int academicYearId,
+  }) async {
+    final studentPath = Uri.encodeComponent(customStudentId);
+    final query = Uri(
+      queryParameters: {
+        'customSchoolId': customSchoolId,
+        'termId': '$termId',
+        'academicYearId': '$academicYearId',
+        'download': 'false',
+      },
+    ).query;
+    final response = await _send(
+      '/api/report-cards/student/$studentPath/pdf?$query',
+      extraHeaders: const {'Accept': 'application/pdf'},
+    );
+    if (response.bodyBytes.isEmpty) {
+      throw const AssessmentApiException(
+        'The report PDF could not be generated.',
+      );
+    }
+    return response.bodyBytes;
+  }
+
+  Future<List<Map<String, dynamic>>> getReportCardRemarks({
+    required String customSchoolId,
+    required int termId,
+  }) async {
+    final schoolPath = Uri.encodeComponent(customSchoolId);
+    return _list(
+      _decodeBody(
+        await _send('/api/report-card-remarks/school/$schoolPath/term/$termId'),
+      ),
+    ).map(_map).toList();
+  }
+
+  Future<Map<String, dynamic>> saveReportCardRemarks({
+    required String submittedBy,
+    required Map<String, dynamic> body,
+  }) async {
+    final query = Uri(queryParameters: {'submittedBy': submittedBy}).query;
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/report-card-remarks?$query',
+          method: 'POST',
+          body: body,
+        ),
+      ),
+    );
+  }
+
   Future<http.Response> _send(
     String path, {
     String method = 'GET',
-    Map<String, dynamic>? body,
+    Object? body,
+    Map<String, String> extraHeaders = const {},
     bool retry = true,
   }) async {
     if (accessToken == null || accessToken!.isEmpty) {
@@ -294,6 +561,7 @@ class AssessmentApiClient {
       final headers = {
         'Authorization': 'Bearer $accessToken',
         'Content-Type': 'application/json',
+        ...extraHeaders,
       };
       final response =
           await (method == 'POST'
@@ -312,7 +580,13 @@ class AssessmentApiClient {
         final refreshed = await onRefreshAccessToken!();
         if (refreshed != null && refreshed.isNotEmpty) {
           accessToken = refreshed;
-          return _send(path, method: method, body: body, retry: false);
+          return _send(
+            path,
+            method: method,
+            body: body,
+            extraHeaders: extraHeaders,
+            retry: false,
+          );
         }
       }
       throw AssessmentApiException(
@@ -410,6 +684,7 @@ class AssessmentStudentScore {
 class AssessmentFormSetup {
   const AssessmentFormSetup({
     required this.streams,
+    required this.gradeLevels,
     required this.subjects,
     required this.academicYearId,
     required this.academicYearName,
@@ -420,6 +695,7 @@ class AssessmentFormSetup {
   });
 
   final List<AssessmentStreamOption> streams;
+  final List<AssessmentGradeLevelOption> gradeLevels;
   final List<AssessmentSubjectOption> subjects;
   final int academicYearId;
   final String academicYearName;
@@ -427,6 +703,18 @@ class AssessmentFormSetup {
   final String termName;
   final int termSequence;
   final bool termClosed;
+}
+
+class AssessmentGradeLevelOption {
+  const AssessmentGradeLevelOption({
+    required this.id,
+    required this.name,
+    required this.status,
+  });
+
+  final int id;
+  final String name;
+  final String status;
 }
 
 class AssessmentStreamOption {

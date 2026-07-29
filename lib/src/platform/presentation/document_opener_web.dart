@@ -20,5 +20,5 @@ Future<void> openDocumentBytes(
 ) async {
   final blob = html.Blob([Uint8List.fromList(bytes)], contentType);
   final url = html.Url.createObjectUrlFromBlob(blob);
-  html.window.open(url, '_blank');
+  html.window.open(url, _documentWindowName);
 }
