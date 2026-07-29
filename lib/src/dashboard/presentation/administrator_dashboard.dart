@@ -7,6 +7,7 @@ import '../domain/dashboard_models.dart';
 import '../../admissions/presentation/admissions_screen.dart';
 import '../../attendance/data/attendance_api_client.dart';
 import '../../attendance/presentation/attendance_dashboard_screen.dart';
+import '../../assessments/presentation/assessment_dashboard_screen.dart';
 import '../../classes/presentation/grade_streams_screen.dart';
 import '../../expenses/presentation/expenses_screen.dart';
 import '../../fees/presentation/fee_management_screen.dart';
@@ -20,6 +21,7 @@ enum _SchoolAdminPage {
   admissions,
   students,
   attendance,
+  assessments,
   households,
   staff,
   classes,
@@ -345,6 +347,16 @@ class _DashboardBody extends StatelessWidget {
           accessToken: accessToken,
           onRefreshAccessToken: onRefreshAccessToken,
         ),
+      );
+    }
+
+    if (selectedPage == _SchoolAdminPage.assessments) {
+      return AssessmentDashboardScreen(
+        schoolName: schoolName?.trim().isNotEmpty == true
+            ? schoolName!.trim()
+            : data.schoolName,
+        term: data.term,
+        academicYear: data.academicYear,
       );
     }
 
@@ -3312,6 +3324,13 @@ class _Sidebar extends StatelessWidget {
                     collapsed: collapsed,
                     active: selectedPage == _SchoolAdminPage.attendance,
                     onTap: () => onSelectPage(_SchoolAdminPage.attendance),
+                  ),
+                  _SidebarButton(
+                    icon: Icons.assessment_outlined,
+                    label: 'Assessments',
+                    collapsed: collapsed,
+                    active: selectedPage == _SchoolAdminPage.assessments,
+                    onTap: () => onSelectPage(_SchoolAdminPage.assessments),
                   ),
                   _SidebarButton(
                     icon: Icons.groups_rounded,
