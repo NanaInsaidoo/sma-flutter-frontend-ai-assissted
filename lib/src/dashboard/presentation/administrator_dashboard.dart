@@ -357,6 +357,9 @@ class _DashboardBody extends StatelessWidget {
             : data.schoolName,
         term: data.term,
         academicYear: data.academicYear,
+        customSchoolId: schoolId,
+        accessToken: accessToken,
+        onRefreshAccessToken: onRefreshAccessToken,
       );
     }
 

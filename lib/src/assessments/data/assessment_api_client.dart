@@ -1,0 +1,489 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+
+import '../../config/api_config.dart';
+
+class AssessmentApiClient {
+  AssessmentApiClient({
+    required this.accessToken,
+    this.onRefreshAccessToken,
+    http.Client? client,
+  }) : _client = client ?? http.Client();
+
+  String? accessToken;
+  final Future<String?> Function()? onRefreshAccessToken;
+  final http.Client _client;
+
+  Future<AssessmentFormSetup> getFormSetup(String customSchoolId) async {
+    final schoolPath = Uri.encodeComponent(customSchoolId);
+    final responses = await Future.wait([
+      _send('/api/grade-levels/school/$schoolPath/all-streams'),
+      _send('/api/schools/$schoolPath/subjects?active=true'),
+      _send('/api/schools/$schoolPath/academic-context/current'),
+    ]);
+
+    final streamsBody = _decodeBody(responses[0]);
+    final streamValues = streamsBody is Map<String, dynamic>
+        ? _list(streamsBody['data'])
+        : _list(streamsBody);
+    final streams = streamValues
+        .map(_map)
+        .map(
+          (item) => AssessmentStreamOption(
+            id: _int(item['id']) ?? 0,
+            gradeLevelId: _int(item['gradeLevelId']) ?? 0,
+            gradeName: _string(item['gradeLevelName']),
+            streamName: _string(item['name']).isNotEmpty
+                ? _string(item['name'])
+                : _string(item['alias']),
+            studentCount: _int(item['studentCount']) ?? 0,
+          ),
+        )
+        .where((item) => item.id > 0 && item.label.isNotEmpty)
+        .toList();
+
+    final subjects = _list(_decodeBody(responses[1]))
+        .map(_map)
+        .map(
+          (item) => AssessmentSubjectOption(
+            id: _int(item['id']) ?? 0,
+            gradeLevelId: _int(item['gradeLevelId']) ?? 0,
+            name: _string(item['subjectName']),
+          ),
+        )
+        .where((item) => item.id > 0 && item.name.isNotEmpty)
+        .toList();
+
+    final context = _map(_decodeBody(responses[2]));
+    final year = _map(context['academicYear']);
+    final term = _map(context['academicTerm']);
+    final termId = _int(term['id']) ?? 0;
+    final termName = _string(term['name']);
+    return AssessmentFormSetup(
+      streams: streams,
+      subjects: subjects,
+      academicYearId: _int(year['id']) ?? 0,
+      academicYearName: _string(year['name']),
+      termId: termId,
+      termName: termName,
+      termSequence:
+          _int(term['sequence']) ??
+          _termSequenceFromName(termName) ??
+          (termId >= 1 && termId <= 3 ? termId : 0),
+      termClosed: term['closed'] == true,
+    );
+  }
+
+  Future<Map<String, dynamic>> createAssessment({
+    required String customSchoolId,
+    required Map<String, dynamic> body,
+  }) async {
+    final schoolPath = Uri.encodeComponent(customSchoolId);
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/sba-new/schools/$schoolPath/assessments',
+          method: 'POST',
+          body: body,
+        ),
+      ),
+    );
+  }
+
+  Future<Map<String, dynamic>> updateAssessment({
+    required String customSchoolId,
+    required String assessmentId,
+    required Map<String, dynamic> body,
+  }) async {
+    final schoolPath = Uri.encodeComponent(customSchoolId);
+    final assessmentPath = Uri.encodeComponent(assessmentId);
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/sba-new/schools/$schoolPath/assessments/$assessmentPath',
+          method: 'PUT',
+          body: body,
+        ),
+      ),
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getAssessments({
+    required String customSchoolId,
+    required int streamId,
+    required int term,
+    required int academicYearId,
+  }) async {
+    final schoolPath = Uri.encodeComponent(customSchoolId);
+    final query = Uri(
+      queryParameters: {
+        'streamId': '$streamId',
+        'term': '$term',
+        'academicYearId': '$academicYearId',
+        'page': '0',
+        'size': '100',
+      },
+    ).query;
+    final decoded = _map(
+      _decodeBody(
+        await _send('/api/sba-new/schools/$schoolPath/assessments?$query'),
+      ),
+    );
+    return _list(decoded['assessments']).map(_map).toList();
+  }
+
+  Future<Map<String, dynamic>> getAssessment({
+    required String customSchoolId,
+    required String assessmentId,
+  }) async {
+    final schoolPath = Uri.encodeComponent(customSchoolId);
+    final assessmentPath = Uri.encodeComponent(assessmentId);
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/sba-new/schools/$schoolPath/assessments/$assessmentPath',
+        ),
+      ),
+    );
+  }
+
+  Future<void> deleteAssessment({
+    required String customSchoolId,
+    required String assessmentId,
+  }) async {
+    final schoolPath = Uri.encodeComponent(customSchoolId);
+    final assessmentPath = Uri.encodeComponent(assessmentId);
+    await _send(
+      '/api/sba-new/schools/$schoolPath/assessments/$assessmentPath',
+      method: 'DELETE',
+    );
+  }
+
+  Future<AssessmentScoreSheetData> getScoreSheet({
+    required String customSchoolId,
+    required String assessmentId,
+  }) async {
+    final schoolPath = Uri.encodeComponent(customSchoolId);
+    final assessmentPath = Uri.encodeComponent(assessmentId);
+    final decoded = _map(
+      _decodeBody(
+        await _send(
+          '/api/sba-new/schools/$schoolPath/assessments/$assessmentPath/scores',
+        ),
+      ),
+    );
+    final assessment = _map(decoded['assessment']);
+    return AssessmentScoreSheetData(
+      assessment: assessment,
+      students: _list(decoded['scores'])
+          .map(_map)
+          .map(
+            (item) => AssessmentStudentScore(
+              studentId: _string(item['studentId']),
+              firstName: _string(item['firstName']),
+              lastName: _string(item['lastName']),
+              score: _double(item['score']),
+              maxScore: _double(item['maxScore']),
+              percentage: _double(item['percentage']),
+              status: _string(item['status']),
+              remarks: _string(item['remarks']),
+            ),
+          )
+          .where((item) => item.studentId.isNotEmpty)
+          .toList(),
+    );
+  }
+
+  Future<Map<String, dynamic>> saveScoreSheet({
+    required String customSchoolId,
+    required String assessmentId,
+    required String submittedBy,
+    required List<Map<String, dynamic>> scores,
+  }) async {
+    final schoolPath = Uri.encodeComponent(customSchoolId);
+    final assessmentPath = Uri.encodeComponent(assessmentId);
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/sba-new/schools/$schoolPath/assessments/$assessmentPath/scores',
+          method: 'PUT',
+          body: {
+            'assessmentId': assessmentId,
+            'submittedBy': submittedBy,
+            'scores': scores,
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<Map<String, dynamic>> resetStudentScore({
+    required String customSchoolId,
+    required String assessmentId,
+    required String studentId,
+  }) async {
+    final schoolPath = Uri.encodeComponent(customSchoolId);
+    final assessmentPath = Uri.encodeComponent(assessmentId);
+    final studentPath = Uri.encodeComponent(studentId);
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/sba-new/schools/$schoolPath/assessments/$assessmentPath/scores/$studentPath',
+          method: 'DELETE',
+        ),
+      ),
+    );
+  }
+
+  Future<List<CurriculumIndicatorData>> getCurriculumIndicators({
+    required String grade,
+    required String subject,
+  }) async {
+    final gradePath = Uri.encodeComponent(grade);
+    final subjectPath = Uri.encodeComponent(subject);
+    final response = await _send(
+      '/api/sba-new/curriculum/$gradePath/$subjectPath',
+    );
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) return const [];
+
+    final indicators = <CurriculumIndicatorData>[];
+    for (final strandValue in _list(decoded['strands'])) {
+      final strand = _map(strandValue);
+      final strandName = _string(strand['name']);
+      for (final substrandValue in _list(strand['substrands'])) {
+        final substrand = _map(substrandValue);
+        final substrandName = _string(substrand['name']);
+        for (final indicatorValue in _list(substrand['indicators'])) {
+          final indicator = _map(indicatorValue);
+          final code = _string(indicator['code']);
+          if (code.isEmpty) continue;
+          indicators.add(
+            CurriculumIndicatorData(
+              id: _int(indicator['id']),
+              code: code,
+              description: _string(indicator['description']),
+              strand: _string(indicator['strand']).isNotEmpty
+                  ? _string(indicator['strand'])
+                  : strandName,
+              substrand: _string(indicator['substrand']).isNotEmpty
+                  ? _string(indicator['substrand'])
+                  : substrandName,
+            ),
+          );
+        }
+      }
+    }
+    return indicators;
+  }
+
+  Future<http.Response> _send(
+    String path, {
+    String method = 'GET',
+    Map<String, dynamic>? body,
+    bool retry = true,
+  }) async {
+    if (accessToken == null || accessToken!.isEmpty) {
+      throw const AssessmentApiException('Please sign in again to continue.');
+    }
+
+    try {
+      final uri = Uri.parse('${ApiConfig.baseUrl}$path');
+      final headers = {
+        'Authorization': 'Bearer $accessToken',
+        'Content-Type': 'application/json',
+      };
+      final response =
+          await (method == 'POST'
+                  ? _client.post(uri, headers: headers, body: jsonEncode(body))
+                  : method == 'PUT'
+                  ? _client.put(uri, headers: headers, body: jsonEncode(body))
+                  : method == 'DELETE'
+                  ? _client.delete(uri, headers: headers)
+                  : _client.get(uri, headers: headers))
+              .timeout(const Duration(seconds: 20));
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return response;
+      }
+      if (response.statusCode == 401 && retry && onRefreshAccessToken != null) {
+        final refreshed = await onRefreshAccessToken!();
+        if (refreshed != null && refreshed.isNotEmpty) {
+          accessToken = refreshed;
+          return _send(path, method: method, body: body, retry: false);
+        }
+      }
+      throw AssessmentApiException(
+        _message(response),
+        statusCode: response.statusCode,
+      );
+    } on TimeoutException {
+      throw const AssessmentApiException(
+        'The assessment request timed out. Please try again.',
+      );
+    } on AssessmentApiException {
+      rethrow;
+    } catch (_) {
+      throw const AssessmentApiException(
+        'Unable to complete the assessment request right now.',
+      );
+    }
+  }
+
+  dynamic _decodeBody(http.Response response) {
+    if (response.body.trim().isEmpty) return const <String, dynamic>{};
+    return jsonDecode(response.body);
+  }
+
+  String _message(http.Response response) {
+    try {
+      final body = jsonDecode(response.body);
+      if (body is Map<String, dynamic>) {
+        final message = body['message'] ?? body['error'] ?? body['detail'];
+        if (message is String && message.trim().isNotEmpty) return message;
+      }
+    } catch (_) {
+      // Use a friendly fallback.
+    }
+    return response.statusCode == 404
+        ? 'The requested assessment resource was not found.'
+        : 'Unable to complete the assessment request.';
+  }
+
+  static List<dynamic> _list(dynamic value) => value is List ? value : const [];
+  static Map<String, dynamic> _map(dynamic value) =>
+      value is Map<String, dynamic> ? value : const {};
+  static String _string(dynamic value) => value?.toString().trim() ?? '';
+  static int? _int(dynamic value) =>
+      value is int ? value : int.tryParse(value?.toString() ?? '');
+  static double? _double(dynamic value) => value is num
+      ? value.toDouble()
+      : double.tryParse(value?.toString() ?? '');
+  static int? _termSequenceFromName(String value) {
+    final normalized = value.toLowerCase();
+    if (normalized.contains('first') || normalized.contains('term 1')) return 1;
+    if (normalized.contains('second') || normalized.contains('term 2')) {
+      return 2;
+    }
+    if (normalized.contains('third') || normalized.contains('term 3')) return 3;
+    return null;
+  }
+}
+
+class AssessmentScoreSheetData {
+  const AssessmentScoreSheetData({
+    required this.assessment,
+    required this.students,
+  });
+
+  final Map<String, dynamic> assessment;
+  final List<AssessmentStudentScore> students;
+}
+
+class AssessmentStudentScore {
+  const AssessmentStudentScore({
+    required this.studentId,
+    required this.firstName,
+    required this.lastName,
+    required this.score,
+    required this.maxScore,
+    required this.percentage,
+    required this.status,
+    required this.remarks,
+  });
+
+  final String studentId;
+  final String firstName;
+  final String lastName;
+  final double? score;
+  final double? maxScore;
+  final double? percentage;
+  final String status;
+  final String remarks;
+
+  String get name =>
+      [firstName, lastName].where((part) => part.trim().isNotEmpty).join(' ');
+}
+
+class AssessmentFormSetup {
+  const AssessmentFormSetup({
+    required this.streams,
+    required this.subjects,
+    required this.academicYearId,
+    required this.academicYearName,
+    required this.termId,
+    required this.termName,
+    required this.termSequence,
+    required this.termClosed,
+  });
+
+  final List<AssessmentStreamOption> streams;
+  final List<AssessmentSubjectOption> subjects;
+  final int academicYearId;
+  final String academicYearName;
+  final int termId;
+  final String termName;
+  final int termSequence;
+  final bool termClosed;
+}
+
+class AssessmentStreamOption {
+  const AssessmentStreamOption({
+    required this.id,
+    required this.gradeLevelId,
+    required this.gradeName,
+    required this.streamName,
+    required this.studentCount,
+  });
+
+  final int id;
+  final int gradeLevelId;
+  final String gradeName;
+  final String streamName;
+  final int studentCount;
+
+  String get label => [
+    gradeName,
+    streamName,
+  ].where((part) => part.trim().isNotEmpty).join(' - ');
+}
+
+class AssessmentSubjectOption {
+  const AssessmentSubjectOption({
+    required this.id,
+    required this.gradeLevelId,
+    required this.name,
+  });
+
+  final int id;
+  final int gradeLevelId;
+  final String name;
+}
+
+class CurriculumIndicatorData {
+  const CurriculumIndicatorData({
+    required this.id,
+    required this.code,
+    required this.description,
+    required this.strand,
+    required this.substrand,
+  });
+
+  final int? id;
+  final String code;
+  final String description;
+  final String strand;
+  final String substrand;
+}
+
+class AssessmentApiException implements Exception {
+  const AssessmentApiException(this.message, {this.statusCode});
+
+  final String message;
+  final int? statusCode;
+
+  @override
+  String toString() => message;
+}

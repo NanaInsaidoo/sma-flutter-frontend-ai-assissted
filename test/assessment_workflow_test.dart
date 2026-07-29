@@ -16,6 +16,8 @@ void main() {
             schoolName: 'SMA School',
             term: 'Term 1',
             academicYear: '2024 Academic Year',
+            customSchoolId: '',
+            accessToken: null,
           ),
         ),
       ),
@@ -137,9 +139,9 @@ void main() {
       expect(find.text('LAST UPDATED BY'), findsOneWidget);
       expect(find.text('Class Teacher Remarks'), findsOneWidget);
       expect(find.text('Head Teacher Remarks'), findsOneWidget);
-    expect(find.text('Ignore Head Teacher comment'), findsOneWidget);
-    expect(find.text('Promoted To'), findsOneWidget);
-    expect(find.text('Save Draft'), findsOneWidget);
+      expect(find.text('Ignore Head Teacher comment'), findsOneWidget);
+      expect(find.text('Promoted To'), findsOneWidget);
+      expect(find.text('Save Draft'), findsOneWidget);
       expect(find.text('Preview'), findsOneWidget);
 
       await tester.tap(find.text('Edit Evaluation'));
