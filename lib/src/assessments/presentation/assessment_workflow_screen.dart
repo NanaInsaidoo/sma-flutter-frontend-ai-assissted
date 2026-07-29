@@ -13,6 +13,7 @@ enum _Route {
   evaluationStudents,
   evaluationForm,
   reportCards,
+  studentReport,
   finalReports,
   classes,
   classDetail,
@@ -28,12 +29,14 @@ class CompleteAssessmentWorkflow extends StatefulWidget {
     required this.term,
     required this.academicYear,
     this.viewerRole = 'Administrator',
+    this.viewerName = 'Eric GoM',
   });
 
   final String schoolName;
   final String term;
   final String academicYear;
   final String viewerRole;
+  final String viewerName;
 
   @override
   State<CompleteAssessmentWorkflow> createState() =>
@@ -48,6 +51,7 @@ class _CompleteAssessmentWorkflowState
   _StudentRecord? _selectedStudent;
   _ParentRecord? _selectedParent;
   _StudentRecord? _selectedEvaluationStudent;
+  _StudentRecord? _selectedReportStudent;
   String _selectedClass = 'Grade 5 - Stream A';
   bool _editingAssessment = false;
   String _assessmentQuery = '';
@@ -74,6 +78,20 @@ class _CompleteAssessmentWorkflowState
     'STU-24001': _ReportRemarksDraft.completed('Grade 6'),
     'STU-24002': _ReportRemarksDraft.completed('Grade 6'),
     'STU-24004': _ReportRemarksDraft.completed('Grade 6'),
+  };
+  final Map<String, _ReportAudit> _reportAudit = {
+    'STU-24001': _ReportAudit(
+      createdBy: 'Sarah Johnson',
+      createdAt: '28 Mar 2026 09:15',
+      updatedBy: 'Eric GoM',
+      updatedAt: '29 Mar 2026 11:40',
+    ),
+    'STU-24004': _ReportAudit(
+      createdBy: 'Sarah Johnson',
+      createdAt: '27 Mar 2026 14:10',
+      updatedBy: 'Michael Mensah',
+      updatedAt: '29 Mar 2026 08:25',
+    ),
   };
   String _reportCardFilter = 'All Students';
   final List<_FinalReportStream> _finalReportStreams = [
@@ -426,6 +444,8 @@ class _CompleteAssessmentWorkflowState
         _open(_Route.assessments);
       case 'Generate Report Cards':
         _open(_Route.reportCards);
+      case 'Final Reports':
+        _open(_Route.finalReports);
       case 'Student Evaluations':
         _open(_Route.evaluationStudents);
       default:
@@ -447,6 +467,7 @@ class _CompleteAssessmentWorkflowState
         _Route.evaluationStudents => _evaluationStudents(),
         _Route.evaluationForm => _evaluationForm(),
         _Route.reportCards => _reportCards(),
+        _Route.studentReport => _studentReportPage(),
         _Route.finalReports => _finalReports(),
         _Route.classes => _classes(),
         _Route.classDetail => _classDetail(),
@@ -591,6 +612,14 @@ class _CompleteAssessmentWorkflowState
                     Icons.description_outlined,
                     AppColors.purple,
                     () => _selectClass('Generate Report Cards'),
+                  ),
+                  _actionCard(
+                    width,
+                    'Final Reports',
+                    'Manage reports across grades and streams',
+                    Icons.inventory_2_outlined,
+                    AppColors.green,
+                    () => _selectClass('Final Reports'),
                   ),
                 ],
               );
@@ -3032,6 +3061,46 @@ class _CompleteAssessmentWorkflowState
   bool _readyToPublish(_StudentRecord student) =>
       _publicationReadiness(student) == 'Ready to publish';
 
+  _ReportAudit _auditFor(_StudentRecord student) {
+    return _reportAudit.putIfAbsent(
+      student.id,
+      () => _ReportAudit(
+        createdBy: widget.viewerName,
+        createdAt: _reportTimestamp(),
+        updatedBy: widget.viewerName,
+        updatedAt: _reportTimestamp(),
+      ),
+    );
+  }
+
+  void _touchReportAudit(_StudentRecord student) {
+    final audit = _auditFor(student);
+    audit.updatedBy = widget.viewerName;
+    audit.updatedAt = _reportTimestamp();
+  }
+
+  String _reportTimestamp() {
+    final now = DateTime.now();
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '${two(now.day)} ${_reportMonth(now.month)} ${now.year} '
+        '${two(now.hour)}:${two(now.minute)}';
+  }
+
+  String _reportMonth(int month) => const [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ][month - 1];
+
   Future<void> _generateReports(Iterable<_StudentRecord> students) async {
     final ready = students.where(_gradesComplete).toList();
     if (ready.isEmpty) {
@@ -3052,6 +3121,7 @@ class _CompleteAssessmentWorkflowState
       for (final student in ready) {
         _reportStatuses[student.id] = 'Generated';
         _processingReportStudents.remove(student.id);
+        _touchReportAudit(student);
       }
       _isGeneratingReports = _processingReportStudents.isNotEmpty;
       _reportGenerationProgress = _isGeneratingReports ? .75 : 1;
@@ -3082,6 +3152,7 @@ class _CompleteAssessmentWorkflowState
       for (final student in generated) {
         _reportStatuses[student.id] = 'Published';
         _publishingReportStudents.remove(student.id);
+        _touchReportAudit(student);
       }
     });
     _notice('${generated.length} report card(s) published.');
@@ -3099,6 +3170,11 @@ class _CompleteAssessmentWorkflowState
     if (!mounted) return;
     setState(() => _refreshingReportCards = false);
     _notice('Report card statuses refreshed.');
+  }
+
+  void _openStudentReport(_StudentRecord student) {
+    setState(() => _selectedReportStudent = student);
+    _open(_Route.studentReport);
   }
 
   Widget _reportCards() {
@@ -3124,6 +3200,14 @@ class _CompleteAssessmentWorkflowState
         'Generated' => status == 'Generated',
         'Published' => status == 'Published',
         'Pending Generation' => status != 'Generated' && status != 'Published',
+        'Missing Grades' => !_gradesComplete(student),
+        'Missing Teacher Remarks' =>
+          (_reportRemarks[student.id]?.classTeacherRemarks ?? '').isEmpty,
+        'Pending Head Comments' =>
+          !(_reportRemarks[student.id] ?? _ReportRemarksDraft.empty())
+              .headTeacherRequirementSatisfied,
+        'Missing Promotion' =>
+          (_reportRemarks[student.id]?.promotedTo ?? '').isEmpty,
         _ => true,
       };
       return matchesFilter;
@@ -3134,11 +3218,6 @@ class _CompleteAssessmentWorkflowState
       compactHeader: true,
       maxContentWidth: 1700,
       pagePadding: 14,
-      actions: [
-        _outlineButton('Final Reports', Icons.inventory_2_outlined, () {
-          _open(_Route.finalReports);
-        }),
-      ],
       children: [
         LayoutBuilder(
           builder: (_, c) => _reportCardStatGrid(
@@ -3172,13 +3251,14 @@ class _CompleteAssessmentWorkflowState
     required int pendingHeadComments,
     required int missingPromotion,
   }) {
-    final stats = <(String, String, String, IconData, Color)>[
+    final stats = <(String, String, String, IconData, Color, String)>[
       (
         'TOTAL STUDENTS',
         '$total',
         'All students in stream',
         Icons.groups_outlined,
         const Color(0xFF374151),
+        'All Students',
       ),
       (
         'READY TO PUBLISH',
@@ -3186,6 +3266,7 @@ class _CompleteAssessmentWorkflowState
         'All requirements satisfied',
         Icons.check_circle,
         const Color(0xFF009688),
+        'Ready',
       ),
       (
         'MISSING GRADES',
@@ -3193,6 +3274,7 @@ class _CompleteAssessmentWorkflowState
         'Assessments not fully graded',
         Icons.more_horiz,
         const Color(0xFFF59E0B),
+        'Missing Grades',
       ),
       (
         'TEACHER REMARKS',
@@ -3200,6 +3282,7 @@ class _CompleteAssessmentWorkflowState
         'Class teacher remarks missing',
         Icons.rate_review_outlined,
         const Color(0xFF8B5CF6),
+        'Missing Teacher Remarks',
       ),
       (
         'HEAD COMMENTS',
@@ -3207,6 +3290,7 @@ class _CompleteAssessmentWorkflowState
         'Comment or Ignore required',
         Icons.record_voice_over_outlined,
         const Color(0xFFEF4444),
+        'Pending Head Comments',
       ),
       (
         'MISSING PROMOTION',
@@ -3214,6 +3298,7 @@ class _CompleteAssessmentWorkflowState
         'Next grade not selected',
         Icons.trending_up,
         const Color(0xFFF59E0B),
+        'Missing Promotion',
       ),
     ];
     final columns = maxWidth >= 1350
@@ -3228,69 +3313,83 @@ class _CompleteAssessmentWorkflowState
       spacing: 14,
       runSpacing: 14,
       children: stats.map((stat) {
-        return Container(
-          width: cardWidth,
-          height: 104,
-          padding: const EdgeInsets.fromLTRB(16, 13, 14, 11),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            border: Border.all(color: const Color(0xFFE5E7EB)),
+        final selected = _reportCardFilter == stat.$6;
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => setState(() => _reportCardFilter = stat.$6),
             borderRadius: BorderRadius.circular(11),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x0A0F172A),
-                blurRadius: 8,
-                offset: Offset(0, 3),
-              ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      stat.$1,
-                      style: const TextStyle(
-                        color: Color(0xFF718096),
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: .45,
-                      ),
-                    ),
-                  ),
-                  Container(
-                    width: 28,
-                    height: 28,
-                    decoration: BoxDecoration(
-                      color: stat.$5.withValues(alpha: .1),
-                      borderRadius: BorderRadius.circular(7),
-                    ),
-                    child: Icon(stat.$4, size: 15, color: stat.$5),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              width: cardWidth,
+              height: 104,
+              padding: const EdgeInsets.fromLTRB(16, 13, 14, 11),
+              decoration: BoxDecoration(
+                color: selected
+                    ? stat.$5.withValues(alpha: .055)
+                    : Colors.white,
+                border: Border.all(
+                  color: selected ? stat.$5 : const Color(0xFFE5E7EB),
+                  width: selected ? 1.5 : 1,
+                ),
+                borderRadius: BorderRadius.circular(11),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x0A0F172A),
+                    blurRadius: 8,
+                    offset: Offset(0, 3),
                   ),
                 ],
               ),
-              Text(
-                stat.$2,
-                style: const TextStyle(
-                  color: Color(0xFF1A2332),
-                  fontSize: 22,
-                  fontWeight: FontWeight.w800,
-                  height: 1,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          stat.$1,
+                          style: const TextStyle(
+                            color: Color(0xFF718096),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: .45,
+                          ),
+                        ),
+                      ),
+                      Container(
+                        width: 28,
+                        height: 28,
+                        decoration: BoxDecoration(
+                          color: stat.$5.withValues(alpha: .1),
+                          borderRadius: BorderRadius.circular(7),
+                        ),
+                        child: Icon(stat.$4, size: 15, color: stat.$5),
+                      ),
+                    ],
+                  ),
+                  Text(
+                    stat.$2,
+                    style: const TextStyle(
+                      color: Color(0xFF1A2332),
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      height: 1,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    stat.$3,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF8A9AB5),
+                      fontSize: 10.5,
+                    ),
+                  ),
+                ],
               ),
-              const Spacer(),
-              Text(
-                stat.$3,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Color(0xFF8A9AB5),
-                  fontSize: 10.5,
-                ),
-              ),
-            ],
+            ),
           ),
         );
       }).toList(),
@@ -3298,13 +3397,6 @@ class _CompleteAssessmentWorkflowState
   }
 
   Widget _reportCardStudentRegister(List<_StudentRecord> students) {
-    final publishable = _students
-        .where(
-          (student) =>
-              _reportStatusFor(student) == 'Generated' &&
-              _readyToPublish(student),
-        )
-        .length;
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
@@ -3339,6 +3431,10 @@ class _CompleteAssessmentWorkflowState
                           'Generated',
                           'Pending Generation',
                           'Published',
+                          'Missing Grades',
+                          'Missing Teacher Remarks',
+                          'Pending Head Comments',
+                          'Missing Promotion',
                         ].map((value) {
                           return DropdownMenuItem(
                             value: value,
@@ -3381,24 +3477,6 @@ class _CompleteAssessmentWorkflowState
                       : const Icon(Icons.refresh, size: 14),
                   label: Text(
                     _refreshingReportCards ? 'Refreshing…' : 'Refresh',
-                  ),
-                ),
-                const SizedBox(width: 8),
-                FilledButton.icon(
-                  onPressed: publishable == 0
-                      ? null
-                      : () => _publishStudentReports(
-                          _students.where(
-                            (student) =>
-                                _reportStatusFor(student) == 'Generated' &&
-                                _readyToPublish(student),
-                          ),
-                        ),
-                  icon: const Icon(Icons.send, size: 14),
-                  label: Text('Publish ($publishable)'),
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size(0, 34),
-                    padding: const EdgeInsets.symmetric(horizontal: 13),
                   ),
                 ),
               ],
@@ -3501,282 +3579,143 @@ class _CompleteAssessmentWorkflowState
     final selected = _selectedReportStudents.contains(student.id);
     final status = _reportStatusFor(student);
     final readiness = _publicationReadiness(student);
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: Color(0xFFF3F4F6))),
-      ),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 46,
-            child: Checkbox(
-              value: selected,
-              onChanged: readiness != 'Ready'
-                  ? null
-                  : (checked) => setState(() {
-                      if (checked ?? false) {
-                        _selectedReportStudents.add(student.id);
-                      } else {
-                        _selectedReportStudents.remove(student.id);
-                      }
-                    }),
+    return InkWell(
+      onTap: () => _openStudentReport(student),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: Color(0xFFF3F4F6))),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 46,
+              child: Checkbox(
+                value: selected,
+                onChanged: (checked) => setState(() {
+                  if (checked ?? false) {
+                    _selectedReportStudents.add(student.id);
+                  } else {
+                    _selectedReportStudents.remove(student.id);
+                  }
+                }),
+              ),
             ),
-          ),
-          SizedBox(
-            width: 30,
-            child: Text(
-              '$index',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
+            SizedBox(
+              width: 30,
+              child: Text(
+                '$index',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
+              ),
             ),
-          ),
-          Expanded(
-            flex: 3,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 15,
-                      backgroundColor: const Color(0xFF009688),
-                      child: Text(
-                        student.name
-                            .split(' ')
-                            .map((part) => part[0])
-                            .take(2)
-                            .join(),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 9,
-                          fontWeight: FontWeight.w800,
+            Expanded(
+              flex: 3,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 15,
+                        backgroundColor: const Color(0xFF009688),
+                        child: Text(
+                          student.name
+                              .split(' ')
+                              .map((part) => part[0])
+                              .take(2)
+                              .join(),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 9),
-                    Flexible(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            student.name,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          Text(
-                            student.id,
-                            style: const TextStyle(
-                              color: Color(0xFF94A3B8),
-                              fontSize: 10,
+                      const SizedBox(width: 9),
+                      Flexible(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              student.name,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
-                          ),
-                        ],
+                            Text(
+                              student.id,
+                              style: const TextStyle(
+                                color: Color(0xFF94A3B8),
+                                fontSize: 10,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Row(
-              children: [
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(999),
-                    child: LinearProgressIndicator(
-                      value: student.readiness == 'Scores incomplete' ? .72 : 1,
-                      minHeight: 5,
-                      backgroundColor: const Color(0xFFE5E7EB),
-                    ),
+                    ],
                   ),
-                ),
-                const SizedBox(width: 7),
-                Text(
-                  student.readiness == 'Scores incomplete' ? '4/6' : '6/6',
-                  style: const TextStyle(
-                    color: Color(0xFF64748B),
-                    fontSize: 10,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Center(child: _remarksReadinessButton(student)),
-          ),
-          _reportTableValue('${student.average.toStringAsFixed(1)}%', 1),
-          _reportTableValue(student.grade, 1),
-          Expanded(flex: 2, child: Center(child: _reportStateBadge(readiness))),
-          Expanded(flex: 2, child: Center(child: _reportStateBadge(status))),
-          Expanded(
-            flex: 3,
-            child: Padding(
-              padding: const EdgeInsets.only(right: 10),
-              child: Center(child: _reportCardActions(student, status)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _reportCardActions(_StudentRecord student, String status) {
-    final compactButtonStyle = FilledButton.styleFrom(
-      minimumSize: const Size(0, 30),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      visualDensity: VisualDensity.compact,
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      textStyle: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700),
-    );
-    if (status == 'Processing') {
-      return SizedBox(
-        width: 178,
-        height: 30,
-        child: FilledButton.icon(
-          onPressed: null,
-          icon: const SizedBox(
-            width: 12,
-            height: 12,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-          label: const Text('Generating…'),
-        ),
-      );
-    }
-    if (status == 'Publishing') {
-      return SizedBox(
-        width: 178,
-        height: 30,
-        child: FilledButton.icon(
-          onPressed: null,
-          icon: const SizedBox(
-            width: 12,
-            height: 12,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-          label: const Text('Publishing…'),
-        ),
-      );
-    }
-    if (status != 'Generated' && status != 'Published') {
-      return SizedBox(
-        width: 178,
-        height: 30,
-        child: FilledButton.icon(
-          onPressed: _gradesComplete(student)
-              ? () => _generateReports([student])
-              : null,
-          icon: const Icon(Icons.description_outlined, size: 13),
-          label: const Text('Generate'),
-          style: compactButtonStyle,
-        ),
-      );
-    }
-    return Container(
-      height: 34,
-      padding: const EdgeInsets.only(left: 2),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextButton(
-            onPressed: () => _showReportCard(student),
-            style: TextButton.styleFrom(
-              minimumSize: const Size(52, 30),
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              visualDensity: VisualDensity.compact,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              textStyle: const TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w700,
+                ],
               ),
             ),
-            child: const Text('View'),
-          ),
-          Container(width: 1, height: 18, color: const Color(0xFFE2E8F0)),
-          if (status == 'Generated')
-            TextButton(
-              onPressed: _readyToPublish(student)
-                  ? () => _publishStudentReports([student])
-                  : null,
-              style: TextButton.styleFrom(
-                foregroundColor: const Color(0xFF00796B),
-                minimumSize: const Size(66, 30),
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                visualDensity: VisualDensity.compact,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                textStyle: const TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              child: const Text('Publish'),
-            )
-          else
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 9),
+            Expanded(
+              flex: 2,
               child: Row(
                 children: [
-                  Icon(Icons.check_circle, size: 13, color: Color(0xFF009688)),
-                  SizedBox(width: 4),
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(999),
+                      child: LinearProgressIndicator(
+                        value: student.readiness == 'Scores incomplete'
+                            ? .72
+                            : 1,
+                        minHeight: 5,
+                        backgroundColor: const Color(0xFFE5E7EB),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 7),
                   Text(
-                    'Published',
-                    style: TextStyle(
-                      color: Color(0xFF00796B),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
+                    student.readiness == 'Scores incomplete' ? '4/6' : '6/6',
+                    style: const TextStyle(
+                      color: Color(0xFF64748B),
+                      fontSize: 10,
                     ),
                   ),
                 ],
               ),
             ),
-          Container(width: 1, height: 18, color: const Color(0xFFE2E8F0)),
-          PopupMenuButton<String>(
-            tooltip: 'More report actions',
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints.tightFor(width: 32, height: 30),
-            icon: const Icon(
-              Icons.more_vert,
-              size: 17,
-              color: Color(0xFF64748B),
+            Expanded(
+              flex: 2,
+              child: Center(child: _remarksReadinessButton(student)),
             ),
-            onSelected: (value) {
-              if (value == 'regenerate') {
-                _regenerateStudentReport(student);
-              } else if (value == 'republish') {
-                setState(() => _reportStatuses[student.id] = 'Generated');
-                _publishStudentReports([student]);
-              }
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: 'regenerate',
-                child: ListTile(
-                  dense: true,
-                  leading: Icon(Icons.refresh, size: 18),
-                  title: Text('Regenerate'),
-                ),
-              ),
-              if (status == 'Published')
-                const PopupMenuItem(
-                  value: 'republish',
-                  child: ListTile(
-                    dense: true,
-                    leading: Icon(Icons.send_outlined, size: 18),
-                    title: Text('Republish'),
+            _reportTableValue('${student.average.toStringAsFixed(1)}%', 1),
+            _reportTableValue(student.grade, 1),
+            Expanded(
+              flex: 2,
+              child: Center(child: _reportStateBadge(readiness)),
+            ),
+            Expanded(flex: 2, child: Center(child: _reportStateBadge(status))),
+            Expanded(
+              flex: 3,
+              child: Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: Center(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _openStudentReport(student),
+                    icon: const Icon(Icons.arrow_forward, size: 14),
+                    label: const Text('Open Report'),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(132, 32),
+                      visualDensity: VisualDensity.compact,
+                    ),
                   ),
                 ),
-            ],
-          ),
-        ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -3823,7 +3762,7 @@ class _CompleteAssessmentWorkflowState
   Widget _remarksReadinessButton(_StudentRecord student) {
     final complete = _remarksComplete(student);
     return InkWell(
-      onTap: () => _openRemarksEditor(student),
+      onTap: () => _openStudentReport(student),
       borderRadius: BorderRadius.circular(999),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
@@ -3847,7 +3786,7 @@ class _CompleteAssessmentWorkflowState
   }
 
   Future<void> _openBulkPromotion() async {
-    var grade = 'Grade 6';
+    String? grade;
     var replaceExisting = false;
     final targets = _selectedReportStudents.isEmpty
         ? _students
@@ -3875,6 +3814,7 @@ class _CompleteAssessmentWorkflowState
                 DropdownButtonFormField<String>(
                   value: grade,
                   decoration: const InputDecoration(labelText: 'Promoted To'),
+                  hint: const Text('Select class or grade level'),
                   items:
                       const [
                         'Grade 1',
@@ -3889,8 +3829,7 @@ class _CompleteAssessmentWorkflowState
                       ].map((item) {
                         return DropdownMenuItem(value: item, child: Text(item));
                       }).toList(),
-                  onChanged: (value) =>
-                      setDialogState(() => grade = value ?? grade),
+                  onChanged: (value) => setDialogState(() => grade = value),
                 ),
                 CheckboxListTile(
                   value: replaceExisting,
@@ -3909,7 +3848,9 @@ class _CompleteAssessmentWorkflowState
               child: const Text('Cancel'),
             ),
             FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
+              onPressed: grade == null
+                  ? null
+                  : () => Navigator.pop(dialogContext, true),
               child: const Text('Apply Promotion'),
             ),
           ],
@@ -3925,14 +3866,16 @@ class _CompleteAssessmentWorkflowState
         _reportRemarks[student.id] = _ReportRemarksDraft(
           classTeacherRemarks: current.classTeacherRemarks,
           headTeacherRemarks: current.headTeacherRemarks,
-          promotedTo: grade,
+          promotedTo: grade!,
           ignoreHeadTeacherRemark: current.ignoreHeadTeacherRemark,
         );
+        _touchReportAudit(student);
       }
     });
     _notice('Promotion updated for ${targets.length} student(s).');
   }
 
+  // ignore: unused_element
   Future<void> _openRemarksEditor(_StudentRecord student) async {
     final existing = _reportRemarks[student.id] ?? _ReportRemarksDraft.empty();
     final classController = TextEditingController(
@@ -4085,6 +4028,7 @@ class _CompleteAssessmentWorkflowState
                               DropdownButtonFormField<String>(
                                 value: promotedTo.isEmpty ? null : promotedTo,
                                 isExpanded: true,
+                                hint: const Text('Select class or grade level'),
                                 decoration: const InputDecoration(
                                   labelText: 'Promoted To',
                                   prefixIcon: Icon(Icons.school_outlined),
@@ -4247,15 +4191,13 @@ class _CompleteAssessmentWorkflowState
       contentPadding: const EdgeInsets.symmetric(vertical: 5),
       leading: Checkbox(
         value: _selectedReportStudents.contains(student.id),
-        onChanged: !_gradesComplete(student)
-            ? null
-            : (checked) => setState(() {
-                if (checked ?? false) {
-                  _selectedReportStudents.add(student.id);
-                } else {
-                  _selectedReportStudents.remove(student.id);
-                }
-              }),
+        onChanged: (checked) => setState(() {
+          if (checked ?? false) {
+            _selectedReportStudents.add(student.id);
+          } else {
+            _selectedReportStudents.remove(student.id);
+          }
+        }),
       ),
       title: Text(
         student.name,
@@ -4265,23 +4207,688 @@ class _CompleteAssessmentWorkflowState
         '${student.id} • ${student.average.toStringAsFixed(1)}% • ${student.grade}\nRemarks: ${_remarksComplete(student) ? 'Complete' : 'Pending'} • ${_publicationReadiness(student)} • $status',
       ),
       isThreeLine: true,
-      onTap: () => _openRemarksEditor(student),
+      onTap: () => _openStudentReport(student),
       trailing: IconButton(
-        tooltip: status == 'Generated' || status == 'Published'
-            ? 'View report'
-            : 'Generate report',
-        onPressed: status == 'Generated' || status == 'Published'
-            ? () => _showReportCard(student)
-            : _gradesComplete(student)
-            ? () => _generateReports([student])
-            : null,
-        icon: Icon(
-          status == 'Generated' || status == 'Published'
-              ? Icons.visibility_outlined
-              : Icons.description_outlined,
-        ),
+        tooltip: 'Open report',
+        onPressed: () => _openStudentReport(student),
+        icon: const Icon(Icons.arrow_forward),
       ),
     );
+  }
+
+  Widget _studentReportPage() {
+    final student = _selectedReportStudent ?? _students.first;
+    final remarks = _reportRemarks[student.id] ?? _ReportRemarksDraft.empty();
+    final evaluation = _evaluationFor(student);
+    final status = _reportStatusFor(student);
+    final generated = status == 'Generated' || status == 'Published';
+    final role = widget.viewerRole.toLowerCase();
+    final administrator = role.contains('admin');
+    final canEditClass = administrator || role.contains('class teacher');
+    final canEditHead = administrator || role.contains('head teacher');
+
+    return _page(
+      title: 'Student Report',
+      subtitle: '${student.name} • ${student.id} • $_selectedClass',
+      compactHeader: true,
+      maxContentWidth: 1320,
+      actions: [
+        _outlineButton('Save Draft', Icons.save_outlined, () {
+          setState(() => _touchReportAudit(student));
+          _notice('${student.name} report saved as draft.');
+        }),
+        _outlineButton(
+          'Preview',
+          Icons.visibility_outlined,
+          generated ? () => _showReportCard(student) : null,
+        ),
+        if (status != 'Published')
+          _filledButton(
+            generated ? 'Regenerate' : 'Generate',
+            generated ? Icons.refresh : Icons.description_outlined,
+            _gradesComplete(student)
+                ? () => generated
+                      ? _regenerateStudentReport(student)
+                      : _generateReports([student])
+                : null,
+          ),
+        if (status != 'Published')
+          _filledButton(
+            'Publish',
+            Icons.send,
+            generated && _readyToPublish(student)
+                ? () => _publishStudentReports([student])
+                : null,
+          ),
+      ],
+      children: [
+        _studentReportIdentity(student, status),
+        const SizedBox(height: 16),
+        _reportReadinessSection(student),
+        const SizedBox(height: 16),
+        _section(
+          title: 'Academic Performance',
+          child: _tableCard(
+            embedded: true,
+            columns: const [
+              'SUBJECT',
+              'CLASS SCORE',
+              'EXAM',
+              'TOTAL',
+              'GRADE',
+              'REMARK',
+            ],
+            rows: const [
+              ['Mathematics', '54', '35', '89', 'A', 'Excellent'],
+              ['English Language', '50', '32', '82', 'B', 'Very good'],
+              ['Integrated Science', '48', '30', '78', 'B', 'Good'],
+              ['Social Studies', '45', '29', '74', 'C', 'Good'],
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _studentReportEvaluation(student, evaluation),
+        const SizedBox(height: 16),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final compact = constraints.maxWidth < 820;
+            final remarksSection = _studentReportRemarksSection(
+              student,
+              remarks,
+              canEditClass: canEditClass,
+              canEditHead: canEditHead,
+            );
+            final promotionSection = _studentReportPromotionSection(
+              student,
+              remarks,
+              canEdit: canEditHead,
+            );
+            if (compact) {
+              return Column(
+                children: [
+                  remarksSection,
+                  const SizedBox(height: 16),
+                  promotionSection,
+                ],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(flex: 3, child: remarksSection),
+                const SizedBox(width: 16),
+                Expanded(flex: 2, child: promotionSection),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 16),
+        _studentReportAuditSection(student),
+      ],
+    );
+  }
+
+  Widget _studentReportIdentity(_StudentRecord student, String status) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 26,
+            backgroundColor: const Color(0xFF009688),
+            child: Text(
+              student.name.split(' ').map((part) => part[0]).take(2).join(),
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  student.name,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                Text(
+                  '${student.id} • $_selectedClass • ${widget.term}',
+                  style: const TextStyle(
+                    color: Color(0xFF64748B),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          _reportStateBadge(status),
+        ],
+      ),
+    );
+  }
+
+  Widget _reportReadinessSection(_StudentRecord student) {
+    final remarks = _reportRemarks[student.id] ?? _ReportRemarksDraft.empty();
+    final status = _reportStatusFor(student);
+    final checks = <(String, bool)>[
+      ('All grades entered', _gradesComplete(student)),
+      ('Report generated', status == 'Generated' || status == 'Published'),
+      ('Class Teacher remark', remarks.classTeacherRemarks.isNotEmpty),
+      ('Head comment or Ignore', remarks.headTeacherRequirementSatisfied),
+      ('Promotion selected', remarks.promotedTo.isNotEmpty),
+    ];
+    return _section(
+      title: 'Publication Readiness',
+      action: _reportStateBadge(_publicationReadiness(student)),
+      child: Wrap(
+        spacing: 10,
+        runSpacing: 10,
+        children: checks.map((check) {
+          return Container(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+            decoration: BoxDecoration(
+              color: check.$2
+                  ? const Color(0xFFF0F8F6)
+                  : const Color(0xFFFFF7ED),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: check.$2
+                    ? const Color(0xFFD8ECE8)
+                    : const Color(0xFFFED7AA),
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  check.$2 ? Icons.check_circle : Icons.error_outline,
+                  size: 15,
+                  color: check.$2
+                      ? const Color(0xFF4F8F84)
+                      : const Color(0xFFC27832),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  check.$1,
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _studentReportEvaluation(
+    _StudentRecord student,
+    _EvaluationDraft evaluation,
+  ) {
+    final items = [
+      ('Homework', evaluation.homework),
+      ('Attentiveness', evaluation.punctuality),
+      ('Teamwork', evaluation.neatness),
+      ('Participation', evaluation.attitude),
+      ('Discipline', evaluation.discipline),
+      ('Neatness', evaluation.organization),
+    ];
+    return _section(
+      title: 'Student Evaluation',
+      action: OutlinedButton.icon(
+        onPressed: () => _editEvaluationOnReport(student),
+        icon: const Icon(Icons.edit_outlined, size: 14),
+        label: const Text('Edit Evaluation'),
+      ),
+      child: Column(
+        children: [
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: items.map((item) {
+              return Container(
+                width: 160,
+                padding: const EdgeInsets.all(11),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        item.$1,
+                        style: const TextStyle(
+                          color: Color(0xFF64748B),
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '${item.$2}/10',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Text(
+                'Average: ${evaluation.average.toStringAsFixed(1)}/10',
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              if (evaluation.remark.isNotEmpty) ...[
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    evaluation.remark,
+                    style: const TextStyle(color: Color(0xFF64748B)),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studentReportRemarksSection(
+    _StudentRecord student,
+    _ReportRemarksDraft remarks, {
+    required bool canEditClass,
+    required bool canEditHead,
+  }) {
+    return _section(
+      title: 'Teacher Remarks',
+      child: Column(
+        children: [
+          TextFormField(
+            key: ValueKey('${student.id}-class-report-remark'),
+            initialValue: remarks.classTeacherRemarks,
+            enabled: canEditClass,
+            maxLines: 4,
+            decoration: const InputDecoration(
+              labelText: 'Class Teacher Remarks',
+              alignLabelWithHint: true,
+            ),
+            onChanged: (value) =>
+                _updateReportRemarks(student, classTeacherRemarks: value),
+          ),
+          const SizedBox(height: 12),
+          TextFormField(
+            key: ValueKey('${student.id}-head-report-remark'),
+            initialValue: remarks.headTeacherRemarks,
+            enabled: canEditHead && !remarks.ignoreHeadTeacherRemark,
+            maxLines: 4,
+            decoration: const InputDecoration(
+              labelText: 'Head Teacher Remarks',
+              alignLabelWithHint: true,
+            ),
+            onChanged: (value) =>
+                _updateReportRemarks(student, headTeacherRemarks: value),
+          ),
+          CheckboxListTile(
+            value: remarks.ignoreHeadTeacherRemark,
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.leading,
+            title: const Text(
+              'Ignore Head Teacher comment',
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+            ),
+            subtitle: const Text(
+              'Treat the Head Teacher requirement as satisfied.',
+              style: TextStyle(fontSize: 11),
+            ),
+            onChanged: canEditHead
+                ? (value) => _updateReportRemarks(
+                    student,
+                    ignoreHeadTeacherRemark: value ?? false,
+                  )
+                : null,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studentReportPromotionSection(
+    _StudentRecord student,
+    _ReportRemarksDraft remarks, {
+    required bool canEdit,
+  }) {
+    return _section(
+      title: 'Promotion & Attendance',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          DropdownButtonFormField<String>(
+            value: remarks.promotedTo.isEmpty ? null : remarks.promotedTo,
+            isExpanded: true,
+            hint: const Text('Select class or grade level'),
+            decoration: const InputDecoration(
+              labelText: 'Promoted To',
+              prefixIcon: Icon(Icons.school_outlined),
+            ),
+            items:
+                const [
+                  'Grade 1',
+                  'Grade 2',
+                  'Grade 3',
+                  'Basic 4',
+                  'Grade 5',
+                  'Grade 6',
+                  'JHS 1',
+                  'JHS 2',
+                  'JHS 3',
+                ].map((grade) {
+                  return DropdownMenuItem(value: grade, child: Text(grade));
+                }).toList(),
+            onChanged: canEdit
+                ? (value) =>
+                      _updateReportRemarks(student, promotedTo: value ?? '')
+                : null,
+          ),
+          const SizedBox(height: 18),
+          _reportInfoLine('School days', '90'),
+          _reportInfoLine('Present', '88'),
+          _reportInfoLine('Absent', '2'),
+          _reportInfoLine('Late', '1'),
+        ],
+      ),
+    );
+  }
+
+  Widget _reportInfoLine(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
+            ),
+          ),
+          Text(
+            value,
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studentReportAuditSection(_StudentRecord student) {
+    final audit = _auditFor(student);
+    return _section(
+      title: 'Record Information',
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final fields = [
+            ('Created by', audit.createdBy),
+            ('Created at', audit.createdAt),
+            ('Last updated by', audit.updatedBy),
+            ('Last updated at', audit.updatedAt),
+          ];
+          final width = constraints.maxWidth < 700
+              ? constraints.maxWidth
+              : (constraints.maxWidth - 30) / 4;
+          return Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: fields.map((field) {
+              return Container(
+                width: width,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      field.$1.toUpperCase(),
+                      style: const TextStyle(
+                        color: Color(0xFF94A3B8),
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: .35,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      field.$2,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          );
+        },
+      ),
+    );
+  }
+
+  void _updateReportRemarks(
+    _StudentRecord student, {
+    String? classTeacherRemarks,
+    String? headTeacherRemarks,
+    String? promotedTo,
+    bool? ignoreHeadTeacherRemark,
+  }) {
+    final current = _reportRemarks[student.id] ?? _ReportRemarksDraft.empty();
+    setState(() {
+      _reportRemarks[student.id] = current.copyWith(
+        classTeacherRemarks: classTeacherRemarks,
+        headTeacherRemarks: headTeacherRemarks,
+        promotedTo: promotedTo,
+        ignoreHeadTeacherRemark: ignoreHeadTeacherRemark,
+      );
+    });
+  }
+
+  Future<void> _editEvaluationOnReport(_StudentRecord student) async {
+    final evaluation = _evaluationFor(student);
+    var homework = evaluation.homework;
+    var attentiveness = evaluation.punctuality;
+    var teamwork = evaluation.neatness;
+    var participation = evaluation.attitude;
+    var discipline = evaluation.discipline;
+    var neatness = evaluation.organization;
+    final criterionComments = Map<String, String>.from(evaluation.comments);
+    final remarkController = TextEditingController(text: evaluation.remark);
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          Widget scoreRow(
+            String keyName,
+            String label,
+            int value,
+            ValueChanged<int> update,
+          ) {
+            return Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.fromLTRB(12, 9, 12, 11),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 125,
+                        child: Text(
+                          label,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Slider(
+                          value: value.toDouble(),
+                          min: 0,
+                          max: 10,
+                          divisions: 10,
+                          onChanged: (next) =>
+                              setDialogState(() => update(next.round())),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 38,
+                        child: Text(
+                          '$value/10',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  TextFormField(
+                    key: ValueKey('${student.id}-$keyName-report-comment'),
+                    initialValue: criterionComments[keyName] ?? '',
+                    maxLines: 1,
+                    decoration: const InputDecoration(
+                      hintText: 'Optional one-line comment',
+                      prefixIcon: Icon(Icons.chat_bubble_outline, size: 16),
+                      isDense: true,
+                    ),
+                    onChanged: (comment) =>
+                        criterionComments[keyName] = comment,
+                  ),
+                ],
+              ),
+            );
+          }
+
+          return AlertDialog(
+            title: const Text('Edit Student Evaluation'),
+            content: SizedBox(
+              width: 560,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    scoreRow(
+                      'homework',
+                      'Homework',
+                      homework,
+                      (value) => homework = value,
+                    ),
+                    scoreRow(
+                      'punctuality',
+                      'Attentiveness',
+                      attentiveness,
+                      (value) => attentiveness = value,
+                    ),
+                    scoreRow(
+                      'neatness',
+                      'Teamwork',
+                      teamwork,
+                      (value) => teamwork = value,
+                    ),
+                    scoreRow(
+                      'attitude',
+                      'Participation',
+                      participation,
+                      (value) => participation = value,
+                    ),
+                    scoreRow(
+                      'discipline',
+                      'Discipline',
+                      discipline,
+                      (value) => discipline = value,
+                    ),
+                    scoreRow(
+                      'organization',
+                      'Neatness',
+                      neatness,
+                      (value) => neatness = value,
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: remarkController,
+                      maxLines: 1,
+                      decoration: const InputDecoration(
+                        labelText: 'Overall Evaluation Remark',
+                        hintText: 'Add one concise overall comment',
+                        prefixIcon: Icon(Icons.notes_outlined),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton.icon(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                icon: const Icon(Icons.save_outlined, size: 15),
+                label: const Text('Save Evaluation'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (saved == true && mounted) {
+      setState(() {
+        evaluation.homework = homework;
+        evaluation.punctuality = attentiveness;
+        evaluation.neatness = teamwork;
+        evaluation.attitude = participation;
+        evaluation.discipline = discipline;
+        evaluation.organization = neatness;
+        evaluation.remark = remarkController.text.trim();
+        evaluation.comments
+          ..clear()
+          ..addAll(
+            criterionComments.map((key, value) => MapEntry(key, value.trim()))
+              ..removeWhere((key, value) => value.isEmpty),
+          );
+        evaluation.status = 'Submitted';
+        evaluation.displayScore = evaluation.average;
+        evaluation.lastEvaluated = 'Today';
+        _touchReportAudit(student);
+      });
+      _notice('${student.name} evaluation saved.');
+    }
+    remarkController.dispose();
   }
 
   Future<void> _publishStream(_FinalReportStream stream) async {
@@ -5623,6 +6230,13 @@ class _CompleteAssessmentWorkflowState
                         ('Next term begins', '5 January 2026'),
                         ('Next term fees', 'GHS 850.00'),
                       ]),
+                      const SizedBox(height: 16),
+                      _reportSection('REPORT RECORD', [
+                        ('Created by', _auditFor(student).createdBy),
+                        ('Created at', _auditFor(student).createdAt),
+                        ('Last updated by', _auditFor(student).updatedBy),
+                        ('Last updated at', _auditFor(student).updatedAt),
+                      ]),
                     ],
                   ),
                 ),
@@ -5633,19 +6247,9 @@ class _CompleteAssessmentWorkflowState
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        Future<void>.delayed(
-                          Duration.zero,
-                          () => _openRemarksEditor(student),
-                        );
-                      },
+                      onPressed: () => Navigator.pop(context),
                       icon: const Icon(Icons.rate_review_outlined),
-                      label: Text(
-                        _remarksComplete(student)
-                            ? 'Edit Remarks'
-                            : 'Add Remarks',
-                      ),
+                      label: const Text('Back to Report'),
                     ),
                     const SizedBox(width: 10),
                     OutlinedButton.icon(
@@ -6137,7 +6741,7 @@ class _CompleteAssessmentWorkflowState
     return embedded ? table : _card(table);
   }
 
-  Widget _outlineButton(String label, IconData icon, VoidCallback onPressed) {
+  Widget _outlineButton(String label, IconData icon, VoidCallback? onPressed) {
     return OutlinedButton.icon(
       onPressed: onPressed,
       icon: Icon(icon, size: 18),
@@ -6145,7 +6749,7 @@ class _CompleteAssessmentWorkflowState
     );
   }
 
-  Widget _filledButton(String label, IconData icon, VoidCallback onPressed) {
+  Widget _filledButton(String label, IconData icon, VoidCallback? onPressed) {
     return FilledButton.icon(
       onPressed: onPressed,
       icon: Icon(icon, size: 18),
@@ -8638,11 +9242,40 @@ class _ReportRemarksDraft {
   final String promotedTo;
   final bool ignoreHeadTeacherRemark;
 
+  _ReportRemarksDraft copyWith({
+    String? classTeacherRemarks,
+    String? headTeacherRemarks,
+    String? promotedTo,
+    bool? ignoreHeadTeacherRemark,
+  }) {
+    return _ReportRemarksDraft(
+      classTeacherRemarks: classTeacherRemarks ?? this.classTeacherRemarks,
+      headTeacherRemarks: headTeacherRemarks ?? this.headTeacherRemarks,
+      promotedTo: promotedTo ?? this.promotedTo,
+      ignoreHeadTeacherRemark:
+          ignoreHeadTeacherRemark ?? this.ignoreHeadTeacherRemark,
+    );
+  }
+
   bool get headTeacherRequirementSatisfied =>
       headTeacherRemarks.isNotEmpty || ignoreHeadTeacherRemark;
 
   bool get remarksComplete =>
       classTeacherRemarks.isNotEmpty && headTeacherRequirementSatisfied;
+}
+
+class _ReportAudit {
+  _ReportAudit({
+    required this.createdBy,
+    required this.createdAt,
+    required this.updatedBy,
+    required this.updatedAt,
+  });
+
+  final String createdBy;
+  final String createdAt;
+  String updatedBy;
+  String updatedAt;
 }
 
 class _FinalReportHeader extends StatelessWidget {

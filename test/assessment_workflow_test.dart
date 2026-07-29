@@ -93,53 +93,62 @@ void main() {
     },
   );
 
-  testWidgets('opens final report management from report cards', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(1700, 900));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    await pumpWorkflow(tester);
+  testWidgets(
+    'opens final reports and uses report cards as a monitoring register',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1700, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await pumpWorkflow(tester);
 
-    await tester.tap(find.text('Generate Report Cards').first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Continue'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Final Reports'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.text('Final Reports').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
 
-    expect(find.text('Final Report Management'), findsOneWidget);
-    expect(find.text('TOTAL STREAMS'), findsOneWidget);
-    expect(find.text('PENDING GENERATION'), findsWidgets);
-    expect(find.textContaining('Publish All'), findsOneWidget);
-    expect(find.text('Publish (25)'), findsOneWidget);
-    expect(find.text('Export Report'), findsOneWidget);
+      expect(find.text('Final Report Management'), findsOneWidget);
+      expect(find.text('TOTAL STREAMS'), findsOneWidget);
+      expect(find.text('PENDING GENERATION'), findsWidgets);
+      expect(find.textContaining('Publish All'), findsOneWidget);
+      expect(find.text('Publish (25)'), findsOneWidget);
+      expect(find.text('Export Report'), findsOneWidget);
 
-    final view = find.text('View').first;
-    await tester.ensureVisible(view);
-    await tester.tap(view);
-    await tester.pumpAndSettle();
+      final view = find.text('View').first;
+      await tester.ensureVisible(view);
+      await tester.tap(view);
+      await tester.pumpAndSettle();
 
-    expect(find.text('Report Cards'), findsOneWidget);
-    expect(find.text('TOTAL STUDENTS'), findsOneWidget);
-    expect(find.text('READY TO PUBLISH'), findsOneWidget);
-    expect(find.text('HEAD COMMENTS'), findsOneWidget);
-    expect(find.text('MISSING PROMOTION'), findsOneWidget);
-    expect(find.text('All Students'), findsOneWidget);
-    expect(find.textContaining('Publish ('), findsOneWidget);
+      expect(find.text('Report Cards'), findsOneWidget);
+      expect(find.text('TOTAL STUDENTS'), findsOneWidget);
+      expect(find.text('READY TO PUBLISH'), findsOneWidget);
+      expect(find.text('HEAD COMMENTS'), findsOneWidget);
+      expect(find.text('MISSING PROMOTION'), findsOneWidget);
+      expect(find.text('All Students'), findsOneWidget);
+      expect(find.text('Open Report'), findsWidgets);
+      expect(find.textContaining('Publish ('), findsNothing);
 
-    await tester.tap(find.text('Publish'));
-    await tester.pump();
-    expect(find.text('Publishing…'), findsOneWidget);
-    await tester.pump(const Duration(milliseconds: 800));
-    expect(find.text('Published'), findsWidgets);
-
-    await tester.tap(find.text('Pending').first);
-    await tester.pumpAndSettle();
-    expect(find.text('Student Report Remarks'), findsOneWidget);
-    expect(find.text('Class Teacher Remarks'), findsOneWidget);
-    expect(find.text('Head Teacher Remarks'), findsOneWidget);
+      await tester.tap(find.text('Open Report').first);
+      await tester.pumpAndSettle();
+      expect(find.text('Student Report'), findsOneWidget);
+      expect(find.text('Academic Performance'), findsOneWidget);
+      expect(find.text('Publication Readiness'), findsOneWidget);
+      expect(find.text('Student Evaluation'), findsOneWidget);
+      expect(find.text('Record Information'), findsOneWidget);
+      expect(find.text('CREATED BY'), findsOneWidget);
+      expect(find.text('LAST UPDATED BY'), findsOneWidget);
+      expect(find.text('Class Teacher Remarks'), findsOneWidget);
+      expect(find.text('Head Teacher Remarks'), findsOneWidget);
     expect(find.text('Ignore Head Teacher comment'), findsOneWidget);
     expect(find.text('Promoted To'), findsOneWidget);
-    expect(find.text('Save Remarks'), findsOneWidget);
-  });
+    expect(find.text('Save Draft'), findsOneWidget);
+      expect(find.text('Preview'), findsOneWidget);
+
+      await tester.tap(find.text('Edit Evaluation'));
+      await tester.pumpAndSettle();
+      expect(find.text('Edit Student Evaluation'), findsOneWidget);
+      expect(find.text('Overall Evaluation Remark'), findsOneWidget);
+      expect(find.text('Optional one-line comment'), findsNWidgets(6));
+      expect(find.text('Add one concise overall comment'), findsOneWidget);
+      expect(find.text('Save Evaluation'), findsOneWidget);
+    },
+  );
 }
