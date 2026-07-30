@@ -66,7 +66,7 @@ class _CompleteAssessmentWorkflowState
   _ParentRecord? _selectedParent;
   _StudentRecord? _selectedEvaluationStudent;
   _StudentRecord? _selectedReportStudent;
-  String _selectedClass = 'Grade 5 - Stream A';
+  String _selectedClass = '';
   bool _editingAssessment = false;
   String _assessmentQuery = '';
   String _assessmentTypeFilter = 'All Types';
@@ -95,32 +95,10 @@ class _CompleteAssessmentWorkflowState
   final Map<String, Map<String, dynamic>> _studentReportCards = {};
   List<String> _configuredGradeLevels = const [];
   bool _refreshingReportCards = false;
-  final Map<String, _ReportRemarksDraft> _reportRemarks = {
-    'STU-24001': _ReportRemarksDraft.completed('Grade 6'),
-    'STU-24002': _ReportRemarksDraft.completed('Grade 6'),
-    'STU-24004': _ReportRemarksDraft.completed('Grade 6'),
-  };
-  final Map<String, _ReportAudit> _reportAudit = {
-    'STU-24001': _ReportAudit(
-      createdBy: 'Sarah Johnson',
-      createdAt: '28 Mar 2026 09:15',
-      updatedBy: 'Eric GoM',
-      updatedAt: '29 Mar 2026 11:40',
-    ),
-    'STU-24004': _ReportAudit(
-      createdBy: 'Sarah Johnson',
-      createdAt: '27 Mar 2026 14:10',
-      updatedBy: 'Michael Mensah',
-      updatedAt: '29 Mar 2026 08:25',
-    ),
-  };
+  final Map<String, _ReportRemarksDraft> _reportRemarks = {};
+  final Map<String, _ReportAudit> _reportAudit = {};
   String _reportCardFilter = 'All Students';
-  final List<_FinalReportStream> _finalReportStreams = [
-    _FinalReportStream('Grade 5 - A', 'Sarah Johnson', 47, 47, 43, 18),
-    _FinalReportStream('Grade 5 - B', 'Michael Brown', 45, 45, 45, 45),
-    _FinalReportStream('Basic 4 - A', 'Abena Kofi', 35, 35, 30, 30),
-    _FinalReportStream('JHS 2 - A', 'Kweku Mensah', 62, 58, 52, 40),
-  ];
+  final List<_FinalReportStream> _finalReportStreams = [];
 
   @override
   void initState() {
@@ -129,50 +107,14 @@ class _CompleteAssessmentWorkflowState
       accessToken: widget.accessToken,
       onRefreshAccessToken: widget.onRefreshAccessToken,
     );
-    if (widget.customSchoolId.trim().isEmpty) {
-      _assessmentFormSetup = Future.value(
-        AssessmentFormSetup(
-          streams: const [
-            AssessmentStreamOption(
-              id: 1,
-              gradeLevelId: 5,
-              gradeName: 'Grade 5',
-              streamName: 'Stream A',
-              studentCount: 47,
+    _assessmentFormSetup = widget.customSchoolId.trim().isEmpty
+        ? Future.error(
+            const AssessmentApiException(
+              'A school must be selected before loading assessments.',
             ),
-          ],
-          gradeLevels: const [
-            AssessmentGradeLevelOption(
-              id: 5,
-              name: 'Grade 5',
-              status: 'ACTIVE',
-            ),
-            AssessmentGradeLevelOption(
-              id: 6,
-              name: 'Grade 6',
-              status: 'ACTIVE',
-            ),
-          ],
-          subjects: const [
-            AssessmentSubjectOption(
-              id: 1,
-              gradeLevelId: 5,
-              name: 'Mathematics',
-            ),
-          ],
-          academicYearId: 1,
-          academicYearName: widget.academicYear,
-          termId: 1,
-          termName: widget.term,
-          termSequence: 1,
-          termClosed: false,
-        ),
-      );
-      _loadingAssessments = false;
-    } else {
-      _assessmentFormSetup = _assessmentApi.getFormSetup(widget.customSchoolId);
-      _loadLiveAssessments();
-    }
+          )
+        : _assessmentApi.getFormSetup(widget.customSchoolId);
+    _loadLiveAssessments();
   }
 
   Future<void> _loadLiveAssessments() async {
@@ -368,177 +310,9 @@ class _CompleteAssessmentWorkflowState
     _ => 'Open',
   };
 
-  final List<_AssessmentRecord> _assessments = [
-    _AssessmentRecord(
-      id: 'ASS-001',
-      title: 'CAT 1 – Number & Algebra',
-      type: 'CAT 1',
-      subject: 'Mathematics',
-      date: '17 Jan 2024',
-      maxScore: 30,
-      entered: 47,
-      totalStudents: 47,
-      average: 22.4,
-      passRate: 85.1,
-      status: 'Graded',
-      grading: 'Complete',
-      curriculumIndicators: const [
-        _CurriculumIndicator(
-          code: 'B5.1.1.1',
-          text:
-              'Count, read and write numbers up to 10,000 in numerals and words.',
-          strand: 'Number',
-          subStrand: 'Counting & Place Value',
-        ),
-        _CurriculumIndicator(
-          code: 'B5.1.2.1',
-          text:
-              'Use letters and symbols to represent unknown numbers in simple equations.',
-          strand: 'Number',
-          subStrand: 'Algebra',
-        ),
-        _CurriculumIndicator(
-          code: 'B5.1.3.2',
-          text: 'Solve multi-step word problems involving all four operations.',
-          strand: 'Number',
-          subStrand: 'Operations',
-        ),
-      ],
-    ),
-    _AssessmentRecord(
-      id: 'ASS-002',
-      title: 'CAT 2 – Geometry',
-      type: 'CAT 2',
-      subject: 'Mathematics',
-      date: '04 Mar 2024',
-      maxScore: 30,
-      entered: 0,
-      totalStudents: 47,
-      average: 0,
-      passRate: 0,
-      status: 'Open',
-      grading: 'Not started',
-    ),
-    _AssessmentRecord(
-      id: 'ASS-003',
-      title: 'CAT 1 – Reading Comprehension',
-      type: 'CAT 1',
-      subject: 'English Language',
-      date: '21 Jan 2024',
-      maxScore: 40,
-      entered: 47,
-      totalStudents: 47,
-      average: 31.7,
-      passRate: 91.5,
-      status: 'Graded',
-      grading: 'Complete',
-    ),
-    _AssessmentRecord(
-      id: 'ASS-004',
-      title: 'Environmental Science Project',
-      type: 'CAT 4 – Project/Assignment',
-      subject: 'Integrated Science',
-      date: '13 Feb 2024',
-      maxScore: 50,
-      entered: 38,
-      totalStudents: 47,
-      average: 40.2,
-      passRate: 78.9,
-      status: 'Pending Review',
-      grading: '38 of 47',
-    ),
-    _AssessmentRecord(
-      id: 'ASS-005',
-      title: 'End of Term Exam',
-      type: 'End-of-Term Exam',
-      subject: 'Mathematics',
-      date: '19 Mar 2024',
-      maxScore: 100,
-      entered: 47,
-      totalStudents: 47,
-      average: 68.3,
-      passRate: 74.5,
-      status: 'Closed',
-      grading: 'Complete',
-    ),
-  ];
-
-  final List<_StudentRecord> _students = [
-    const _StudentRecord(
-      id: 'STU-24001',
-      name: 'Ama Boateng',
-      gender: 'Female',
-      average: 89,
-      grade: 'A',
-      readiness: 'Ready',
-      reportStatus: 'Generated',
-      parent: 'Mr. Kofi Boateng',
-    ),
-    const _StudentRecord(
-      id: 'STU-24002',
-      name: 'Kwame Asante',
-      gender: 'Male',
-      average: 82,
-      grade: 'B',
-      readiness: 'Ready',
-      reportStatus: 'Draft',
-      parent: 'Mrs. Adwoa Asante',
-    ),
-    const _StudentRecord(
-      id: 'STU-24003',
-      name: 'Abena Mensah',
-      gender: 'Female',
-      average: 78,
-      grade: 'B',
-      readiness: 'Missing remark',
-      reportStatus: 'Not generated',
-      parent: 'Mr. Kojo Mensah',
-    ),
-    const _StudentRecord(
-      id: 'STU-24004',
-      name: 'Yaw Darko',
-      gender: 'Male',
-      average: 74,
-      grade: 'C',
-      readiness: 'Ready',
-      reportStatus: 'Published',
-      parent: 'Mrs. Akua Darko',
-    ),
-    const _StudentRecord(
-      id: 'STU-24005',
-      name: 'Nana Owusu',
-      gender: 'Male',
-      average: 68,
-      grade: 'C',
-      readiness: 'Scores incomplete',
-      reportStatus: 'Not generated',
-      parent: 'Mr. Daniel Owusu',
-    ),
-  ];
-
-  late final List<_ParentRecord> _parents = [
-    _ParentRecord(
-      id: 'PAR-001',
-      name: 'Mr. Kofi Boateng',
-      phone: '024 456 7890',
-      email: 'kofi.boateng@example.com',
-      children: [_students[0]],
-    ),
-    _ParentRecord(
-      id: 'PAR-002',
-      name: 'Mrs. Adwoa Asante',
-      phone: '020 234 5678',
-      email: 'adwoa.asante@example.com',
-      children: [_students[1]],
-    ),
-    _ParentRecord(
-      id: 'PAR-003',
-      name: 'Mr. Kojo Mensah',
-      phone: '055 890 1234',
-      email: 'kojo.mensah@example.com',
-      children: [_students[2]],
-    ),
-  ];
+  final List<_AssessmentRecord> _assessments = [];
+  final List<_StudentRecord> _students = [];
+  final List<_ParentRecord> _parents = [];
 
   void _open(_Route route) {
     setState(() {
@@ -1068,29 +842,49 @@ class _CompleteAssessmentWorkflowState
   }
 
   Widget _dashboard() {
+    final completed = _assessments
+        .where((assessment) => assessment.entered >= assessment.totalStudents)
+        .length;
+    final enteredScores = _assessments.fold<int>(
+      0,
+      (total, assessment) => total + assessment.entered,
+    );
+    final requiredScores = _assessments.fold<int>(
+      0,
+      (total, assessment) => total + assessment.totalStudents,
+    );
+    final average = _assessments.isEmpty
+        ? 0.0
+        : _assessments.fold<double>(
+                0,
+                (total, assessment) => total + assessment.average,
+              ) /
+              _assessments.length;
     return _page(
       title: 'Assessment Dashboard',
       subtitle: '${widget.term} - ${widget.academicYear} Academic Year',
       showBack: false,
-      actions: [
-        _outlineButton(
-          'Classes',
-          Icons.school_outlined,
-          () => _open(_Route.classes),
-        ),
-        _outlineButton(
-          'Parents',
-          Icons.family_restroom_outlined,
-          () => _open(_Route.parents),
-        ),
-      ],
       children: [
         LayoutBuilder(
-          builder: (_, constraints) => _statGrid(constraints.maxWidth, const [
-            ('TOTAL STUDENTS', '580', 'Across 18 active classes'),
-            ('ACTIVE ASSESSMENTS', '78', '15 pending review'),
-            ('AVG SBA SCORE', '75.8%', '+2.4% from last term'),
-            ('COMPLETION', '84%', '487 of 580 complete'),
+          builder: (_, constraints) => _statGrid(constraints.maxWidth, [
+            (
+              'ACTIVE ASSESSMENTS',
+              '${_assessments.length}',
+              'For the selected term',
+            ),
+            ('FULLY GRADED', '$completed', 'Assessments with all scores'),
+            (
+              'AVG SCORE',
+              '${average.toStringAsFixed(1)}%',
+              'Across assessments',
+            ),
+            (
+              'SCORE ENTRY',
+              requiredScores == 0
+                  ? '0%'
+                  : '${(enteredScores * 100 / requiredScores).toStringAsFixed(0)}%',
+              '$enteredScores of $requiredScores scores entered',
+            ),
           ]),
         ),
         const SizedBox(height: 18),
@@ -1179,11 +973,34 @@ class _CompleteAssessmentWorkflowState
             );
             final completion = _section(
               title: 'Assessment Completion',
-              child: const Column(
+              child: Column(
                 children: [
-                  _ProgressRow('Completed', 487, 580, AppColors.green),
-                  _ProgressRow('In progress', 68, 580, AppColors.amber),
-                  _ProgressRow('Not started', 25, 580, AppColors.red),
+                  _ProgressRow(
+                    'Completed',
+                    completed,
+                    _assessments.length,
+                    AppColors.green,
+                  ),
+                  _ProgressRow(
+                    'In progress',
+                    _assessments
+                        .where(
+                          (assessment) =>
+                              assessment.entered > 0 &&
+                              assessment.entered < assessment.totalStudents,
+                        )
+                        .length,
+                    _assessments.length,
+                    AppColors.amber,
+                  ),
+                  _ProgressRow(
+                    'Not started',
+                    _assessments
+                        .where((assessment) => assessment.entered == 0)
+                        .length,
+                    _assessments.length,
+                    AppColors.red,
+                  ),
                 ],
               ),
             );
@@ -1200,84 +1017,6 @@ class _CompleteAssessmentWorkflowState
                     ],
                   );
           },
-        ),
-        const SizedBox(height: 18),
-        LayoutBuilder(
-          builder: (_, c) {
-            final stacked = c.maxWidth < 920;
-            final performance = _section(
-              title: 'Performance by Grade',
-              child: const Column(
-                children: [
-                  _ProgressRow('Kindergarten', 84, 100, AppColors.purple),
-                  _ProgressRow('Basic 1-3', 79, 100, AppColors.green),
-                  _ProgressRow('Basic 4-6', 76, 100, AppColors.blue),
-                  _ProgressRow('JHS 1-3', 72, 100, AppColors.amber),
-                ],
-              ),
-            );
-            final activity = _section(
-              title: 'Recent Activity',
-              child: Column(
-                children: [
-                  _activityRow(
-                    'Sarah Johnson',
-                    'Completed Mathematics CAT 1 for Grade 5 - 47 students',
-                    'Today, 10:42 AM',
-                  ),
-                  _activityRow(
-                    'Michael Brown',
-                    'Started English assessment for JHS 2 - 62 students',
-                    'Yesterday, 3:18 PM',
-                  ),
-                  _activityRow(
-                    'Abena Kofi',
-                    'Generated 35 report cards for Basic 4',
-                    '24 Feb, 1:05 PM',
-                  ),
-                ],
-              ),
-            );
-            return stacked
-                ? Column(
-                    children: [
-                      performance,
-                      const SizedBox(height: 16),
-                      activity,
-                    ],
-                  )
-                : Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(child: performance),
-                      const SizedBox(width: 16),
-                      Expanded(child: activity),
-                    ],
-                  );
-          },
-        ),
-        const SizedBox(height: 18),
-        _section(
-          title: 'Students Needing Attention',
-          child: Column(
-            children: [
-              _attentionRow(
-                'Abena Mensah',
-                '3 assessment scores are missing',
-                'Review scores',
-              ),
-              _attentionRow(
-                'Nana Owusu',
-                'Class teacher remark is incomplete',
-                'Add remark',
-              ),
-              _attentionRow(
-                'Daniel Ofori',
-                'Average dropped by 14% this term',
-                'View student',
-              ),
-            ],
-          ),
         ),
       ],
     );
@@ -2435,6 +2174,9 @@ class _CompleteAssessmentWorkflowState
         return _AssessmentFormPage(
           title: _editingAssessment ? 'Edit Assessment' : 'New Assessment',
           subtitle: _selectedClass,
+          selectedStream: snapshot.data!.streams
+              .where((stream) => stream.label == _selectedClass)
+              .firstOrNull,
           source: source,
           setup: snapshot.data!,
           api: _assessmentApi,
@@ -4755,9 +4497,9 @@ class _CompleteAssessmentWorkflowState
                                 ),
                               ),
                               const SizedBox(height: 8),
-                              const Text(
-                                'Sarah Johnson • Class Teacher',
-                                style: TextStyle(
+                              Text(
+                                '${widget.viewerName} • Class Teacher',
+                                style: const TextStyle(
                                   color: Color(0xFF94A3B8),
                                   fontSize: 11,
                                 ),
@@ -6562,53 +6304,7 @@ class _CompleteAssessmentWorkflowState
             'AVG SCORE',
             'COMPLETION',
           ],
-          rows: const [
-            [
-              'Grade 5 - Stream A',
-              'Basic 4-6',
-              'Sarah Johnson',
-              '47',
-              '8',
-              '78.4%',
-              '92%',
-            ],
-            [
-              'Grade 5 - Stream B',
-              'Basic 4-6',
-              'Michael Brown',
-              '45',
-              '8',
-              '75.1%',
-              '88%',
-            ],
-            [
-              'Basic 4 - Stream A',
-              'Basic 4-6',
-              'Abena Kofi',
-              '35',
-              '7',
-              '81.3%',
-              '86%',
-            ],
-            [
-              'JHS 2 - Stream A',
-              'Junior High',
-              'Kweku Mensah',
-              '62',
-              '9',
-              '72.8%',
-              '79%',
-            ],
-          ],
-          onRowTap: (index) {
-            _selectedClass = const [
-              'Grade 5 - Stream A',
-              'Grade 5 - Stream B',
-              'Basic 4 - Stream A',
-              'JHS 2 - Stream A',
-            ][index];
-            _open(_Route.classDetail);
-          },
+          rows: const [],
         ),
       ],
     );
@@ -7516,76 +7212,6 @@ class _CompleteAssessmentWorkflowState
     );
   }
 
-  Widget _activityRow(String actor, String activity, String time) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 11),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: AppColors.greenSoft,
-            child: Text(
-              actor.split(' ').map((part) => part[0]).take(2).join(),
-              style: const TextStyle(
-                color: AppColors.green,
-                fontWeight: FontWeight.w700,
-                fontSize: 12,
-              ),
-            ),
-          ),
-          const SizedBox(width: 11),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  actor,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  activity,
-                  style: const TextStyle(color: AppColors.muted, fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 10),
-          Text(
-            time,
-            style: const TextStyle(color: AppColors.muted, fontSize: 11),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _attentionRow(String student, String issue, String action) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Row(
-        children: [
-          const Icon(Icons.warning_amber_rounded, color: AppColors.amber),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  student,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                Text(issue, style: const TextStyle(color: AppColors.muted)),
-              ],
-            ),
-          ),
-          TextButton(onPressed: () => _notice(action), child: Text(action)),
-        ],
-      ),
-    );
-  }
-
   Widget _filterBar({required String hint, required List<String> filters}) {
     return _card(
       Padding(
@@ -7699,6 +7325,7 @@ class _AssessmentFormPage extends StatefulWidget {
   const _AssessmentFormPage({
     required this.title,
     required this.subtitle,
+    required this.selectedStream,
     required this.source,
     required this.setup,
     required this.api,
@@ -7710,6 +7337,7 @@ class _AssessmentFormPage extends StatefulWidget {
 
   final String title;
   final String subtitle;
+  final AssessmentStreamOption? selectedStream;
   final _AssessmentRecord? source;
   final AssessmentFormSetup setup;
   final AssessmentApiClient api;
@@ -7767,12 +7395,7 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
       _description.text = widget.source!.description;
       _selectedIndicators.addAll(widget.source!.curriculumIndicators);
     } else {
-      final matchingStreams = widget.setup.streams.where(
-        (stream) => stream.label == widget.subtitle,
-      );
-      _selectedClass = matchingStreams.isEmpty
-          ? null
-          : matchingStreams.first.label;
+      _selectedClass = widget.selectedStream?.label;
       _term = widget.setup.termName;
       _academicYear = widget.setup.academicYearName;
     }
@@ -7790,7 +7413,7 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
   Future<void> _openCurriculumDrawer() async {
     if (_selectedClass == null || _subject == null) {
       setState(() {
-        _indicatorError = 'Select a class and subject before browsing.';
+        _indicatorError = 'Select a subject before browsing.';
       });
       return;
     }
@@ -8388,24 +8011,22 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
               ),
               const SizedBox(height: 14),
             ],
-            _responsivePair(
-              _dropdown(
-                label: 'Class',
-                hint: 'Select Class',
-                value: _selectedClass,
-                values: _classOptions,
-                onChanged: (value) => setState(() {
-                  _selectedClass = value;
-                  if (!_subjectOptions.contains(_subject)) _subject = null;
-                }),
+            if (_selectedClass == null) ...[
+              _formNotice(
+                'The selected class stream is unavailable. Return to Assessments and select the stream again.',
+                const Color(0xFFFFF1F2),
+                const Color(0xFF991B1B),
               ),
-              _dropdown(
-                label: 'Subject',
-                hint: 'Select Subject',
-                value: _subject,
-                values: _subjectOptions,
-                onChanged: (value) => setState(() => _subject = value),
-              ),
+              const SizedBox(height: 14),
+            ],
+            _dropdown(
+              label: 'Subject',
+              hint: 'Select Subject',
+              value: _subject,
+              values: _subjectOptions,
+              onChanged: _selectedClass == null
+                  ? null
+                  : (value) => setState(() => _subject = value),
             ),
             const SizedBox(height: 14),
             _dropdown(
@@ -8862,11 +8483,8 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
     );
   }
 
-  List<String> get _classOptions {
-    return widget.setup.streams.map((stream) => stream.label).toList();
-  }
-
   AssessmentStreamOption? get _selectedStream {
+    if (widget.source == null) return widget.selectedStream;
     for (final stream in widget.setup.streams) {
       if (stream.label == _selectedClass) return stream;
     }
@@ -8910,7 +8528,10 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
     final stream = _selectedStream;
     final subject = _selectedSubject;
     if (stream == null || subject == null) {
-      setState(() => _saveError = 'Select a configured class and subject.');
+      setState(
+        () => _saveError =
+            'The selected stream or subject is no longer configured.',
+      );
       return;
     }
     final max = int.parse(_maxScore.text);
@@ -9091,29 +8712,10 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
       _error = null;
     });
     if (widget.customSchoolId.trim().isEmpty) {
-      const demoStudents = [
-        AssessmentStudentScore(
-          studentId: 'STU-24001',
-          firstName: 'Ama',
-          lastName: 'Boateng',
-          score: 3,
-          maxScore: 30,
-          percentage: 10,
-          status: 'FAIL',
-          remarks: '',
-        ),
-        AssessmentStudentScore(
-          studentId: 'STU-24002',
-          firstName: 'Kwame',
-          lastName: 'Asante',
-          score: 15,
-          maxScore: 30,
-          percentage: 50,
-          status: 'PASS',
-          remarks: '',
-        ),
-      ];
-      _replaceStudents(demoStudents);
+      setState(() {
+        _error = 'A school must be selected before loading the score sheet.';
+        _loading = false;
+      });
       return;
     }
     try {
@@ -10605,16 +10207,6 @@ class _ReportRemarksDraft {
     promotedTo: '',
     ignoreHeadTeacherRemark: false,
   );
-
-  factory _ReportRemarksDraft.completed(String promotedTo) =>
-      _ReportRemarksDraft(
-        classTeacherRemarks:
-            'Demonstrates consistent effort and positive academic progress.',
-        headTeacherRemarks:
-            'A commendable performance. Continue working diligently.',
-        promotedTo: promotedTo,
-        ignoreHeadTeacherRemark: false,
-      );
 
   final String classTeacherRemarks;
   final String headTeacherRemarks;

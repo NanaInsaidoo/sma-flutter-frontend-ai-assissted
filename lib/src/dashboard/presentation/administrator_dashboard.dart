@@ -11,6 +11,7 @@ import '../../assessments/presentation/assessment_dashboard_screen.dart';
 import '../../classes/presentation/grade_streams_screen.dart';
 import '../../expenses/presentation/expenses_screen.dart';
 import '../../fees/presentation/fee_management_screen.dart';
+import '../../incidents/presentation/incidents_screen.dart';
 import '../../settings/presentation/school_settings_screen.dart';
 import '../../staff/presentation/staff_screen.dart';
 import '../../students/data/api_students_repository.dart';
@@ -27,6 +28,7 @@ enum _SchoolAdminPage {
   classes,
   fees,
   expenses,
+  incidents,
   calendar,
   settings,
 }
@@ -392,6 +394,17 @@ class _DashboardBody extends StatelessWidget {
         accessToken: accessToken,
         onRefreshAccessToken: onRefreshAccessToken,
         recordedBy: userDisplayName?.trim().isNotEmpty == true
+            ? userDisplayName!.trim()
+            : data.administratorName,
+      );
+    }
+
+    if (selectedPage == _SchoolAdminPage.incidents) {
+      return IncidentsScreen(
+        customSchoolId: schoolId,
+        accessToken: accessToken,
+        onRefreshAccessToken: onRefreshAccessToken,
+        reportedBy: userDisplayName?.trim().isNotEmpty == true
             ? userDisplayName!.trim()
             : data.administratorName,
       );
@@ -3369,6 +3382,13 @@ class _Sidebar extends StatelessWidget {
                     collapsed: collapsed,
                     active: selectedPage == _SchoolAdminPage.expenses,
                     onTap: () => onSelectPage(_SchoolAdminPage.expenses),
+                  ),
+                  _SidebarButton(
+                    icon: Icons.warning_amber_rounded,
+                    label: 'Incident Management',
+                    collapsed: collapsed,
+                    active: selectedPage == _SchoolAdminPage.incidents,
+                    onTap: () => onSelectPage(_SchoolAdminPage.incidents),
                   ),
                   _SidebarButton(
                     icon: Icons.campaign_rounded,
