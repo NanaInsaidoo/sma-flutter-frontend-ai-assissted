@@ -28,6 +28,7 @@ class FeeManagementScreen extends StatefulWidget {
     required this.schoolName,
     required this.accessToken,
     this.onRefreshAccessToken,
+    this.role,
     this.openRecordPaymentOnLoad = false,
     this.onRecordPaymentRequestConsumed,
   });
@@ -36,6 +37,7 @@ class FeeManagementScreen extends StatefulWidget {
   final String schoolName;
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
+  final String? role;
   final bool openRecordPaymentOnLoad;
   final VoidCallback? onRecordPaymentRequestConsumed;
 
@@ -76,6 +78,13 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
   bool _overviewDetailLoading = false;
   Object? _overviewDetailError;
   bool _openingRecordPaymentRequest = false;
+
+  bool get _canApproveFinance {
+    final role = widget.role?.trim().toUpperCase();
+    return role == 'ADMINISTRATOR' ||
+        role == 'HEAD_TEACHER' ||
+        role == 'SUPER_ADMIN';
+  }
 
   @override
   void initState() {
@@ -255,6 +264,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
                 repository: _classRequirements!,
                 termName: _termName,
                 gradeLevels: _gradeLevels,
+                canPublish: _canApproveFinance,
               ),
       _FeeTab.waivers => _buildWaiversContent(),
     };
@@ -829,7 +839,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
       money: _money,
       onAddClassLevel: _openClassLevelSheet,
       onEditClassLevel: _openClassLevelSheet,
-      onPublishClassLevel: _publishFeeStructure,
+      onPublishClassLevel: _canApproveFinance ? _publishFeeStructure : null,
       onDeleteClassLevel: _deleteFeeStructure,
     );
   }
@@ -3238,8 +3248,12 @@ class _StudentFeesContent extends StatelessWidget {
             api: api,
             customSchoolId: customSchoolId,
             termId: termId,
-            onRecordPayment: () =>
-                _showRecordPaymentForm(context, rows, selectedStudent: row),
+            onRecordPayment: () => _showRecordPaymentForm(
+              context,
+              rows,
+              selectedStudent: row,
+              closeDetailsAfterSave: true,
+            ),
           ),
         );
       },
@@ -3257,6 +3271,7 @@ class _StudentFeesContent extends StatelessWidget {
     BuildContext context,
     List<_StudentFeeRow> rows, {
     _StudentFeeRow? selectedStudent,
+    bool closeDetailsAfterSave = false,
   }) async {
     final saved = await showDialog<bool>(
       context: context,
@@ -3280,6 +3295,9 @@ class _StudentFeesContent extends StatelessWidget {
           backgroundColor: AppColors.green,
         ),
       );
+      if (closeDetailsAfterSave && context.mounted) {
+        Navigator.of(context).pop();
+      }
     }
   }
 }

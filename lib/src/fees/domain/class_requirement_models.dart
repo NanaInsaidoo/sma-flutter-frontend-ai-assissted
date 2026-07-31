@@ -51,7 +51,7 @@ class ClassRequirementItem {
       quantity: _asInt(json['quantity']),
       unit: '${json['unit'] ?? ''}',
       estimatedUnitPrice: _asDouble(json['estimatedUnitPrice']),
-      dueDate: DateTime.tryParse('${json['dueDate'] ?? ''}') ?? DateTime.now(),
+      dueDate: _requirementDate(json['dueDate']) ?? DateTime.now(),
       instructions: '${json['instructions'] ?? ''}',
       isOptional: json['optional'] == true,
       updatedSincePublished: json['updatedSincePublished'] == true,
@@ -89,6 +89,18 @@ class ClassRequirementItem {
           updatedSincePublished ?? this.updatedSincePublished,
     );
   }
+}
+
+DateTime? _requirementDate(dynamic value) {
+  if (value is List && value.length >= 3) {
+    final year = (value[0] as num?)?.toInt();
+    final month = (value[1] as num?)?.toInt();
+    final day = (value[2] as num?)?.toInt();
+    if (year != null && month != null && day != null) {
+      return DateTime(year, month, day);
+    }
+  }
+  return DateTime.tryParse('${value ?? ''}');
 }
 
 class ClassRequirementGroup {

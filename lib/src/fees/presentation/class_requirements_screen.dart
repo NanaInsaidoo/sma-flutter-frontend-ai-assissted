@@ -12,11 +12,13 @@ class ClassRequirementsScreen extends StatefulWidget {
     required this.repository,
     required this.termName,
     this.gradeLevels = const [],
+    this.canPublish = true,
   });
 
   final ClassRequirementsRepository repository;
   final String termName;
   final List<FeeGradeLevel> gradeLevels;
+  final bool canPublish;
 
   @override
   State<ClassRequirementsScreen> createState() =>
@@ -68,7 +70,9 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
                 _showRequirementForm(selected.id, initialItem: item),
             onDeleteRequirement: (item) =>
                 _confirmDeleteRequirement(selected, item),
-            onPublish: () => _showPublishDialog(selected),
+            onPublish: widget.canPublish
+                ? () => _showPublishDialog(selected)
+                : null,
             onOpenStudent: (student) => _showStudentDetails(selected, student),
           );
         }
@@ -670,7 +674,7 @@ class _ClassTracker extends StatelessWidget {
   final VoidCallback onAddRequirement;
   final ValueChanged<ClassRequirementItem> onEditRequirement;
   final ValueChanged<ClassRequirementItem> onDeleteRequirement;
-  final VoidCallback onPublish;
+  final VoidCallback? onPublish;
   final ValueChanged<StudentRequirementProgress> onOpenStudent;
 
   @override
@@ -706,6 +710,8 @@ class _ClassTracker extends StatelessWidget {
                     ? 'Add items to publish'
                     : group.draftChangeCount == 0
                     ? 'Published'
+                    : onPublish == null
+                    ? 'Approval required'
                     : 'Review & publish (${group.draftChangeCount})',
               ),
             ),
@@ -757,7 +763,9 @@ class _ClassTracker extends StatelessWidget {
                         ),
                         const SizedBox(height: 10),
                         Text(
-                          hasItems
+                          group.status == RequirementStatus.draft && hasItems
+                              ? 'Student tracking begins after this checklist is published.'
+                              : hasItems
                               ? 'No students are enrolled in this class yet.'
                               : 'Student tracking will appear here after class items are configured.',
                           textAlign: TextAlign.center,
@@ -1689,6 +1697,16 @@ class _AddRequirementDialogState extends State<_AddRequirementDialog> {
     'Pens',
   ];
 
+  static const _commonItemCategories = {
+    'Toilet rolls': 'Hygiene',
+    'Box of tissues': 'Hygiene',
+    'Liquid soap': 'Hygiene',
+    'Disinfectant': 'Hygiene',
+    'Exercise books': 'Learning materials',
+    'HB pencils': 'Learning materials',
+    'Pens': 'Learning materials',
+  };
+
   @override
   void initState() {
     super.initState();
@@ -1778,7 +1796,11 @@ class _AddRequirementDialogState extends State<_AddRequirementDialog> {
                       .map(
                         (item) => ActionChip(
                           label: Text(item),
-                          onPressed: () => _name.text = item,
+                          onPressed: () => setState(() {
+                            _name.text = item;
+                            _category =
+                                _commonItemCategories[item] ?? _category;
+                          }),
                         ),
                       )
                       .toList(),

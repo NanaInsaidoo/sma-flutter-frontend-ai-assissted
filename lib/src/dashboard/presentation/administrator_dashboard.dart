@@ -387,6 +387,7 @@ class _DashboardBody extends StatelessWidget {
             : data.schoolName,
         accessToken: accessToken,
         onRefreshAccessToken: onRefreshAccessToken,
+        role: role,
         openRecordPaymentOnLoad: openRecordPaymentOnNextFees,
         onRecordPaymentRequestConsumed: onRecordPaymentRequestConsumed,
       );
