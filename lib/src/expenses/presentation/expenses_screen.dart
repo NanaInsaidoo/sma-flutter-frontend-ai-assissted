@@ -3469,8 +3469,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                 _snack('The current academic term is not available.');
                 return;
               }
-              final saved = await _runFinanceMutation(
-                request: () => _financeApi.post(
+              try {
+                final created = await _financeApi.post(
                   '/api/schools/${widget.customSchoolId}/finance/requisitions',
                   body: {
                     'academicTermId': termId,
@@ -3495,12 +3495,31 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                         ? verbalApprover.text.trim()
                         : null,
                   },
-                ),
-                successMessage: emergencyApproval
-                    ? 'Emergency requisition created. Record actual spend, then complete ratification.'
-                    : 'Requisition created for approval.',
-              );
-              if (saved && context.mounted) Navigator.pop(context);
+                );
+                final requisitionId = _nullableServerId(_asMap(created)['id']);
+                if (requisitionId == null) {
+                  throw const FinanceApiException(
+                    'The requisition was created without a server ID.',
+                  );
+                }
+                await _financeApi.post(
+                  '/api/schools/${widget.customSchoolId}/finance/requisitions/$requisitionId/submit',
+                );
+                await _loadFinanceWorkspace(showLoading: false);
+                if (!mounted) return;
+                _snack(
+                  emergencyApproval
+                      ? 'Emergency requisition submitted for approval.'
+                      : 'Requisition submitted for approval.',
+                );
+                if (context.mounted) Navigator.pop(context);
+              } on FinanceApiException catch (error) {
+                if (mounted) _snack(error.message);
+              } catch (_) {
+                if (mounted) {
+                  _snack('The requisition could not be submitted.');
+                }
+              }
             },
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
