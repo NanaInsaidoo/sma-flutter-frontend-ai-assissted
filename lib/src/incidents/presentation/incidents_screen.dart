@@ -3303,8 +3303,8 @@ class _PersonDialogState extends State<_PersonDialog> {
   IncidentLookup? role;
   Timer? _searchDebounce;
   bool _searching = false;
-  List<IncidentMention> _staffResults = const [];
-  IncidentMention? _selectedStaff;
+  List<IncidentMention> _personResults = const [];
+  IncidentMention? _selectedPerson;
 
   @override
   void initState() {
@@ -3344,14 +3344,18 @@ class _PersonDialogState extends State<_PersonDialog> {
               onChanged: _changeType,
             ),
             const SizedBox(height: 10),
-            if (type == 'STAFF') ...[
+            if (type == 'STAFF' || type == 'STUDENT') ...[
               TextField(
                 controller: name,
-                onChanged: _searchStaff,
-                decoration: const InputDecoration(
-                  labelText: 'Search staff',
-                  hintText: 'Type staff name or ID',
-                  prefixIcon: Icon(Icons.search_rounded),
+                onChanged: _searchPeople,
+                decoration: InputDecoration(
+                  labelText: type == 'STUDENT'
+                      ? 'Search enrolled student'
+                      : 'Search staff',
+                  hintText: type == 'STUDENT'
+                      ? 'Type student name or ID'
+                      : 'Type staff name or ID',
+                  prefixIcon: const Icon(Icons.search_rounded),
                 ),
               ),
               if (_searching)
@@ -3362,7 +3366,7 @@ class _PersonDialogState extends State<_PersonDialog> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   ),
                 )
-              else if (_staffResults.isNotEmpty)
+              else if (_personResults.isNotEmpty)
                 Container(
                   constraints: const BoxConstraints(maxHeight: 200),
                   margin: const EdgeInsets.only(top: 6),
@@ -3372,30 +3376,34 @@ class _PersonDialogState extends State<_PersonDialog> {
                   ),
                   child: ListView(
                     shrinkWrap: true,
-                    children: _staffResults
+                    children: _personResults
                         .map(
-                          (staff) => ListTile(
+                          (person) => ListTile(
                             dense: true,
-                            onTap: () => _selectStaff(staff),
-                            leading: const Icon(
-                              Icons.badge_outlined,
-                              color: AppColors.purple,
+                            onTap: () => _selectPerson(person),
+                            leading: Icon(
+                              person.isStudent
+                                  ? Icons.school_outlined
+                                  : Icons.badge_outlined,
+                              color: person.isStudent
+                                  ? AppColors.green
+                                  : AppColors.purple,
                             ),
                             title: Text(
-                              staff.name,
+                              person.name,
                               style: const TextStyle(
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
                             subtitle: Text(
-                              '${staff.id} · ${staff.subtitle.isEmpty ? 'Staff' : _label(staff.subtitle)}',
+                              '${person.id} · ${person.subtitle.isEmpty ? _label(type) : _label(person.subtitle)}',
                             ),
                           ),
                         )
                         .toList(),
                   ),
                 ),
-              if (_selectedStaff != null)
+              if (_selectedPerson != null)
                 Container(
                   width: double.infinity,
                   margin: const EdgeInsets.only(top: 8),
@@ -3406,7 +3414,7 @@ class _PersonDialogState extends State<_PersonDialog> {
                     borderRadius: BorderRadius.circular(9),
                   ),
                   child: Text(
-                    '${_selectedStaff!.name}\n${_selectedStaff!.id} · ${_selectedStaff!.subtitle.isEmpty ? 'Staff' : _label(_selectedStaff!.subtitle)}',
+                    '${_selectedPerson!.name}\n${_selectedPerson!.id} · ${_selectedPerson!.subtitle.isEmpty ? _label(type) : _label(_selectedPerson!.subtitle)}',
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                 ),
@@ -3425,21 +3433,6 @@ class _PersonDialogState extends State<_PersonDialog> {
                   labelText: 'Description or relationship',
                   hintText: 'e.g. Parent, visitor, community member',
                 ),
-              ),
-            ] else ...[
-              TextField(
-                controller: id,
-                decoration: const InputDecoration(labelText: 'Student ID'),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: name,
-                decoration: const InputDecoration(labelText: 'Full name'),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: subtitle,
-                decoration: const InputDecoration(labelText: 'Class'),
               ),
             ],
             const SizedBox(height: 10),
@@ -3466,23 +3459,22 @@ class _PersonDialogState extends State<_PersonDialog> {
       FilledButton(
         onPressed: () {
           if (role == null) return;
-          if (type == 'STAFF' && _selectedStaff == null) return;
-          if (type == 'EXTERNAL' && name.text.trim().isEmpty) return;
-          if (type == 'STUDENT' &&
-              (id.text.trim().isEmpty || name.text.trim().isEmpty)) {
+          if ((type == 'STAFF' || type == 'STUDENT') &&
+              _selectedPerson == null) {
             return;
           }
+          if (type == 'EXTERNAL' && name.text.trim().isEmpty) return;
           final personId = switch (type) {
-            'STAFF' => _selectedStaff!.id,
+            'STAFF' || 'STUDENT' => _selectedPerson!.id,
             'EXTERNAL' =>
               'EXT-${DateTime.now().microsecondsSinceEpoch.toRadixString(36).toUpperCase()}',
-            _ => id.text.trim(),
+            _ => '',
           };
-          final personName = type == 'STAFF'
-              ? _selectedStaff!.name
+          final personName = type == 'STAFF' || type == 'STUDENT'
+              ? _selectedPerson!.name
               : name.text.trim();
-          final personSubtitle = type == 'STAFF'
-              ? _selectedStaff!.subtitle
+          final personSubtitle = type == 'STAFF' || type == 'STUDENT'
+              ? _selectedPerson!.subtitle
               : subtitle.text.trim();
           Navigator.pop(
             context,
@@ -3510,21 +3502,21 @@ class _PersonDialogState extends State<_PersonDialog> {
       id.clear();
       name.clear();
       subtitle.clear();
-      _selectedStaff = null;
-      _staffResults = const [];
+      _selectedPerson = null;
+      _personResults = const [];
       _searching = false;
     });
   }
 
-  void _searchStaff(String value) {
-    if (_selectedStaff != null && value != _selectedStaff!.name) {
-      _selectedStaff = null;
+  void _searchPeople(String value) {
+    if (_selectedPerson != null && value != _selectedPerson!.name) {
+      _selectedPerson = null;
     }
     _searchDebounce?.cancel();
     final query = value.trim();
     if (query.length < 2) {
       setState(() {
-        _staffResults = const [];
+        _personResults = const [];
         _searching = false;
       });
       return;
@@ -3534,20 +3526,20 @@ class _PersonDialogState extends State<_PersonDialog> {
       final matches = await widget.onSearchPeople(query);
       if (!mounted || name.text.trim() != query) return;
       setState(() {
-        _staffResults = matches
-            .where((person) => !person.isStudent)
+        _personResults = matches
+            .where((person) => person.isStudent == (type == 'STUDENT'))
             .toList(growable: false);
         _searching = false;
       });
     });
   }
 
-  void _selectStaff(IncidentMention staff) {
+  void _selectPerson(IncidentMention person) {
     setState(() {
-      _selectedStaff = staff;
-      _staffResults = const [];
-      name.text = staff.name;
-      name.selection = TextSelection.collapsed(offset: staff.name.length);
+      _selectedPerson = person;
+      _personResults = const [];
+      name.text = person.name;
+      name.selection = TextSelection.collapsed(offset: person.name.length);
     });
   }
 }

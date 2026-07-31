@@ -1222,7 +1222,9 @@ class _GuardianDetailScreenState extends State<_GuardianDetailScreen> {
 
   void _reload() {
     final next = _loadDetail();
-    setState(() => _detailFuture = next);
+    setState(() {
+      _detailFuture = next;
+    });
   }
 
   Future<void> _openStudent(
@@ -1913,7 +1915,9 @@ class _StudentProfileScreenState extends State<_StudentProfileScreen> {
 
   void _reloadStudent() {
     final nextStudent = _loadStudent();
-    setState(() => _studentFuture = nextStudent);
+    setState(() {
+      _studentFuture = nextStudent;
+    });
   }
 
   @override
@@ -2539,16 +2543,15 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
             existingGuardian: existingGuardian,
             existingStudent: existingStudent,
             onSaved: (savedHouseholdId) {
+              if (_household.householdId == null && savedHouseholdId != null) {
+                _household = _household.copyWith(
+                  householdId: savedHouseholdId,
+                  status: 'Ready for student',
+                  statusColor: AppColors.green,
+                );
+              }
               final nextDashboard = _loadDashboard();
               setState(() {
-                if (_household.householdId == null &&
-                    savedHouseholdId != null) {
-                  _household = _household.copyWith(
-                    householdId: savedHouseholdId,
-                    status: 'Ready for student',
-                    statusColor: AppColors.green,
-                  );
-                }
                 _dashboardFuture = nextDashboard;
               });
               ScaffoldMessenger.of(context).showSnackBar(

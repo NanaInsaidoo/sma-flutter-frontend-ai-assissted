@@ -76,7 +76,9 @@ class _SchoolDetailScreenState extends State<SchoolDetailScreen> {
   }
 
   void _retryProfile() {
-    setState(() => _profileFuture = _loadProfile());
+    setState(() {
+      _profileFuture = _loadProfile();
+    });
   }
 
   Future<void> _openReassignDialog() async {
@@ -329,7 +331,9 @@ class _SchoolDetailScreenState extends State<SchoolDetailScreen> {
                     }
                   } catch (_) {
                     if (mounted) {
-                      setState(() => _profileFuture = _loadProfile());
+                      setState(() {
+                        _profileFuture = _loadProfile();
+                      });
                     }
                   }
                   if (dialogContext.mounted) {
@@ -1462,7 +1466,9 @@ class _SchoolUsersState extends State<_SchoolUsers> {
       widget.repository.getSchoolUsers(widget.school.code);
 
   void _refreshUsers() {
-    setState(() => _usersFuture = _loadUsers());
+    setState(() {
+      _usersFuture = _loadUsers();
+    });
   }
 
   List<SchoolUserInfo> _mergeUsers(List<SchoolUserInfo> users) {

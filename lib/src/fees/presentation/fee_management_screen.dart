@@ -3511,12 +3511,19 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
     final amount = double.tryParse(_amountController.text.trim()) ?? 0;
     if (_success) {
       return AlertDialog(
-        content: SizedBox(
-          width: 430,
-          child: _PaymentSuccessView(
-            receipt: _receipt!,
-            onRecordAnother: _resetForAnotherPayment,
-            onDone: () => Navigator.pop(context, true),
+        content: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * .78,
+          ),
+          child: SingleChildScrollView(
+            child: SizedBox(
+              width: 430,
+              child: _PaymentSuccessView(
+                receipt: _receipt!,
+                onRecordAnother: _resetForAnotherPayment,
+                onDone: () => Navigator.pop(context, true),
+              ),
+            ),
           ),
         ),
       );

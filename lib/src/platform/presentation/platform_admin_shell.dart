@@ -2339,7 +2339,9 @@ class _AttentionSchoolsScreenState extends State<_AttentionSchoolsScreen> {
   }
 
   void _refreshItems() {
-    setState(() => _itemsFuture = _loadItems());
+    setState(() {
+      _itemsFuture = _loadItems();
+    });
   }
 
   @override
@@ -2355,7 +2357,9 @@ class _AttentionSchoolsScreenState extends State<_AttentionSchoolsScreen> {
           return _AttentionErrorState(
             title: 'Could not load Needs attention',
             message: snapshot.error.toString(),
-            onRetry: () => setState(() => _summaryFuture = _loadSummary()),
+            onRetry: () => setState(() {
+              _summaryFuture = _loadSummary();
+            }),
           );
         }
 
@@ -2395,7 +2399,9 @@ class _AttentionSchoolsScreenState extends State<_AttentionSchoolsScreen> {
               if (categories.isEmpty)
                 _AttentionEmptyState(
                   onRefresh: () {
-                    setState(() => _summaryFuture = _loadSummary());
+                    setState(() {
+                      _summaryFuture = _loadSummary();
+                    });
                   },
                 )
               else ...[
@@ -4007,7 +4013,9 @@ class _SchoolsScreenState extends State<_SchoolsScreen> {
   }
 
   void _refreshSchools() {
-    setState(() => _schoolsFuture = _loadSchools());
+    setState(() {
+      _schoolsFuture = _loadSchools();
+    });
   }
 
   void _handleSearchChanged(String value) {

@@ -2071,12 +2071,42 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
         statuses = const [];
       }
       if (!mounted) return;
+      const supportedEmploymentStatuses = {
+        'ACTIVE',
+        'PROBATION',
+        'SUSPENDED',
+        'ON_LEAVE',
+        'TERMINATED',
+        'RESIGNED',
+        'RETIRED',
+      };
       setState(() {
         _departments = departments
             .where((item) => item.id.isNotEmpty && item.name.isNotEmpty)
             .toList();
         _employmentStatuses = statuses
-            .where((item) => item.id.isNotEmpty && item.name.isNotEmpty)
+            .where(
+              (item) =>
+                  item.id.isNotEmpty &&
+                  supportedEmploymentStatuses.contains(
+                    item.name.trim().toUpperCase(),
+                  ),
+            )
+            .map(
+              (item) => StaffLookupOption(
+                id: item.id,
+                name: item.name
+                    .trim()
+                    .toLowerCase()
+                    .split('_')
+                    .map(
+                      (word) => word.isEmpty
+                          ? word
+                          : '${word[0].toUpperCase()}${word.substring(1)}',
+                    )
+                    .join(' '),
+              ),
+            )
             .toList();
         _loadingLookups = false;
       });
