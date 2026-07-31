@@ -375,7 +375,17 @@ Color _colorForRole(String role) {
 String _formatDate(String raw) {
   final clean = _clean(raw);
   if (clean.isEmpty) return 'Not provided';
-  final date = DateTime.tryParse(clean.replaceFirst(' ', 'T'));
+  DateTime? date = DateTime.tryParse(clean.replaceFirst(' ', 'T'));
+  if (date == null && clean.startsWith('[') && clean.endsWith(']')) {
+    final parts = RegExp(r'\d+')
+        .allMatches(clean)
+        .map((match) => int.tryParse(match.group(0) ?? ''))
+        .whereType<int>()
+        .toList();
+    if (parts.length >= 3) {
+      date = DateTime(parts[0], parts[1], parts[2]);
+    }
+  }
   if (date == null) return clean;
   const months = [
     'Jan',
