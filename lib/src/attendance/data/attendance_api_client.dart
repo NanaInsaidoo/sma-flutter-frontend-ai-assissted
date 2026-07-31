@@ -131,8 +131,8 @@ class AttendanceApiClient implements AttendanceRepository {
           return AttendanceGradeLevel(
             id: _integer(
               json['schoolGradeLevelId'] ??
-                  json['gradeLevelId'] ??
                   json['id'] ??
+                  json['gradeLevelId'] ??
                   nested?['id'],
             ),
             name: _string(
