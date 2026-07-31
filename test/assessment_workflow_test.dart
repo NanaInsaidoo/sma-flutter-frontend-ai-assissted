@@ -18,6 +18,8 @@ void main() {
             academicYear: '2024 Academic Year',
             customSchoolId: '',
             accessToken: null,
+            viewerName: 'Test Administrator',
+            viewerRole: 'Administrator',
           ),
         ),
       ),

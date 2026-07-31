@@ -243,10 +243,10 @@ class AttendanceApiClient implements AttendanceRepository {
     required List<AttendanceEntry> entries,
     required bool updateExisting,
   }) async {
-    final body = entries.map((entry) {
+    Map<String, dynamic> payload(AttendanceEntry entry) {
       final present = entry.mark != AttendanceMark.absent;
       return <String, dynamic>{
-        if (updateExisting && entry.attendanceId?.isNotEmpty == true)
+        if (entry.attendanceId?.isNotEmpty == true)
           'attendanceId': entry.attendanceId,
         'customStudentId': entry.student.customStudentId,
         'gradeLevelId': '$gradeLevelId',
@@ -259,13 +259,29 @@ class AttendanceApiClient implements AttendanceRepository {
         'attendanceDate': _date(date),
         if (entry.remarks.trim().isNotEmpty) 'remarks': entry.remarks.trim(),
       };
-    }).toList();
+    }
 
-    await _send(
-      updateExisting ? 'PATCH' : 'POST',
-      '/api/schools/$customSchoolId/attendance/bulk',
-      body: body,
-    );
+    final endpoint = '/api/schools/$customSchoolId/attendance/bulk';
+    if (!updateExisting) {
+      await _send('POST', endpoint, body: entries.map(payload).toList());
+      return;
+    }
+
+    final existing = entries
+        .where((entry) => entry.attendanceId?.isNotEmpty == true)
+        .map(payload)
+        .toList();
+    final newEntries = entries
+        .where((entry) => entry.attendanceId?.isNotEmpty != true)
+        .map(payload)
+        .toList();
+
+    if (existing.isNotEmpty) {
+      await _send('PATCH', endpoint, body: existing);
+    }
+    if (newEntries.isNotEmpty) {
+      await _send('POST', endpoint, body: newEntries);
+    }
   }
 
   AttendanceRecord _recordFromJson(Map<String, dynamic> json) {
