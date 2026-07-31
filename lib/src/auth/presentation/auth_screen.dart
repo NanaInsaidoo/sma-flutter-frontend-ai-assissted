@@ -142,8 +142,7 @@ class _AuthScreenState extends State<AuthScreen> {
             _mode = session.isAccountManagerRole
                 ? _AuthMode.accountPendingApproval
                 : _AuthMode.firstLoginPasswordDone;
-            _message =
-                session.isAccountManagerRole
+            _message = session.isAccountManagerRole
                 ? 'Password updated. Your account is now waiting for approval.'
                 : 'Password updated. Sign in again with your new password.';
             _password.clear();
@@ -231,10 +230,7 @@ class _AuthScreenState extends State<AuthScreen> {
     }
 
     widget.onAuthenticated(
-      session.copyWith(
-        requiresDateOfBirth: false,
-        mustChangePassword: false,
-      ),
+      session.copyWith(requiresDateOfBirth: false, mustChangePassword: false),
     );
   }
 
@@ -561,9 +557,7 @@ class _AuthScreenState extends State<AuthScreen> {
       case _AuthMode.firstLoginPasswordDone:
         return const [_SuccessPanel()];
       case _AuthMode.accountPendingApproval:
-        return const [
-          _PendingApprovalPanel(),
-        ];
+        return const [_PendingApprovalPanel()];
     }
   }
 
@@ -637,111 +631,118 @@ class _BrandPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 500,
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [AppColors.green, Color(0xFF197A70), AppColors.navyDark],
-        ),
-      ),
-      child: Stack(
-        children: [
-          Positioned(
-            top: -90,
-            right: -80,
-            child: _GlowCircle(size: 290, opacity: .08),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxHeight < 560;
+        return Container(
+          width: 500,
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [AppColors.green, Color(0xFF197A70), AppColors.navyDark],
+            ),
           ),
-          Positioned(
-            bottom: -100,
-            left: -70,
-            child: _GlowCircle(size: 300, opacity: .06),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(48),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+          child: Stack(
+            children: [
+              Positioned(
+                top: -90,
+                right: -80,
+                child: _GlowCircle(size: 290, opacity: .08),
+              ),
+              Positioned(
+                bottom: -100,
+                left: -70,
+                child: _GlowCircle(size: 300, opacity: .06),
+              ),
+              Padding(
+                padding: EdgeInsets.all(compact ? 32 : 48),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      width: 52,
-                      height: 52,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: .16),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: .24),
-                        ),
-                      ),
-                      child: const Icon(
-                        Icons.school_rounded,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(width: 14),
-                    const Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    Row(
                       children: [
-                        Text(
-                          'SMA Ghana',
-                          style: TextStyle(
+                        Container(
+                          width: 52,
+                          height: 52,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: .16),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: .24),
+                            ),
+                          ),
+                          child: const Icon(
+                            Icons.school_rounded,
                             color: Colors.white,
-                            fontSize: 20,
-                            fontWeight: FontWeight.w800,
                           ),
                         ),
-                        Text(
-                          'School Management Platform',
-                          style: TextStyle(
-                            color: Color(0xBFFFFFFF),
-                            fontSize: 12,
-                          ),
+                        const SizedBox(width: 14),
+                        const Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'SMA Ghana',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            Text(
+                              'School Management Platform',
+                              style: TextStyle(
+                                color: Color(0xBFFFFFFF),
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
+                    const Spacer(),
+                    Text(
+                      'Built for Ghanaian private schools.',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: compact ? 34 : 42,
+                        height: 1.08,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    const Text(
+                      'Admissions, fees, attendance, reports, and school onboarding in one responsive workspace.',
+                      style: TextStyle(
+                        color: Color(0xCFFFFFFF),
+                        fontSize: 15,
+                        height: 1.65,
+                      ),
+                    ),
+                    SizedBox(height: compact ? 18 : 32),
+                    const _BrandFeature(
+                      'Offline-friendly views for daily work',
+                    ),
+                    const _BrandFeature('Live updates when records change'),
+                    const _BrandFeature('Built around Ghana school operations'),
+                    const Spacer(),
+                    const Text(
+                      'GHANA · BASIC SCHOOL · PRIVATE SCHOOLS',
+                      style: TextStyle(
+                        color: Color(0x99FFFFFF),
+                        fontSize: 11,
+                        letterSpacing: 1.4,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                   ],
                 ),
-                const Spacer(),
-                const Text(
-                  'Built for Ghanaian private schools.',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 42,
-                    height: 1.08,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 18),
-                const Text(
-                  'Admissions, fees, attendance, reports, and school onboarding in one responsive workspace.',
-                  style: TextStyle(
-                    color: Color(0xCFFFFFFF),
-                    fontSize: 15,
-                    height: 1.65,
-                  ),
-                ),
-                const SizedBox(height: 32),
-                const _BrandFeature('Offline-friendly views for daily work'),
-                const _BrandFeature('Live updates when records change'),
-                const _BrandFeature('Built around Ghana school operations'),
-                const Spacer(),
-                const Text(
-                  'GHANA · BASIC SCHOOL · PRIVATE SCHOOLS',
-                  style: TextStyle(
-                    color: Color(0x99FFFFFF),
-                    fontSize: 11,
-                    letterSpacing: 1.4,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }

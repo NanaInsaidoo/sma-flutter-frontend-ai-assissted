@@ -2186,8 +2186,14 @@ class _CompleteAssessmentWorkflowState
           onSave: (record) {
             setState(() {
               if (_editingAssessment && _selectedAssessment != null) {
-                final index = _assessments.indexOf(_selectedAssessment!);
-                _assessments[index] = record;
+                final index = _assessments.indexWhere(
+                  (assessment) => assessment.id == _selectedAssessment!.id,
+                );
+                if (index >= 0) {
+                  _assessments[index] = record;
+                } else {
+                  _assessments.insert(0, record);
+                }
               } else {
                 _assessments.insert(0, record);
               }
@@ -8486,6 +8492,9 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
   AssessmentStreamOption? get _selectedStream {
     if (widget.source == null) return widget.selectedStream;
     for (final stream in widget.setup.streams) {
+      if (stream.id == widget.source!.streamId) return stream;
+    }
+    for (final stream in widget.setup.streams) {
       if (stream.label == _selectedClass) return stream;
     }
     return null;
@@ -8505,6 +8514,11 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
   }
 
   AssessmentSubjectOption? get _selectedSubject {
+    if (widget.source != null) {
+      for (final subject in widget.setup.subjects) {
+        if (subject.id == widget.source!.schoolSubjectId) return subject;
+      }
+    }
     final gradeLevelId =
         _selectedStream?.gradeLevelId ?? widget.source?.gradeLevelId;
     for (final subject in widget.setup.subjects) {

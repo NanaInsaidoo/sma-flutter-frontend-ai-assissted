@@ -513,7 +513,7 @@ class _ClassIntro extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          '$enrolled enrolled · ${capacity == null ? 'Capacity not set' : 'Capacity $capacity'} · $totalSubjects subjects',
+          '$enrolled enrolled · ${capacity == null ? 'Capacity not set' : 'Capacity $capacity'}',
           style: const TextStyle(color: AppColors.muted, fontSize: 13),
         ),
         const SizedBox(height: 8),
@@ -680,7 +680,7 @@ class _StatCard extends StatelessWidget {
                     children: [
                       Text(
                         label.toUpperCase(),
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: AppColors.muted,
                           fontSize: 10,
                           letterSpacing: .7,
@@ -1264,7 +1264,7 @@ class _SidePanel extends StatelessWidget {
     return Column(
       children: [
         InkWell(
-          onTap: onManageSubjects,
+          onTap: null,
           borderRadius: BorderRadius.circular(16),
           child: Container(
             padding: const EdgeInsets.all(14),
@@ -1294,7 +1294,7 @@ class _SidePanel extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Manage Subjects',
+                        'Subject management unavailable',
                         style: TextStyle(
                           color: AppColors.green,
                           fontSize: 15,
@@ -1302,9 +1302,9 @@ class _SidePanel extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 2),
-                      Text(
-                        '$totalSubjects subjects · $gesCount GES + $customCount custom',
-                        style: const TextStyle(
+                      const Text(
+                        'API-backed subject editing is not available yet',
+                        style: TextStyle(
                           color: AppColors.muted,
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
@@ -1314,8 +1314,8 @@ class _SidePanel extends StatelessWidget {
                   ),
                 ),
                 const Icon(
-                  Icons.chevron_right_rounded,
-                  color: AppColors.green,
+                  Icons.lock_outline_rounded,
+                  color: AppColors.muted,
                   size: 22,
                 ),
               ],
