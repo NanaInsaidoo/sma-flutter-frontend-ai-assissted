@@ -3246,6 +3246,7 @@ class _Sidebar extends StatelessWidget {
         : 250.0;
     final displaySchoolName = _displaySchoolName(data, schoolName);
     final displayRole = _displayRole(role);
+    final isBursar = role?.trim().toUpperCase() == 'BURSAR';
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
       width: width,
@@ -3325,13 +3326,14 @@ class _Sidebar extends StatelessWidget {
                     active: selectedPage == _SchoolAdminPage.dashboard,
                     onTap: () => onSelectPage(_SchoolAdminPage.dashboard),
                   ),
-                  _SidebarButton(
-                    icon: Icons.assignment_ind_rounded,
-                    label: 'Admissions',
-                    collapsed: collapsed,
-                    active: selectedPage == _SchoolAdminPage.admissions,
-                    onTap: () => onSelectPage(_SchoolAdminPage.admissions),
-                  ),
+                  if (!isBursar)
+                    _SidebarButton(
+                      icon: Icons.assignment_ind_rounded,
+                      label: 'Admissions',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.admissions,
+                      onTap: () => onSelectPage(_SchoolAdminPage.admissions),
+                    ),
                   _SidebarButton(
                     icon: Icons.school_rounded,
                     label: 'Students',
@@ -3339,41 +3341,43 @@ class _Sidebar extends StatelessWidget {
                     active: selectedPage == _SchoolAdminPage.students,
                     onTap: () => onSelectPage(_SchoolAdminPage.students),
                   ),
-                  _SidebarButton(
-                    icon: Icons.fact_check_outlined,
-                    label: 'Attendance',
-                    collapsed: collapsed,
-                    active: selectedPage == _SchoolAdminPage.attendance,
-                    onTap: () => onSelectPage(_SchoolAdminPage.attendance),
-                  ),
-                  _SidebarButton(
-                    icon: Icons.assessment_outlined,
-                    label: 'Assessments',
-                    collapsed: collapsed,
-                    active: selectedPage == _SchoolAdminPage.assessments,
-                    onTap: () => onSelectPage(_SchoolAdminPage.assessments),
-                  ),
-                  _SidebarButton(
-                    icon: Icons.groups_rounded,
-                    label: 'Households & Guardians',
-                    collapsed: collapsed,
-                    active: selectedPage == _SchoolAdminPage.households,
-                    onTap: () => onSelectPage(_SchoolAdminPage.households),
-                  ),
-                  _SidebarButton(
-                    icon: Icons.badge_rounded,
-                    label: 'Staff Management',
-                    collapsed: collapsed,
-                    active: selectedPage == _SchoolAdminPage.staff,
-                    onTap: () => onSelectPage(_SchoolAdminPage.staff),
-                  ),
-                  _SidebarButton(
-                    icon: Icons.account_tree_rounded,
-                    label: 'Classes & Streams',
-                    collapsed: collapsed,
-                    active: selectedPage == _SchoolAdminPage.classes,
-                    onTap: () => onSelectPage(_SchoolAdminPage.classes),
-                  ),
+                  if (!isBursar) ...[
+                    _SidebarButton(
+                      icon: Icons.fact_check_outlined,
+                      label: 'Attendance',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.attendance,
+                      onTap: () => onSelectPage(_SchoolAdminPage.attendance),
+                    ),
+                    _SidebarButton(
+                      icon: Icons.assessment_outlined,
+                      label: 'Assessments',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.assessments,
+                      onTap: () => onSelectPage(_SchoolAdminPage.assessments),
+                    ),
+                    _SidebarButton(
+                      icon: Icons.groups_rounded,
+                      label: 'Households & Guardians',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.households,
+                      onTap: () => onSelectPage(_SchoolAdminPage.households),
+                    ),
+                    _SidebarButton(
+                      icon: Icons.badge_rounded,
+                      label: 'Staff Management',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.staff,
+                      onTap: () => onSelectPage(_SchoolAdminPage.staff),
+                    ),
+                    _SidebarButton(
+                      icon: Icons.account_tree_rounded,
+                      label: 'Classes & Streams',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.classes,
+                      onTap: () => onSelectPage(_SchoolAdminPage.classes),
+                    ),
+                  ],
                   _SidebarButton(
                     icon: Icons.account_balance_wallet_rounded,
                     label: 'Fees & Requirements',
@@ -3388,30 +3392,33 @@ class _Sidebar extends StatelessWidget {
                     active: selectedPage == _SchoolAdminPage.expenses,
                     onTap: () => onSelectPage(_SchoolAdminPage.expenses),
                   ),
-                  _SidebarButton(
-                    icon: Icons.warning_amber_rounded,
-                    label: 'Incident Management',
-                    collapsed: collapsed,
-                    active: selectedPage == _SchoolAdminPage.incidents,
-                    onTap: () => onSelectPage(_SchoolAdminPage.incidents),
-                  ),
-                  _SidebarButton(
-                    icon: Icons.campaign_rounded,
-                    label: 'Communication',
-                    collapsed: collapsed,
-                  ),
+                  if (!isBursar) ...[
+                    _SidebarButton(
+                      icon: Icons.warning_amber_rounded,
+                      label: 'Incident Management',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.incidents,
+                      onTap: () => onSelectPage(_SchoolAdminPage.incidents),
+                    ),
+                    _SidebarButton(
+                      icon: Icons.campaign_rounded,
+                      label: 'Communication',
+                      collapsed: collapsed,
+                    ),
+                  ],
                   _SidebarButton(
                     icon: Icons.bar_chart_rounded,
                     label: 'Reports',
                     collapsed: collapsed,
                   ),
-                  _SidebarButton(
-                    icon: Icons.admin_panel_settings_rounded,
-                    label: 'Settings',
-                    collapsed: collapsed,
-                    active: selectedPage == _SchoolAdminPage.settings,
-                    onTap: () => onSelectPage(_SchoolAdminPage.settings),
-                  ),
+                  if (!isBursar)
+                    _SidebarButton(
+                      icon: Icons.admin_panel_settings_rounded,
+                      label: 'Settings',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.settings,
+                      onTap: () => onSelectPage(_SchoolAdminPage.settings),
+                    ),
                 ],
               ),
             ),
