@@ -160,6 +160,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                         data: data,
                         onRefresh: _refresh,
                         userDisplayName: widget.userDisplayName,
+                        role: widget.role,
                         selectedPage: _selectedPage,
                         onSelectPage: _selectPage,
                         schoolId: _schoolId,
@@ -212,6 +213,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                 data: data,
                 onRefresh: _refresh,
                 userDisplayName: widget.userDisplayName,
+                role: widget.role,
                 showMenu: true,
                 selectedPage: _selectedPage,
                 onSelectPage: _selectPage,
@@ -250,6 +252,7 @@ class _DashboardBody extends StatelessWidget {
     required this.data,
     required this.onRefresh,
     this.userDisplayName,
+    this.role,
     this.showMenu = false,
     required this.selectedPage,
     required this.onSelectPage,
@@ -274,6 +277,7 @@ class _DashboardBody extends StatelessWidget {
   final DashboardSnapshot data;
   final VoidCallback onRefresh;
   final String? userDisplayName;
+  final String? role;
   final bool showMenu;
   final _SchoolAdminPage selectedPage;
   final ValueChanged<_SchoolAdminPage> onSelectPage;
@@ -396,6 +400,7 @@ class _DashboardBody extends StatelessWidget {
         recordedBy: userDisplayName?.trim().isNotEmpty == true
             ? userDisplayName!.trim()
             : data.administratorName,
+        role: role,
       );
     }
 

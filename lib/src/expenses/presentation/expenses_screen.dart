@@ -15,12 +15,14 @@ class ExpensesScreen extends StatefulWidget {
     this.accessToken,
     this.onRefreshAccessToken,
     this.recordedBy,
+    this.role,
   });
 
   final String customSchoolId;
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
   final String? recordedBy;
+  final String? role;
 
   @override
   State<ExpensesScreen> createState() => _ExpensesScreenState();
@@ -85,6 +87,13 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   double get _cashBalance => _float.cashBalance;
   double get _momoBalance => _float.momoBalance;
   double get _totalFloatBalance => _cashBalance + _momoBalance;
+  bool get _canApproveFinance {
+    final role = widget.role?.trim().toUpperCase();
+    return role == 'ADMINISTRATOR' ||
+        role == 'HEAD_TEACHER' ||
+        role == 'SUPER_ADMIN';
+  }
+
   double get _totalSpend =>
       _expenses.fold(0, (total, item) => total + item.netAmount);
   double get _pettySpend => _expenses
@@ -2756,6 +2765,18 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   Widget _buildApprovalsTab() {
+    if (!_canApproveFinance) {
+      return const _SectionCard(
+        title: 'Approval queue',
+        subtitle: 'Finance approvals require an administrator or head teacher.',
+        child: _InlineNotice(
+          icon: Icons.lock_outline,
+          color: AppColors.amber,
+          text:
+              'Your role can prepare and view finance records, but cannot approve or reject them.',
+        ),
+      );
+    }
     final pendingRequisitions = _requisitions.where(
       (item) => item.status == _RequisitionStatus.pending,
     );
@@ -3134,6 +3155,16 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   List<Widget> _topUpActions(_TopUpRequest item) {
     switch (item.status) {
       case _TopUpStatus.pending:
+        if (!_canApproveFinance) {
+          return const [
+            _InlineNotice(
+              icon: Icons.lock_outline,
+              color: AppColors.amber,
+              text:
+                  'An administrator or head teacher must review this request.',
+            ),
+          ];
+        }
         return [
           OutlinedButton(
             onPressed: () => _queryTopUp(item),
@@ -3695,7 +3726,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   ),
                   _InfoRow('Requested by', requisition.requestedBy),
                   _InfoRow('Requested on', _date(requisition.requestedAt)),
-                  _InfoRow('Expires on', _date(requisition.expiresAt)),
+                  _InfoRow('Expires on', _dateOrNotSet(requisition.expiresAt)),
                   _InfoRow(
                     'Reason',
                     requisition.notes.isEmpty
@@ -3749,7 +3780,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               spacing: 10,
               runSpacing: 10,
               children: [
-                if (requisition.status == _RequisitionStatus.pending) ...[
+                if (_canApproveFinance &&
+                    requisition.status == _RequisitionStatus.pending) ...[
                   FilledButton.icon(
                     onPressed: () {
                       Navigator.pop(dialogContext);
@@ -3788,8 +3820,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                     icon: const Icon(Icons.receipt_long_outlined),
                     label: const Text('Open expense'),
                   ),
-                if (linkedExpense?.approvalStatus ==
-                    _ExpenseApprovalStatus.pendingRatification)
+                if (_canApproveFinance &&
+                    linkedExpense?.approvalStatus ==
+                        _ExpenseApprovalStatus.pendingRatification)
                   FilledButton.tonalIcon(
                     onPressed: () {
                       Navigator.pop(dialogContext);
@@ -3798,8 +3831,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                     icon: const Icon(Icons.verified_outlined),
                     label: const Text('Ratify emergency'),
                   ),
-                if (linkedExpense?.varianceStatus ==
-                    _VarianceStatus.pendingReview)
+                if (_canApproveFinance &&
+                    linkedExpense?.varianceStatus ==
+                        _VarianceStatus.pendingReview)
                   FilledButton.tonalIcon(
                     onPressed: () {
                       Navigator.pop(dialogContext);
@@ -3841,7 +3875,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       _snack('Only approved requisitions can be fulfilled.');
       return false;
     }
-    if (DateTime.now().isAfter(requisition.expiresAt)) {
+    if (_hasUsableDate(requisition.expiresAt) &&
+        DateTime.now().isAfter(requisition.expiresAt)) {
       _snack('This requisition has expired and must be reactivated.');
       return false;
     }
@@ -3974,6 +4009,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   Future<void> _approveRequisition(_RequisitionRecord item) async {
+    if (!_canApproveFinance) {
+      _snack('Your role cannot approve finance requests.');
+      return;
+    }
     if (item.serverId == null) {
       _snack(
         'This requisition cannot be approved because its server ID is missing.',
@@ -3993,6 +4032,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   Future<void> _rejectRequisition(_RequisitionRecord item) async {
+    if (!_canApproveFinance) {
+      _snack('Your role cannot reject finance requests.');
+      return;
+    }
     if (item.serverId == null) {
       _snack(
         'This requisition cannot be rejected because its server ID is missing.',
@@ -4064,6 +4107,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   Future<void> _approveTopUp(_TopUpRequest item) async {
+    if (!_canApproveFinance) {
+      _snack('Your role cannot approve top-up requests.');
+      return;
+    }
     if (item.serverId == null) {
       _snack(
         'This top-up cannot be approved because its server ID is missing.',
@@ -4593,7 +4640,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               },
               child: const Text('Record refund'),
             ),
-          if (item.approvalStatus == _ExpenseApprovalStatus.pendingRatification)
+          if (_canApproveFinance &&
+              item.approvalStatus == _ExpenseApprovalStatus.pendingRatification)
             FilledButton.tonal(
               onPressed: () {
                 Navigator.pop(context);
@@ -4601,7 +4649,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               },
               child: const Text('Ratify emergency'),
             ),
-          if (item.varianceStatus == _VarianceStatus.pendingReview)
+          if (_canApproveFinance &&
+              item.varianceStatus == _VarianceStatus.pendingReview)
             FilledButton.tonal(
               onPressed: () {
                 Navigator.pop(context);
@@ -5269,6 +5318,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   void _ratifyExpense(_ExpenseRecord item) {
+    if (!_canApproveFinance) {
+      _snack('Your role cannot ratify expenses.');
+      return;
+    }
     setState(() {
       item.approvalStatus = _ExpenseApprovalStatus.ratified;
       item.status = item.varianceStatus == _VarianceStatus.pendingReview
@@ -5279,6 +5332,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   void _openVarianceReviewDialog(_ExpenseRecord item) {
+    if (!_canApproveFinance) {
+      _snack('Your role cannot review expense variances.');
+      return;
+    }
     final reviewNotes = TextEditingController(text: item.varianceReviewNotes);
     var outcome = _VarianceOutcome.accept;
     final approved = item.approvedAmount ?? 0;
@@ -5604,11 +5661,14 @@ class _RequisitionTable extends StatelessWidget {
                 ],
               ),
               Text(_date(item.requestedAt)),
-              Text(_date(item.expiresAt)),
-              OutlinedButton.icon(
-                onPressed: () => onOpen(item),
-                icon: const Icon(Icons.open_in_new_outlined, size: 16),
-                label: const Text('Open'),
+              Text(_dateOrNotSet(item.expiresAt)),
+              SizedBox(
+                width: 104,
+                child: OutlinedButton.icon(
+                  onPressed: () => onOpen(item),
+                  icon: const Icon(Icons.open_in_new_outlined, size: 16),
+                  label: const Text('Open'),
+                ),
               ),
             ],
           )
@@ -7459,6 +7519,11 @@ String _date(DateTime date) {
   ];
   return '${date.day} ${months[date.month - 1]} ${date.year}';
 }
+
+bool _hasUsableDate(DateTime date) => date.millisecondsSinceEpoch > 0;
+
+String _dateOrNotSet(DateTime date) =>
+    _hasUsableDate(date) ? _date(date) : 'Not set';
 
 String _fileSizeLabel(int bytes) {
   if (bytes < 1024) return '$bytes B';
