@@ -567,6 +567,10 @@ class _CompleteAssessmentWorkflowState
       case 'Final Reports':
         _open(_Route.finalReports);
       case 'Student Evaluations':
+        if (widget.customSchoolId.trim().isNotEmpty) {
+          await _loadLiveReportReadiness(setup, result);
+          if (!mounted) return;
+        }
         _open(_Route.evaluationStudents);
       default:
         _open(_Route.evaluations);
@@ -2445,7 +2449,8 @@ class _CompleteAssessmentWorkflowState
   }
 
   Widget _evaluationStudents() {
-    final filteredStudents = _students.where((student) {
+    final evaluationStudents = _reportCardStudents;
+    final filteredStudents = evaluationStudents.where((student) {
       final evaluation = _evaluationFor(student);
       final query = _evaluationQuery.trim().toLowerCase();
       final evaluated = evaluation.status == 'Submitted';
@@ -2459,7 +2464,7 @@ class _CompleteAssessmentWorkflowState
           (_evaluationStatusFilter == 'Pending' && !evaluated);
       return matchesSearch && matchesStatus;
     }).toList();
-    final pending = _students
+    final pending = evaluationStudents
         .where((student) => _evaluationFor(student).status != 'Submitted')
         .length;
 
