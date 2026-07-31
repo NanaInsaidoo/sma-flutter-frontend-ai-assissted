@@ -3072,17 +3072,9 @@ class _CreateIncidentDialog extends StatefulWidget {
 
 class _CreateIncidentDialogState extends State<_CreateIncidentDialog> {
   final _form = GlobalKey<FormState>();
-  final _title = TextEditingController(
-    text: 'Bullying reported near the JHS classroom block',
-  );
-  final _description = TextEditingController(
-    text:
-        'During the morning break, Kojo Mensah repeatedly pushed and verbally '
-        'threatened another JHS 2 student near the classroom corridor. Two '
-        'students witnessed the incident, and the class teacher separated the '
-        'students before referring the matter to the school administrator.',
-  );
-  final _location = TextEditingController(text: 'JHS classroom corridor');
+  final _title = TextEditingController();
+  final _description = TextEditingController();
+  final _location = TextEditingController();
   List<IncidentLookup> _types = const [];
   IncidentLookup? _type;
   String _severity = 'HIGH';
