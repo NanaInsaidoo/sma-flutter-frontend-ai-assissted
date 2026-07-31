@@ -640,10 +640,25 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   List<_ExpenseRecord> _transactionRecords(dynamic response) {
-    return _pageContent(response)
+    final records = _pageContent(response)
         .where((value) => _isExpenseTransaction(_asMap(value)))
         .map((value) => _expenseFromMap(_asMap(value)))
         .toList();
+    final byServerId = <int, _ExpenseRecord>{
+      for (final record in records)
+        if (record.serverId != null) record.serverId!: record,
+    };
+    for (final refund in records.where((item) => item.amount < 0)) {
+      final parentId = int.tryParse(refund.linkedExpenseId ?? '');
+      final original = parentId == null ? null : byServerId[parentId];
+      if (original != null) {
+        original.refundedAmount += refund.amount.abs();
+        original.status = original.refundableAmount == 0
+            ? _ExpenseStatus.fullyRefunded
+            : _ExpenseStatus.partiallyRefunded;
+      }
+    }
+    return records;
   }
 
   bool _isExpenseTransaction(Map<String, dynamic> value) {
@@ -678,6 +693,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       status: status,
       receiptNumber: _asText(value['receiptNumber']),
       notes: _asText(value['notes']),
+      linkedExpenseId: _nullableText(value['parentTransactionId']),
       momoFee: _asDouble(value['feeAmount']),
       isEmergency: _asBool(value['emergency']),
       approvalStatus: _asBool(value['requiresRatification'])
@@ -4027,12 +4043,12 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       _snack('There is already an open top-up cycle.');
       return;
     }
-    if (_totalFloatBalance >= _settings.floatCeiling) {
+    if (_totalFloatBalance >= _settings.floatApprovedAmount) {
       _snack('Float is already full. Top-up request blocked.');
       return;
     }
 
-    final amount = _settings.floatCeiling - _totalFloatBalance;
+    final amount = _settings.floatApprovedAmount - _totalFloatBalance;
     await _runFinanceMutation(
       request: () => _financeApi.post(
         '/api/schools/${widget.customSchoolId}/finance/top-ups',
@@ -4456,40 +4472,37 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () {
+            onPressed: () async {
               final value = _parseAmount(amount.text);
               if (value <= 0 || value > item.refundableAmount) {
                 _snack('Refund cannot exceed original unrefunded amount.');
                 return;
               }
-              setState(() {
-                item.refundedAmount += value;
-                item.status = item.refundableAmount == 0
-                    ? _ExpenseStatus.fullyRefunded
-                    : _ExpenseStatus.partiallyRefunded;
-                if (_float.status == _FloatStatus.active) {
-                  _float.cashBalance += value;
-                }
-                _expenses.insert(
-                  0,
-                  _ExpenseRecord(
-                    expenseId: _nextId('REF'),
-                    description: 'Refund for ${item.description}',
-                    category: 'Refund',
-                    payee: item.payee,
-                    amount: -value,
-                    transactionDate: DateTime.now(),
-                    source: item.source,
-                    channel: item.channel,
-                    status: _ExpenseStatus.complete,
-                    receiptNumber: item.receiptNumber,
-                    notes: reason.text.trim(),
-                    linkedExpenseId: item.expenseId,
-                  ),
-                );
-              });
-              Navigator.pop(context);
-              _snack('Refund recorded and linked to original expense.');
+              if (reason.text.trim().isEmpty) {
+                _snack('Enter a reason for the refund.');
+                return;
+              }
+              if (item.serverId == null) {
+                _snack('This expense is missing its server ID.');
+                return;
+              }
+              final saved = await _runFinanceMutation(
+                request: () => _financeApi.post(
+                  '/api/schools/${widget.customSchoolId}/finance/transactions/${item.serverId}/refunds',
+                  body: {
+                    'amount': value,
+                    'reason': reason.text.trim(),
+                    'transactionDate': DateTime.now()
+                        .toIso8601String()
+                        .split('T')
+                        .first,
+                    'reference': item.receiptNumber,
+                  },
+                ),
+                successMessage:
+                    'Refund recorded and linked to original expense.',
+              );
+              if (saved && context.mounted) Navigator.pop(context);
             },
             style: _primaryButtonStyle(),
             child: const Text('Save refund'),
