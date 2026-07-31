@@ -10,6 +10,8 @@ class AssessmentDashboardScreen extends StatelessWidget {
     required this.academicYear,
     required this.customSchoolId,
     required this.accessToken,
+    required this.viewerRole,
+    required this.viewerName,
     this.onRefreshAccessToken,
   });
 
@@ -18,6 +20,8 @@ class AssessmentDashboardScreen extends StatelessWidget {
   final String academicYear;
   final String customSchoolId;
   final String? accessToken;
+  final String viewerRole;
+  final String viewerName;
   final Future<String?> Function()? onRefreshAccessToken;
 
   @override
@@ -28,6 +32,8 @@ class AssessmentDashboardScreen extends StatelessWidget {
       academicYear: academicYear,
       customSchoolId: customSchoolId,
       accessToken: accessToken,
+      viewerRole: viewerRole,
+      viewerName: viewerName,
       onRefreshAccessToken: onRefreshAccessToken,
     );
   }

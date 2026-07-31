@@ -34,9 +34,9 @@ class CompleteAssessmentWorkflow extends StatefulWidget {
     required this.academicYear,
     required this.customSchoolId,
     required this.accessToken,
+    required this.viewerRole,
+    required this.viewerName,
     this.onRefreshAccessToken,
-    this.viewerRole = 'Administrator',
-    this.viewerName = 'Eric GoM',
   });
 
   final String schoolName;
@@ -658,6 +658,14 @@ class _CompleteAssessmentWorkflowState
                 .where((student) => student.id.isNotEmpty)
                 .toList()
           : <_StudentRecord>[];
+      final evaluationRows = await Future.wait(
+        students.map(
+          (student) => _assessmentApi.getStudentEvaluations(
+            customStudentId: student.id,
+            termId: setup.termId,
+          ),
+        ),
+      );
       final completed = <String, int>{};
       final required = <String, int>{};
       final missing = <String, List<String>>{};
@@ -698,6 +706,9 @@ class _CompleteAssessmentWorkflowState
       }
       setState(() {
         _liveReportStudents = students;
+        for (var index = 0; index < students.length; index++) {
+          _hydrateLiveEvaluation(students[index], evaluationRows[index]);
+        }
         for (final student in students) {
           _reportStatuses[student.id] = publishedStudentIds.contains(student.id)
               ? 'Published'
@@ -2696,7 +2707,7 @@ class _CompleteAssessmentWorkflowState
         ),
         DataCell(SizedBox(width: 160, child: Text(_selectedClass))),
         DataCell(_evaluationScoreBadge(evaluation.displayScore)),
-        DataCell(_evaluationStatus(evaluated)),
+        DataCell(SizedBox(width: 100, child: _evaluationStatus(evaluated))),
         DataCell(SizedBox(width: 140, child: Text(evaluation.lastEvaluated))),
         DataCell(
           SizedBox(
@@ -2843,7 +2854,58 @@ class _CompleteAssessmentWorkflowState
   Widget _evaluationForm() {
     final student = _selectedEvaluationStudent ?? _students.first;
     final evaluation = _evaluationFor(student);
-    void save() {
+    Future<void> save() async {
+      if (widget.customSchoolId.trim().isNotEmpty) {
+        final entries = <Map<String, dynamic>>[
+          {
+            'criterion': 'HOMEWORK',
+            'score': evaluation.homework,
+            'teacherComments': evaluation.comments['homework'] ?? '',
+          },
+          {
+            'criterion': 'ATTENTIVENESS',
+            'score': evaluation.punctuality,
+            'teacherComments': evaluation.comments['punctuality'] ?? '',
+          },
+          {
+            'criterion': 'TEAMWORK',
+            'score': evaluation.neatness,
+            'teacherComments': evaluation.comments['neatness'] ?? '',
+          },
+          {
+            'criterion': 'CLASS_PARTICIPATION',
+            'score': evaluation.attitude,
+            'teacherComments': evaluation.comments['attitude'] ?? '',
+          },
+          {
+            'criterion': 'RESPECT_AND_DISCIPLINE',
+            'score': evaluation.discipline,
+            'teacherComments': evaluation.comments['discipline'] ?? '',
+          },
+          {
+            'criterion': 'NEATNESS',
+            'score': evaluation.organization,
+            'teacherComments': evaluation.comments['organization'] ?? '',
+          },
+        ];
+        for (final entry in entries) {
+          entry['overallComment'] = evaluation.remark;
+        }
+        try {
+          final setup = await _assessmentFormSetup;
+          await _assessmentApi.saveStudentEvaluations(
+            customSchoolId: widget.customSchoolId,
+            customStudentId: student.id,
+            termId: setup.termId,
+            evaluatedBy: widget.viewerName,
+            evaluations: entries,
+          );
+        } on AssessmentApiException catch (error) {
+          if (mounted) _notice(error.message);
+          return;
+        }
+      }
+      if (!mounted) return;
       setState(() {
         evaluation.status = 'Submitted';
         evaluation.displayScore = evaluation.average;

@@ -365,6 +365,12 @@ class _DashboardBody extends StatelessWidget {
         academicYear: data.academicYear,
         customSchoolId: schoolId,
         accessToken: accessToken,
+        viewerRole: role?.trim().isNotEmpty == true
+            ? role!.trim()
+            : 'Administrator',
+        viewerName: userDisplayName?.trim().isNotEmpty == true
+            ? userDisplayName!.trim()
+            : data.administratorName,
         onRefreshAccessToken: onRefreshAccessToken,
       );
     }
