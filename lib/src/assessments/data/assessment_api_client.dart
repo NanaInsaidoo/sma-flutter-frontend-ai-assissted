@@ -29,7 +29,7 @@ class AssessmentApiClient {
     final streamValues = streamsBody is Map<String, dynamic>
         ? _list(streamsBody['data'])
         : _list(streamsBody);
-    final streams = streamValues
+    final rawStreams = streamValues
         .map(_map)
         .map(
           (item) => AssessmentStreamOption(
@@ -90,6 +90,27 @@ class AssessmentApiClient {
               item.id > 0 &&
               item.name.isNotEmpty &&
               item.status.toUpperCase() != 'INACTIVE',
+        )
+        .toList();
+
+    // The all-streams endpoint currently returns the school-grade row id while
+    // subjects and the grade-level endpoint use the canonical GES grade id.
+    // Reconcile by the shared grade name so valid subjects are not filtered out.
+    final canonicalGradeIds = <String, int>{
+      for (final grade in gradeLevels)
+        grade.name.trim().toLowerCase(): grade.id,
+    };
+    final streams = rawStreams
+        .map(
+          (stream) => AssessmentStreamOption(
+            id: stream.id,
+            gradeLevelId:
+                canonicalGradeIds[stream.gradeName.trim().toLowerCase()] ??
+                stream.gradeLevelId,
+            gradeName: stream.gradeName,
+            streamName: stream.streamName,
+            studentCount: stream.studentCount,
+          ),
         )
         .toList();
     final year = _map(context['academicYear']);

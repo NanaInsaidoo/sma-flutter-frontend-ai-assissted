@@ -1635,7 +1635,7 @@ class _SubjectsDrawer extends StatelessWidget {
                         ),
                       ),
                       Text(
-                        '$gradeName · Term 1, 2024/2025',
+                        '$gradeName subjects',
                         style: const TextStyle(
                           color: AppColors.muted,
                           fontSize: 12,

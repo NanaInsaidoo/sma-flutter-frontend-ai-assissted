@@ -323,22 +323,6 @@ class _Header extends StatelessWidget {
               fontWeight: FontWeight.w900,
             ),
           ),
-          const SizedBox(width: 10),
-          const Text(
-            '/',
-            style: TextStyle(
-              color: AppColors.muted,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(width: 10),
-          const Text(
-            '2024/2025',
-            style: TextStyle(
-              color: AppColors.muted,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
           const Spacer(),
           Text(
             '$totalStreams streams configured',
