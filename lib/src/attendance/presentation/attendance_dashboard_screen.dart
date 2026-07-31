@@ -170,8 +170,12 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
               present: item.present,
               absent: item.absent,
               late: item.late,
-              percentage: item.attendanceRate,
-              pending: !item.submitted,
+              percentage: item.totalStudents == 0
+                  ? 0
+                  : ((item.present + item.late) / item.totalStudents) * 100,
+              pending:
+                  !item.submitted ||
+                  item.present + item.absent + item.late < item.totalStudents,
             ),
           )
           .toList();
@@ -337,10 +341,16 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
         : _period == _AttendancePeriod.week
         ? 'Daily average this week'
         : 'Recorded this month';
+    final displayedAttendanceRate = _period == _AttendancePeriod.today
+        ? (summary.totalStudents == 0
+              ? 0.0
+              : ((summary.present + summary.late) / summary.totalStudents) *
+                    100)
+        : summary.attendanceRate;
     final items = [
       _DashboardStat(
         label: 'Overall attendance',
-        value: '${summary.attendanceRate.toStringAsFixed(1)}%',
+        value: '${displayedAttendanceRate.toStringAsFixed(1)}%',
         detail: periodDetail,
         icon: Icons.insights_rounded,
         color: AppColors.green,

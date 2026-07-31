@@ -172,7 +172,15 @@ class ApiDashboardRepository implements DashboardRepository {
       final totalStudents = _integer(statistics['totalStudents']);
       final activeClasses = _integer(statistics['totalActiveClasses']);
       final totalClasses = _integer(statistics['totalClasses']);
-      final attendanceRate = attendance.today.attendanceRate;
+      final attendanceRate = attendance.today.totalStudents == 0
+          ? 0.0
+          : ((attendance.today.present + attendance.today.late) /
+                    attendance.today.totalStudents) *
+                100;
+      final streamsPending = attendance.classes.where((item) {
+        final recorded = item.present + item.absent + item.late;
+        return !item.submitted || recorded < item.totalStudents;
+      }).length;
 
       return DashboardSnapshot(
         schoolName: schoolName?.trim().isNotEmpty == true
@@ -209,7 +217,7 @@ class ApiDashboardRepository implements DashboardRepository {
             value: '${attendanceRate.toStringAsFixed(1)}%',
             caption:
                 '${attendance.today.present} of ${attendance.today.totalStudents} present',
-            change: '${attendance.streamsPending} streams pending',
+            change: '$streamsPending streams pending',
             icon: Icons.fact_check_rounded,
             color: AppColors.blue,
           ),
