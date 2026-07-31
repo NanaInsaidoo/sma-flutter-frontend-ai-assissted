@@ -26,6 +26,11 @@ class IncidentApiClient {
   final Future<String?> Function()? onRefreshAccessToken;
   final http.Client _client;
 
+  Future<IncidentTermContext> getCurrentTerm() async {
+    final response = await _send('GET', '/api/v1/current-term/$customSchoolId');
+    return IncidentTermContext.fromJson(_object(response));
+  }
+
   Future<IncidentDashboardStats> getStats() async {
     final response = await _send(
       'GET',
@@ -417,4 +422,33 @@ class IncidentApiClient {
     } catch (_) {}
     return 'Incident request failed (${response.statusCode}).';
   }
+}
+
+class IncidentTermContext {
+  const IncidentTermContext({required this.startDate, required this.endDate});
+
+  factory IncidentTermContext.fromJson(Map<String, dynamic> json) {
+    DateTime? date(dynamic value) {
+      if (value is List && value.length >= 3) {
+        return DateTime(
+          (value[0] as num).toInt(),
+          (value[1] as num).toInt(),
+          (value[2] as num).toInt(),
+        );
+      }
+      return DateTime.tryParse(value?.toString() ?? '');
+    }
+
+    final start = date(json['startDate']);
+    final end = date(json['endDate']);
+    if (start == null || end == null) {
+      throw const IncidentApiException(
+        'The current academic term dates are not configured.',
+      );
+    }
+    return IncidentTermContext(startDate: start, endDate: end);
+  }
+
+  final DateTime startDate;
+  final DateTime endDate;
 }

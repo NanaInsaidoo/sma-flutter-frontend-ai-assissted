@@ -27,6 +27,7 @@ class _IncidentsScreenState extends State<IncidentsScreen> {
   late final IncidentApiClient _api;
   IncidentDashboardStats? _stats;
   IncidentPage? _page;
+  IncidentTermContext? _term;
   bool _loading = true;
   String? _error;
   String _search = '';
@@ -61,11 +62,13 @@ class _IncidentsScreenState extends State<IncidentsScreen> {
           status: _status,
           severity: _severity,
         ),
+        _api.getCurrentTerm(),
       ]);
       if (!mounted) return;
       setState(() {
         _stats = values[0] as IncidentDashboardStats;
         _page = values[1] as IncidentPage;
+        _term = values[2] as IncidentTermContext;
         _loading = false;
       });
     } catch (error) {
@@ -252,12 +255,20 @@ class _IncidentsScreenState extends State<IncidentsScreen> {
   }
 
   Future<void> _openCreate() async {
+    final term = _term;
+    if (term == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Current term dates are unavailable.')),
+      );
+      return;
+    }
     final created = await showDialog<IncidentRecord>(
       context: context,
       builder: (_) => _CreateIncidentDialog(
         api: _api,
         schoolId: widget.customSchoolId,
         reportedBy: widget.reportedBy,
+        term: term,
       ),
     );
     if (created != null) {
@@ -3062,10 +3073,12 @@ class _CreateIncidentDialog extends StatefulWidget {
     required this.api,
     required this.schoolId,
     required this.reportedBy,
+    required this.term,
   });
   final IncidentApiClient api;
   final String schoolId;
   final String reportedBy;
+  final IncidentTermContext term;
   @override
   State<_CreateIncidentDialog> createState() => _CreateIncidentDialogState();
 }
@@ -3078,7 +3091,7 @@ class _CreateIncidentDialogState extends State<_CreateIncidentDialog> {
   List<IncidentLookup> _types = const [];
   IncidentLookup? _type;
   String _severity = 'HIGH';
-  DateTime _date = DateTime.now();
+  late DateTime _date;
   TimeOfDay _time = TimeOfDay.now();
   bool _parent = true;
   bool _followUp = true;
@@ -3087,6 +3100,12 @@ class _CreateIncidentDialogState extends State<_CreateIncidentDialog> {
   @override
   void initState() {
     super.initState();
+    final today = DateUtils.dateOnly(DateTime.now());
+    _date = today.isBefore(widget.term.startDate)
+        ? widget.term.startDate
+        : today.isAfter(widget.term.endDate)
+        ? widget.term.endDate
+        : today;
     widget.api
         .getReference('incident-types')
         .then((value) {
@@ -3112,6 +3131,16 @@ class _CreateIncidentDialogState extends State<_CreateIncidentDialog> {
         child: SingleChildScrollView(
           child: Column(
             children: [
+              if (!_termAcceptsIncidentToday)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(
+                    'Incidents can only be logged within the current term '
+                    '(${_formatDate(widget.term.startDate)} to '
+                    '${_formatDate(widget.term.endDate)}).',
+                    style: const TextStyle(color: AppColors.red),
+                  ),
+                ),
               if (_error != null)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 10),
@@ -3124,7 +3153,7 @@ class _CreateIncidentDialogState extends State<_CreateIncidentDialog> {
                 children: [
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: _pickDate,
+                      onPressed: _termAcceptsIncidentToday ? _pickDate : null,
                       icon: const Icon(Icons.calendar_today_rounded),
                       label: Text(_formatDate(_date)),
                     ),
@@ -3211,7 +3240,7 @@ class _CreateIncidentDialogState extends State<_CreateIncidentDialog> {
         child: const Text('Cancel'),
       ),
       FilledButton(
-        onPressed: _saving ? null : _save,
+        onPressed: _saving || !_termAcceptsIncidentToday ? null : _save,
         child: Text(_saving ? 'Saving…' : 'Save incident'),
       ),
     ],
@@ -3219,12 +3248,20 @@ class _CreateIncidentDialogState extends State<_CreateIncidentDialog> {
 
   String? _required(String? value) =>
       value?.trim().isEmpty != false ? 'Required' : null;
+  bool get _termAcceptsIncidentToday {
+    final today = DateUtils.dateOnly(DateTime.now());
+    return !today.isBefore(widget.term.startDate);
+  }
+
   Future<void> _pickDate() async {
+    final today = DateUtils.dateOnly(DateTime.now());
     final value = await showDatePicker(
       context: context,
       initialDate: _date,
-      firstDate: DateTime(2020),
-      lastDate: DateTime.now(),
+      firstDate: widget.term.startDate,
+      lastDate: today.isBefore(widget.term.endDate)
+          ? today
+          : widget.term.endDate,
     );
     if (value != null) setState(() => _date = value);
   }

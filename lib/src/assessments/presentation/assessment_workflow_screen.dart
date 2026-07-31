@@ -890,8 +890,8 @@ class _CompleteAssessmentWorkflowState
             ('FULLY GRADED', '$completed', 'Assessments with all scores'),
             (
               'AVG SCORE',
-              '${average.toStringAsFixed(1)}%',
-              'Across assessments',
+              average.toStringAsFixed(1),
+              'Raw score across assessments',
             ),
             (
               'SCORE ENTRY',
@@ -8875,6 +8875,7 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
     final values = _controllers.values
         .map((controller) => double.tryParse(controller.text.trim()))
         .whereType<double>()
+        .where((score) => score >= 0 && score <= widget.assessment.maxScore)
         .toList();
     final average = values.isEmpty
         ? null
@@ -9167,6 +9168,14 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
   double? _scoreFor(AssessmentStudentScore student) =>
       double.tryParse(_controllers[student.studentId]!.text.trim());
 
+  double? _validScoreForDisplay(AssessmentStudentScore student) {
+    final score = _scoreFor(student);
+    if (score == null || score < 0 || score > widget.assessment.maxScore) {
+      return null;
+    }
+    return score;
+  }
+
   String _gradeFor(double? score) {
     if (score == null) return '—';
     final percent = score / widget.assessment.maxScore * 100;
@@ -9179,7 +9188,8 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
 
   Widget _oldScoreInput(AssessmentStudentScore student) {
     final score = _scoreFor(student);
-    final invalid = score != null && score > widget.assessment.maxScore;
+    final invalid =
+        score != null && (score < 0 || score > widget.assessment.maxScore);
     return SizedBox(
       width: 92,
       child: TextField(
@@ -9193,7 +9203,7 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
         decoration: InputDecoration(
           hintText: '—',
           isDense: true,
-          errorText: invalid ? 'Too high' : null,
+          errorText: invalid ? 'Out of range' : null,
           contentPadding: const EdgeInsets.symmetric(
             horizontal: 8,
             vertical: 10,
@@ -9255,7 +9265,7 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
   }
 
   DataRow _oldDesktopScoreRow(int index, AssessmentStudentScore student) {
-    final score = _scoreFor(student);
+    final score = _validScoreForDisplay(student);
     return DataRow(
       cells: [
         DataCell(Text('${index + 1}')),
@@ -9296,7 +9306,7 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
   }
 
   Widget _oldMobileScoreRow(int index, AssessmentStudentScore student) {
-    final score = _scoreFor(student);
+    final score = _validScoreForDisplay(student);
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: const BoxDecoration(
