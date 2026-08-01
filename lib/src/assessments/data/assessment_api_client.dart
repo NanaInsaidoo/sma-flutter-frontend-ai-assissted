@@ -397,7 +397,9 @@ class AssessmentApiClient {
             'streamId': streamId,
             'term': term,
             'academicYearId': academicYearId,
-            'strictMode': true,
+            // Draft generation is allowed for completed subjects. The API
+            // still applies strict validation when a report is finalized.
+            'strictMode': false,
             'finalize': false,
             'generatedBy': generatedBy,
             if (customStudentIds.isNotEmpty)

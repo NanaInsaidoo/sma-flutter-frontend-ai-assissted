@@ -3512,9 +3512,9 @@ class _CompleteAssessmentWorkflowState
   ][month - 1];
 
   Future<void> _generateReports(Iterable<_StudentRecord> students) async {
-    final ready = students.where(_gradesComplete).toList();
+    final ready = students.toList();
     if (ready.isEmpty) {
-      _notice('Select at least one student whose report is ready.');
+      _notice('Select at least one student.');
       return;
     }
     setState(() {
@@ -4843,7 +4843,7 @@ class _CompleteAssessmentWorkflowState
     final canEditClass = administrator || role.contains('class teacher');
     final canEditHead = administrator || role.contains('head teacher');
     final reportSubjects = _studentReportCards[student.id]?['subjects'];
-    final academicRows = reportSubjects is List
+    final generatedAcademicRows = reportSubjects is List
         ? reportSubjects.whereType<Map>().map((rawSubject) {
             final subject = Map<String, dynamic>.from(rawSubject);
             String score(dynamic value) =>
@@ -4858,6 +4858,30 @@ class _CompleteAssessmentWorkflowState
             ];
           }).toList()
         : <List<String>>[];
+    final generatedSubjectNames = generatedAcademicRows
+        .map((row) => row.first)
+        .toSet();
+    final pendingSubjectNames =
+        (_reportMissingComponents[student.id] ?? const [])
+            .map((item) => item.split(':').first.trim())
+            .where(
+              (name) =>
+                  name.isNotEmpty && !generatedSubjectNames.contains(name),
+            )
+            .toSet();
+    final academicRows = <List<String>>[
+      ...generatedAcademicRows,
+      ...pendingSubjectNames.map(
+        (subject) => [
+          subject,
+          'Results pending',
+          'Results pending',
+          'Results pending',
+          '—',
+          'Results pending',
+        ],
+      ),
+    ];
 
     return _page(
       title: 'Student Report',
@@ -4878,13 +4902,13 @@ class _CompleteAssessmentWorkflowState
         ),
         if (status != 'Published')
           _filledButton(
-            generated ? 'Regenerate' : 'Generate',
+            generated
+                ? (_gradesComplete(student) ? 'Regenerate' : 'Regenerate Draft')
+                : (_gradesComplete(student) ? 'Generate' : 'Generate Draft'),
             generated ? Icons.refresh : Icons.description_outlined,
-            _gradesComplete(student)
-                ? () => generated
-                      ? _regenerateStudentReport(student)
-                      : _generateReports([student])
-                : null,
+            () => generated
+                ? _regenerateStudentReport(student)
+                : _generateReports([student]),
           ),
         if (status != 'Published')
           _filledButton(
