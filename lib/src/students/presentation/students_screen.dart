@@ -145,10 +145,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _StudentsHeader(
-                    term: widget.term,
-                    academicYear: widget.academicYear,
-                  ),
+                  const _StudentsHeader(),
                   const SizedBox(height: 20),
                   _StudentSummary(students: students),
                   const SizedBox(height: 20),
@@ -189,10 +186,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
 }
 
 class _StudentsHeader extends StatelessWidget {
-  const _StudentsHeader({required this.term, required this.academicYear});
-
-  final String term;
-  final String academicYear;
+  const _StudentsHeader();
 
   @override
   Widget build(BuildContext context) {
@@ -223,45 +217,7 @@ class _StudentsHeader extends StatelessWidget {
             ],
           ),
         ),
-        _TermBadge(term: term, academicYear: academicYear),
       ],
-    );
-  }
-}
-
-class _TermBadge extends StatelessWidget {
-  const _TermBadge({required this.term, required this.academicYear});
-
-  final String term;
-  final String academicYear;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
-      decoration: BoxDecoration(
-        color: AppColors.greenSoft,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: AppColors.green.withValues(alpha: 0.25)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(
-            Icons.calendar_month_rounded,
-            size: 18,
-            color: AppColors.green,
-          ),
-          const SizedBox(width: 8),
-          Text(
-            '$term  ·  $academicYear',
-            style: const TextStyle(
-              color: AppColors.green,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -1043,11 +999,7 @@ class _StudentProfileViewState extends State<StudentProfileView> {
                 label: const Text('Back to students'),
               ),
               const SizedBox(height: 8),
-              _StudentProfileHeader(
-                student: widget.student,
-                term: widget.term,
-                academicYear: widget.academicYear,
-              ),
+              _StudentProfileHeader(student: widget.student),
               const SizedBox(height: 16),
               _ProfileTabs(
                 selected: _tab,
@@ -1089,15 +1041,9 @@ class _StudentProfileViewState extends State<StudentProfileView> {
 }
 
 class _StudentProfileHeader extends StatelessWidget {
-  const _StudentProfileHeader({
-    required this.student,
-    required this.term,
-    required this.academicYear,
-  });
+  const _StudentProfileHeader({required this.student});
 
   final EnrolledStudent student;
-  final String term;
-  final String academicYear;
 
   @override
   Widget build(BuildContext context) {
@@ -1134,14 +1080,7 @@ class _StudentProfileHeader extends StatelessWidget {
                 ),
               ],
             );
-            final contextBadge = Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _StatusBadge(status: student.status),
-                const SizedBox(width: 10),
-                _TermBadge(term: term, academicYear: academicYear),
-              ],
-            );
+            final contextBadge = _StatusBadge(status: student.status);
             if (compact) {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,

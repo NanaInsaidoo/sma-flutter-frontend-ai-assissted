@@ -193,8 +193,6 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
                     primaryAction: 'Start Admission',
                     onPrimaryAction: _showStartAdmissionSheet,
                   ),
-                  const SizedBox(height: 12),
-                  _CurrentTermBanner(future: _termFuture),
                   const SizedBox(height: 18),
                   _StatusTabs(
                     selected: _filter,
@@ -284,7 +282,6 @@ class HouseholdsGuardiansScreen extends StatefulWidget {
 class _HouseholdsGuardiansScreenState extends State<HouseholdsGuardiansScreen> {
   String _search = '';
   late final AdmissionsApiClient _api;
-  late final Future<AdmissionTermContext> _termFuture;
   late Future<List<_HouseholdRecord>> _householdsFuture;
 
   @override
@@ -294,7 +291,6 @@ class _HouseholdsGuardiansScreenState extends State<HouseholdsGuardiansScreen> {
       accessToken: widget.accessToken,
       onRefreshAccessToken: widget.onRefreshAccessToken,
     );
-    _termFuture = _api.getCurrentTerm(widget.customSchoolId);
     _householdsFuture = _loadHouseholds();
   }
 
@@ -345,8 +341,6 @@ class _HouseholdsGuardiansScreenState extends State<HouseholdsGuardiansScreen> {
                     subtitle:
                         'Find existing households, manage guardians, and continue unfinished guardian onboarding.',
                   ),
-                  const SizedBox(height: 12),
-                  _CurrentTermBanner(future: _termFuture),
                   const SizedBox(height: 18),
                   _HouseholdSummaryCards(households: households),
                   const SizedBox(height: 18),
@@ -415,121 +409,6 @@ class _AdmissionsHeader extends StatelessWidget {
             label: Text(primaryAction!),
           ),
       ],
-    );
-  }
-}
-
-class _TermContextBanner extends StatelessWidget {
-  const _TermContextBanner({
-    required this.academicYear,
-    required this.term,
-    required this.dateRange,
-  });
-
-  final String academicYear;
-  final String term;
-  final String dateRange;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-        child: Wrap(
-          spacing: 12,
-          runSpacing: 8,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            _TermChip(icon: Icons.calendar_month_rounded, label: academicYear),
-            _TermChip(icon: Icons.flag_rounded, label: term),
-            _TermChip(icon: Icons.date_range_rounded, label: dateRange),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _CurrentTermBanner extends StatelessWidget {
-  const _CurrentTermBanner({required this.future});
-
-  final Future<AdmissionTermContext> future;
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<AdmissionTermContext>(
-      future: future,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const _TermContextBanner(
-            academicYear: 'Loading academic year...',
-            term: 'Loading term...',
-            dateRange: 'Loading dates...',
-          );
-        }
-        if (snapshot.hasError || snapshot.data == null) {
-          return Card(
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Row(
-                children: [
-                  const Icon(Icons.error_outline_rounded, color: AppColors.red),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      snapshot.error?.toString() ??
-                          'The current academic term could not be loaded.',
-                      style: const TextStyle(color: AppColors.red),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }
-        final term = snapshot.data!;
-        return _TermContextBanner(
-          academicYear: term.academicYear.isEmpty
-              ? 'Academic year'
-              : term.academicYear,
-          term: term.term.isEmpty ? 'Current term' : term.term,
-          dateRange:
-              '${_formatDateText(term.startDate)} to ${_formatDateText(term.endDate)}',
-        );
-      },
-    );
-  }
-}
-
-class _TermChip extends StatelessWidget {
-  const _TermChip({required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
-      decoration: BoxDecoration(
-        color: AppColors.greenSoft,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 16, color: AppColors.green),
-          const SizedBox(width: 7),
-          Text(
-            label,
-            style: const TextStyle(
-              color: AppColors.text,
-              fontWeight: FontWeight.w700,
-              fontSize: 12.5,
-            ),
-          ),
-        ],
-      ),
     );
   }
 }
