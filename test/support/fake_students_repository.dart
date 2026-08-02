@@ -84,6 +84,8 @@ class FakeStudentsRepository implements StudentsRepository {
           status: StudentFeeAdjustmentStatus.pending,
           createdOn: DateTime(2026, 7, 15),
           createdBy: 'Eric Amozini',
+          assignedApproverId: 12,
+          assignedApproverName: 'Efua Nyarko',
         ),
       ],
     ),
@@ -241,6 +243,15 @@ class FakeStudentsRepository implements StudentsRepository {
     createdOn: DateTime(2026, 7, 19),
     createdBy: 'Current administrator',
   );
+
+  @override
+  Future<StudentFeeAdjustment> updateFeeAdjustment({
+    required StudentFeeAdjustment adjustment,
+    required int feeId,
+    required double amount,
+    required String description,
+    String? changeReason,
+  }) async => adjustment.copyWith(amount: amount, description: description);
 }
 
 EnrolledStudent _student({

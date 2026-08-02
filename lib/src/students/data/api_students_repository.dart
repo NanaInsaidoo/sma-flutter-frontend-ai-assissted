@@ -69,6 +69,31 @@ class ApiStudentsRepository implements StudentsRepository {
   }
 
   @override
+  Future<StudentFeeAdjustment> updateFeeAdjustment({
+    required StudentFeeAdjustment adjustment,
+    required int feeId,
+    required double amount,
+    required String description,
+    String? changeReason,
+  }) async {
+    final id = int.tryParse(adjustment.id);
+    if (id == null) {
+      throw const ApiStudentsException('The adjustment cannot be updated.');
+    }
+    final updated = await _fees.updateFeeAdjustment(
+      customSchoolId: customSchoolId,
+      adjustmentId: id,
+      feeId: feeId,
+      amount: adjustment.type == StudentFeeAdjustmentType.discount
+          ? -amount.abs()
+          : amount.abs(),
+      description: description,
+      changeReason: changeReason,
+    );
+    return _studentAdjustment(updated);
+  }
+
+  @override
   Future<List<EnrolledStudent>> getEnrolledStudents() async {
     final term = await _admissions.getCurrentTerm(customSchoolId);
     final students = await _admissions.getStudents(
@@ -619,6 +644,8 @@ StudentFeeAdjustment _studentAdjustment(FeeAdjustment item) {
     status: _adjustmentStatus(item.status),
     createdOn: item.createdDate ?? DateTime.now(),
     createdBy: item.createdByType,
+    assignedApproverId: item.assignedApproverId,
+    assignedApproverName: item.assignedApproverName,
   );
 }
 

@@ -2499,9 +2499,11 @@ class _AdjustmentHistoryRow extends StatelessWidget {
   final StudentFeeAdjustment adjustment;
   final ValueChanged<_StudentAdjustmentAction> onAction;
 
-  // Workflow mutations are deliberately centralized in Fees > Adjustments so
-  // they always use the server-side approval rules and immutable audit trail.
-  List<_StudentAdjustmentAction> get _actions => const [];
+  List<_StudentAdjustmentAction> get _actions => switch (adjustment.status) {
+    StudentFeeAdjustmentStatus.draft ||
+    StudentFeeAdjustmentStatus.pending => const [_StudentAdjustmentAction.edit],
+    _ => const [],
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -2780,6 +2782,7 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
   final _formKey = GlobalKey<FormState>();
   final _amountController = TextEditingController();
   final _reasonController = TextEditingController();
+  final _changeReasonController = TextEditingController();
   String? _feeName;
   StudentFeeAdjustmentType _type = StudentFeeAdjustmentType.discount;
   StudentFeeAdjustmentStatus _status = StudentFeeAdjustmentStatus.pending;
@@ -2813,12 +2816,16 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
       initial.amount % 1 == 0 ? 0 : 2,
     );
     _reasonController.text = initial.description;
+    _approverId = initial.assignedApproverId > 0
+        ? initial.assignedApproverId
+        : null;
   }
 
   @override
   void dispose() {
     _amountController.dispose();
     _reasonController.dispose();
+    _changeReasonController.dispose();
     super.dispose();
   }
 
@@ -2835,6 +2842,22 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
         )
         .fold<double>(0, (sum, item) => sum + item.signedAmount);
     return (original + existingAdjustments).clamp(0, double.infinity);
+  }
+
+  double? get _projectedFee {
+    final feeName = _feeName;
+    final amount = double.tryParse(_amountController.text.trim());
+    if (feeName == null || amount == null || amount <= 0) return null;
+    final original = widget.student.fees
+        .where((fee) => fee.name == feeName)
+        .fold<double>(0, (sum, fee) => sum + fee.amount);
+    final approved = widget.currentAdjustments
+        .where((item) => item.affectsBalance && item.feeName == feeName)
+        .fold<double>(0, (sum, item) => sum + item.signedAmount);
+    final proposed = _type == StudentFeeAdjustmentType.discount
+        ? -amount.abs()
+        : amount.abs();
+    return original + approved + proposed;
   }
 
   Future<void> _save() async {
@@ -2856,16 +2879,25 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
     final fee = widget.student.fees.firstWhere((item) => item.name == _feeName);
     setState(() => _saving = true);
     try {
-      final result = await widget.repository.createFeeAdjustment(
-        customStudentId: widget.student.id,
-        termId: widget.student.feeTermId,
-        feeId: fee.id,
-        type: _type,
-        amount: amount,
-        description: _reasonController.text.trim(),
-        status: _status,
-        approverId: _approverId,
-      );
+      final initial = widget.initialAdjustment;
+      final result = initial == null
+          ? await widget.repository.createFeeAdjustment(
+              customStudentId: widget.student.id,
+              termId: widget.student.feeTermId,
+              feeId: fee.id,
+              type: _type,
+              amount: amount,
+              description: _reasonController.text.trim(),
+              status: _status,
+              approverId: _approverId,
+            )
+          : await widget.repository.updateFeeAdjustment(
+              adjustment: initial,
+              feeId: fee.id,
+              amount: amount,
+              description: _reasonController.text.trim(),
+              changeReason: _changeReasonController.text.trim(),
+            );
       if (mounted) Navigator.of(context).pop(result);
     } catch (error) {
       if (!mounted) return;
@@ -2879,8 +2911,11 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
   @override
   Widget build(BuildContext context) {
     final reversing = widget.reversingAdjustment != null;
+    final editing = widget.initialAdjustment != null;
     final actionLabel = reversing
         ? 'Record reversal'
+        : editing
+        ? 'Save changes'
         : switch (_status) {
             StudentFeeAdjustmentStatus.pending => 'Submit for approval',
             _ => 'Save adjustment',
@@ -3004,7 +3039,7 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
                                 selected:
                                     _type == StudentFeeAdjustmentType.discount,
                                 color: AppColors.green,
-                                onTap: reversing
+                                onTap: reversing || editing
                                     ? null
                                     : () => setState(
                                         () => _type =
@@ -3021,7 +3056,7 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
                                 selected:
                                     _type == StudentFeeAdjustmentType.surcharge,
                                 color: AppColors.red,
-                                onTap: reversing
+                                onTap: reversing || editing
                                     ? null
                                     : () => setState(
                                         () => _type =
@@ -3059,7 +3094,48 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
                             }
                             return null;
                           },
+                          onChanged: (_) => setState(() {}),
                         ),
+                        if (_projectedFee case final projected?) ...[
+                          const SizedBox(height: 10),
+                          Container(
+                            key: const Key('adjustment-fee-preview'),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color:
+                                  (projected < 0
+                                          ? AppColors.red
+                                          : AppColors.green)
+                                      .withValues(alpha: .08),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    projected < 0
+                                        ? 'This adjustment would make the fee negative. Reduce the discount amount.'
+                                        : '${_feeName!} if approved',
+                                    style: TextStyle(
+                                      color: projected < 0
+                                          ? AppColors.red
+                                          : AppColors.text,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                                if (projected >= 0)
+                                  Text(
+                                    _money(projected),
+                                    style: const TextStyle(
+                                      color: AppColors.green,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 18),
                         TextFormField(
                           key: const Key('adjustment-reason'),
@@ -3075,8 +3151,25 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
                               ? 'Enter a reason for the adjustment'
                               : null,
                         ),
+                        if (editing &&
+                            _status == StudentFeeAdjustmentStatus.pending) ...[
+                          const SizedBox(height: 18),
+                          TextFormField(
+                            key: const Key('adjustment-change-reason'),
+                            controller: _changeReasonController,
+                            minLines: 2,
+                            maxLines: 3,
+                            decoration: const InputDecoration(
+                              labelText: 'Reason for changing this request *',
+                            ),
+                            validator: (value) =>
+                                (value?.trim().isEmpty ?? true)
+                                ? 'Explain why the pending request is being changed'
+                                : null,
+                          ),
+                        ],
                         const SizedBox(height: 18),
-                        if (!reversing)
+                        if (!reversing && !editing)
                           DropdownButtonFormField<StudentFeeAdjustmentStatus>(
                             key: const Key('adjustment-processing'),
                             value: _status,
@@ -3120,8 +3213,10 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
                             validator: (value) => value == null
                                 ? 'Select the person who must approve this request'
                                 : null,
-                            onChanged: (value) =>
-                                setState(() => _approverId = value),
+                            onChanged: editing
+                                ? null
+                                : (value) =>
+                                      setState(() => _approverId = value),
                           ),
                         ],
                         const SizedBox(height: 12),

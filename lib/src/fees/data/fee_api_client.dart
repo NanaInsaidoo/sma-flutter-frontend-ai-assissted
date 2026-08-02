@@ -174,6 +174,7 @@ class FeeApiClient {
     String? description,
     String? status,
     int? feeId,
+    String? changeReason,
   }) async {
     final response = await _send(
       'PUT',
@@ -184,6 +185,8 @@ class FeeApiClient {
         if (description != null) 'description': description.trim(),
         if (status != null) 'status': status,
         if (feeId != null) 'feeId': feeId,
+        if (changeReason?.trim().isNotEmpty == true)
+          'changeReason': changeReason!.trim(),
       },
     );
     return FeeAdjustment.fromJson(_decodeMap(response));

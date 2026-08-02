@@ -181,7 +181,7 @@ void main() {
     expect(find.text('Fee adjustment submitted for approval.'), findsOneWidget);
   });
 
-  testWidgets('student adjustment history is read-only', (tester) async {
+  testWidgets('pending adjustment is visible and editable', (tester) async {
     await pumpStudents(tester);
 
     await tester.tap(find.byKey(const Key('student-row-STU-FA1BC0-9043')));
@@ -196,7 +196,24 @@ void main() {
     expect(find.text('Adjustment history · 1 pending'), findsOneWidget);
 
     final menu = find.byKey(const Key('adjustment-menu-ADJ-1042-03'));
-    expect(menu, findsNothing);
+    expect(menu, findsOneWidget);
+    await tester.tap(menu);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Edit'));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit fee adjustment'), findsOneWidget);
+    expect(find.byKey(const Key('adjustment-change-reason')), findsOneWidget);
+    expect(find.byKey(const Key('adjustment-fee-preview')), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const Key('adjustment-change-reason')),
+      'Correcting the requested amount',
+    );
+    await tester.enterText(find.byKey(const Key('adjustment-amount')), '20');
+    final saveChanges = find.byKey(const Key('save-fee-adjustment'));
+    await tester.ensureVisible(saveChanges);
+    await tester.tap(saveChanges);
+    await tester.pumpAndSettle();
+    expect(find.text('GH₵ 20'), findsWidgets);
     expect(find.text('Pending'), findsWidgets);
   });
 

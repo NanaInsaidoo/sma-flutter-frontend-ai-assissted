@@ -192,6 +192,8 @@ class StudentFeeAdjustment {
     required this.status,
     required this.createdOn,
     required this.createdBy,
+    this.assignedApproverId = 0,
+    this.assignedApproverName = '',
   });
 
   final String id;
@@ -202,6 +204,8 @@ class StudentFeeAdjustment {
   final StudentFeeAdjustmentStatus status;
   final DateTime createdOn;
   final String createdBy;
+  final int assignedApproverId;
+  final String assignedApproverName;
 
   bool get affectsBalance =>
       status == StudentFeeAdjustmentStatus.approved ||
@@ -220,6 +224,8 @@ class StudentFeeAdjustment {
     StudentFeeAdjustmentStatus? status,
     DateTime? createdOn,
     String? createdBy,
+    int? assignedApproverId,
+    String? assignedApproverName,
   }) {
     return StudentFeeAdjustment(
       id: id ?? this.id,
@@ -230,6 +236,8 @@ class StudentFeeAdjustment {
       status: status ?? this.status,
       createdOn: createdOn ?? this.createdOn,
       createdBy: createdBy ?? this.createdBy,
+      assignedApproverId: assignedApproverId ?? this.assignedApproverId,
+      assignedApproverName: assignedApproverName ?? this.assignedApproverName,
     );
   }
 }
@@ -314,5 +322,13 @@ abstract interface class StudentsRepository {
     required String description,
     required StudentFeeAdjustmentStatus status,
     int? approverId,
+  });
+
+  Future<StudentFeeAdjustment> updateFeeAdjustment({
+    required StudentFeeAdjustment adjustment,
+    required int feeId,
+    required double amount,
+    required String description,
+    String? changeReason,
   });
 }
