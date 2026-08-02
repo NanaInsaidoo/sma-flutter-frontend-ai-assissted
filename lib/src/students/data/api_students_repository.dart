@@ -21,10 +21,12 @@ class ApiStudentsRepository implements StudentsRepository {
        _admissions = AdmissionsApiClient(
          accessToken: accessToken,
          onRefreshAccessToken: onRefreshAccessToken,
+         client: client,
        ),
        _fees = FeeApiClient(
          accessToken: accessToken,
          onRefreshAccessToken: onRefreshAccessToken,
+         client: client,
        );
 
   final String customSchoolId;
@@ -154,6 +156,12 @@ class ApiStudentsRepository implements StudentsRepository {
       customStudentId: studentId,
       academicTermId: term.id ?? 0,
     );
+    final adjustmentsFuture = (term.id ?? 0) <= 0
+        ? Future.value(const <FeeAdjustment>[])
+        : _fees.getFeeAdjustments(
+            customSchoolId: customSchoolId,
+            termId: term.id!,
+          );
     final attendanceFuture = _getAttendanceSummary(
       studentId,
       term.startDate,
@@ -168,6 +176,10 @@ class ApiStudentsRepository implements StudentsRepository {
     );
     final feeAccount = await _optional<FeeStudentAccount?>(
       feeAccountFuture,
+      null,
+    );
+    final termAdjustments = await _optional<List<FeeAdjustment>?>(
+      adjustmentsFuture,
       null,
     );
     final attendance = await attendanceFuture;
@@ -185,6 +197,10 @@ class ApiStudentsRepository implements StudentsRepository {
       householdStudents: householdStudents,
       documents: documents,
       requirements: requirements,
+      feeAdjustments: termAdjustments
+          ?.where((item) => item.customStudentId == studentId)
+          .map(_studentAdjustment)
+          .toList(growable: false),
     );
   }
 
@@ -252,6 +268,7 @@ class ApiStudentsRepository implements StudentsRepository {
     List<AdmissionStudent> householdStudents = const [],
     List<AdmissionStudentDocument> documents = const [],
     List<StudentRequirement> requirements = const [],
+    List<StudentFeeAdjustment>? feeAdjustments,
   }) {
     final json = detail.rawJson;
     final primary = guardians.where((guardian) => guardian.isPrimary);
@@ -329,7 +346,7 @@ class ApiStudentsRepository implements StudentsRepository {
       householdMembers: householdMembers,
       attendance: attendance.records,
       fees: _feeItems(feeAccount),
-      feeAdjustments: _feeAdjustments(feeAccount),
+      feeAdjustments: feeAdjustments ?? _feeAdjustments(feeAccount),
       payments: _payments(feeAccount),
       requirements: requirements,
       documents: documents
