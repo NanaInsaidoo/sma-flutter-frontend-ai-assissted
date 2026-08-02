@@ -3144,12 +3144,9 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
                             key: const Key('adjustment-fee-preview'),
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color:
-                                  (projected < 0
-                                          ? AppColors.red
-                                          : AppColors.green)
-                                      .withValues(alpha: .08),
+                              color: AppColors.background,
                               borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: AppColors.border),
                             ),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3166,11 +3163,9 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
                                       ),
                                     ),
                                     Text(
-                                      _money(projected),
-                                      style: TextStyle(
-                                        color: projected < 0
-                                            ? AppColors.red
-                                            : AppColors.green,
+                                      _projectedMoney(projected),
+                                      style: const TextStyle(
+                                        color: AppColors.text,
                                         fontWeight: FontWeight.w900,
                                       ),
                                     ),
@@ -3963,6 +3958,9 @@ String _formatDate(DateTime? value) {
 }
 
 String _money(double value) => 'GH\u20b5 ${value.abs().toStringAsFixed(0)}';
+
+String _projectedMoney(double value) =>
+    value < 0 ? '-${_money(value)}' : _money(value);
 
 String _signedMoney(double value) {
   if (value == 0) return _money(0);

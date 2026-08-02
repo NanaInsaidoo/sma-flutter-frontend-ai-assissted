@@ -168,7 +168,9 @@ void main() {
     );
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('adjustment-approver')));
+    final approver = find.byKey(const Key('adjustment-approver'));
+    await tester.ensureVisible(approver);
+    await tester.tap(approver);
     await tester.pumpAndSettle();
     await tester.tap(find.textContaining('Efua Nyarko').last);
     await tester.pumpAndSettle();
@@ -217,6 +219,7 @@ void main() {
       find.text('Warning: this adjustment will make the fee negative.'),
       findsOneWidget,
     );
+    expect(find.text('-GH₵ 150'), findsOneWidget);
     await tester.enterText(
       find.byKey(const Key('adjustment-change-reason')),
       'Correcting the requested amount',
