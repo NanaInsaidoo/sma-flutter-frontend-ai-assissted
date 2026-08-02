@@ -2838,7 +2838,20 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
   }
 
   Future<void> _save() async {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
+    final valid = _formKey.currentState?.validate() ?? false;
+    if (_status == StudentFeeAdjustmentStatus.pending && _approverId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Select an approver to submit this request, or save it as a draft.',
+          ),
+          backgroundColor: AppColors.amber,
+        ),
+      );
+      return;
+    }
+    if (!valid) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
     final amount = double.parse(_amountController.text.trim());
     final fee = widget.student.fees.firstWhere((item) => item.name == _feeName);
     setState(() => _saving = true);

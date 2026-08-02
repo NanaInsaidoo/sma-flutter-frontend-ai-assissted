@@ -160,6 +160,14 @@ void main() {
       find.text('Select the person who must approve this request'),
       findsOneWidget,
     );
+    expect(
+      find.text(
+        'Select an approver to submit this request, or save it as a draft.',
+      ),
+      findsOneWidget,
+    );
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('adjustment-approver')));
     await tester.pumpAndSettle();
     await tester.tap(find.textContaining('Efua Nyarko').last);
