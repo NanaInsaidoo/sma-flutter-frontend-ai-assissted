@@ -204,6 +204,12 @@ void main() {
     expect(find.text('Edit fee adjustment'), findsOneWidget);
     expect(find.byKey(const Key('adjustment-change-reason')), findsOneWidget);
     expect(find.byKey(const Key('adjustment-fee-preview')), findsOneWidget);
+    await tester.enterText(find.byKey(const Key('adjustment-amount')), '200');
+    await tester.pump();
+    expect(
+      find.text('Warning: this adjustment will make the fee negative.'),
+      findsOneWidget,
+    );
     await tester.enterText(
       find.byKey(const Key('adjustment-change-reason')),
       'Correcting the requested amount',

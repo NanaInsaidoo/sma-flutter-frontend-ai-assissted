@@ -1739,8 +1739,6 @@ class _FeesTab extends StatefulWidget {
 }
 
 class _FeesTabState extends State<_FeesTab> {
-  static const _overallFeeAccount = 'Overall fee account';
-
   late List<StudentFeeAdjustment> _adjustments;
   final GlobalKey _adjustmentHistoryKey = GlobalKey();
   bool _highlightAdjustmentHistory = false;
@@ -2829,21 +2827,6 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
     super.dispose();
   }
 
-  double _maximumDiscountFor(String feeName) {
-    final overall = feeName == _FeesTabState._overallFeeAccount;
-    final original = overall
-        ? widget.student.fees.fold<double>(0, (sum, fee) => sum + fee.amount)
-        : widget.student.fees
-              .where((fee) => fee.name == feeName)
-              .fold<double>(0, (sum, fee) => sum + fee.amount);
-    final existingAdjustments = widget.currentAdjustments
-        .where(
-          (item) => item.affectsBalance && (overall || item.feeName == feeName),
-        )
-        .fold<double>(0, (sum, item) => sum + item.signedAmount);
-    return (original + existingAdjustments).clamp(0, double.infinity);
-  }
-
   double? get _projectedFee {
     final feeName = _feeName;
     final amount = double.tryParse(_amountController.text.trim());
@@ -3085,13 +3068,6 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
                             if (amount == null || amount <= 0) {
                               return 'Enter an amount greater than zero';
                             }
-                            if (_type == StudentFeeAdjustmentType.discount &&
-                                _feeName != null) {
-                              final maximum = _maximumDiscountFor(_feeName!);
-                              if (amount > maximum) {
-                                return 'Discount cannot exceed ${_money(maximum)}';
-                              }
-                            }
                             return null;
                           },
                           onChanged: (_) => setState(() {}),
@@ -3109,29 +3085,42 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
                                       .withValues(alpha: .08),
                               borderRadius: BorderRadius.circular(12),
                             ),
-                            child: Row(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                Expanded(
-                                  child: Text(
-                                    projected < 0
-                                        ? 'This adjustment would make the fee negative. Reduce the discount amount.'
-                                        : '${_feeName!} if approved',
-                                    style: TextStyle(
-                                      color: projected < 0
-                                          ? AppColors.red
-                                          : AppColors.text,
-                                      fontWeight: FontWeight.w700,
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        '${_feeName!} if approved',
+                                        style: const TextStyle(
+                                          color: AppColors.text,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
                                     ),
-                                  ),
+                                    Text(
+                                      _money(projected),
+                                      style: TextStyle(
+                                        color: projected < 0
+                                            ? AppColors.red
+                                            : AppColors.green,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                if (projected >= 0)
+                                if (projected < 0) ...[
+                                  const SizedBox(height: 6),
                                   Text(
-                                    _money(projected),
+                                    'Warning: this adjustment will make the fee negative.',
                                     style: const TextStyle(
-                                      color: AppColors.green,
-                                      fontWeight: FontWeight.w900,
+                                      color: AppColors.red,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w800,
                                     ),
                                   ),
+                                ],
                               ],
                             ),
                           ),
