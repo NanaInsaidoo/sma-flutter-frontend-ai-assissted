@@ -156,8 +156,7 @@ class ApiDashboardRepository implements DashboardRepository {
           : await _optional<List<AdmissionListItem>>(
                   () => admissionsApi.getAdmissions(
                     customSchoolId: schoolId,
-                    startDate: admissionTerm.startDate,
-                    endDate: admissionTerm.endDate,
+                    termId: admissionTerm.id,
                     size: 100,
                   ),
                 ) ??

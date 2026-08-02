@@ -28,6 +28,7 @@ class AdmissionsApiClient {
     String personType = 'STUDENT',
     String? startDate,
     String? endDate,
+    int? termId,
     int page = 0,
     int size = 100,
   }) async {
@@ -38,6 +39,7 @@ class AdmissionsApiClient {
         'personType': personType,
         if (startDate != null) 'startDate': '${startDate}T00:00:00',
         if (endDate != null) 'endDate': '${endDate}T23:59:59',
+        if (termId != null) 'termId': '$termId',
         'page': '$page',
         'size': '$size',
       }),
