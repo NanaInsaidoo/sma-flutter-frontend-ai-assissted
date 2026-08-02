@@ -117,6 +117,7 @@ class FeeApiClient {
     required double amount,
     required String description,
     String status = 'PENDING',
+    int? approverId,
   }) async {
     final response = await _send(
       'POST',
@@ -128,6 +129,39 @@ class FeeApiClient {
         'amount': amount,
         'description': description.trim(),
         'status': status,
+        if (approverId != null) 'approverId': approverId,
+      },
+    );
+    return FeeAdjustment.fromJson(_decodeMap(response));
+  }
+
+  Future<List<FeeAdjustmentApprover>> getFeeAdjustmentApprovers(
+    String customSchoolId,
+  ) async {
+    final response = await _send(
+      'GET',
+      '/api/schools/$customSchoolId/fee-adjustments/approvers',
+    );
+    return _extractList(_decode(response))
+        .whereType<Map<String, dynamic>>()
+        .map(FeeAdjustmentApprover.fromJson)
+        .toList();
+  }
+
+  Future<FeeAdjustment> performFeeAdjustmentAction({
+    required String customSchoolId,
+    required int adjustmentId,
+    required String action,
+    required String reason,
+    int? approverId,
+  }) async {
+    final response = await _send(
+      'POST',
+      '/api/schools/$customSchoolId/fee-adjustments/$adjustmentId/actions',
+      body: {
+        'action': action,
+        'reason': reason.trim(),
+        if (approverId != null) 'approverId': approverId,
       },
     );
     return FeeAdjustment.fromJson(_decodeMap(response));

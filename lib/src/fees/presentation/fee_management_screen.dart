@@ -29,6 +29,7 @@ class FeeManagementScreen extends StatefulWidget {
     required this.accessToken,
     this.onRefreshAccessToken,
     this.role,
+    this.userId,
     this.openRecordPaymentOnLoad = false,
     this.onRecordPaymentRequestConsumed,
   });
@@ -38,6 +39,7 @@ class FeeManagementScreen extends StatefulWidget {
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
   final String? role;
+  final int? userId;
   final bool openRecordPaymentOnLoad;
   final VoidCallback? onRecordPaymentRequestConsumed;
 
@@ -250,6 +252,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
         api: _api,
         customSchoolId: widget.customSchoolId,
         termId: _activeTermId,
+        currentUserId: widget.userId ?? 0,
         onChanged: _reloadFees,
       ),
       _FeeTab.classRequirements =>

@@ -208,6 +208,9 @@ class FeeAdjustment {
     required this.updatedByType,
     required this.updatedById,
     required this.updatedDate,
+    required this.assignedApproverId,
+    required this.assignedApproverName,
+    required this.history,
   });
 
   final int id;
@@ -229,6 +232,9 @@ class FeeAdjustment {
   final String updatedByType;
   final int updatedById;
   final DateTime? updatedDate;
+  final int assignedApproverId;
+  final String assignedApproverName;
+  final List<FeeAdjustmentAction> history;
 
   factory FeeAdjustment.fromJson(Map<String, dynamic> json) {
     final student = json['student'];
@@ -257,8 +263,60 @@ class FeeAdjustment {
       updatedByType: '${json['updatedByType'] ?? ''}',
       updatedById: _intValue(json['updatedById']),
       updatedDate: _dateValue(json['updatedDate'] ?? json['updatedAt']),
+      assignedApproverId: _intValue(json['assignedApproverId']),
+      assignedApproverName: '${json['assignedApproverName'] ?? ''}',
+      history: (json['history'] is List ? json['history'] as List : const [])
+          .whereType<Map<String, dynamic>>()
+          .map(FeeAdjustmentAction.fromJson)
+          .toList(),
     );
   }
+}
+
+class FeeAdjustmentApprover {
+  const FeeAdjustmentApprover({
+    required this.id,
+    required this.name,
+    required this.role,
+  });
+  final int id;
+  final String name;
+  final String role;
+  factory FeeAdjustmentApprover.fromJson(Map<String, dynamic> json) =>
+      FeeAdjustmentApprover(
+        id: _intValue(json['id']),
+        name: '${json['name'] ?? ''}',
+        role: '${json['role'] ?? ''}',
+      );
+}
+
+class FeeAdjustmentAction {
+  const FeeAdjustmentAction({
+    required this.action,
+    required this.previousStatus,
+    required this.newStatus,
+    required this.actorId,
+    required this.actorRole,
+    required this.reason,
+    required this.createdAt,
+  });
+  final String action;
+  final String previousStatus;
+  final String newStatus;
+  final int actorId;
+  final String actorRole;
+  final String reason;
+  final DateTime? createdAt;
+  factory FeeAdjustmentAction.fromJson(Map<String, dynamic> json) =>
+      FeeAdjustmentAction(
+        action: '${json['action'] ?? ''}',
+        previousStatus: '${json['previousStatus'] ?? ''}',
+        newStatus: '${json['newStatus'] ?? ''}',
+        actorId: _intValue(json['actorId']),
+        actorRole: '${json['actorRole'] ?? ''}',
+        reason: '${json['reason'] ?? ''}',
+        createdAt: _dateValue(json['createdAt']),
+      );
 }
 
 class FeeAdjustmentsPage {

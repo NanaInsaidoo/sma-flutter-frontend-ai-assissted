@@ -28,6 +28,7 @@ void main() {
               api: api,
               customSchoolId: 'SCH-001',
               termId: 44,
+              currentUserId: 12,
             ),
           ),
         ),
@@ -75,10 +76,10 @@ void main() {
       accessToken: 'token',
       client: MockClient((request) async {
         requests.add(request);
-        if (request.method == 'PUT') {
+        if (request.method == 'POST' && request.url.path.endsWith('/actions')) {
           final body = jsonDecode(request.body) as Map<String, dynamic>;
-          expect(body['id'], 42);
-          expect(body['status'], 'APPROVED');
+          expect(body['action'], 'APPROVE');
+          expect(body['reason'], 'Reviewed and confirmed');
           approved = true;
           return http.Response(_adjustmentJson(status: 'APPROVED'), 200);
         }
@@ -96,11 +97,23 @@ void main() {
 
     await tester.tap(find.byKey(const Key('adjustment-action-approve')));
     await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byType(TextField).last,
+      'Reviewed and confirmed',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Approve'));
+    await tester.pumpAndSettle();
 
     expect(approved, isTrue);
     expect(find.text('Adjustment approved.'), findsOneWidget);
     expect(find.text('Approved'), findsWidgets);
-    expect(requests.where((request) => request.method == 'PUT'), hasLength(1));
+    expect(
+      requests.where(
+        (request) =>
+            request.method == 'POST' && request.url.path.endsWith('/actions'),
+      ),
+      hasLength(1),
+    );
   });
 
   testWidgets('shows a useful empty state without fallback records', (
@@ -143,6 +156,8 @@ String _adjustmentJson({required String status}) =>
   "status": "$status",
   "createdByType": "ADMINISTRATOR",
   "createdById": 7,
+  "assignedApproverId": 12,
+  "assignedApproverName": "Efua Nyarko",
   "createdDate": "2026-07-18T10:30:00",
   "updatedByType": "",
   "updatedById": null,

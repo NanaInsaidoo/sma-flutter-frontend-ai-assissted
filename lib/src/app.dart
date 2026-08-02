@@ -292,6 +292,7 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
       schoolName: session?.schoolName,
       userDisplayName: session?.displayName,
       role: session?.role,
+      userId: session?.userId,
       accessToken: session?.accessToken,
       onRefreshAccessToken: _refreshAccessToken,
       onLogout: _logout,

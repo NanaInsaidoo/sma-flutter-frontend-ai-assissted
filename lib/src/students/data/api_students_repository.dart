@@ -35,6 +35,38 @@ class ApiStudentsRepository implements StudentsRepository {
   String? _accessToken;
 
   @override
+  Future<List<FeeAdjustmentApprover>> getFeeAdjustmentApprovers() =>
+      _fees.getFeeAdjustmentApprovers(customSchoolId);
+
+  @override
+  Future<StudentFeeAdjustment> createFeeAdjustment({
+    required String customStudentId,
+    required int termId,
+    required int feeId,
+    required StudentFeeAdjustmentType type,
+    required double amount,
+    required String description,
+    required StudentFeeAdjustmentStatus status,
+    int? approverId,
+  }) async {
+    final created = await _fees.createFeeAdjustment(
+      customSchoolId: customSchoolId,
+      customStudentId: customStudentId,
+      termId: termId,
+      feeId: feeId,
+      amount: type == StudentFeeAdjustmentType.discount
+          ? -amount.abs()
+          : amount.abs(),
+      description: description,
+      status: status == StudentFeeAdjustmentStatus.draft
+          ? 'DRAFT'
+          : 'PENDING_APPROVAL',
+      approverId: approverId,
+    );
+    return _studentAdjustment(created);
+  }
+
+  @override
   Future<List<EnrolledStudent>> getEnrolledStudents() async {
     final term = await _admissions.getCurrentTerm(customSchoolId);
     final students = await _admissions.getStudents(
@@ -311,6 +343,7 @@ class ApiStudentsRepository implements StudentsRepository {
           )
           .toList(),
       activity: const [],
+      feeTermId: feeAccount?.termId ?? term.id ?? 0,
     );
   }
 
@@ -523,8 +556,12 @@ List<StudentFeeItem> _feeItems(FeeStudentAccount? account) {
   if (account == null) return const [];
   return account.assessments
       .map(
-        (item) =>
-            StudentFeeItem(name: item.feeName, amount: item.amount, paid: 0),
+        (item) => StudentFeeItem(
+          id: item.assessmentId,
+          name: item.feeName,
+          amount: item.amount,
+          paid: 0,
+        ),
       )
       .toList();
 }
@@ -550,6 +587,22 @@ List<StudentFeeAdjustment> _feeAdjustments(FeeStudentAccount? account) {
       createdBy: 'School administration',
     );
   }).toList();
+}
+
+StudentFeeAdjustment _studentAdjustment(FeeAdjustment item) {
+  final type = item.adjustmentType.toUpperCase();
+  return StudentFeeAdjustment(
+    id: '${item.id}',
+    feeName: item.feeName,
+    type: type.contains('SURCHARGE') || item.amount > 0
+        ? StudentFeeAdjustmentType.surcharge
+        : StudentFeeAdjustmentType.discount,
+    amount: item.amount.abs(),
+    description: item.description,
+    status: _adjustmentStatus(item.status),
+    createdOn: item.createdDate ?? DateTime.now(),
+    createdBy: item.createdByType,
+  );
 }
 
 List<StudentPayment> _payments(FeeStudentAccount? account) {

@@ -41,6 +41,7 @@ class AdministratorDashboard extends StatefulWidget {
     this.schoolName,
     this.userDisplayName,
     this.role,
+    this.userId,
     this.accessToken,
     this.onRefreshAccessToken,
     this.onLogout,
@@ -51,6 +52,7 @@ class AdministratorDashboard extends StatefulWidget {
   final String? schoolName;
   final String? userDisplayName;
   final String? role;
+  final int? userId;
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
   final VoidCallback? onLogout;
@@ -161,6 +163,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                         onRefresh: _refresh,
                         userDisplayName: widget.userDisplayName,
                         role: widget.role,
+                        userId: widget.userId,
                         selectedPage: _selectedPage,
                         onSelectPage: _selectPage,
                         schoolId: _schoolId,
@@ -214,6 +217,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                 onRefresh: _refresh,
                 userDisplayName: widget.userDisplayName,
                 role: widget.role,
+                userId: widget.userId,
                 showMenu: true,
                 selectedPage: _selectedPage,
                 onSelectPage: _selectPage,
@@ -253,6 +257,7 @@ class _DashboardBody extends StatelessWidget {
     required this.onRefresh,
     this.userDisplayName,
     this.role,
+    this.userId,
     this.showMenu = false,
     required this.selectedPage,
     required this.onSelectPage,
@@ -278,6 +283,7 @@ class _DashboardBody extends StatelessWidget {
   final VoidCallback onRefresh;
   final String? userDisplayName;
   final String? role;
+  final int? userId;
   final bool showMenu;
   final _SchoolAdminPage selectedPage;
   final ValueChanged<_SchoolAdminPage> onSelectPage;
@@ -394,6 +400,7 @@ class _DashboardBody extends StatelessWidget {
         accessToken: accessToken,
         onRefreshAccessToken: onRefreshAccessToken,
         role: role,
+        userId: userId,
         openRecordPaymentOnLoad: openRecordPaymentOnNextFees,
         onRecordPaymentRequestConsumed: onRecordPaymentRequestConsumed,
       );

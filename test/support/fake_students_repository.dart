@@ -1,4 +1,5 @@
 import 'package:school_management_app/src/students/domain/student_models.dart';
+import 'package:school_management_app/src/fees/domain/fee_models.dart';
 
 class FakeStudentsRepository implements StudentsRepository {
   const FakeStudentsRepository();
@@ -209,6 +210,37 @@ class FakeStudentsRepository implements StudentsRepository {
     await Future<void>.delayed(const Duration(milliseconds: 120));
     return _students.firstWhere((student) => student.id == studentId);
   }
+
+  @override
+  Future<List<FeeAdjustmentApprover>> getFeeAdjustmentApprovers() async =>
+      const [
+        FeeAdjustmentApprover(
+          id: 12,
+          name: 'Efua Nyarko',
+          role: 'ADMINISTRATOR',
+        ),
+      ];
+
+  @override
+  Future<StudentFeeAdjustment> createFeeAdjustment({
+    required String customStudentId,
+    required int termId,
+    required int feeId,
+    required StudentFeeAdjustmentType type,
+    required double amount,
+    required String description,
+    required StudentFeeAdjustmentStatus status,
+    int? approverId,
+  }) async => StudentFeeAdjustment(
+    id: 'ADJ-SERVER-1',
+    feeName: 'Tuition fee',
+    type: type,
+    amount: amount,
+    description: description,
+    status: status,
+    createdOn: DateTime(2026, 7, 19),
+    createdBy: 'Current administrator',
+  );
 }
 
 EnrolledStudent _student({
@@ -238,6 +270,7 @@ EnrolledStudent _student({
   final ictPaid = (paid - tuitionPaid - ptaPaid).clamp(0, 100).toDouble();
   return EnrolledStudent(
     id: id,
+    feeTermId: 44,
     name: name,
     className: className,
     gender: gender,
@@ -327,9 +360,19 @@ EnrolledStudent _student({
       StudentAttendanceEntry(date: DateTime(2026, 7, 13), status: 'Present'),
     ],
     fees: [
-      StudentFeeItem(name: 'Tuition fee', amount: 450, paid: tuitionPaid),
-      StudentFeeItem(name: 'PTA levy', amount: 50, paid: ptaPaid),
-      StudentFeeItem(name: 'ICT / Computer', amount: 100, paid: ictPaid),
+      StudentFeeItem(
+        id: 501,
+        name: 'Tuition fee',
+        amount: 450,
+        paid: tuitionPaid,
+      ),
+      StudentFeeItem(id: 502, name: 'PTA levy', amount: 50, paid: ptaPaid),
+      StudentFeeItem(
+        id: 503,
+        name: 'ICT / Computer',
+        amount: 100,
+        paid: ictPaid,
+      ),
     ],
     feeAdjustments: feeAdjustments,
     payments: [

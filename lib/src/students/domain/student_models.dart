@@ -1,3 +1,5 @@
+import '../../fees/domain/fee_models.dart';
+
 enum EnrolledStudentStatus { active, inactive, transferred }
 
 class EnrolledStudent {
@@ -35,6 +37,7 @@ class EnrolledStudent {
     required this.requirements,
     required this.documents,
     required this.activity,
+    this.feeTermId = 0,
   });
 
   final String id;
@@ -70,6 +73,7 @@ class EnrolledStudent {
   final List<StudentRequirement> requirements;
   final List<StudentDocument> documents;
   final List<StudentActivity> activity;
+  final int feeTermId;
 
   int get requirementsOutstanding =>
       (requirementsTotal - requirementsCompleted).clamp(0, requirementsTotal);
@@ -151,10 +155,12 @@ class StudentAttendanceEntry {
 
 class StudentFeeItem {
   const StudentFeeItem({
+    this.id = 0,
     required this.name,
     required this.amount,
     required this.paid,
   });
+  final int id;
 
   final String name;
   final double amount;
@@ -296,4 +302,17 @@ abstract interface class StudentsRepository {
   Future<List<EnrolledStudent>> getEnrolledStudents();
 
   Future<EnrolledStudent> getStudent(String studentId);
+
+  Future<List<FeeAdjustmentApprover>> getFeeAdjustmentApprovers();
+
+  Future<StudentFeeAdjustment> createFeeAdjustment({
+    required String customStudentId,
+    required int termId,
+    required int feeId,
+    required StudentFeeAdjustmentType type,
+    required double amount,
+    required String description,
+    required StudentFeeAdjustmentStatus status,
+    int? approverId,
+  });
 }

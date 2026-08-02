@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../theme/app_theme.dart';
 import '../domain/student_models.dart';
+import '../../fees/domain/fee_models.dart';
 
 const _allClasses = 'All classes';
 const _allStatuses = 'All statuses';
@@ -105,6 +106,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
             onBack: _closeStudent,
             onOpenStudent: _openStudent,
             onOpenHousehold: widget.onOpenHousehold,
+            repository: widget.repository,
           );
         },
       );
@@ -117,6 +119,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         onBack: _closeStudent,
         onOpenStudent: _openStudent,
         onOpenHousehold: widget.onOpenHousehold,
+        repository: widget.repository,
       );
     }
 
@@ -1005,6 +1008,7 @@ class StudentProfileView extends StatefulWidget {
     required this.onBack,
     required this.onOpenStudent,
     this.onOpenHousehold,
+    this.repository,
   });
 
   final EnrolledStudent student;
@@ -1013,6 +1017,7 @@ class StudentProfileView extends StatefulWidget {
   final VoidCallback onBack;
   final ValueChanged<String> onOpenStudent;
   final VoidCallback? onOpenHousehold;
+  final StudentsRepository? repository;
 
   @override
   State<StudentProfileView> createState() => _StudentProfileViewState();
@@ -1066,6 +1071,7 @@ class _StudentProfileViewState extends State<StudentProfileView> {
                   student: widget.student,
                   term: widget.term,
                   academicYear: widget.academicYear,
+                  repository: widget.repository,
                 ),
                 _StudentProfileTab.requirements => _RequirementsTab(
                   student: widget.student,
@@ -1720,11 +1726,13 @@ class _FeesTab extends StatefulWidget {
     required this.student,
     required this.term,
     required this.academicYear,
+    this.repository,
   });
 
   final EnrolledStudent student;
   final String term;
   final String academicYear;
+  final StudentsRepository? repository;
 
   @override
   State<_FeesTab> createState() => _FeesTabState();
@@ -1771,6 +1779,12 @@ class _FeesTabState extends State<_FeesTab> {
   double get _balance => (_adjustedFees - _paid).clamp(0, double.infinity);
 
   Future<void> _openAdjustmentForm([StudentFeeAdjustment? existing]) async {
+    if (widget.repository == null) {
+      _showAdjustmentMessage('Fee adjustments are unavailable from this view.');
+      return;
+    }
+    final approvers = await widget.repository!.getFeeAdjustmentApprovers();
+    if (!mounted) return;
     final adjustment = await showGeneralDialog<StudentFeeAdjustment>(
       context: context,
       barrierDismissible: false,
@@ -1784,6 +1798,8 @@ class _FeesTabState extends State<_FeesTab> {
           term: widget.term,
           academicYear: widget.academicYear,
           currentAdjustments: _adjustments,
+          repository: widget.repository!,
+          approvers: approvers,
           initialAdjustment: existing,
         ),
       ),
@@ -1818,6 +1834,9 @@ class _FeesTabState extends State<_FeesTab> {
   }
 
   Future<void> _openReversalForm(StudentFeeAdjustment original) async {
+    if (widget.repository == null) return;
+    final approvers = await widget.repository!.getFeeAdjustmentApprovers();
+    if (!mounted) return;
     final reversal = await showGeneralDialog<StudentFeeAdjustment>(
       context: context,
       barrierDismissible: false,
@@ -1831,6 +1850,8 @@ class _FeesTabState extends State<_FeesTab> {
           term: widget.term,
           academicYear: widget.academicYear,
           currentAdjustments: _adjustments,
+          repository: widget.repository!,
+          approvers: approvers,
           reversingAdjustment: original,
         ),
       ),
@@ -2386,30 +2407,9 @@ class _AdjustmentHistoryRow extends StatelessWidget {
   final StudentFeeAdjustment adjustment;
   final ValueChanged<_StudentAdjustmentAction> onAction;
 
-  List<_StudentAdjustmentAction> get _actions => switch (adjustment.status) {
-    StudentFeeAdjustmentStatus.draft => const [
-      _StudentAdjustmentAction.edit,
-      _StudentAdjustmentAction.submit,
-      _StudentAdjustmentAction.delete,
-    ],
-    StudentFeeAdjustmentStatus.pending => const [
-      _StudentAdjustmentAction.edit,
-      _StudentAdjustmentAction.withdraw,
-      _StudentAdjustmentAction.delete,
-    ],
-    StudentFeeAdjustmentStatus.changesRequested => const [
-      _StudentAdjustmentAction.edit,
-      _StudentAdjustmentAction.resubmit,
-      _StudentAdjustmentAction.delete,
-    ],
-    StudentFeeAdjustmentStatus.approved => const [
-      _StudentAdjustmentAction.reverse,
-    ],
-    StudentFeeAdjustmentStatus.rejected => const [
-      _StudentAdjustmentAction.duplicate,
-    ],
-    _ => const [],
-  };
+  // Workflow mutations are deliberately centralized in Fees > Adjustments so
+  // they always use the server-side approval rules and immutable audit trail.
+  List<_StudentAdjustmentAction> get _actions => const [];
 
   @override
   Widget build(BuildContext context) {
@@ -2665,6 +2665,8 @@ class _FeeAdjustmentSheet extends StatefulWidget {
     required this.term,
     required this.academicYear,
     required this.currentAdjustments,
+    required this.repository,
+    required this.approvers,
     this.initialAdjustment,
     this.reversingAdjustment,
   });
@@ -2673,6 +2675,8 @@ class _FeeAdjustmentSheet extends StatefulWidget {
   final String term;
   final String academicYear;
   final List<StudentFeeAdjustment> currentAdjustments;
+  final StudentsRepository repository;
+  final List<FeeAdjustmentApprover> approvers;
   final StudentFeeAdjustment? initialAdjustment;
   final StudentFeeAdjustment? reversingAdjustment;
 
@@ -2687,6 +2691,8 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
   String? _feeName;
   StudentFeeAdjustmentType _type = StudentFeeAdjustmentType.discount;
   StudentFeeAdjustmentStatus _status = StudentFeeAdjustmentStatus.pending;
+  int? _approverId;
+  bool _saving = false;
 
   @override
   void initState() {
@@ -2739,28 +2745,30 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
     return (original + existingAdjustments).clamp(0, double.infinity);
   }
 
-  void _save() {
+  Future<void> _save() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     final amount = double.parse(_amountController.text.trim());
-    Navigator.of(context).pop(
-      StudentFeeAdjustment(
-        id: widget.reversingAdjustment != null
-            ? 'REV-${DateTime.now().millisecondsSinceEpoch}'
-            : widget.initialAdjustment?.id ??
-                  'ADJ-${DateTime.now().millisecondsSinceEpoch}',
-        feeName: _feeName!,
+    final fee = widget.student.fees.firstWhere((item) => item.name == _feeName);
+    setState(() => _saving = true);
+    try {
+      final result = await widget.repository.createFeeAdjustment(
+        customStudentId: widget.student.id,
+        termId: widget.student.feeTermId,
+        feeId: fee.id,
         type: _type,
         amount: amount,
         description: _reasonController.text.trim(),
         status: _status,
-        createdOn: widget.reversingAdjustment != null
-            ? DateTime.now()
-            : widget.initialAdjustment?.createdOn ?? DateTime.now(),
-        createdBy: widget.reversingAdjustment != null
-            ? 'Current administrator'
-            : widget.initialAdjustment?.createdBy ?? 'Current administrator',
-      ),
-    );
+        approverId: _approverId,
+      );
+      if (mounted) Navigator.of(context).pop(result);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$error'), backgroundColor: AppColors.red),
+      );
+    }
   }
 
   @override
@@ -2853,12 +2861,9 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
                             labelText: 'Fee item *',
                           ),
                           items: [
-                            const DropdownMenuItem(
-                              value: _FeesTabState._overallFeeAccount,
-                              child: Text('Overall fee account'),
-                            ),
                             ...widget.student.fees.map(
                               (fee) => DropdownMenuItem(
+                                key: Key('adjustment-fee-option-${fee.id}'),
                                 value: fee.name,
                                 child: Text(
                                   '${fee.name} · ${_money(fee.amount)}',
@@ -2986,6 +2991,34 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
                             onChanged: (value) =>
                                 setState(() => _status = value!),
                           ),
+                        if (!reversing &&
+                            _status == StudentFeeAdjustmentStatus.pending) ...[
+                          const SizedBox(height: 12),
+                          DropdownButtonFormField<int>(
+                            key: const Key('adjustment-approver'),
+                            isExpanded: true,
+                            value: _approverId,
+                            decoration: const InputDecoration(
+                              labelText: 'Assigned approver *',
+                            ),
+                            items: widget.approvers
+                                .map(
+                                  (item) => DropdownMenuItem(
+                                    value: item.id,
+                                    child: Text(
+                                      '${item.name} · ${item.role.replaceAll('_', ' ')}',
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                            validator: (value) => value == null
+                                ? 'Select the person who must approve this request'
+                                : null,
+                            onChanged: (value) =>
+                                setState(() => _approverId = value),
+                          ),
+                        ],
                         const SizedBox(height: 12),
                         Container(
                           padding: const EdgeInsets.all(13),
@@ -3039,9 +3072,9 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
                     Expanded(
                       child: FilledButton.icon(
                         key: const Key('save-fee-adjustment'),
-                        onPressed: _save,
+                        onPressed: _saving ? null : _save,
                         icon: const Icon(Icons.check_rounded),
-                        label: Text(actionLabel),
+                        label: Text(_saving ? 'Saving...' : actionLabel),
                       ),
                     ),
                   ],

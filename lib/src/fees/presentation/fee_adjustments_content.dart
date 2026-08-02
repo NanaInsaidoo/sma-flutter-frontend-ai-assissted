@@ -10,12 +10,14 @@ class FeeAdjustmentsContent extends StatefulWidget {
     required this.api,
     required this.customSchoolId,
     required this.termId,
+    this.currentUserId = 0,
     this.onChanged,
   });
 
   final FeeApiClient api;
   final String customSchoolId;
   final int termId;
+  final int currentUserId;
   final Future<void> Function()? onChanged;
 
   @override
@@ -121,6 +123,7 @@ class _FeeAdjustmentsContentState extends State<FeeAdjustmentsContent> {
         alignment: Alignment.centerRight,
         child: _AdjustmentReviewPanel(
           adjustment: adjustment,
+          currentUserId: widget.currentUserId,
           onAction: (action) {
             Navigator.of(context).pop();
             _handleAction(adjustment, action);
@@ -145,58 +148,135 @@ class _FeeAdjustmentsContentState extends State<FeeAdjustmentsContent> {
     FeeAdjustment adjustment,
     _ReviewAction action,
   ) async {
-    if (action == _ReviewAction.delete) {
-      final confirmed = await _confirm(
-        title: 'Delete draft adjustment?',
-        message: 'This permanently removes the unsubmitted adjustment.',
-        actionLabel: 'Delete',
-      );
-      if (!confirmed) return;
-      await _mutate(
-        () => widget.api.deleteFeeAdjustment(
-          customSchoolId: widget.customSchoolId,
-          adjustmentId: adjustment.id,
-        ),
-        'Draft adjustment deleted.',
-      );
+    final selection =
+        action == _ReviewAction.submit || action == _ReviewAction.reassign
+        ? await _requestApproverAndReason(action)
+        : null;
+    if ((action == _ReviewAction.submit || action == _ReviewAction.reassign) &&
+        selection == null) {
       return;
     }
-
-    final nextStatus = switch (action) {
-      _ReviewAction.submit => 'PENDING',
-      _ReviewAction.approve => 'APPROVED',
-      _ReviewAction.reject => 'REJECTED',
-      _ReviewAction.complete => 'COMPLETE',
-      _ReviewAction.cancel => 'CANCELLED',
-      _ReviewAction.delete => adjustment.status,
-    };
-    if (action == _ReviewAction.reject || action == _ReviewAction.cancel) {
-      final confirmed = await _confirm(
-        title: action == _ReviewAction.reject
-            ? 'Reject adjustment?'
-            : 'Cancel adjustment?',
-        message: action == _ReviewAction.reject
-            ? 'The adjustment will not affect the student fee balance.'
-            : 'The adjustment will remain visible as a cancelled audit record.',
-        actionLabel: action == _ReviewAction.reject ? 'Reject' : 'Cancel',
-      );
-      if (!confirmed) return;
-    }
+    final reason = selection?.reason ?? await _requestReason(action);
+    if (reason == null) return;
     await _mutate(
-      () => widget.api.updateFeeAdjustment(
+      () => widget.api.performFeeAdjustmentAction(
         customSchoolId: widget.customSchoolId,
         adjustmentId: adjustment.id,
-        status: nextStatus,
+        action: action.name.toUpperCase(),
+        reason: reason,
+        approverId: selection?.approverId,
       ),
       switch (action) {
         _ReviewAction.submit => 'Adjustment submitted for approval.',
+        _ReviewAction.reassign => 'Approver changed.',
         _ReviewAction.approve => 'Adjustment approved.',
         _ReviewAction.reject => 'Adjustment rejected.',
-        _ReviewAction.complete => 'Adjustment marked complete.',
         _ReviewAction.cancel => 'Adjustment cancelled.',
-        _ReviewAction.delete => 'Adjustment deleted.',
       },
     );
+  }
+
+  Future<String?> _requestReason(_ReviewAction action) async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('${_actionLabel(action)}?'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 500,
+          maxLines: 3,
+          decoration: const InputDecoration(labelText: 'Reason *'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Back'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (controller.text.trim().isNotEmpty) {
+                Navigator.pop(context, controller.text.trim());
+              }
+            },
+            child: Text(_actionLabel(action)),
+          ),
+        ],
+      ),
+    );
+    return result;
+  }
+
+  Future<_ApproverSelection?> _requestApproverAndReason(
+    _ReviewAction action,
+  ) async {
+    final approvers = await widget.api.getFeeAdjustmentApprovers(
+      widget.customSchoolId,
+    );
+    if (!mounted) return null;
+    int? selectedId;
+    final controller = TextEditingController();
+    final result = await showDialog<_ApproverSelection>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(_actionLabel(action)),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<int>(
+                  value: selectedId,
+                  decoration: const InputDecoration(
+                    labelText: 'Assigned approver *',
+                  ),
+                  items: approvers
+                      .where((item) => item.id != widget.currentUserId)
+                      .map(
+                        (item) => DropdownMenuItem(
+                          value: item.id,
+                          child: Text(
+                            '${item.name} · ${item.role.replaceAll('_', ' ')}',
+                          ),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) =>
+                      setDialogState(() => selectedId = value),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller,
+                  maxLength: 500,
+                  maxLines: 3,
+                  decoration: const InputDecoration(labelText: 'Reason *'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Back'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (selectedId != null && controller.text.trim().isNotEmpty) {
+                  Navigator.pop(
+                    context,
+                    _ApproverSelection(selectedId!, controller.text.trim()),
+                  );
+                }
+              },
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      ),
+    );
+    return result;
   }
 
   Future<void> _mutate(
@@ -217,31 +297,6 @@ class _FeeAdjustmentsContentState extends State<FeeAdjustmentsContent> {
         );
       }
     }
-  }
-
-  Future<bool> _confirm({
-    required String title,
-    required String message,
-    required String actionLabel,
-  }) async {
-    return await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: Text(title),
-            content: Text(message),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Keep adjustment'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: Text(actionLabel),
-              ),
-            ],
-          ),
-        ) ??
-        false;
   }
 
   void _notify(String message) {
@@ -315,7 +370,7 @@ class _FeeAdjustmentsContentState extends State<FeeAdjustmentsContent> {
                   _AdjustmentMetric(
                     width: cardWidth,
                     label: 'Pending on this page',
-                    value: _count('PENDING'),
+                    value: _count('PENDING') + _count('PENDING_APPROVAL'),
                     color: AppColors.amber,
                   ),
                   _AdjustmentMetric(
@@ -603,24 +658,43 @@ class _FeeAdjustmentsContentState extends State<FeeAdjustmentsContent> {
 
 enum _AdjustmentKind { discount, surcharge }
 
-enum _ReviewAction { submit, approve, reject, complete, cancel, delete }
+enum _ReviewAction { submit, reassign, approve, reject, cancel }
+
+class _ApproverSelection {
+  const _ApproverSelection(this.approverId, this.reason);
+  final int approverId;
+  final String reason;
+}
 
 class _AdjustmentReviewPanel extends StatelessWidget {
   const _AdjustmentReviewPanel({
     required this.adjustment,
+    required this.currentUserId,
     required this.onAction,
   });
 
   final FeeAdjustment adjustment;
+  final int currentUserId;
   final ValueChanged<_ReviewAction> onAction;
 
   @override
   Widget build(BuildContext context) {
     final status = adjustment.status.trim().toUpperCase();
+    final isCreator = adjustment.createdById == currentUserId;
+    final isApprover = adjustment.assignedApproverId == currentUserId;
     final actions = switch (status) {
-      'DRAFT' => const [_ReviewAction.submit, _ReviewAction.delete],
-      'PENDING' => const [_ReviewAction.approve, _ReviewAction.reject],
-      'APPROVED' => const [_ReviewAction.complete, _ReviewAction.cancel],
+      'DRAFT' when isCreator => const [
+        _ReviewAction.submit,
+        _ReviewAction.cancel,
+      ],
+      'PENDING' || 'PENDING_APPROVAL' when isCreator => const [
+        _ReviewAction.reassign,
+        _ReviewAction.cancel,
+      ],
+      'PENDING' || 'PENDING_APPROVAL' when isApprover => const [
+        _ReviewAction.approve,
+        _ReviewAction.reject,
+      ],
       _ => const <_ReviewAction>[],
     };
     return Material(
@@ -708,6 +782,13 @@ class _AdjustmentReviewPanel extends StatelessWidget {
                         ),
                       ),
                       _ReviewInfo(
+                        label: 'Assigned approver',
+                        value: _provided(
+                          adjustment.assignedApproverName,
+                          'Not assigned',
+                        ),
+                      ),
+                      _ReviewInfo(
                         label: 'Created',
                         value:
                             '${_createdBy(adjustment)} · ${_date(adjustment.createdDate)}',
@@ -718,6 +799,26 @@ class _AdjustmentReviewPanel extends StatelessWidget {
                           value:
                               '${_updatedBy(adjustment)} · ${_date(adjustment.updatedDate)}',
                         ),
+                      if (adjustment.history.isNotEmpty) ...[
+                        const SizedBox(height: 16),
+                        const Text(
+                          'Action history',
+                          style: TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 8),
+                        ...adjustment.history.map(
+                          (item) => Padding(
+                            padding: const EdgeInsets.only(bottom: 7),
+                            child: Text(
+                              '${item.action.replaceAll('_', ' ')} · ${item.actorRole.replaceAll('_', ' ')} · ${item.reason}',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppColors.muted,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 12),
                       Container(
                         padding: const EdgeInsets.all(14),
@@ -745,8 +846,7 @@ class _AdjustmentReviewPanel extends StatelessWidget {
                     children: actions.map((action) {
                       final primary =
                           action == _ReviewAction.approve ||
-                          action == _ReviewAction.submit ||
-                          action == _ReviewAction.complete;
+                          action == _ReviewAction.submit;
                       return primary
                           ? FilledButton.icon(
                               key: Key('adjustment-action-${action.name}'),
@@ -950,6 +1050,7 @@ class _AdjustmentError extends StatelessWidget {
 const _statusOptions = [
   'DRAFT',
   'PENDING',
+  'PENDING_APPROVAL',
   'APPROVED',
   'REJECTED',
   'COMPLETE',
@@ -1038,9 +1139,8 @@ String _provided(String value, String otherwise) =>
 
 String _actionLabel(_ReviewAction action) => switch (action) {
   _ReviewAction.submit => 'Submit for approval',
+  _ReviewAction.reassign => 'Change approver',
   _ReviewAction.approve => 'Approve',
   _ReviewAction.reject => 'Reject',
-  _ReviewAction.complete => 'Mark complete',
   _ReviewAction.cancel => 'Cancel adjustment',
-  _ReviewAction.delete => 'Delete draft',
 };

@@ -109,7 +109,7 @@ void main() {
     expect(find.text('Basic 4B'), findsWidgets);
   });
 
-  testWidgets('shows fee statement and creates an overall pending adjustment', (
+  testWidgets('shows fee statement and creates a pending fee-item adjustment', (
     tester,
   ) async {
     await pumpStudents(tester);
@@ -143,24 +143,30 @@ void main() {
 
     await tester.tap(find.byKey(const Key('adjustment-fee-item')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Overall fee account').last);
+    final tuitionOption = find.byKey(const Key('adjustment-fee-option-501'));
+    await tester.ensureVisible(tuitionOption);
+    await tester.tap(tuitionOption);
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('adjustment-amount')), '35');
     await tester.enterText(
       find.byKey(const Key('adjustment-reason')),
       'Short-term hardship support',
     );
-    await tester.tap(find.byKey(const Key('save-fee-adjustment')));
+    await tester.tap(find.byKey(const Key('adjustment-approver')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('Efua Nyarko').last);
+    await tester.pumpAndSettle();
+    final save = find.byKey(const Key('save-fee-adjustment'));
+    await tester.ensureVisible(save);
+    await tester.tap(save);
     await tester.pumpAndSettle();
 
     expect(find.text('Short-term hardship support'), findsWidgets);
-    expect(find.textContaining('Overall fee account'), findsWidgets);
+    expect(find.textContaining('Tuition fee'), findsWidgets);
     expect(find.text('Fee adjustment submitted for approval.'), findsOneWidget);
   });
 
-  testWidgets('pending adjustment can be edited, deleted, or moved to draft', (
-    tester,
-  ) async {
+  testWidgets('student adjustment history is read-only', (tester) async {
     await pumpStudents(tester);
 
     await tester.tap(find.byKey(const Key('student-row-STU-FA1BC0-9043')));
@@ -169,42 +175,11 @@ void main() {
     await tester.pumpAndSettle();
 
     final menu = find.byKey(const Key('adjustment-menu-ADJ-1042-03'));
-    await tester.ensureVisible(menu);
-    await tester.tap(menu);
-    await tester.pumpAndSettle();
-    expect(find.text('Edit'), findsOneWidget);
-    expect(find.text('Move to draft'), findsOneWidget);
-    expect(find.text('Delete'), findsOneWidget);
-
-    await tester.tap(find.text('Edit'));
-    await tester.pumpAndSettle();
-    expect(find.text('Edit fee adjustment'), findsOneWidget);
-    final reasonField = tester.widget<EditableText>(
-      find.descendant(
-        of: find.byKey(const Key('adjustment-reason')),
-        matching: find.byType(EditableText),
-      ),
-    );
-    expect(reasonField.controller.text, 'Temporary financial support request');
-    await tester.tap(find.byTooltip('Close'));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byKey(const Key('adjustment-menu-ADJ-1042-03')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Move to draft'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Adjustment withdrawn to draft.'), findsOneWidget);
-    expect(find.text('Draft'), findsWidgets);
-
-    await tester.tap(find.byKey(const Key('adjustment-menu-ADJ-1042-03')));
-    await tester.pumpAndSettle();
-    expect(find.text('Edit'), findsOneWidget);
-    expect(find.text('Submit for approval'), findsOneWidget);
-    expect(find.text('Delete'), findsOneWidget);
+    expect(menu, findsNothing);
+    expect(find.text('Pending'), findsWidgets);
   });
 
-  testWidgets('reverses an approved adjustment with a counter entry', (
+  testWidgets('approved adjustments cannot be mutated from student profile', (
     tester,
   ) async {
     await pumpStudents(tester);
@@ -214,39 +189,7 @@ void main() {
     await tester.tap(find.byKey(const Key('student-tab-fees')));
     await tester.pumpAndSettle();
 
-    final menu = find.byKey(const Key('adjustment-menu-ADJ-1042-01'));
-    await tester.ensureVisible(menu);
-    await tester.tap(menu);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Reverse adjustment'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Reverse fee adjustment'), findsOneWidget);
-    expect(
-      find.byKey(const Key('reversing-adjustment-context')),
-      findsOneWidget,
-    );
-    expect(find.textContaining('ADJ-1042-01'), findsWidgets);
-    expect(
-      tester
-          .widget<EditableText>(
-            find.descendant(
-              of: find.byKey(const Key('adjustment-amount')),
-              matching: find.byType(EditableText),
-            ),
-          )
-          .readOnly,
-      isTrue,
-    );
-
-    await tester.tap(find.byKey(const Key('save-fee-adjustment')));
-    await tester.pumpAndSettle();
-
-    expect(
-      find.text('Adjustment reversed with an audit entry.'),
-      findsOneWidget,
-    );
-    expect(find.textContaining('Reversal of ADJ-1042-01'), findsWidgets);
-    expect(find.text('Reversed'), findsWidgets);
+    expect(find.byKey(const Key('adjustment-menu-ADJ-1042-01')), findsNothing);
+    expect(find.text('Approved'), findsWidgets);
   });
 }
