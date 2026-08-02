@@ -521,8 +521,9 @@ class _TopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
     return Container(
-      height: 70,
+      height: width >= 1000 ? 88 : 70,
       padding: const EdgeInsets.symmetric(horizontal: 24),
       decoration: const BoxDecoration(
         color: Colors.white,
@@ -547,7 +548,9 @@ class _TopBar extends StatelessWidget {
               ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
             ),
           ),
-          if (MediaQuery.sizeOf(context).width >= 600)
+          if (width >= 1000)
+            _TermContextPills(data: data)
+          else if (width >= 600)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
@@ -581,6 +584,79 @@ class _TopBar extends StatelessWidget {
   String _displayName(DashboardSnapshot data, String? userDisplayName) {
     final name = userDisplayName?.trim() ?? '';
     return name.isEmpty ? data.administratorName : name;
+  }
+}
+
+class _TermContextPills extends StatelessWidget {
+  const _TermContextPills({required this.data});
+
+  final DashboardSnapshot data;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const Key('top-term-context'),
+      padding: const EdgeInsets.all(7),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (data.academicYear.trim().isNotEmpty)
+            _TermContextPill(
+              icon: Icons.calendar_month_rounded,
+              label: data.academicYear.trim(),
+            ),
+          if (data.academicYear.trim().isNotEmpty &&
+              data.term.trim().isNotEmpty)
+            const SizedBox(width: 7),
+          if (data.term.trim().isNotEmpty)
+            _TermContextPill(icon: Icons.flag_rounded, label: data.term.trim()),
+          if (data.termDateRange.isNotEmpty) ...[
+            const SizedBox(width: 7),
+            _TermContextPill(
+              icon: Icons.calendar_today_rounded,
+              label: data.termDateRange,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TermContextPill extends StatelessWidget {
+  const _TermContextPill({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.greenSoft,
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 17, color: AppColors.green),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: const TextStyle(
+              color: AppColors.text,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
