@@ -2076,6 +2076,13 @@ class _FeesTabState extends State<_FeesTab> {
                         .map(
                           (item) => _AdjustmentHistoryRow(
                             adjustment: item,
+                            onOpen:
+                                item.status ==
+                                        StudentFeeAdjustmentStatus.draft ||
+                                    item.status ==
+                                        StudentFeeAdjustmentStatus.pending
+                                ? () => _openAdjustmentForm(item)
+                                : null,
                             onAction: (action) =>
                                 _handleAdjustmentAction(item, action),
                           ),
@@ -2492,10 +2499,12 @@ class _AdjustmentHistoryRow extends StatelessWidget {
   const _AdjustmentHistoryRow({
     required this.adjustment,
     required this.onAction,
+    this.onOpen,
   });
 
   final StudentFeeAdjustment adjustment;
   final ValueChanged<_StudentAdjustmentAction> onAction;
+  final VoidCallback? onOpen;
 
   List<_StudentAdjustmentAction> get _actions => switch (adjustment.status) {
     StudentFeeAdjustmentStatus.draft ||
@@ -2507,84 +2516,92 @@ class _AdjustmentHistoryRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = _adjustmentStatusColor(adjustment.status);
     final discount = adjustment.type == StudentFeeAdjustmentType.discount;
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 14),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: AppColors.border)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: (discount ? AppColors.green : AppColors.red).withValues(
-                alpha: .1,
+    return InkWell(
+      key: Key('adjustment-row-${adjustment.id}'),
+      onTap: onOpen,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: AppColors.border)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: (discount ? AppColors.green : AppColors.red).withValues(
+                  alpha: .1,
+                ),
+                borderRadius: BorderRadius.circular(12),
               ),
-              borderRadius: BorderRadius.circular(12),
+              child: Icon(
+                discount ? Icons.remove_rounded : Icons.add_rounded,
+                color: discount ? AppColors.green : AppColors.red,
+              ),
             ),
-            child: Icon(
-              discount ? Icons.remove_rounded : Icons.add_rounded,
-              color: discount ? AppColors.green : AppColors.red,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${adjustment.feeName} · ${discount ? 'Discount' : 'Surcharge'}',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    adjustment.description,
+                    style: const TextStyle(color: AppColors.muted),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${_formatDate(adjustment.createdOn)} · ${adjustment.createdBy} · ${adjustment.id}',
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            const SizedBox(width: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
-                  '${adjustment.feeName} · ${discount ? 'Discount' : 'Surcharge'}',
-                  style: const TextStyle(fontWeight: FontWeight.w800),
+                  _signedMoney(adjustment.signedAmount),
+                  style: TextStyle(
+                    color: discount ? AppColors.green : AppColors.red,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  adjustment.description,
-                  style: const TextStyle(color: AppColors.muted),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${_formatDate(adjustment.createdOn)} · ${adjustment.createdBy} · ${adjustment.id}',
-                  style: const TextStyle(color: AppColors.muted, fontSize: 11),
+                const SizedBox(height: 6),
+                _SmallPill(
+                  label: _adjustmentStatusLabel(adjustment.status),
+                  color: color,
                 ),
               ],
             ),
-          ),
-          const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                _signedMoney(adjustment.signedAmount),
-                style: TextStyle(
-                  color: discount ? AppColors.green : AppColors.red,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const SizedBox(height: 6),
-              _SmallPill(
-                label: _adjustmentStatusLabel(adjustment.status),
-                color: color,
+            if (_actions.isNotEmpty) ...[
+              const SizedBox(width: 5),
+              PopupMenuButton<_StudentAdjustmentAction>(
+                key: Key('adjustment-menu-${adjustment.id}'),
+                tooltip: 'Adjustment actions',
+                onSelected: onAction,
+                itemBuilder: (context) => _actions
+                    .map(
+                      (action) => PopupMenuItem(
+                        value: action,
+                        child: Text(_studentAdjustmentActionLabel(action)),
+                      ),
+                    )
+                    .toList(),
               ),
             ],
-          ),
-          if (_actions.isNotEmpty) ...[
-            const SizedBox(width: 5),
-            PopupMenuButton<_StudentAdjustmentAction>(
-              key: Key('adjustment-menu-${adjustment.id}'),
-              tooltip: 'Adjustment actions',
-              onSelected: onAction,
-              itemBuilder: (context) => _actions
-                  .map(
-                    (action) => PopupMenuItem(
-                      value: action,
-                      child: Text(_studentAdjustmentActionLabel(action)),
-                    ),
-                  )
-                  .toList(),
-            ),
           ],
-        ],
+        ),
       ),
     );
   }
@@ -2880,8 +2897,57 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
               amount: amount,
               description: _reasonController.text.trim(),
               changeReason: _changeReasonController.text.trim(),
+              approverId: _approverId,
             );
       if (mounted) Navigator.of(context).pop(result);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$error'), backgroundColor: AppColors.red),
+      );
+    }
+  }
+
+  Future<void> _cancelRequest() async {
+    final adjustment = widget.initialAdjustment;
+    if (adjustment == null) return;
+    final controller = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cancel adjustment request?'),
+        content: TextField(
+          key: const Key('cancel-adjustment-reason'),
+          controller: controller,
+          autofocus: true,
+          maxLength: 500,
+          maxLines: 3,
+          decoration: const InputDecoration(labelText: 'Reason *'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Keep request'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final value = controller.text.trim();
+              if (value.isNotEmpty) Navigator.pop(context, value);
+            },
+            child: const Text('Cancel request'),
+          ),
+        ],
+      ),
+    );
+    if (reason == null || !mounted) return;
+    setState(() => _saving = true);
+    try {
+      final cancelled = await widget.repository.cancelFeeAdjustment(
+        adjustment: adjustment,
+        reason: reason,
+      );
+      if (mounted) Navigator.of(context).pop(cancelled);
     } catch (error) {
       if (!mounted) return;
       setState(() => _saving = false);
@@ -3202,10 +3268,8 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
                             validator: (value) => value == null
                                 ? 'Select the person who must approve this request'
                                 : null,
-                            onChanged: editing
-                                ? null
-                                : (value) =>
-                                      setState(() => _approverId = value),
+                            onChanged: (value) =>
+                                setState(() => _approverId = value),
                           ),
                         ],
                         const SizedBox(height: 12),
@@ -3251,10 +3315,23 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
                 padding: const EdgeInsets.all(16),
                 child: Row(
                   children: [
+                    if (editing &&
+                        (_status == StudentFeeAdjustmentStatus.draft ||
+                            _status == StudentFeeAdjustmentStatus.pending)) ...[
+                      TextButton(
+                        key: const Key('cancel-adjustment-request'),
+                        onPressed: _saving ? null : _cancelRequest,
+                        style: TextButton.styleFrom(
+                          foregroundColor: AppColors.red,
+                        ),
+                        child: const Text('Cancel request'),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
                     Expanded(
                       child: OutlinedButton(
                         onPressed: () => Navigator.of(context).pop(),
-                        child: const Text('Cancel'),
+                        child: const Text('Close'),
                       ),
                     ),
                     const SizedBox(width: 10),

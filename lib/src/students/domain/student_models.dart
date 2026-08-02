@@ -330,5 +330,11 @@ abstract interface class StudentsRepository {
     required double amount,
     required String description,
     String? changeReason,
+    int? approverId,
+  });
+
+  Future<StudentFeeAdjustment> cancelFeeAdjustment({
+    required StudentFeeAdjustment adjustment,
+    required String reason,
   });
 }

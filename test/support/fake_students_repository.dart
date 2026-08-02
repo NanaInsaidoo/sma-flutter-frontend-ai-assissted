@@ -251,7 +251,14 @@ class FakeStudentsRepository implements StudentsRepository {
     required double amount,
     required String description,
     String? changeReason,
+    int? approverId,
   }) async => adjustment.copyWith(amount: amount, description: description);
+
+  @override
+  Future<StudentFeeAdjustment> cancelFeeAdjustment({
+    required StudentFeeAdjustment adjustment,
+    required String reason,
+  }) async => adjustment.copyWith(status: StudentFeeAdjustmentStatus.cancelled);
 }
 
 EnrolledStudent _student({

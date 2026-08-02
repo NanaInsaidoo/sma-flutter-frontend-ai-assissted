@@ -197,11 +197,18 @@ void main() {
 
     final menu = find.byKey(const Key('adjustment-menu-ADJ-1042-03'));
     expect(menu, findsOneWidget);
-    await tester.tap(menu);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Edit'));
+    await tester.tap(find.byKey(const Key('adjustment-row-ADJ-1042-03')));
     await tester.pumpAndSettle();
     expect(find.text('Edit fee adjustment'), findsOneWidget);
+    expect(find.byKey(const Key('cancel-adjustment-request')), findsOneWidget);
+    expect(
+      tester
+          .widget<DropdownButtonFormField<int>>(
+            find.byKey(const Key('adjustment-approver')),
+          )
+          .onChanged,
+      isNotNull,
+    );
     expect(find.byKey(const Key('adjustment-change-reason')), findsOneWidget);
     expect(find.byKey(const Key('adjustment-fee-preview')), findsOneWidget);
     await tester.enterText(find.byKey(const Key('adjustment-amount')), '200');

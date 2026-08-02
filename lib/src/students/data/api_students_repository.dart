@@ -75,12 +75,13 @@ class ApiStudentsRepository implements StudentsRepository {
     required double amount,
     required String description,
     String? changeReason,
+    int? approverId,
   }) async {
     final id = int.tryParse(adjustment.id);
     if (id == null) {
       throw const ApiStudentsException('The adjustment cannot be updated.');
     }
-    final updated = await _fees.updateFeeAdjustment(
+    var updated = await _fees.updateFeeAdjustment(
       customSchoolId: customSchoolId,
       adjustmentId: id,
       feeId: feeId,
@@ -90,7 +91,36 @@ class ApiStudentsRepository implements StudentsRepository {
       description: description,
       changeReason: changeReason,
     );
+    if (adjustment.status == StudentFeeAdjustmentStatus.pending &&
+        approverId != null &&
+        approverId != adjustment.assignedApproverId) {
+      updated = await _fees.performFeeAdjustmentAction(
+        customSchoolId: customSchoolId,
+        adjustmentId: id,
+        action: 'REASSIGN',
+        reason: changeReason ?? '',
+        approverId: approverId,
+      );
+    }
     return _studentAdjustment(updated);
+  }
+
+  @override
+  Future<StudentFeeAdjustment> cancelFeeAdjustment({
+    required StudentFeeAdjustment adjustment,
+    required String reason,
+  }) async {
+    final id = int.tryParse(adjustment.id);
+    if (id == null) {
+      throw const ApiStudentsException('The adjustment cannot be cancelled.');
+    }
+    final cancelled = await _fees.performFeeAdjustmentAction(
+      customSchoolId: customSchoolId,
+      adjustmentId: id,
+      action: 'CANCEL',
+      reason: reason,
+    );
+    return _studentAdjustment(cancelled);
   }
 
   @override
