@@ -1742,6 +1742,8 @@ class _FeesTabState extends State<_FeesTab> {
   static const _overallFeeAccount = 'Overall fee account';
 
   late List<StudentFeeAdjustment> _adjustments;
+  final GlobalKey _adjustmentHistoryKey = GlobalKey();
+  bool _highlightAdjustmentHistory = false;
 
   EnrolledStudent get student => widget.student;
 
@@ -1968,6 +1970,19 @@ class _FeesTabState extends State<_FeesTab> {
     );
   }
 
+  Future<void> _showPendingAdjustments() async {
+    setState(() => _highlightAdjustmentHistory = true);
+    final target = _adjustmentHistoryKey.currentContext;
+    if (target != null) {
+      await Scrollable.ensureVisible(
+        target,
+        duration: const Duration(milliseconds: 450),
+        curve: Curves.easeOutCubic,
+        alignment: .08,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final pending = _adjustments
@@ -2000,6 +2015,8 @@ class _FeesTabState extends State<_FeesTab> {
                   label: 'Net adjustments',
                   value: _signedMoney(_approvedSurcharges - _approvedDiscounts),
                   color: AppColors.purple,
+                  pendingCount: pending,
+                  onPendingTap: _showPendingAdjustments,
                 ),
                 _FeeMetric(
                   width: width,
@@ -2028,29 +2045,46 @@ class _FeesTabState extends State<_FeesTab> {
           student: student,
           adjustments: _adjustments,
           onAdjust: _openAdjustmentForm,
+          onPendingTap: _showPendingAdjustments,
         ),
         const SizedBox(height: 14),
-        _SectionCard(
-          title:
-              'Adjustment history${pending == 0 ? '' : ' · $pending pending'}',
-          icon: Icons.tune_rounded,
-          child: _adjustments.isEmpty
-              ? const _EmptyFeeState(
-                  title: 'No fee adjustments',
-                  description:
-                      'Discounts and surcharges for this student will appear here.',
-                )
-              : Column(
-                  children: _adjustments
-                      .map(
-                        (item) => _AdjustmentHistoryRow(
-                          adjustment: item,
-                          onAction: (action) =>
-                              _handleAdjustmentAction(item, action),
-                        ),
-                      )
-                      .toList(),
-                ),
+        AnimatedContainer(
+          key: _adjustmentHistoryKey,
+          duration: const Duration(milliseconds: 250),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: _highlightAdjustmentHistory
+                ? [
+                    BoxShadow(
+                      color: AppColors.amber.withValues(alpha: .35),
+                      blurRadius: 18,
+                      spreadRadius: 2,
+                    ),
+                  ]
+                : const [],
+          ),
+          child: _SectionCard(
+            title:
+                'Adjustment history${pending == 0 ? '' : ' · $pending pending'}',
+            icon: Icons.tune_rounded,
+            child: _adjustments.isEmpty
+                ? const _EmptyFeeState(
+                    title: 'No fee adjustments',
+                    description:
+                        'Discounts and surcharges for this student will appear here.',
+                  )
+                : Column(
+                    children: _adjustments
+                        .map(
+                          (item) => _AdjustmentHistoryRow(
+                            adjustment: item,
+                            onAction: (action) =>
+                                _handleAdjustmentAction(item, action),
+                          ),
+                        )
+                        .toList(),
+                  ),
+          ),
         ),
         const SizedBox(height: 14),
         _SectionCard(
@@ -2069,12 +2103,16 @@ class _FeeMetric extends StatelessWidget {
     required this.label,
     required this.value,
     required this.color,
+    this.pendingCount = 0,
+    this.onPendingTap,
   });
 
   final double width;
   final String label;
   final String value;
   final Color color;
+  final int pendingCount;
+  final VoidCallback? onPendingTap;
 
   @override
   Widget build(BuildContext context) {
@@ -2104,6 +2142,24 @@ class _FeeMetric extends StatelessWidget {
                   fontWeight: FontWeight.w800,
                 ),
               ),
+              if (pendingCount > 0) ...[
+                const SizedBox(height: 7),
+                TextButton.icon(
+                  key: const Key('pending-adjustments-summary'),
+                  onPressed: onPendingTap,
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.amber,
+                    padding: EdgeInsets.zero,
+                    minimumSize: const Size(0, 28),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  icon: const Icon(Icons.schedule_rounded, size: 15),
+                  label: Text(
+                    'Pending: $pendingCount ${pendingCount == 1 ? 'adjustment' : 'adjustments'}',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -2117,14 +2173,24 @@ class _FeeStatementCard extends StatelessWidget {
     required this.student,
     required this.adjustments,
     required this.onAdjust,
+    required this.onPendingTap,
   });
 
   final EnrolledStudent student;
   final List<StudentFeeAdjustment> adjustments;
   final VoidCallback onAdjust;
+  final VoidCallback onPendingTap;
 
   List<StudentFeeAdjustment> get _approvedAdjustments =>
       adjustments.where((item) => item.affectsBalance).toList(growable: false);
+
+  int _pendingFor(String feeName) => adjustments
+      .where(
+        (item) =>
+            item.status == StudentFeeAdjustmentStatus.pending &&
+            item.feeName == feeName,
+      )
+      .length;
 
   double get _originalTotal =>
       student.fees.fold(0, (sum, fee) => sum + fee.amount);
@@ -2190,12 +2256,15 @@ class _FeeStatementCard extends StatelessWidget {
               children: [
                 const _StatementSectionLabel('Original fee items'),
                 const SizedBox(height: 6),
-                ...student.fees.map(
-                  (fee) => _StatementLine(
+                ...student.fees.map((fee) {
+                  final pendingCount = _pendingFor(fee.name);
+                  return _StatementLine(
                     title: fee.name,
                     amount: _money(fee.amount),
-                  ),
-                ),
+                    pendingCount: pendingCount,
+                    onPendingTap: onPendingTap,
+                  );
+                }),
                 const SizedBox(height: 18),
                 const _StatementSectionLabel('Approved adjustments'),
                 const SizedBox(height: 6),
@@ -2285,6 +2354,8 @@ class _StatementLine extends StatelessWidget {
     this.subtitle,
     this.amountColor = AppColors.text,
     this.adjustment = false,
+    this.pendingCount = 0,
+    this.onPendingTap,
   });
 
   final String title;
@@ -2292,6 +2363,8 @@ class _StatementLine extends StatelessWidget {
   final String? subtitle;
   final Color amountColor;
   final bool adjustment;
+  final int pendingCount;
+  final VoidCallback? onPendingTap;
 
   @override
   Widget build(BuildContext context) {
@@ -2329,6 +2402,25 @@ class _StatementLine extends StatelessWidget {
                     style: const TextStyle(
                       color: AppColors.muted,
                       fontSize: 12,
+                    ),
+                  ),
+                ],
+                if (pendingCount > 0) ...[
+                  const SizedBox(height: 3),
+                  InkWell(
+                    key: Key('pending-fee-$title'),
+                    onTap: onPendingTap,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Text(
+                        '$pendingCount pending ${pendingCount == 1 ? 'adjustment' : 'adjustments'}',
+                        style: const TextStyle(
+                          color: AppColors.amber,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
                     ),
                   ),
                 ],

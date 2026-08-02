@@ -152,11 +152,18 @@ void main() {
       find.byKey(const Key('adjustment-reason')),
       'Short-term hardship support',
     );
+    final save = find.byKey(const Key('save-fee-adjustment'));
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Select the person who must approve this request'),
+      findsOneWidget,
+    );
     await tester.tap(find.byKey(const Key('adjustment-approver')));
     await tester.pumpAndSettle();
     await tester.tap(find.textContaining('Efua Nyarko').last);
     await tester.pumpAndSettle();
-    final save = find.byKey(const Key('save-fee-adjustment'));
     await tester.ensureVisible(save);
     await tester.tap(save);
     await tester.pumpAndSettle();
@@ -173,6 +180,12 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('student-tab-fees')));
     await tester.pumpAndSettle();
+
+    expect(find.text('Pending: 1 adjustment'), findsOneWidget);
+    expect(find.text('1 pending adjustment'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('pending-adjustments-summary')));
+    await tester.pumpAndSettle();
+    expect(find.text('Adjustment history · 1 pending'), findsOneWidget);
 
     final menu = find.byKey(const Key('adjustment-menu-ADJ-1042-03'));
     expect(menu, findsNothing);
