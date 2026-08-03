@@ -1447,7 +1447,9 @@ class _MedicalTab extends StatelessWidget {
               width: 245,
               child: _MiniMetric(
                 label: 'Blood group',
-                value: student.bloodGroup,
+                value: student.bloodGroup.trim().isEmpty
+                    ? 'Not provided'
+                    : student.bloodGroup,
                 color: AppColors.red,
               ),
             ),
