@@ -4,6 +4,7 @@ import '../data/classes_api_client.dart';
 import '../domain/class_models.dart';
 import '../../theme/app_theme.dart';
 import 'grade_detail_screen.dart';
+import 'class_subject_configuration_screen.dart';
 
 class GradeStreamsScreen extends StatefulWidget {
   const GradeStreamsScreen({
@@ -103,6 +104,23 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
     }
   }
 
+  Future<void> _openClassConfiguration() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: const Text('Classes and subjects')),
+          body: ClassSubjectConfigurationScreen(
+            customSchoolId: widget.customSchoolId,
+            accessToken: widget.accessToken,
+            onRefreshAccessToken: widget.onRefreshAccessToken,
+            repository: _repository,
+          ),
+        ),
+      ),
+    );
+    await _loadGradeStreams();
+  }
+
   List<ClassGradeLevel> _mergeLiveStreamMetrics({
     required List<ClassGradeLevel> levels,
     required List<ClassGradeLevel> liveLevels,
@@ -164,7 +182,10 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
 
     return Column(
       children: [
-        _Header(totalStreams: totalStreams),
+        _Header(
+          totalStreams: totalStreams,
+          onConfigure: _openClassConfiguration,
+        ),
         _PhaseTabs(
           selected: _phase,
           counts: _phaseCounts,
@@ -301,9 +322,10 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.totalStreams});
+  const _Header({required this.totalStreams, required this.onConfigure});
 
   final int totalStreams;
+  final VoidCallback onConfigure;
 
   @override
   Widget build(BuildContext context) {
@@ -324,6 +346,12 @@ class _Header extends StatelessWidget {
             ),
           ),
           const Spacer(),
+          OutlinedButton.icon(
+            onPressed: onConfigure,
+            icon: const Icon(Icons.tune_rounded, size: 18),
+            label: const Text('Classes & subjects'),
+          ),
+          const SizedBox(width: 14),
           Text(
             '$totalStreams streams configured',
             style: const TextStyle(

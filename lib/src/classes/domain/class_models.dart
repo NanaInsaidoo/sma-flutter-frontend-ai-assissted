@@ -13,6 +13,13 @@ abstract class ClassesRepository {
     required int streamCount,
   });
 
+  Future<ClassGradeLevel> updateCustomGradeLevel({
+    required String customSchoolId,
+    required ClassGradeLevel grade,
+    required String name,
+    required int displayOrder,
+  });
+
   Future<List<ClassSubject>> getGradeSubjects({
     required String customSchoolId,
     required int gradeLevelId,
@@ -105,6 +112,9 @@ class ClassGradeLevel {
     required this.streams,
     this.custom = false,
     this.studentCount = 0,
+    this.displayOrder = 0,
+    this.nextGradeLevelId,
+    this.nextGradeLevelName,
   });
 
   final int id;
@@ -114,6 +124,9 @@ class ClassGradeLevel {
   final List<ClassStreamSummary> streams;
   final bool custom;
   final int studentCount;
+  final int displayOrder;
+  final int? nextGradeLevelId;
+  final String? nextGradeLevelName;
 
   bool get active => status.trim().isEmpty || status.toUpperCase() == 'ACTIVE';
 }

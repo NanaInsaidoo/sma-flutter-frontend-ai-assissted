@@ -203,6 +203,93 @@ class _ClassSubjectConfigurationScreenState
     );
   }
 
+  Future<void> _editCustomClass(ClassGradeLevel grade) async {
+    final name = TextEditingController(text: grade.name);
+    final custom = _grades.where((item) => item.custom).toList()
+      ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
+    var position = custom.indexWhere((item) => item.id == grade.id) + 1;
+    if (position < 1) position = 1;
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text('Edit ${grade.name}'),
+          content: SizedBox(
+            width: 460,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: name,
+                  autofocus: true,
+                  decoration: const InputDecoration(labelText: 'Class name'),
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<int>(
+                  value: position,
+                  decoration: const InputDecoration(
+                    labelText: 'Position below KG1',
+                  ),
+                  items: List.generate(
+                    custom.length,
+                    (index) => DropdownMenuItem(
+                      value: index + 1,
+                      child: Text('Position ${index + 1}'),
+                    ),
+                  ),
+                  onChanged: (value) =>
+                      setDialogState(() => position = value ?? position),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Promotion follows this order. The final custom class progresses to KG1.',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (name.text.trim().isNotEmpty) Navigator.pop(context, true);
+              },
+              child: const Text('Save changes'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (submitted != true) return;
+
+    try {
+      // Reassign all custom positions so moving one class cannot leave ambiguous
+      // progression ordering.
+      custom.removeWhere((item) => item.id == grade.id);
+      custom.insert(position - 1, grade);
+      for (var index = 0; index < custom.length; index++) {
+        final item = custom[index];
+        await _repository.updateCustomGradeLevel(
+          customSchoolId: widget.customSchoolId,
+          grade: item,
+          name: item.id == grade.id ? name.text.trim() : item.name,
+          displayOrder: (index + 1) * 100,
+        );
+      }
+      await _load();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) return const Center(child: CircularProgressIndicator());
@@ -269,6 +356,7 @@ class _ClassSubjectConfigurationScreenState
                   grade: grade,
                   onActiveChanged: (value) => _toggle(grade, value),
                   onSubjects: () => _manageSubjects(grade),
+                  onEdit: null,
                 ),
               ),
               const SizedBox(height: 28),
@@ -287,6 +375,7 @@ class _ClassSubjectConfigurationScreenState
                     grade: grade,
                     onActiveChanged: (value) => _toggle(grade, value),
                     onSubjects: () => _manageSubjects(grade),
+                    onEdit: () => _editCustomClass(grade),
                   ),
                 ),
             ],
@@ -331,10 +420,12 @@ class _GradeCard extends StatelessWidget {
     required this.grade,
     required this.onActiveChanged,
     required this.onSubjects,
+    required this.onEdit,
   });
   final ClassGradeLevel grade;
   final ValueChanged<bool> onActiveChanged;
   final VoidCallback onSubjects;
+  final VoidCallback? onEdit;
   @override
   Widget build(BuildContext context) => Card(
     margin: const EdgeInsets.only(bottom: 10),
@@ -382,6 +473,17 @@ class _GradeCard extends StatelessWidget {
                   '${grade.streams.length} stream${grade.streams.length == 1 ? '' : 's'} · ${grade.studentCount} students',
                   style: const TextStyle(color: AppColors.muted),
                 ),
+                if (grade.custom) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    'Progresses to ${grade.nextGradeLevelName ?? 'the next active class'}',
+                    style: const TextStyle(
+                      color: AppColors.green,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -390,6 +492,14 @@ class _GradeCard extends StatelessWidget {
             icon: const Icon(Icons.menu_book_outlined),
             label: const Text('Subjects'),
           ),
+          if (onEdit != null) ...[
+            const SizedBox(width: 8),
+            IconButton(
+              tooltip: 'Edit class and progression',
+              onPressed: onEdit,
+              icon: const Icon(Icons.edit_outlined),
+            ),
+          ],
           const SizedBox(width: 14),
           const Text('Active'),
           Switch(value: grade.active, onChanged: onActiveChanged),

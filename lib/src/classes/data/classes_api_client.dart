@@ -42,7 +42,7 @@ class ClassesApiClient implements ClassesRepository {
         )
         .toList();
     return [...configured, ...available]
-      ..sort((a, b) => a.gradeLevelId.compareTo(b.gradeLevelId));
+      ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
   }
 
   @override
@@ -87,6 +87,28 @@ class ClassesApiClient implements ClassesRepository {
         : null;
     if (map == null) {
       throw const ClassesApiException('The new class could not be read.');
+    }
+    return _gradeFromJson(map);
+  }
+
+  @override
+  Future<ClassGradeLevel> updateCustomGradeLevel({
+    required String customSchoolId,
+    required ClassGradeLevel grade,
+    required String name,
+    required int displayOrder,
+  }) async {
+    final response = await _send(
+      'PUT',
+      '/api/grade-levels/school/$customSchoolId/${grade.id}',
+      body: {'gradeName': name, 'displayOrder': displayOrder},
+    );
+    final decoded = _decode(response);
+    final map = decoded is Map<String, dynamic>
+        ? (_map(decoded['data']) ?? decoded)
+        : null;
+    if (map == null) {
+      throw const ClassesApiException('The custom class could not be read.');
     }
     return _gradeFromJson(map);
   }
@@ -409,6 +431,14 @@ class ClassesApiClient implements ClassesRepository {
       streams: streams,
       custom: json['isCustom'] == true || json['custom'] == true,
       studentCount: _integer(json['gradeLevelStudentCount']),
+      displayOrder: _integer(
+        json['displayOrder'],
+        fallback: json['isCustom'] == true ? 900 : 1000 + gradeLevelId * 100,
+      ),
+      nextGradeLevelId: _nullableInteger(json['nextGradeLevelId']),
+      nextGradeLevelName: _string(json['nextGradeLevelName']).isEmpty
+          ? null
+          : _string(json['nextGradeLevelName']),
     );
   }
 
