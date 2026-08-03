@@ -9,6 +9,7 @@ import '../../attendance/data/attendance_api_client.dart';
 import '../../attendance/presentation/attendance_dashboard_screen.dart';
 import '../../assessments/presentation/assessment_dashboard_screen.dart';
 import '../../classes/presentation/grade_streams_screen.dart';
+import '../../classes/presentation/class_subject_configuration_screen.dart';
 import '../../expenses/presentation/expenses_screen.dart';
 import '../../fees/presentation/fee_management_screen.dart';
 import '../../incidents/presentation/incidents_screen.dart';
@@ -295,7 +296,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
       return _ReadinessSetupShell(
         title: 'Class structure setup',
         onBack: _refreshReadiness,
-        child: GradeStreamsScreen(
+        child: ClassSubjectConfigurationScreen(
           customSchoolId: _schoolId,
           accessToken: widget.accessToken,
           onRefreshAccessToken: widget.onRefreshAccessToken,

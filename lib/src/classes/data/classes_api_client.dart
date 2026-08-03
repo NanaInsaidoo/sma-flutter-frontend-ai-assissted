@@ -20,6 +20,161 @@ class ClassesApiClient implements ClassesRepository {
   final http.Client _client;
 
   @override
+  Future<List<ClassGradeLevel>> getAllGradeLevels(String customSchoolId) async {
+    final responses = await Future.wait([
+      _send('GET', '/api/grade-levels/allstatus/school/$customSchoolId'),
+      _send('GET', '/api/grade-levels/default'),
+    ]);
+    final configured = _extractList(_decode(responses[0]))
+        .whereType<Map<String, dynamic>>()
+        .map(_gradeFromJson)
+        .where((grade) => grade.id > 0 && grade.name.isNotEmpty)
+        .toList();
+    final configuredIds = configured.map((grade) => grade.gradeLevelId).toSet();
+    final available = _extractList(_decode(responses[1]))
+        .whereType<Map<String, dynamic>>()
+        .map((json) => _gradeFromJson({...json, 'status': 'INACTIVE'}))
+        .where(
+          (grade) =>
+              grade.gradeLevelId > 0 &&
+              grade.name.isNotEmpty &&
+              !configuredIds.contains(grade.gradeLevelId),
+        )
+        .toList();
+    return [...configured, ...available]
+      ..sort((a, b) => a.gradeLevelId.compareTo(b.gradeLevelId));
+  }
+
+  @override
+  Future<void> setGradeLevelActive({
+    required String customSchoolId,
+    required int gradeLevelId,
+    required bool active,
+  }) async {
+    await _send(
+      'PUT',
+      '/api/grade-levels/school/$customSchoolId/batch-status-update',
+      body: {
+        'updates': [
+          {
+            'gradeLevelId': gradeLevelId,
+            'status': active ? 'ACTIVE' : 'INACTIVE',
+          },
+        ],
+      },
+    );
+  }
+
+  @override
+  Future<ClassGradeLevel> createCustomGradeLevel({
+    required String customSchoolId,
+    required String name,
+    required int streamCount,
+  }) async {
+    final response = await _send(
+      'POST',
+      '/api/grade-levels/school/$customSchoolId/custom',
+      body: {
+        'gradeName': name,
+        'streamsCount': streamCount,
+        'custom': true,
+        'status': 'ACTIVE',
+      },
+    );
+    final decoded = _decode(response);
+    final map = decoded is Map<String, dynamic>
+        ? (_map(decoded['data']) ?? decoded)
+        : null;
+    if (map == null) {
+      throw const ClassesApiException('The new class could not be read.');
+    }
+    return _gradeFromJson(map);
+  }
+
+  @override
+  Future<List<ClassSubject>> getGradeSubjects({
+    required String customSchoolId,
+    required int gradeLevelId,
+  }) async {
+    final response = await _send(
+      'GET',
+      '/api/subjects/grade/$gradeLevelId/school/$customSchoolId/subjects',
+    );
+    return _extractList(_decode(response))
+        .whereType<Map<String, dynamic>>()
+        .map(
+          (json) => ClassSubject(
+            id: _integer(json['id']),
+            name: _string(json['subjectName']),
+            code: _string(json['subjectCode']),
+            custom: json['isCustom'] == true,
+            active: json['isActive'] != false,
+            examinable: json['isExaminable'] ?? json['isCore'] ?? true,
+          ),
+        )
+        .where((subject) => subject.name.isNotEmpty)
+        .toList();
+  }
+
+  @override
+  Future<ClassSubject> createCustomSubject({
+    required String customSchoolId,
+    required int gradeLevelId,
+    required String name,
+    required String code,
+    required bool examinable,
+  }) async {
+    final response = await _send(
+      'POST',
+      '/api/subjects/$customSchoolId',
+      body: {
+        'subjectName': name,
+        'subjectCode': code,
+        'gradeLevelId': gradeLevelId,
+        'description': 'School-defined subject',
+        'core': examinable,
+      },
+    );
+    final json = _decode(response) as Map<String, dynamic>;
+    return ClassSubject(
+      id: _integer(json['id']),
+      name: _string(json['subjectName']),
+      code: _string(json['subjectCode']),
+      custom: true,
+      active: json['isActive'] != false,
+      examinable: json['isExaminable'] ?? json['isCore'] ?? examinable,
+    );
+  }
+
+  @override
+  Future<void> updateCustomSubject({
+    required String customSchoolId,
+    required ClassSubject subject,
+  }) async {
+    await _send(
+      'PUT',
+      '/api/subjects/$customSchoolId/${subject.id}',
+      body: {
+        'subjectName': subject.name,
+        'subjectCode': subject.code,
+        'gradeLevelId': 0,
+        'core': subject.examinable,
+      },
+    );
+  }
+
+  @override
+  Future<void> deleteCustomSubject({
+    required String customSchoolId,
+    required int subjectId,
+  }) async {
+    await _send(
+      'DELETE',
+      '/api/schools/$customSchoolId/subjects/custom/$subjectId',
+    );
+  }
+
+  @override
   Future<List<ClassGradeLevel>> getGradeStreams(String customSchoolId) async {
     final response = await _send(
       'GET',
@@ -252,6 +407,8 @@ class ClassesApiClient implements ClassesRepository {
       name: name,
       status: _string(json['status']),
       streams: streams,
+      custom: json['isCustom'] == true || json['custom'] == true,
+      studentCount: _integer(json['gradeLevelStudentCount']),
     );
   }
 
@@ -335,6 +492,10 @@ class ClassesApiClient implements ClassesRepository {
         name: entry.key,
         status: 'ACTIVE',
         streams: entry.value,
+        studentCount: entry.value.fold(
+          0,
+          (total, stream) => total + stream.enrolled,
+        ),
       );
     }).toList();
   }

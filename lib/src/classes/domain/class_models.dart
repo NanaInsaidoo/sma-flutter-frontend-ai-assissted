@@ -1,4 +1,41 @@
 abstract class ClassesRepository {
+  Future<List<ClassGradeLevel>> getAllGradeLevels(String customSchoolId);
+
+  Future<void> setGradeLevelActive({
+    required String customSchoolId,
+    required int gradeLevelId,
+    required bool active,
+  });
+
+  Future<ClassGradeLevel> createCustomGradeLevel({
+    required String customSchoolId,
+    required String name,
+    required int streamCount,
+  });
+
+  Future<List<ClassSubject>> getGradeSubjects({
+    required String customSchoolId,
+    required int gradeLevelId,
+  });
+
+  Future<ClassSubject> createCustomSubject({
+    required String customSchoolId,
+    required int gradeLevelId,
+    required String name,
+    required String code,
+    required bool examinable,
+  });
+
+  Future<void> updateCustomSubject({
+    required String customSchoolId,
+    required ClassSubject subject,
+  });
+
+  Future<void> deleteCustomSubject({
+    required String customSchoolId,
+    required int subjectId,
+  });
+
   Future<List<ClassGradeLevel>> getGradeStreams(String customSchoolId);
 
   Future<List<ClassGradeLevel>> getAllStreams(String customSchoolId);
@@ -66,6 +103,8 @@ class ClassGradeLevel {
     required this.name,
     required this.status,
     required this.streams,
+    this.custom = false,
+    this.studentCount = 0,
   });
 
   final int id;
@@ -73,6 +112,28 @@ class ClassGradeLevel {
   final String name;
   final String status;
   final List<ClassStreamSummary> streams;
+  final bool custom;
+  final int studentCount;
+
+  bool get active => status.trim().isEmpty || status.toUpperCase() == 'ACTIVE';
+}
+
+class ClassSubject {
+  const ClassSubject({
+    required this.id,
+    required this.name,
+    required this.code,
+    required this.custom,
+    required this.active,
+    required this.examinable,
+  });
+
+  final int id;
+  final String name;
+  final String code;
+  final bool custom;
+  final bool active;
+  final bool examinable;
 }
 
 class ClassStreamSummary {
