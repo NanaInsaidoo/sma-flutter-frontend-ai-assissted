@@ -11,6 +11,7 @@ import 'platform/data/platform_repository.dart';
 import 'platform/domain/platform_models.dart';
 import 'platform/presentation/platform_admin_shell.dart';
 import 'theme/app_theme.dart';
+import 'readiness/data/school_readiness_repository.dart';
 
 class SchoolManagementApp extends StatefulWidget {
   const SchoolManagementApp({super.key});
@@ -296,6 +297,10 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
       accessToken: session?.accessToken,
       onRefreshAccessToken: _refreshAccessToken,
       onLogout: _logout,
+      readinessRepository: ApiSchoolReadinessRepository(
+        accessToken: session?.accessToken,
+        onRefreshAccessToken: _refreshAccessToken,
+      ),
     );
   }
 

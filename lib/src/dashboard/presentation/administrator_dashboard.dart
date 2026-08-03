@@ -16,6 +16,8 @@ import '../../settings/presentation/school_settings_screen.dart';
 import '../../staff/presentation/staff_screen.dart';
 import '../../students/data/api_students_repository.dart';
 import '../../students/presentation/students_screen.dart';
+import '../../readiness/data/school_readiness_repository.dart';
+import '../../readiness/domain/school_readiness.dart';
 
 enum _SchoolAdminPage {
   dashboard,
@@ -45,6 +47,7 @@ class AdministratorDashboard extends StatefulWidget {
     this.accessToken,
     this.onRefreshAccessToken,
     this.onLogout,
+    this.readinessRepository,
   });
 
   final DashboardRepository repository;
@@ -56,13 +59,16 @@ class AdministratorDashboard extends StatefulWidget {
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
   final VoidCallback? onLogout;
+  final SchoolReadinessRepository? readinessRepository;
 
   @override
   State<AdministratorDashboard> createState() => _AdministratorDashboardState();
 }
 
 class _AdministratorDashboardState extends State<AdministratorDashboard> {
-  late Future<DashboardSnapshot> _dashboard;
+  Future<DashboardSnapshot>? _dashboard;
+  late Future<SchoolReadiness> _readiness;
+  _SchoolAdminPage? _setupPage;
   bool _sidebarCollapsed = false;
   _SchoolAdminPage _selectedPage = _SchoolAdminPage.dashboard;
   bool _openStartAdmissionOnNextAdmissions = false;
@@ -73,12 +79,23 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   @override
   void initState() {
     super.initState();
-    _dashboard = widget.repository.getAdministratorDashboard(_schoolId);
+    _readiness = widget.readinessRepository == null
+        ? Future.value(SchoolReadiness.readySchool)
+        : widget.readinessRepository!.getReadiness(_schoolId);
   }
 
   void _refresh() {
     setState(() {
       _dashboard = widget.repository.getAdministratorDashboard(_schoolId);
+    });
+  }
+
+  void _refreshReadiness() {
+    setState(() {
+      _setupPage = null;
+      _readiness = widget.readinessRepository == null
+          ? Future.value(SchoolReadiness.readySchool)
+          : widget.readinessRepository!.getReadiness(_schoolId);
     });
   }
 
@@ -125,6 +142,28 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
 
   @override
   Widget build(BuildContext context) {
+    return FutureBuilder<SchoolReadiness>(
+      future: _readiness,
+      builder: (context, readinessSnapshot) {
+        if (readinessSnapshot.hasError) {
+          return _ReadinessError(onRetry: _refreshReadiness);
+        }
+        if (!readinessSnapshot.hasData) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final readiness = readinessSnapshot.requireData;
+        if (!readiness.ready) {
+          return _buildReadinessGate(readiness);
+        }
+        _dashboard ??= widget.repository.getAdministratorDashboard(_schoolId);
+        return _buildDashboard();
+      },
+    );
+  }
+
+  Widget _buildDashboard() {
     return FutureBuilder<DashboardSnapshot>(
       future: _dashboard,
       builder: (context, snapshot) {
@@ -247,6 +286,294 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
           },
         );
       },
+    );
+  }
+
+  Widget _buildReadinessGate(SchoolReadiness readiness) {
+    if (_setupPage == _SchoolAdminPage.classes) {
+      return _ReadinessSetupShell(
+        title: 'Class structure setup',
+        onBack: _refreshReadiness,
+        child: GradeStreamsScreen(
+          customSchoolId: _schoolId,
+          accessToken: widget.accessToken,
+          onRefreshAccessToken: widget.onRefreshAccessToken,
+        ),
+      );
+    }
+    if (_setupPage == _SchoolAdminPage.fees) {
+      return _ReadinessSetupShell(
+        title: 'Tuition fee setup',
+        onBack: _refreshReadiness,
+        child: FeeManagementScreen(
+          customSchoolId: _schoolId,
+          schoolName: widget.schoolName ?? _schoolId,
+          accessToken: widget.accessToken,
+          onRefreshAccessToken: widget.onRefreshAccessToken,
+          role: widget.role,
+          userId: widget.userId,
+        ),
+      );
+    }
+    if (_setupPage == _SchoolAdminPage.settings) {
+      return _ReadinessSetupShell(
+        title: 'School settings',
+        onBack: _refreshReadiness,
+        child: SchoolSettingsScreen(
+          customSchoolId: _schoolId,
+          accessToken: widget.accessToken,
+          onRefreshAccessToken: widget.onRefreshAccessToken,
+        ),
+      );
+    }
+    return _SchoolReadinessGate(
+      readiness: readiness,
+      schoolName: widget.schoolName ?? _schoolId,
+      onLogout: widget.onLogout,
+      onRefresh: _refreshReadiness,
+      onOpenItem: (item) {
+        setState(() {
+          _setupPage = switch (item.key) {
+            'CLASS_STRUCTURE' => _SchoolAdminPage.classes,
+            'TUITION_FEES' => _SchoolAdminPage.fees,
+            _ => _SchoolAdminPage.settings,
+          };
+        });
+      },
+    );
+  }
+}
+
+class _SchoolReadinessGate extends StatelessWidget {
+  const _SchoolReadinessGate({
+    required this.readiness,
+    required this.schoolName,
+    required this.onRefresh,
+    required this.onOpenItem,
+    this.onLogout,
+  });
+
+  final SchoolReadiness readiness;
+  final String schoolName;
+  final VoidCallback onRefresh;
+  final ValueChanged<SchoolReadinessItem> onOpenItem;
+  final VoidCallback? onLogout;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: Text(schoolName),
+        actions: [
+          TextButton.icon(
+            onPressed: onRefresh,
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('Recheck setup'),
+          ),
+          if (onLogout != null)
+            TextButton.icon(
+              onPressed: onLogout,
+              icon: const Icon(Icons.logout_rounded),
+              label: const Text('Logout'),
+            ),
+          const SizedBox(width: 12),
+        ],
+      ),
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 860),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(
+                  Icons.fact_check_outlined,
+                  size: 46,
+                  color: AppColors.green,
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Finish setting up your school',
+                  style: TextStyle(
+                    color: AppColors.text,
+                    fontSize: 30,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Completed work is preserved. Finish only the items marked incomplete to unlock daily school operations.',
+                  style: TextStyle(color: AppColors.muted, fontSize: 16),
+                ),
+                const SizedBox(height: 24),
+                ...readiness.items.map(
+                  (item) => Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: _ReadinessItemCard(
+                      item: item,
+                      current: item.key == readiness.currentBlockingStep,
+                      onOpen: item.complete || item.blocked
+                          ? null
+                          : () => onOpenItem(item),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ReadinessItemCard extends StatelessWidget {
+  const _ReadinessItemCard({
+    required this.item,
+    required this.current,
+    this.onOpen,
+  });
+
+  final SchoolReadinessItem item;
+  final bool current;
+  final VoidCallback? onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = item.complete
+        ? AppColors.green
+        : item.blocked
+        ? AppColors.muted
+        : AppColors.amber;
+    return Card(
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: current ? AppColors.amber : AppColors.border,
+          width: current ? 1.5 : 1,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Row(
+          children: [
+            CircleAvatar(
+              backgroundColor: color.withValues(alpha: 0.12),
+              foregroundColor: color,
+              child: Icon(
+                item.complete
+                    ? Icons.check_rounded
+                    : item.blocked
+                    ? Icons.lock_outline_rounded
+                    : Icons.priority_high_rounded,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.label,
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    item.detail,
+                    style: const TextStyle(color: AppColors.muted),
+                  ),
+                  if (item.missingGradeLevels.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Missing: ${item.missingGradeLevels.join(', ')}',
+                      style: const TextStyle(
+                        color: AppColors.red,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            if (onOpen != null)
+              FilledButton(onPressed: onOpen, child: const Text('Set up'))
+            else
+              Text(
+                item.complete ? 'Completed' : 'Blocked',
+                style: TextStyle(color: color, fontWeight: FontWeight.w800),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReadinessSetupShell extends StatelessWidget {
+  const _ReadinessSetupShell({
+    required this.title,
+    required this.onBack,
+    required this.child,
+  });
+
+  final String title;
+  final VoidCallback onBack;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        leading: const SizedBox.shrink(),
+        leadingWidth: 0,
+        title: Text(title),
+        actions: [
+          FilledButton.icon(
+            onPressed: onBack,
+            icon: const Icon(Icons.fact_check_outlined),
+            label: const Text('Save complete — recheck'),
+          ),
+          const SizedBox(width: 16),
+        ],
+      ),
+      body: child,
+    );
+  }
+}
+
+class _ReadinessError extends StatelessWidget {
+  const _ReadinessError({required this.onRetry});
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.cloud_off_rounded, size: 44, color: AppColors.red),
+            const SizedBox(height: 12),
+            const Text(
+              'School readiness could not be verified.',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Try again'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
