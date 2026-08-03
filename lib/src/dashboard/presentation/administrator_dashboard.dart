@@ -18,6 +18,7 @@ import '../../students/data/api_students_repository.dart';
 import '../../students/presentation/students_screen.dart';
 import '../../readiness/data/school_readiness_repository.dart';
 import '../../readiness/domain/school_readiness.dart';
+import '../../readiness/presentation/academic_term_setup_screen.dart';
 
 enum _SchoolAdminPage {
   dashboard,
@@ -319,10 +320,11 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
       return _ReadinessSetupShell(
         title: 'School settings',
         onBack: _refreshReadiness,
-        child: SchoolSettingsScreen(
+        child: AcademicTermSetupScreen(
           customSchoolId: _schoolId,
           accessToken: widget.accessToken,
           onRefreshAccessToken: widget.onRefreshAccessToken,
+          onSaved: _refreshReadiness,
         ),
       );
     }
