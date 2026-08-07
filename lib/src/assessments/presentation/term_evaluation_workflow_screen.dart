@@ -900,6 +900,7 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
   final _comment = TextEditingController();
   final _final = <String, String>{};
   final _originalFinal = <String, String>{};
+  List<Map<String, dynamic>> _audit = const [];
   Map<String, String> _calculated = const {};
   bool _loading = true;
   bool _busy = false;
@@ -947,6 +948,18 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
           ..addAll(finalRatings);
         _comment.text = data['comment']?.toString() ?? '';
         _status = data['status']?.toString() ?? 'PENDING';
+        _audit = (data['audit'] as List? ?? const [])
+            .whereType<Map>()
+            .map(
+              (entry) =>
+                  entry.map((key, value) => MapEntry(key.toString(), value)),
+            )
+            .where(
+              (entry) =>
+                  entry['action']?.toString() ==
+                  'HEADMASTER_FINAL_WORDING_CHANGED',
+            )
+            .toList();
         _loading = false;
       });
       if (!widget.canManageFinalWordings) {
@@ -1187,6 +1200,53 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
     }
   }
 
+  String _historyTitle(Map<String, dynamic> entry) {
+    final details = entry['reason']?.toString() ?? '';
+    final change = details.split('; reason:').first.trim();
+    final separator = change.indexOf(':');
+    if (separator < 0) return 'Final wording changed';
+    final criterion = change.substring(0, separator).trim();
+    final transition = change.substring(separator + 1).trim();
+    return '${_criteria[criterion] ?? criterion.replaceAll('_', ' ')} · $transition';
+  }
+
+  String _historyReason(Map<String, dynamic> entry) {
+    final details = entry['reason']?.toString() ?? '';
+    const marker = '; reason:';
+    final separator = details.indexOf(marker);
+    return separator < 0
+        ? details
+        : details.substring(separator + marker.length).trim();
+  }
+
+  String _historyMeta(Map<String, dynamic> entry) {
+    final actor = entry['actor']?.toString().trim() ?? '';
+    final rawCreatedAt = entry['createdAt'];
+    DateTime? parsed;
+    if (rawCreatedAt is List && rawCreatedAt.length >= 5) {
+      final parts = rawCreatedAt
+          .take(6)
+          .map((value) => int.tryParse(value.toString()))
+          .toList();
+      if (parts.take(5).every((value) => value != null)) {
+        parsed = DateTime(
+          parts[0]!,
+          parts[1]!,
+          parts[2]!,
+          parts[3]!,
+          parts[4]!,
+          parts.length > 5 ? parts[5] ?? 0 : 0,
+        );
+      }
+    } else {
+      parsed = DateTime.tryParse(rawCreatedAt?.toString() ?? '')?.toLocal();
+    }
+    final date = parsed == null
+        ? rawCreatedAt?.toString() ?? ''
+        : '${parsed.day.toString().padLeft(2, '0')}/${parsed.month.toString().padLeft(2, '0')}/${parsed.year} · ${parsed.hour.toString().padLeft(2, '0')}:${parsed.minute.toString().padLeft(2, '0')}';
+    return [actor, date].where((value) => value.isNotEmpty).join(' · ');
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -1215,7 +1275,7 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                       complete
                           ? widget.canManageFinalWordings
                                 ? finalized
-                                      ? 'Review the combined teacher evaluation. Only an authorized head or administrator can correct the final report-card wording.'
+                                      ? 'Review the combined teacher evaluation. Only the headmaster can correct the final report-card wording.'
                                       : 'The combined wording is ready, but the class teacher must add the final comment and finalize it first.'
                                 : finalized
                                 ? 'The combined teacher evaluation and your report-card comment are finalized.'
@@ -1396,7 +1456,7 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                     SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        'This evaluation is finalized. The combined wording cannot be changed by the class teacher; only an authorized head or administrator can correct it with a recorded reason.',
+                        'This evaluation is finalized. The combined wording cannot be changed by the class teacher; only the headmaster can correct it with a recorded reason.',
                       ),
                     ),
                   ],
@@ -1415,6 +1475,54 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                 label: const Text('Preview comment'),
               ),
             ),
+          if (widget.canManageFinalWordings && _audit.isNotEmpty) ...[
+            const SizedBox(height: 22),
+            Card(
+              key: const ValueKey('evaluation-wording-history'),
+              child: Padding(
+                padding: const EdgeInsets.all(18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.history_outlined),
+                        SizedBox(width: 8),
+                        Text(
+                          'Wording change history',
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Every headmaster correction is retained with its reason.',
+                    ),
+                    const Divider(height: 26),
+                    ..._audit.map(
+                      (entry) => ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const CircleAvatar(
+                          child: Icon(Icons.admin_panel_settings_outlined),
+                        ),
+                        title: Text(
+                          _historyTitle(entry),
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                        subtitle: Text(
+                          '${_historyReason(entry)}\n${_historyMeta(entry)}',
+                        ),
+                        isThreeLine: true,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );

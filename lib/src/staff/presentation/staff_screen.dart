@@ -1739,6 +1739,7 @@ class _ManualStaffDrawer extends StatefulWidget {
 class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
   static const _roles = [
     ('ADMINISTRATOR', 'Administrator'),
+    ('HEADMASTER', 'Headmaster'),
     ('HEAD_TEACHER', 'Head teacher'),
     ('ASSISTANT_HEAD_TEACHER', 'Assistant head teacher'),
     ('CLASS_TEACHER', 'Class teacher'),
@@ -1777,6 +1778,12 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
   List<StaffLookupOption> _departments = const [];
   List<StaffLookupOption> _employmentStatuses = const [];
   PlatformFile? _resume;
+
+  String get _userTypeForRole => switch (_role) {
+    'ADMINISTRATOR' => 'ADMIN',
+    'HEADMASTER' => 'HEADMASTER',
+    _ => 'STAFF',
+  };
 
   @override
   void initState() {
@@ -2312,7 +2319,7 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
         'dateOfBirth': _dateOfBirth.text.trim(),
         'email': _email.text.trim(),
         'phoneNumber': _normalisePhone(_phone.text),
-        'userType': 'STAFF',
+        'userType': _userTypeForRole,
         'role': _role,
         'emailDelivery': true,
         'smsDelivery': true,

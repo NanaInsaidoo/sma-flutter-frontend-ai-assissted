@@ -306,6 +306,15 @@ void main() {
               'finalRatings': calculated,
               'comment': 'Ama has worked well this term.',
               'status': 'FINALIZED',
+              'audit': [
+                {
+                  'action': 'HEADMASTER_FINAL_WORDING_CHANGED',
+                  'actor': 'Nana Headmaster',
+                  'reason':
+                      'HOMEWORK_HABITS: Satisfactory -> Good; reason: Verified against the signed class record',
+                  'createdAt': [2026, 8, 7, 12, 30, 0],
+                },
+              ],
             }),
             200,
           );
@@ -354,11 +363,21 @@ void main() {
     await tester.tap(find.text('Ama Mensah'));
     await tester.pumpAndSettle();
 
+    expect(
+      find.textContaining(
+        'Only the headmaster can correct the final report-card wording.',
+      ),
+      findsOneWidget,
+    );
     expect(find.byType(DropdownButtonFormField<String>), findsNWidgets(6));
     final comment = tester.widget<TextField>(
       find.byKey(const ValueKey('evaluation-final-comment')),
     );
     expect(comment.readOnly, isTrue);
+    expect(find.text('Wording change history'), findsOneWidget);
+    expect(find.text('Homework habits · Satisfactory -> Good'), findsOneWidget);
+    expect(find.textContaining('Nana Headmaster'), findsOneWidget);
+    expect(find.textContaining('07/08/2026 · 12:30'), findsOneWidget);
 
     await tester.tap(
       find.byKey(const ValueKey('headmaster-wording-HOMEWORK_HABITS')),
