@@ -12,6 +12,7 @@ class GradeDetailScreen extends StatefulWidget {
     required this.customSchoolId,
     required this.streamId,
     required this.gradeLevelId,
+    required this.subjectGradeLevelId,
     required this.gradeName,
     required this.streamName,
     required this.enrolled,
@@ -32,6 +33,7 @@ class GradeDetailScreen extends StatefulWidget {
   final String customSchoolId;
   final int streamId;
   final int gradeLevelId;
+  final int subjectGradeLevelId;
   final String gradeName;
   final String streamName;
   final int enrolled;
@@ -174,7 +176,7 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
       final result = await Future.wait([
         widget.repository.getGradeSubjects(
           customSchoolId: widget.customSchoolId,
-          gradeLevelId: widget.gradeLevelId,
+          gradeLevelId: widget.subjectGradeLevelId,
         ),
         widget.repository.getSubjectTeacherAssignments(
           customSchoolId: widget.customSchoolId,
@@ -245,7 +247,7 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
                       children: [
                         _ClassIntro(
                           streamName: widget.streamName,
-                          classTeacherName: widget.classTeacherName,
+                          classTeacherName: _displayClassTeacherName,
                           enrolled: widget.enrolled,
                           capacity: widget.capacity,
                           active: widget.active,
@@ -612,7 +614,7 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
         await widget.repository.addSubjectTeacherAssignment(
           customSchoolId: widget.customSchoolId,
           streamId: widget.streamId,
-          gradeLevelId: widget.gradeLevelId,
+          gradeLevelId: widget.subjectGradeLevelId,
           subject: subject,
           staffId: staffId,
           effectiveFrom: effectiveFrom,
@@ -659,13 +661,34 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
       _teacherError = null;
     });
     try {
-      final teachers = await widget.repository.getClassTeachers(
-        customSchoolId: widget.customSchoolId,
-        streamId: widget.streamId,
-      );
+      final result = await Future.wait([
+        widget.repository.getClassTeachers(
+          customSchoolId: widget.customSchoolId,
+          streamId: widget.streamId,
+        ),
+        widget.repository.getSchoolStaff(widget.customSchoolId),
+      ]);
+      final teachers = result[0] as List<ClassTeacherAssignment>;
+      final staff = result[1] as List<SchoolStaffOption>;
+      final staffById = {for (final member in staff) member.id: member};
+      final hydratedTeachers = teachers.map((teacher) {
+        final member = staffById[teacher.staffId];
+        if (member == null) return teacher;
+        return ClassTeacherAssignment(
+          id: teacher.id,
+          staffId: teacher.staffId,
+          name: teacher.name.trim().isEmpty || teacher.name == 'Unnamed teacher'
+              ? member.name
+              : teacher.name,
+          email: teacher.email.trim().isEmpty ? member.email : teacher.email,
+          role: teacher.role.trim().isEmpty ? member.role : teacher.role,
+          isPrimary: teacher.isPrimary,
+          isActive: teacher.isActive,
+        );
+      }).toList();
       if (!mounted) return;
       setState(() {
-        _classTeachers = teachers;
+        _classTeachers = hydratedTeachers;
         _loadingTeachers = false;
       });
     } catch (error) {
@@ -675,6 +698,14 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
         _loadingTeachers = false;
       });
     }
+  }
+
+  String? get _displayClassTeacherName {
+    final active = _classTeachers.where((teacher) => teacher.isActive).toList();
+    if (active.isEmpty) return widget.classTeacherName;
+    return active
+        .firstWhere((teacher) => teacher.isPrimary, orElse: () => active.first)
+        .name;
   }
 
   Future<void> _showAddClassTeacherDialog() async {

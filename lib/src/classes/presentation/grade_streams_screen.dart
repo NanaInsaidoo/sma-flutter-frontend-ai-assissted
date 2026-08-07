@@ -174,6 +174,7 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
         customSchoolId: widget.customSchoolId,
         streamId: selected.streamId,
         gradeLevelId: selected.gradeLevelId,
+        subjectGradeLevelId: selected.subjectGradeLevelId,
         gradeName: selected.gradeName,
         streamName: selected.streamName,
         enrolled: selected.enrolled,
@@ -238,6 +239,9 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
         gradeLevelId: stream.gradeLevelId > 0
             ? stream.gradeLevelId
             : level.gradeLevelId,
+        // Subject configuration is attached to the school's grade record.
+        // Custom grades can have a different canonical roster grade id.
+        subjectGradeLevelId: level.gradeLevelId,
         gradeName: level.name,
         streamName: stream.name,
         enrolled: stream.enrolled,
@@ -1321,6 +1325,7 @@ class _SelectedStream {
   const _SelectedStream({
     required this.streamId,
     required this.gradeLevelId,
+    required this.subjectGradeLevelId,
     required this.gradeName,
     required this.streamName,
     required this.enrolled,
@@ -1331,6 +1336,7 @@ class _SelectedStream {
 
   final int streamId;
   final int gradeLevelId;
+  final int subjectGradeLevelId;
   final String gradeName;
   final String streamName;
   final int enrolled;
