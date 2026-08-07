@@ -9,12 +9,16 @@ import '../data/fee_api_client.dart';
 import '../domain/fee_models.dart';
 import 'class_requirements_screen.dart';
 import 'fee_adjustments_content.dart';
+import 'payment_reversals_content.dart';
+import '../../assessments/presentation/report_pdf_download_stub.dart'
+    if (dart.library.html) '../../assessments/presentation/report_pdf_download_web.dart';
 
 enum _FeeTab {
   overview,
   studentFees,
   feeStructure,
   adjustments,
+  reversals,
   classRequirements,
   waivers,
 }
@@ -255,6 +259,13 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
         currentUserId: widget.userId ?? 0,
         onChanged: _reloadFees,
       ),
+      _FeeTab.reversals => PaymentReversalsContent(
+        api: _api,
+        customSchoolId: widget.customSchoolId,
+        currentTermId: _activeTermId,
+        currentUserId: widget.userId ?? 0,
+        onChanged: _reloadFees,
+      ),
       _FeeTab.classRequirements =>
         _classRequirements == null
             ? const Center(
@@ -334,6 +345,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
       paymentMethods: _paymentMethods,
       customSchoolId: widget.customSchoolId,
       termId: _activeTermId,
+      currentUserId: widget.userId ?? 0,
       api: _api,
       money: _money,
       onSearchChanged: _onStudentFeeSearchChanged,
@@ -1136,6 +1148,7 @@ class _FeeTabs extends StatelessWidget {
     (_FeeTab.studentFees, 'Student Fees'),
     (_FeeTab.feeStructure, 'Fee Structure'),
     (_FeeTab.adjustments, 'Fee Adjustments'),
+    (_FeeTab.reversals, 'Payment Reversals'),
     (_FeeTab.classRequirements, 'Items & Supplies'),
     (_FeeTab.waivers, 'Waivers'),
   ];
@@ -3094,6 +3107,7 @@ class _StudentFeesContent extends StatelessWidget {
     required this.paymentMethods,
     required this.customSchoolId,
     required this.termId,
+    required this.currentUserId,
     required this.api,
     required this.money,
     required this.onSearchChanged,
@@ -3111,6 +3125,7 @@ class _StudentFeesContent extends StatelessWidget {
   final List<FeePaymentMethod> paymentMethods;
   final String customSchoolId;
   final int termId;
+  final int currentUserId;
   final FeeApiClient api;
   final String Function(double amount) money;
   final ValueChanged<String> onSearchChanged;
@@ -3251,6 +3266,7 @@ class _StudentFeesContent extends StatelessWidget {
             api: api,
             customSchoolId: customSchoolId,
             termId: termId,
+            currentUserId: currentUserId,
             onRecordPayment: () => _showRecordPaymentForm(
               context,
               rows,
@@ -4434,6 +4450,7 @@ class _StudentFeeDetailPanel extends StatelessWidget {
     required this.api,
     required this.customSchoolId,
     required this.termId,
+    required this.currentUserId,
     required this.onRecordPayment,
   });
 
@@ -4442,6 +4459,7 @@ class _StudentFeeDetailPanel extends StatelessWidget {
   final FeeApiClient api;
   final String customSchoolId;
   final int termId;
+  final int currentUserId;
   final VoidCallback onRecordPayment;
 
   @override
@@ -4573,6 +4591,9 @@ class _StudentFeeDetailPanel extends StatelessWidget {
                                   .map(_historyFromPayment)
                                   .toList(),
                               money: money,
+                              api: api,
+                              customSchoolId: customSchoolId,
+                              currentUserId: currentUserId,
                             ),
                         ],
                       ),
@@ -4612,6 +4633,8 @@ class _StudentFeeDetailPanel extends StatelessWidget {
 
   _StudentPaymentHistory _historyFromPayment(FeeStudentPayment payment) {
     return _StudentPaymentHistory(
+      id: payment.id,
+      status: payment.status,
       method: payment.paymentMethod.trim().isEmpty
           ? 'Payment'
           : payment.paymentMethod,
@@ -4931,10 +4954,19 @@ class _FeeAdjustmentRow extends StatelessWidget {
 }
 
 class _PaymentHistorySection extends StatelessWidget {
-  const _PaymentHistorySection({required this.payments, required this.money});
+  const _PaymentHistorySection({
+    required this.payments,
+    required this.money,
+    required this.api,
+    required this.customSchoolId,
+    required this.currentUserId,
+  });
 
   final List<_StudentPaymentHistory> payments;
   final String Function(double amount) money;
+  final FeeApiClient api;
+  final String customSchoolId;
+  final int currentUserId;
 
   @override
   Widget build(BuildContext context) {
@@ -4974,7 +5006,13 @@ class _PaymentHistorySection extends StatelessWidget {
           ...payments.map(
             (payment) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: _PaymentHistoryTile(payment: payment, money: money),
+              child: _PaymentHistoryTile(
+                payment: payment,
+                money: money,
+                api: api,
+                customSchoolId: customSchoolId,
+                currentUserId: currentUserId,
+              ),
             ),
           ),
       ],
@@ -4982,14 +5020,61 @@ class _PaymentHistorySection extends StatelessWidget {
   }
 }
 
-class _PaymentHistoryTile extends StatelessWidget {
-  const _PaymentHistoryTile({required this.payment, required this.money});
+class _PaymentHistoryTile extends StatefulWidget {
+  const _PaymentHistoryTile({
+    required this.payment,
+    required this.money,
+    required this.api,
+    required this.customSchoolId,
+    required this.currentUserId,
+  });
 
   final _StudentPaymentHistory payment;
   final String Function(double amount) money;
+  final FeeApiClient api;
+  final String customSchoolId;
+  final int currentUserId;
+
+  @override
+  State<_PaymentHistoryTile> createState() => _PaymentHistoryTileState();
+}
+
+class _PaymentHistoryTileState extends State<_PaymentHistoryTile> {
+  late Future<List<PaymentReversal>> _reversals;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  void _reload() {
+    _reversals = widget.api.getPaymentReversals(
+      customSchoolId: widget.customSchoolId,
+      paymentId: widget.payment.id,
+    );
+  }
+
+  Future<void> _openReversal([PaymentReversal? existing]) async {
+    final changed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _PaymentReversalDialog(
+        api: widget.api,
+        customSchoolId: widget.customSchoolId,
+        payment: widget.payment,
+        existing: existing,
+        currentUserId: widget.currentUserId,
+      ),
+    );
+    if (changed == true && mounted) setState(_reload);
+  }
 
   @override
   Widget build(BuildContext context) {
+    final payment = widget.payment;
+    final money = widget.money;
+    final reversed = payment.status.toUpperCase() == 'REVERSED';
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -4997,54 +5082,124 @@ class _PaymentHistoryTile extends StatelessWidget {
         border: Border.all(color: AppColors.border),
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Row(
+      child: Column(
         children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: AppColors.greenSoft,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(
-              Icons.receipt_long_rounded,
-              size: 18,
-              color: AppColors.green,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  payment.method,
-                  style: const TextStyle(fontWeight: FontWeight.w900),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  '${payment.receiptNumber} · ${payment.term} · ${payment.recordedBy}',
-                  style: const TextStyle(color: AppColors.muted, fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
+          Row(
             children: [
-              Text(
-                money(payment.amount),
-                style: const TextStyle(
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: AppColors.greenSoft,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.receipt_long_rounded,
+                  size: 18,
                   color: AppColors.green,
-                  fontWeight: FontWeight.w900,
                 ),
               ),
-              const SizedBox(height: 3),
-              Text(
-                payment.date,
-                style: const TextStyle(color: AppColors.muted, fontSize: 12),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      payment.method,
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${payment.receiptNumber} · ${payment.term} · ${payment.recordedBy}',
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
               ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    money(payment.amount),
+                    style: TextStyle(
+                      color: reversed ? AppColors.red : AppColors.green,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    payment.date,
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+              if (!reversed)
+                IconButton(
+                  key: Key('reverse-payment-${payment.id}'),
+                  tooltip: 'Request reversal',
+                  onPressed: () => _openReversal(),
+                  icon: const Icon(Icons.undo_rounded, color: AppColors.red),
+                ),
             ],
+          ),
+          if (reversed)
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text(
+                  'REVERSED · The original receipt remains in the audit trail.',
+                  style: TextStyle(
+                    color: AppColors.red,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
+          FutureBuilder<List<PaymentReversal>>(
+            future: _reversals,
+            builder: (context, snapshot) {
+              final rows = snapshot.data ?? const <PaymentReversal>[];
+              if (rows.isEmpty) return const SizedBox.shrink();
+              final latest = rows.first;
+              return InkWell(
+                key: Key('payment-reversal-${payment.id}'),
+                onTap: () => _openReversal(latest),
+                child: Container(
+                  margin: const EdgeInsets.only(top: 10),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: latest.status == 'PENDING_APPROVAL'
+                        ? AppColors.amber.withValues(alpha: .10)
+                        : const Color(0xFFF8FAF9),
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.assignment_return_outlined, size: 17),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '${latest.status.replaceAll('_', ' ')} · ${latest.approverName.isEmpty ? 'No approver selected' : latest.approverName}',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      const Icon(Icons.chevron_right_rounded, size: 18),
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -5052,8 +5207,344 @@ class _PaymentHistoryTile extends StatelessWidget {
   }
 }
 
+class _PaymentReversalDialog extends StatefulWidget {
+  const _PaymentReversalDialog({
+    required this.api,
+    required this.customSchoolId,
+    required this.payment,
+    required this.currentUserId,
+    this.existing,
+  });
+
+  final FeeApiClient api;
+  final String customSchoolId;
+  final _StudentPaymentHistory payment;
+  final int currentUserId;
+  final PaymentReversal? existing;
+
+  @override
+  State<_PaymentReversalDialog> createState() => _PaymentReversalDialogState();
+}
+
+class _PaymentReversalDialogState extends State<_PaymentReversalDialog> {
+  late final TextEditingController _reason;
+  late final TextEditingController _actionReason;
+  late Future<List<FeeAdjustmentApprover>> _approvers;
+  int? _approverId;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _reason = TextEditingController(text: widget.existing?.reason ?? '');
+    _actionReason = TextEditingController();
+    _approverId = widget.existing?.approverId == 0
+        ? null
+        : widget.existing?.approverId;
+    _approvers = widget.api.getFeeAdjustmentApprovers(widget.customSchoolId);
+  }
+
+  @override
+  void dispose() {
+    _reason.dispose();
+    _actionReason.dispose();
+    super.dispose();
+  }
+
+  Future<void> _create(bool submit) async {
+    if (_reason.text.trim().length < 10) {
+      setState(
+        () => _error = 'Enter a reversal reason of at least 10 characters.',
+      );
+      return;
+    }
+    if (submit && _approverId == null) {
+      setState(
+        () => _error = 'Select an approver or save the reversal as a draft.',
+      );
+      return;
+    }
+    await _run(
+      () => widget.api.createPaymentReversal(
+        customSchoolId: widget.customSchoolId,
+        paymentId: widget.payment.id,
+        reason: _reason.text,
+        approverId: _approverId,
+        submitForApproval: submit,
+      ),
+    );
+  }
+
+  Future<void> _action(String action) async {
+    final reasonRequired = const {
+      'CANCEL',
+      'REASSIGN',
+      'REJECT',
+    }.contains(action);
+    if (reasonRequired && _actionReason.text.trim().length < 5) {
+      setState(
+        () =>
+            _error = 'Enter a reason of at least 5 characters for this action.',
+      );
+      return;
+    }
+    if ((action == 'SUBMIT' || action == 'REASSIGN') && _approverId == null) {
+      setState(() => _error = 'Select an approver first.');
+      return;
+    }
+    await _run(
+      () => widget.api.performPaymentReversalAction(
+        customSchoolId: widget.customSchoolId,
+        reversalId: widget.existing!.id,
+        action: action,
+        reason: _actionReason.text.trim().isEmpty
+            ? 'Approved'
+            : _actionReason.text,
+        approverId: _approverId,
+      ),
+    );
+  }
+
+  Future<void> _run(Future<PaymentReversal> Function() operation) async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await operation();
+      if (mounted) Navigator.pop(context, true);
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error = '$error';
+        });
+      }
+    }
+  }
+
+  Future<void> _downloadConfirmation() async {
+    final reversal = widget.existing!;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final bytes = await widget.api.downloadPaymentReversalConfirmation(
+        customSchoolId: widget.customSchoolId,
+        reversalId: reversal.id,
+      );
+      final reference = reversal.reversalReference.trim().isEmpty
+          ? 'payment-reversal-${reversal.id}'
+          : reversal.reversalReference.trim();
+      final downloaded = await downloadReportPdf('$reference.pdf', bytes);
+      if (!downloaded) {
+        throw const FeeApiException(
+          'The confirmation could not be downloaded.',
+        );
+      }
+      if (mounted) setState(() => _saving = false);
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error = '$error';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final existing = widget.existing;
+    final active = existing?.isActive ?? true;
+    return AlertDialog(
+      title: Text(
+        existing == null ? 'Request payment reversal' : 'Reversal request',
+      ),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.red.withValues(alpha: .07),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '${widget.payment.receiptNumber} · ${widget.payment.moneyLabel}\nThe original receipt will be retained and marked Reversed after approval.',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              const SizedBox(height: 16),
+              if (existing != null) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color:
+                        (existing.status == 'APPROVED'
+                                ? AppColors.green
+                                : AppColors.amber)
+                            .withValues(alpha: .12),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    existing.status.replaceAll('_', ' '),
+                    style: TextStyle(
+                      color: existing.status == 'APPROVED'
+                          ? AppColors.green
+                          : AppColors.amber,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                if (existing.reversalReference.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Reversal reference: ${existing.reversalReference}',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ],
+                const SizedBox(height: 14),
+              ],
+              TextField(
+                key: const Key('payment-reversal-reason'),
+                controller: _reason,
+                enabled: existing == null,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Reason for reversal *',
+                  alignLabelWithHint: true,
+                ),
+              ),
+              if (active) ...[
+                const SizedBox(height: 14),
+                FutureBuilder<List<FeeAdjustmentApprover>>(
+                  future: _approvers,
+                  builder: (context, snapshot) {
+                    final approvers =
+                        (snapshot.data ?? const <FeeAdjustmentApprover>[])
+                            .where((item) => item.id != widget.currentUserId)
+                            .toList();
+                    return DropdownButtonFormField<int>(
+                      key: const Key('payment-reversal-approver'),
+                      value: approvers.any((item) => item.id == _approverId)
+                          ? _approverId
+                          : null,
+                      decoration: const InputDecoration(labelText: 'Approver'),
+                      items: approvers
+                          .map(
+                            (item) => DropdownMenuItem(
+                              value: item.id,
+                              child: Text('${item.name} · ${item.role}'),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: _saving
+                          ? null
+                          : (value) => setState(() => _approverId = value),
+                    );
+                  },
+                ),
+              ],
+              if (existing != null && active) ...[
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _actionReason,
+                  maxLines: 2,
+                  decoration: const InputDecoration(
+                    labelText: 'Action reason',
+                    alignLabelWithHint: true,
+                  ),
+                ),
+              ],
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _error!,
+                  style: const TextStyle(
+                    color: AppColors.red,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context, false),
+          child: const Text('Close'),
+        ),
+        if (existing == null) ...[
+          OutlinedButton(
+            key: const Key('save-reversal-draft'),
+            onPressed: _saving ? null : () => _create(false),
+            child: const Text('Save draft'),
+          ),
+          FilledButton(
+            key: const Key('submit-reversal'),
+            onPressed: _saving ? null : () => _create(true),
+            child: const Text('Submit for approval'),
+          ),
+        ] else if (existing.status == 'DRAFT') ...[
+          OutlinedButton(
+            onPressed: _saving ? null : () => _action('CANCEL'),
+            child: const Text('Cancel request'),
+          ),
+          FilledButton(
+            onPressed: _saving ? null : () => _action('SUBMIT'),
+            child: const Text('Submit for approval'),
+          ),
+        ] else if (existing.status == 'PENDING_APPROVAL') ...[
+          OutlinedButton(
+            onPressed: _saving ? null : () => _action('CANCEL'),
+            child: const Text('Cancel request'),
+          ),
+          OutlinedButton(
+            onPressed: _saving ? null : () => _action('REASSIGN'),
+            child: const Text('Change approver'),
+          ),
+          OutlinedButton(
+            onPressed: _saving ? null : () => _action('REJECT'),
+            child: const Text('Reject'),
+          ),
+          FilledButton(
+            key: const Key('approve-reversal'),
+            onPressed: _saving ? null : () => _action('APPROVE'),
+            child: const Text('Approve reversal'),
+          ),
+        ] else if (existing.status == 'APPROVED') ...[
+          FilledButton.icon(
+            key: const Key('download-reversal-confirmation'),
+            onPressed: _saving ? null : _downloadConfirmation,
+            icon: const Icon(Icons.picture_as_pdf_outlined),
+            label: const Text('Download confirmation'),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+extension on _StudentPaymentHistory {
+  String get moneyLabel => 'GH₵${amount.toStringAsFixed(2)}';
+}
+
 class _StudentPaymentHistory {
   const _StudentPaymentHistory({
+    required this.id,
+    required this.status,
     required this.method,
     required this.receiptNumber,
     required this.amount,
@@ -5062,6 +5553,8 @@ class _StudentPaymentHistory {
     required this.recordedBy,
   });
 
+  final int id;
+  final String status;
   final String method;
   final String receiptNumber;
   final double amount;

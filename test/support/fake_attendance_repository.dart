@@ -144,6 +144,38 @@ class FakeAttendanceRepository implements AttendanceRepository {
   }
 
   @override
+  Future<AttendanceTermHistory> getTermHistory({
+    required String customSchoolId,
+    required int gradeLevelId,
+    required int streamId,
+  }) async {
+    final today = DateTime.now();
+    return AttendanceTermHistory(
+      termId: 1,
+      teachingStartDate: today.subtract(const Duration(days: 30)),
+      teachingEndDate: today.add(const Duration(days: 30)),
+      expectedStudents: 15,
+      days: [
+        AttendanceDaySummary(
+          date: today,
+          status: AttendanceDayStatus.missing,
+          expectedStudents: 15,
+        ),
+      ],
+    );
+  }
+
+  @override
+  Future<void> markNonSchoolDay({
+    required String customSchoolId,
+    required int termId,
+    required DateTime date,
+    required String name,
+    required String type,
+    String? description,
+  }) async {}
+
+  @override
   Future<void> saveAttendance({
     required String customSchoolId,
     required int gradeLevelId,
@@ -151,6 +183,7 @@ class FakeAttendanceRepository implements AttendanceRepository {
     required DateTime date,
     required List<AttendanceEntry> entries,
     required bool updateExisting,
+    String? vacationOverrideReason,
   }) async {
     await _pause();
     _savedRecords[_key(streamId, date)] = entries

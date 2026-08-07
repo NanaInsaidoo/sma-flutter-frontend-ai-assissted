@@ -259,6 +259,77 @@ class FakeStudentsRepository implements StudentsRepository {
     required StudentFeeAdjustment adjustment,
     required String reason,
   }) async => adjustment.copyWith(status: StudentFeeAdjustmentStatus.cancelled);
+
+  @override
+  Future<StudentPlacement> getCurrentPlacement(String studentId) async =>
+      StudentPlacement(
+        placementId: 1,
+        gradeLevelId: 1,
+        gradeName: 'JHS 1',
+        streamId: 11,
+        streamName: 'A',
+        effectiveFrom: DateTime(2026, 7, 1),
+        active: true,
+        termStart: DateTime(2026, 7, 1),
+        termEnd: DateTime(2026, 9, 30),
+      );
+
+  @override
+  Future<List<StudentPlacement>> getPlacementHistory(String studentId) async =>
+      [await getCurrentPlacement(studentId)];
+
+  @override
+  Future<List<StudentTransferDestination>> getTransferDestinations(
+    String studentId,
+  ) async => const [
+    StudentTransferDestination(
+      gradeLevelId: 1,
+      gradeName: 'JHS 1',
+      streamId: 12,
+      streamName: 'B',
+    ),
+    StudentTransferDestination(
+      gradeLevelId: 2,
+      gradeName: 'JHS 2',
+      streamId: 21,
+      streamName: 'A',
+    ),
+  ];
+
+  @override
+  Future<StudentTransferPreview> previewTransfer(
+    String studentId,
+    StudentTransferInput input,
+  ) async => StudentTransferPreview(
+    previewToken: 'preview-token',
+    source: await getCurrentPlacement(studentId),
+    destination: (await getTransferDestinations(
+      studentId,
+    )).firstWhere((x) => x.streamId == input.destinationStreamId),
+    effectiveDate: input.effectiveDate,
+    reason: input.reason,
+    gradeChanged: input.destinationGradeLevelId != 1,
+    feeMessage: input.destinationGradeLevelId != 1
+        ? 'Fees will be recalculated using the destination grade fee structure.'
+        : 'No grade-level fee change is expected.',
+    attendanceMessage:
+        'Attendance before the effective date remains with the previous class.',
+  );
+
+  @override
+  Future<StudentPlacement> confirmTransfer(
+    String studentId,
+    StudentTransferInput input,
+  ) async => StudentPlacement(
+    placementId: 2,
+    gradeLevelId: input.destinationGradeLevelId,
+    gradeName: input.destinationGradeLevelId == 1 ? 'JHS 1' : 'JHS 2',
+    streamId: input.destinationStreamId,
+    streamName: input.destinationStreamId == 12 ? 'B' : 'A',
+    effectiveFrom: input.effectiveDate,
+    active: true,
+    reason: input.reason,
+  );
 }
 
 EnrolledStudent _student({

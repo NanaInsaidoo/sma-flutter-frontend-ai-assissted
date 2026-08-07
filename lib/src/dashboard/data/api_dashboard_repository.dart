@@ -140,6 +140,19 @@ class ApiDashboardRepository implements DashboardRepository {
       final term = results[1] as fee_models.CurrentAcademicTerm;
       final feeOverview = results[2] as fee_models.FeeManagementOverview;
       final attendance = results[3] as AttendanceDashboardOverview;
+      final activeWaivers =
+          await _optional<List<fee_models.FeeWaiverAssignment>>(
+            () => feeApi.getStudentWaivers(
+              customSchoolId: schoolId,
+              academicTermId: term.id,
+            ),
+          ) ??
+          <fee_models.FeeWaiverAssignment>[];
+      final paymentReversals =
+          await _optional<List<fee_models.PaymentReversal>>(
+            () => feeApi.getSchoolPaymentReversals(customSchoolId: schoolId),
+          ) ??
+          <fee_models.PaymentReversal>[];
       final admissionTerm = await _optional<AdmissionTermContext>(
         () => admissionsApi.getCurrentTerm(schoolId),
       );
@@ -231,16 +244,27 @@ class ApiDashboardRepository implements DashboardRepository {
           ),
         ],
         admissions: _buildAdmissionGroups(admissions),
-        alerts: attendance.alerts
-            .map(
+        alerts: [
+          ...attendance.alerts.map(
               (alert) => SchoolAlert(
                 title: alert.title,
                 message: alert.message,
                 context: 'Attendance',
                 level: _alertLevel(alert.severity),
               ),
-            )
-            .toList(),
+            ),
+          if (paymentReversals.any(
+            (item) =>
+                item.status == 'PENDING_APPROVAL' && item.termId == term.id,
+          ))
+            SchoolAlert(
+              title: 'Payment reversals awaiting approval',
+              message:
+                  '${paymentReversals.where((item) => item.status == 'PENDING_APPROVAL' && item.termId == term.id).length} reversal request${paymentReversals.where((item) => item.status == 'PENDING_APPROVAL' && item.termId == term.id).length == 1 ? '' : 's'} must be reviewed.',
+              context: 'Fees',
+              level: AlertLevel.warning,
+            ),
+        ],
         events: _buildUpcomingEvents(schoolEvents),
         calendarEvents: schoolEvents,
         activities: const [],
@@ -253,7 +277,9 @@ class ApiDashboardRepository implements DashboardRepository {
         fees: FeeSummary(
           collected: feeOverview.totalCollected,
           outstanding: feeOverview.outstanding,
-          waivers: 0,
+          waivers: activeWaivers
+              .where((item) => item.status == 'ACTIVE')
+              .fold(0, (sum, item) => sum + item.waivedAmount),
         ),
       );
     } on DashboardApiException {

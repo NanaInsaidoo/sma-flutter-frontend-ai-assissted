@@ -528,4 +528,91 @@ void main() {
       expect(requests.last.body, contains('"score":9'));
     });
   });
+
+  group('AssessmentApiClient term evaluations', () {
+    test('loads an assignment with its saved student ratings', () async {
+      late http.Request request;
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((value) async {
+          request = value;
+          return http.Response(
+            '{"id":14,"staffId":"T-1","students":[{"id":"STU-1","name":"Ama Mensah"}],"ratings":{"STU-1":{"ATTENTIVENESS":"Good"}}}',
+            200,
+          );
+        }),
+      );
+
+      final result = await api.getTermEvaluationAssignment(
+        assignmentId: 14,
+        schoolId: 'SCHOOL-1',
+      );
+
+      expect(request.method, 'GET');
+      expect(request.url.path, endsWith('/term-evaluations/assignments/14'));
+      expect(request.url.queryParameters['customSchoolId'], 'SCHOOL-1');
+      expect((result['ratings'] as Map)['STU-1']['ATTENTIVENESS'], 'Good');
+    });
+
+    test(
+      'saves a per-student draft without filling omitted criteria',
+      () async {
+        late http.Request request;
+        final api = AssessmentApiClient(
+          accessToken: 'test-token',
+          client: MockClient((value) async {
+            request = value;
+            return http.Response('', 204);
+          }),
+        );
+
+        await api.saveTermEvaluationAssignment(
+          assignmentId: 14,
+          schoolId: 'SCHOOL-1',
+          staffId: 'T-1',
+          students: [
+            {
+              'customStudentId': 'STU-1',
+              'ratings': [
+                {'criterion': 'ATTENTIVENESS', 'rating': 'Not observed'},
+              ],
+            },
+          ],
+        );
+
+        expect(request.method, 'PUT');
+        expect(request.url.queryParameters['staffId'], 'T-1');
+        expect(request.body, contains('"customStudentId":"STU-1"'));
+        expect(request.body, contains('"rating":"Not observed"'));
+        expect(request.body, isNot(contains('HOMEWORK_HABITS')));
+      },
+    );
+
+    test('finalizes the class-teacher wording and comment', () async {
+      late http.Request request;
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((value) async {
+          request = value;
+          return http.Response('{"status":"FINALIZED"}', 200);
+        }),
+      );
+
+      await api.finalizeTermEvaluationReview(
+        studentId: 'STU/1',
+        schoolId: 'SCHOOL-1',
+        termId: 7,
+        staffId: 'CLASS-1',
+        finalRatings: {'ATTENTIVENESS': 'Excellent'},
+        comment: 'Consistent progress.',
+      );
+
+      expect(request.method, 'POST');
+      expect(request.url.path, endsWith('/students/STU%2F1/finalize'));
+      expect(request.url.queryParameters['termId'], '7');
+      expect(request.url.queryParameters['staffId'], 'CLASS-1');
+      expect(request.body, contains('"ATTENTIVENESS":"Excellent"'));
+      expect(request.body, contains('"comment":"Consistent progress."'));
+    });
+  });
 }

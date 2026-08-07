@@ -2,6 +2,78 @@ import '../../fees/domain/fee_models.dart';
 
 enum EnrolledStudentStatus { active, inactive, transferred }
 
+enum StudentTransferType { sameGradeDifferentStream, differentGrade }
+
+class StudentPlacement {
+  const StudentPlacement({
+    required this.placementId,
+    required this.gradeLevelId,
+    required this.gradeName,
+    required this.streamId,
+    required this.streamName,
+    required this.effectiveFrom,
+    this.effectiveTo,
+    required this.active,
+    this.termStart,
+    this.termEnd,
+    this.reason = '',
+  });
+  final int placementId, gradeLevelId, streamId;
+  final String gradeName, streamName, reason;
+  final DateTime effectiveFrom;
+  final DateTime? effectiveTo, termStart, termEnd;
+  final bool active;
+  String get label => '$gradeName — $streamName';
+}
+
+class StudentTransferDestination {
+  const StudentTransferDestination({
+    required this.gradeLevelId,
+    required this.gradeName,
+    required this.streamId,
+    required this.streamName,
+  });
+  final int gradeLevelId, streamId;
+  final String gradeName, streamName;
+  String get label => '$gradeName — $streamName';
+}
+
+class StudentTransferInput {
+  const StudentTransferInput({
+    required this.type,
+    required this.destinationGradeLevelId,
+    required this.destinationStreamId,
+    required this.effectiveDate,
+    required this.reason,
+    this.previewToken,
+    this.actorUserId,
+  });
+  final StudentTransferType type;
+  final int destinationGradeLevelId, destinationStreamId;
+  final DateTime effectiveDate;
+  final String reason;
+  final String? previewToken;
+  final int? actorUserId;
+}
+
+class StudentTransferPreview {
+  const StudentTransferPreview({
+    required this.previewToken,
+    required this.source,
+    required this.destination,
+    required this.effectiveDate,
+    required this.reason,
+    required this.gradeChanged,
+    required this.feeMessage,
+    required this.attendanceMessage,
+  });
+  final String previewToken, reason, feeMessage, attendanceMessage;
+  final StudentPlacement source;
+  final StudentTransferDestination destination;
+  final DateTime effectiveDate;
+  final bool gradeChanged;
+}
+
 class EnrolledStudent {
   const EnrolledStudent({
     required this.id,
@@ -337,4 +409,18 @@ abstract interface class StudentsRepository {
     required StudentFeeAdjustment adjustment,
     required String reason,
   });
+
+  Future<StudentPlacement> getCurrentPlacement(String studentId);
+  Future<List<StudentPlacement>> getPlacementHistory(String studentId);
+  Future<List<StudentTransferDestination>> getTransferDestinations(
+    String studentId,
+  );
+  Future<StudentTransferPreview> previewTransfer(
+    String studentId,
+    StudentTransferInput input,
+  );
+  Future<StudentPlacement> confirmTransfer(
+    String studentId,
+    StudentTransferInput input,
+  );
 }

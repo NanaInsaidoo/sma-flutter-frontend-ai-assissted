@@ -235,6 +235,73 @@ class AttendanceApiClient implements AttendanceRepository {
   }
 
   @override
+  Future<AttendanceTermHistory> getTermHistory({
+    required String customSchoolId,
+    required int gradeLevelId,
+    required int streamId,
+  }) async {
+    final response = await _send(
+      'GET',
+      _withQuery(
+        '/api/schools/$customSchoolId/attendance/streams/$streamId/term-history',
+        {'gradeLevelId': '$gradeLevelId'},
+      ),
+    );
+    final json = _map(_decode(response)) ?? const {};
+    final days = _list(json['days']).whereType<Map<String, dynamic>>().map((
+      item,
+    ) {
+      final rawStatus = _string(item['status']).toUpperCase();
+      return AttendanceDaySummary(
+        date: _dateTime(item['date']) ?? DateTime.now(),
+        status: rawStatus == 'COMPLETED'
+            ? AttendanceDayStatus.completed
+            : rawStatus == 'NON_SCHOOL_DAY'
+            ? AttendanceDayStatus.nonSchoolDay
+            : AttendanceDayStatus.missing,
+        expectedStudents: _integer(item['expectedStudents']),
+        markedStudents: _integer(item['markedStudents']),
+        present: _integer(item['present']),
+        absent: _integer(item['absent']),
+        late: _integer(item['late']),
+        eventName: _string(item['eventName']),
+        eventDescription: _string(item['eventDescription']),
+      );
+    }).toList();
+    return AttendanceTermHistory(
+      termId: _integer(json['termId']),
+      teachingStartDate: _dateTime(json['teachingStartDate']) ?? DateTime.now(),
+      teachingEndDate: _dateTime(json['teachingEndDate']) ?? DateTime.now(),
+      expectedStudents: _integer(json['expectedStudents']),
+      days: days,
+    );
+  }
+
+  @override
+  Future<void> markNonSchoolDay({
+    required String customSchoolId,
+    required int termId,
+    required DateTime date,
+    required String name,
+    required String type,
+    String? description,
+  }) async {
+    await _send(
+      'POST',
+      '/api/v2/staff-attendance/school/$customSchoolId/non-school-day',
+      body: {
+        'termId': termId,
+        'startDate': _date(date),
+        'endDate': _date(date),
+        'name': name,
+        'type': type,
+        if (description?.trim().isNotEmpty == true)
+          'description': description!.trim(),
+      },
+    );
+  }
+
+  @override
   Future<void> saveAttendance({
     required String customSchoolId,
     required int gradeLevelId,
@@ -242,6 +309,7 @@ class AttendanceApiClient implements AttendanceRepository {
     required DateTime date,
     required List<AttendanceEntry> entries,
     required bool updateExisting,
+    String? vacationOverrideReason,
   }) async {
     Map<String, dynamic> payload(AttendanceEntry entry) {
       final present = entry.mark != AttendanceMark.absent;
@@ -257,6 +325,8 @@ class AttendanceApiClient implements AttendanceRepository {
             ? entry.minutesLate
             : 0,
         'attendanceDate': _date(date),
+        if (vacationOverrideReason?.trim().isNotEmpty == true)
+          'vacationOverrideReason': vacationOverrideReason!.trim(),
         if (entry.remarks.trim().isNotEmpty) 'remarks': entry.remarks.trim(),
       };
     }
@@ -375,13 +445,25 @@ class AttendanceApiClient implements AttendanceRepository {
   String _errorMessage(http.Response response) {
     try {
       final decoded = jsonDecode(response.body);
+      if (decoded is String && decoded.trim().isNotEmpty) {
+        return decoded.trim();
+      }
+      if (decoded is List &&
+          decoded.isNotEmpty &&
+          decoded.first is String &&
+          (decoded.first as String).trim().isNotEmpty) {
+        return (decoded.first as String).trim();
+      }
       if (decoded is Map<String, dynamic>) {
         for (final key in ['message', 'error', 'detail']) {
           final value = decoded[key];
           if (value is String && value.trim().isNotEmpty) return value.trim();
         }
       }
-    } catch (_) {}
+    } catch (_) {
+      final raw = response.body.trim();
+      if (raw.isNotEmpty) return raw;
+    }
     return 'Attendance request failed (${response.statusCode}).';
   }
 

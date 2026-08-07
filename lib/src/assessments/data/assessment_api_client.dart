@@ -83,6 +83,8 @@ class AssessmentApiClient {
             id: _int(item['gradeLevelId'] ?? item['id'] ?? nested['id']) ?? 0,
             name: name,
             status: _string(item['status']),
+            displayOrder:
+                _int(item['displayOrder'] ?? nested['displayOrder']) ?? 0,
           );
         })
         .where(
@@ -629,6 +631,240 @@ class AssessmentApiClient {
     }
   }
 
+  Future<Map<String, dynamic>> releaseTermEvaluations({
+    required String schoolId,
+    required int termId,
+    required String actor,
+  }) async {
+    final q = Uri(
+      queryParameters: {
+        'customSchoolId': schoolId,
+        'termId': '$termId',
+        'actor': actor,
+      },
+    ).query;
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/term-evaluations/release?$q',
+          method: 'POST',
+          body: const {},
+        ),
+      ),
+    );
+  }
+
+  Future<Map<String, dynamic>> getTermEvaluationDashboard({
+    required String schoolId,
+    required int termId,
+  }) async {
+    final q = Uri(
+      queryParameters: {'customSchoolId': schoolId, 'termId': '$termId'},
+    ).query;
+    return _map(_decodeBody(await _send('/api/term-evaluations/dashboard?$q')));
+  }
+
+  Future<void> saveTermEvaluationAssignment({
+    required int assignmentId,
+    required String schoolId,
+    required String staffId,
+    required List<Map<String, dynamic>> students,
+  }) async {
+    final q = Uri(
+      queryParameters: {'customSchoolId': schoolId, 'staffId': staffId},
+    ).query;
+    await _send(
+      '/api/term-evaluations/assignments/$assignmentId?$q',
+      method: 'PUT',
+      body: {'students': students},
+    );
+  }
+
+  Future<Map<String, dynamic>> getTermEvaluationAssignment({
+    required int assignmentId,
+    required String schoolId,
+  }) async {
+    final q = Uri(queryParameters: {'customSchoolId': schoolId}).query;
+    return _map(
+      _decodeBody(
+        await _send('/api/term-evaluations/assignments/$assignmentId?$q'),
+      ),
+    );
+  }
+
+  Future<void> submitTermEvaluationAssignment({
+    required int assignmentId,
+    required String schoolId,
+    required String staffId,
+  }) async {
+    final q = Uri(
+      queryParameters: {'customSchoolId': schoolId, 'staffId': staffId},
+    ).query;
+    await _send(
+      '/api/term-evaluations/assignments/$assignmentId/submit?$q',
+      method: 'POST',
+      body: const {},
+    );
+  }
+
+  Future<void> reopenTermEvaluationAssignment({
+    required int assignmentId,
+    required String schoolId,
+    required String actor,
+    required String reason,
+  }) async {
+    final q = Uri(
+      queryParameters: {'customSchoolId': schoolId, 'actor': actor},
+    ).query;
+    await _send(
+      '/api/term-evaluations/assignments/$assignmentId/reopen?$q',
+      method: 'POST',
+      body: {'reason': reason},
+    );
+  }
+
+  Future<Map<String, String>> getConsolidatedEvaluation({
+    required String studentId,
+    required String schoolId,
+    required int termId,
+  }) async {
+    final q = Uri(
+      queryParameters: {'customSchoolId': schoolId, 'termId': '$termId'},
+    ).query;
+    final body = _map(
+      _decodeBody(
+        await _send(
+          '/api/term-evaluations/students/${Uri.encodeComponent(studentId)}/consolidated?$q',
+        ),
+      ),
+    );
+    return body.map((key, value) => MapEntry(key, value.toString()));
+  }
+
+  Future<Map<String, dynamic>> getTermEvaluationReview({
+    required String studentId,
+    required String schoolId,
+    required int termId,
+  }) async {
+    final q = Uri(
+      queryParameters: {'customSchoolId': schoolId, 'termId': '$termId'},
+    ).query;
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/term-evaluations/students/${Uri.encodeComponent(studentId)}/review?$q',
+        ),
+      ),
+    );
+  }
+
+  Future<void> finalizeTermEvaluationReview({
+    required String studentId,
+    required String schoolId,
+    required int termId,
+    required String staffId,
+    required Map<String, String> finalRatings,
+    String? comment,
+  }) async {
+    final q = Uri(
+      queryParameters: {
+        'customSchoolId': schoolId,
+        'termId': '$termId',
+        'staffId': staffId,
+      },
+    ).query;
+    await _send(
+      '/api/term-evaluations/students/${Uri.encodeComponent(studentId)}/finalize?$q',
+      method: 'POST',
+      body: {'finalRatings': finalRatings, 'comment': comment},
+    );
+  }
+
+  Future<void> requestEvaluationOverride({
+    required String studentId,
+    required String schoolId,
+    required int termId,
+    required String actor,
+    required String criterion,
+    required String proposedRating,
+    required String reason,
+  }) async {
+    final q = Uri(
+      queryParameters: {
+        'customSchoolId': schoolId,
+        'termId': '$termId',
+        'actor': actor,
+      },
+    ).query;
+    await _send(
+      '/api/term-evaluations/students/${Uri.encodeComponent(studentId)}/overrides?$q',
+      method: 'POST',
+      body: {
+        'criterion': criterion,
+        'proposedRating': proposedRating,
+        'reason': reason,
+      },
+    );
+  }
+
+  Future<void> decideEvaluationOverride({
+    required int overrideId,
+    required bool approve,
+    required String actor,
+    required String reason,
+  }) async {
+    final q = Uri(
+      queryParameters: {'approve': '$approve', 'actor': actor},
+    ).query;
+    await _send(
+      '/api/term-evaluations/overrides/$overrideId/decision?$q',
+      method: 'POST',
+      body: {'reason': reason},
+    );
+  }
+
+  Future<void> acceptConsolidatedEvaluation({
+    required String studentId,
+    required String schoolId,
+    required int termId,
+    required String actor,
+    String? comment,
+  }) async {
+    final q = Uri(
+      queryParameters: {
+        'customSchoolId': schoolId,
+        'termId': '$termId',
+        'actor': actor,
+      },
+    ).query;
+    await _send(
+      '/api/term-evaluations/students/${Uri.encodeComponent(studentId)}/accept?$q',
+      method: 'POST',
+      body: {'comment': comment},
+    );
+  }
+
+  Future<void> remindTermEvaluationTeacher({
+    required int assignmentId,
+    required String schoolId,
+    required int termId,
+    required String actor,
+    String? message,
+  }) async {
+    final q = Uri(
+      queryParameters: {
+        'customSchoolId': schoolId,
+        'termId': '$termId',
+        'actor': actor,
+      },
+    ).query;
+    await _send(
+      '/api/term-evaluations/assignments/$assignmentId/remind?$q',
+      method: 'POST',
+      body: {'message': message},
+    );
+  }
+
   dynamic _decodeBody(http.Response response) {
     if (response.body.trim().isEmpty) return const <String, dynamic>{};
     return jsonDecode(response.body);
@@ -637,12 +873,20 @@ class AssessmentApiClient {
   String _message(http.Response response) {
     try {
       final body = jsonDecode(response.body);
+      if (body is String && body.trim().isNotEmpty) return body.trim();
+      if (body is List &&
+          body.isNotEmpty &&
+          body.first is String &&
+          (body.first as String).trim().isNotEmpty) {
+        return (body.first as String).trim();
+      }
       if (body is Map<String, dynamic>) {
         final message = body['message'] ?? body['error'] ?? body['detail'];
         if (message is String && message.trim().isNotEmpty) return message;
       }
     } catch (_) {
-      // Use a friendly fallback.
+      final raw = response.body.trim();
+      if (raw.isNotEmpty) return raw;
     }
     return response.statusCode == 404
         ? 'The requested assessment resource was not found.'
@@ -733,11 +977,13 @@ class AssessmentGradeLevelOption {
     required this.id,
     required this.name,
     required this.status,
+    this.displayOrder = 0,
   });
 
   final int id;
   final String name;
   final String status;
+  final int displayOrder;
 }
 
 class AssessmentStreamOption {

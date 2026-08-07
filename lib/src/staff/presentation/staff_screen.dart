@@ -151,12 +151,23 @@ class _StaffScreenState extends State<StaffScreen> {
     });
 
     try {
-      final users = await StaffApiClient(
+      final apiClient = StaffApiClient(
         accessToken: accessToken,
         onRefreshAccessToken: widget.onRefreshAccessToken,
-      ).getSchoolStaffUsers(customSchoolId: customSchoolId);
+      );
+      final results = await Future.wait([
+        apiClient.getSchoolStaffUsers(customSchoolId: customSchoolId),
+        apiClient.getSchoolStaffProfiles(customSchoolId),
+      ]);
+      final users = results[0] as List<StaffUserRecord>;
+      final profiles = results[1] as List<StaffProfileRecord>;
+      final profilesByUserId = {
+        for (final profile in profiles) profile.userId: profile,
+      };
       final nextStaff = [
-        ...users.map(_staffFromUserRecord),
+        ...users.map(
+          (user) => _staffFromUserRecord(user, profilesByUserId[user.id]),
+        ),
         ..._localEduHireDrafts,
       ];
       if (!mounted) return;
@@ -276,12 +287,17 @@ class _StaffScreenState extends State<StaffScreen> {
     );
   }
 
-  _StaffMember _staffFromUserRecord(StaffUserRecord user) {
+  _StaffMember _staffFromUserRecord(
+    StaffUserRecord user, [
+    StaffProfileRecord? profile,
+  ]) {
     final firstName = _clean(user.firstName).isEmpty
         ? _fallbackFirstName(user)
         : _clean(user.firstName);
     final lastName = _clean(user.lastName);
-    final role = _formatRole(user.role);
+    final role = _clean(profile?.position ?? '').isNotEmpty
+        ? _clean(profile!.position)
+        : _formatRole(user.role);
     final status = _statusFromAccountStatus(user.accountStatus);
     final category = _categoryForRole(user.role);
     return _StaffMember(
@@ -289,10 +305,12 @@ class _StaffScreenState extends State<StaffScreen> {
       firstName: firstName,
       lastName: lastName.isEmpty ? '' : lastName,
       role: role,
-      department: 'Not configured',
+      department: _clean(profile?.departmentName ?? '').isEmpty
+          ? 'Not configured'
+          : _clean(profile!.departmentName),
       category: category,
-      employmentType: 'Not configured',
-      contractType: 'Not configured',
+      employmentType: _employmentTypeDisplay(profile?.employmentType),
+      contractType: _contractTypeDisplay(profile?.employmentType),
       email: _display(user.email),
       phone: _display(user.phoneNumber),
       dateOfBirth: _formatDate(user.dateOfBirth),
@@ -300,7 +318,9 @@ class _StaffScreenState extends State<StaffScreen> {
       emergencyName: 'Not configured',
       emergencyRelationship: 'Not configured',
       emergencyPhone: 'Not configured',
-      startDate: _formatDate(user.createdAt),
+      startDate: _clean(profile?.startDate ?? '').isNotEmpty
+          ? _formatDate(profile!.startDate)
+          : _formatDate(user.createdAt),
       status: status,
       sourceLabel: 'School user',
       sourceReference: _display(user.userName),
@@ -308,10 +328,35 @@ class _StaffScreenState extends State<StaffScreen> {
       checks: [
         if (user.mustChangePassword) 'Awaiting first password change',
         if (!user.mustChangePassword) 'Login setup complete',
-        'Employment profile can be completed from onboarding',
+        if (profile == null)
+          'Employment profile can be completed from onboarding',
+        if (profile != null) 'Employment onboarding saved',
+        if (profile?.resumes.isNotEmpty == true) 'Resume uploaded',
       ],
       assignments: const [],
+      staffProfileId: profile?.staffId ?? '',
+      resumes: profile?.resumes ?? const [],
     );
+  }
+
+  String _employmentTypeDisplay(String? value) {
+    final clean = _clean(value ?? '');
+    if (clean.isEmpty) return 'Not configured';
+    return clean
+        .toLowerCase()
+        .split('_')
+        .map((part) {
+          return part.isEmpty
+              ? part
+              : '${part[0].toUpperCase()}${part.substring(1)}';
+        })
+        .join('-');
+  }
+
+  String _contractTypeDisplay(String? value) {
+    final clean = _clean(value ?? '').toUpperCase();
+    if (clean.isEmpty) return 'Not configured';
+    return clean == 'CONTRACT' ? 'Fixed term' : 'Permanent';
   }
 
   String _fallbackFirstName(StaffUserRecord user) {
@@ -328,6 +373,13 @@ String _clean(String value) => value.trim();
 String _display(String value) {
   final clean = _clean(value);
   return clean.isEmpty ? 'Not provided' : clean;
+}
+
+String _formatFileSize(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  final kilobytes = bytes / 1024;
+  if (kilobytes < 1024) return '${kilobytes.toStringAsFixed(1)} KB';
+  return '${(kilobytes / 1024).toStringAsFixed(1)} MB';
 }
 
 String _formatRole(String role) {
@@ -1336,6 +1388,46 @@ class _DocumentsTab extends StatelessWidget {
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 12),
+            if (staff.resumes.isNotEmpty) ...[
+              ...staff.resumes.map(
+                (resume) => Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: AppColors.greenSoft,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.picture_as_pdf_outlined,
+                        color: AppColors.green,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              resume.fileName,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            Text(
+                              '${_formatFileSize(resume.fileSize)} · ${resume.status.toLowerCase()}',
+                            ),
+                          ],
+                        ),
+                      ),
+                      const _SoftBadge(label: 'Resume', color: AppColors.green),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+            ],
             ...staff.checks.map(
               (check) => Container(
                 margin: const EdgeInsets.only(bottom: 10),
@@ -2279,6 +2371,7 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
       throw const StaffApiException('Could not read the selected resume file.');
     }
     await widget.apiClient.uploadResume(
+      customSchoolId: widget.customSchoolId,
       staffId: _staffId!,
       bytes: bytes,
       fileName: file.name,
@@ -3224,6 +3317,8 @@ class _StaffMember {
     required this.color,
     required this.checks,
     required this.assignments,
+    this.staffProfileId = '',
+    this.resumes = const [],
   });
 
   final String id;
@@ -3248,6 +3343,8 @@ class _StaffMember {
   final Color color;
   final List<String> checks;
   final List<String> assignments;
+  final String staffProfileId;
+  final List<StaffResumeRecord> resumes;
 
   String get fullName => '$firstName $lastName';
 
@@ -3275,6 +3372,8 @@ class _StaffMember {
       color: color,
       checks: checks,
       assignments: assignments,
+      staffProfileId: staffProfileId,
+      resumes: resumes,
     );
   }
 }

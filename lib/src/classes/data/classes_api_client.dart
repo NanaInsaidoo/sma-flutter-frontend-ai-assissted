@@ -241,6 +241,93 @@ class ClassesApiClient implements ClassesRepository {
   }
 
   @override
+  Future<List<SubjectTeacherAssignment>> getSubjectTeacherAssignments({
+    required String customSchoolId,
+    required int streamId,
+  }) async {
+    final response = await _send(
+      'GET',
+      '/api/schools/$customSchoolId/streams/$streamId/subject-teachers',
+    );
+    return _extractList(_decode(response))
+        .whereType<Map<String, dynamic>>()
+        .map(
+          (json) => SubjectTeacherAssignment(
+            id: _integer(json['id']),
+            streamId: _integer(json['streamId']),
+            subjectId: _integer(json['subjectId']),
+            subjectType: _string(json['subjectType']),
+            subjectName: _string(json['subjectName']),
+            subjectCode: _string(json['subjectCode']),
+            staffId: _string(json['staffId']),
+            staffName: _string(json['staffName']),
+            active: json['active'] != false,
+            effectiveFrom: DateTime.tryParse(_string(json['effectiveFrom'])),
+            changeReason: _string(json['changeReason']),
+          ),
+        )
+        .toList();
+  }
+
+  @override
+  Future<SubjectTeacherAssignment> addSubjectTeacherAssignment({
+    required String customSchoolId,
+    required int streamId,
+    required int gradeLevelId,
+    required ClassSubject subject,
+    required String staffId,
+    DateTime? effectiveFrom,
+    String? reason,
+  }) async {
+    final response = await _send(
+      'POST',
+      '/api/schools/$customSchoolId/streams/$streamId/subject-teachers',
+      body: {
+        'gradeLevelId': gradeLevelId,
+        'subjectId': subject.id,
+        'subjectType': subject.custom ? 'CUSTOM' : 'GES',
+        'staffId': staffId,
+        if (effectiveFrom != null)
+          'effectiveFrom': effectiveFrom.toIso8601String().split('T').first,
+        if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+      },
+    );
+    final json = _decode(response) as Map<String, dynamic>;
+    return SubjectTeacherAssignment(
+      id: _integer(json['id']),
+      streamId: _integer(json['streamId']),
+      subjectId: _integer(json['subjectId']),
+      subjectType: _string(json['subjectType']),
+      subjectName: _string(json['subjectName']),
+      subjectCode: _string(json['subjectCode']),
+      staffId: _string(json['staffId']),
+      staffName: _string(json['staffName']),
+      active: json['active'] != false,
+      effectiveFrom: DateTime.tryParse(_string(json['effectiveFrom'])),
+      changeReason: _string(json['changeReason']),
+    );
+  }
+
+  @override
+  Future<void> removeSubjectTeacherAssignment({
+    required String customSchoolId,
+    required int streamId,
+    required int assignmentId,
+    DateTime? effectiveFrom,
+    String? reason,
+  }) async {
+    await _send(
+      'DELETE',
+      '/api/schools/$customSchoolId/streams/$streamId/subject-teachers/$assignmentId',
+      body: {
+        'reason': reason ?? 'Teacher allocation updated',
+        if (effectiveFrom != null)
+          'effectiveFrom': effectiveFrom.toIso8601String().split('T').first,
+      },
+    );
+  }
+
+  @override
   Future<List<ClassGradeLevel>> getAllStreams(String customSchoolId) async {
     final encoded = Uri.encodeComponent(customSchoolId);
     final response = await _send(
@@ -383,10 +470,9 @@ class ClassesApiClient implements ClassesRepository {
 
   @override
   Future<List<SchoolStaffOption>> getSchoolStaff(String customSchoolId) async {
-    final encoded = Uri.encodeComponent(customSchoolId);
     final response = await _send(
       'GET',
-      '/api/user-management/schools/$encoded/users?page=0&size=100',
+      '/api/schools/${Uri.encodeComponent(customSchoolId)}/streams/0/subject-teachers/staff-options',
     );
     final decoded = _decode(response);
     final usersJson =

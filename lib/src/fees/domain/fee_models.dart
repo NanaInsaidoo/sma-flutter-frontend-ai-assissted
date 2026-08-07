@@ -821,6 +821,129 @@ class FeePaymentMethod {
   }
 }
 
+class HouseholdPaymentOptions {
+  const HouseholdPaymentOptions({required this.termId, required this.students});
+  final int termId;
+  final List<HouseholdPaymentStudent> students;
+  factory HouseholdPaymentOptions.fromJson(Map<String, dynamic> json) =>
+      HouseholdPaymentOptions(
+        termId: _feeInt(json['termId']),
+        students: (json['students'] as List? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(HouseholdPaymentStudent.fromJson)
+            .toList(),
+      );
+}
+
+class HouseholdPaymentStudent {
+  const HouseholdPaymentStudent({
+    required this.customStudentId,
+    required this.studentName,
+    required this.balance,
+    required this.items,
+  });
+  final String customStudentId;
+  final String studentName;
+  final double balance;
+  final List<HouseholdPaymentItem> items;
+  factory HouseholdPaymentStudent.fromJson(Map<String, dynamic> json) =>
+      HouseholdPaymentStudent(
+        customStudentId: '${json['customStudentId'] ?? ''}',
+        studentName: '${json['studentName'] ?? ''}',
+        balance: _feeDouble(json['balance']),
+        items: (json['items'] as List? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(HouseholdPaymentItem.fromJson)
+            .toList(),
+      );
+}
+
+class HouseholdPaymentItem {
+  const HouseholdPaymentItem({
+    required this.assessmentId,
+    required this.feeName,
+    required this.categoryName,
+    required this.outstandingAmount,
+  });
+  final int assessmentId;
+  final String feeName;
+  final String categoryName;
+  final double outstandingAmount;
+  factory HouseholdPaymentItem.fromJson(Map<String, dynamic> json) =>
+      HouseholdPaymentItem(
+        assessmentId: _feeInt(json['assessmentId']),
+        feeName: '${json['feeName'] ?? ''}',
+        categoryName: '${json['categoryName'] ?? ''}',
+        outstandingAmount: _feeDouble(json['outstandingAmount']),
+      );
+}
+
+class HouseholdPaymentResult {
+  const HouseholdPaymentResult({required this.transactions});
+  final List<HouseholdPaymentTransaction> transactions;
+  factory HouseholdPaymentResult.fromJson(Map<String, dynamic> json) =>
+      HouseholdPaymentResult(
+        transactions: (json['transactions'] as List? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(HouseholdPaymentTransaction.fromJson)
+            .toList(),
+      );
+}
+
+class HouseholdPaymentTransaction {
+  const HouseholdPaymentTransaction({
+    required this.paymentId,
+    required this.transactionNumber,
+    required this.receiptNumber,
+    required this.studentName,
+    required this.amount,
+    required this.status,
+    required this.allocations,
+  });
+  final int paymentId;
+  final String transactionNumber;
+  final String receiptNumber;
+  final String studentName;
+  final double amount;
+  final String status;
+  final List<HouseholdPaymentAllocation> allocations;
+  factory HouseholdPaymentTransaction.fromJson(Map<String, dynamic> json) =>
+      HouseholdPaymentTransaction(
+        paymentId: _feeInt(json['paymentId']),
+        transactionNumber: '${json['transactionNumber'] ?? ''}',
+        receiptNumber: '${json['receiptNumber'] ?? ''}',
+        studentName: '${json['studentName'] ?? ''}',
+        amount: _feeDouble(json['amount']),
+        status: '${json['status'] ?? ''}',
+        allocations: (json['allocations'] as List? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(HouseholdPaymentAllocation.fromJson)
+            .toList(),
+      );
+}
+
+class HouseholdPaymentAllocation {
+  const HouseholdPaymentAllocation({
+    required this.assessmentId,
+    required this.feeName,
+    required this.amount,
+  });
+  final int assessmentId;
+  final String feeName;
+  final double amount;
+  factory HouseholdPaymentAllocation.fromJson(Map<String, dynamic> json) =>
+      HouseholdPaymentAllocation(
+        assessmentId: _feeInt(json['assessmentId']),
+        feeName: '${json['feeName'] ?? ''}',
+        amount: _feeDouble(json['amount']),
+      );
+}
+
+int _feeInt(dynamic value) =>
+    value is num ? value.toInt() : int.tryParse('$value') ?? 0;
+double _feeDouble(dynamic value) =>
+    value is num ? value.toDouble() : double.tryParse('$value') ?? 0;
+
 class FeePaymentRequest {
   const FeePaymentRequest({
     required this.customStudentId,
@@ -1051,6 +1174,69 @@ class FeeStudentPayment {
       status: '${json['status'] ?? ''}',
     );
   }
+}
+
+class PaymentReversal {
+  const PaymentReversal({
+    required this.id,
+    required this.paymentId,
+    required this.paymentReference,
+    required this.customStudentId,
+    required this.studentName,
+    required this.termId,
+    required this.amount,
+    required this.status,
+    required this.reason,
+    required this.requestedBy,
+    required this.requesterName,
+    required this.approverId,
+    required this.approverName,
+    required this.decisionReason,
+    required this.reversalReference,
+    required this.createdAt,
+    required this.decidedAt,
+  });
+
+  final int id;
+  final int paymentId;
+  final String paymentReference;
+  final String customStudentId;
+  final String studentName;
+  final int termId;
+  final double amount;
+  final String status;
+  final String reason;
+  final String requestedBy;
+  final String requesterName;
+  final int approverId;
+  final String approverName;
+  final String decisionReason;
+  final String reversalReference;
+  final DateTime? createdAt;
+  final DateTime? decidedAt;
+
+  bool get isActive => status == 'DRAFT' || status == 'PENDING_APPROVAL';
+
+  factory PaymentReversal.fromJson(Map<String, dynamic> json) =>
+      PaymentReversal(
+        id: _intValue(json['id']),
+        paymentId: _intValue(json['paymentId']),
+        paymentReference: '${json['paymentReference'] ?? ''}',
+        customStudentId: '${json['customStudentId'] ?? ''}',
+        studentName: '${json['studentName'] ?? ''}',
+        termId: _intValue(json['termId']),
+        amount: _doubleValue(json['amount']),
+        status: '${json['status'] ?? ''}'.toUpperCase(),
+        reason: '${json['reason'] ?? ''}',
+        requestedBy: '${json['requestedBy'] ?? ''}',
+        requesterName: '${json['requesterName'] ?? ''}',
+        approverId: _intValue(json['approverId']),
+        approverName: '${json['approverName'] ?? ''}',
+        decisionReason: '${json['decisionReason'] ?? ''}',
+        reversalReference: '${json['reversalReference'] ?? ''}',
+        createdAt: _dateValue(json['createdAt']),
+        decidedAt: _dateValue(json['decidedAt']),
+      );
 }
 
 String _dateOnly(DateTime date) {

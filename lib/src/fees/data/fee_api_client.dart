@@ -669,6 +669,64 @@ class FeeApiClient {
         .toList();
   }
 
+  Future<HouseholdPaymentOptions> getHouseholdPaymentOptions({
+    required String customSchoolId,
+    required int householdId,
+    required int termId,
+  }) async {
+    final response = await _send(
+      'GET',
+      '/api/payments/schools/$customSchoolId/households/$householdId/allocation-options?termId=$termId',
+    );
+    return HouseholdPaymentOptions.fromJson(_decodeMap(response));
+  }
+
+  Future<HouseholdPaymentResult> createHouseholdSplitPayment({
+    required String customSchoolId,
+    required String idempotencyKey,
+    required int householdId,
+    required int termId,
+    required int paymentMethodId,
+    required double amountReceived,
+    required String payerName,
+    required String receivedBy,
+    String? externalReference,
+    required List<Map<String, dynamic>> payments,
+  }) async {
+    final response = await _send(
+      'POST',
+      '/api/payments/schools/$customSchoolId/households/split',
+      body: {
+        'idempotencyKey': idempotencyKey,
+        'householdId': householdId,
+        'termId': termId,
+        'paymentMethodId': paymentMethodId,
+        'amountReceived': amountReceived,
+        'payerName': payerName,
+        'receivedBy': receivedBy,
+        if (externalReference?.trim().isNotEmpty == true)
+          'externalReference': externalReference!.trim(),
+        'paymentDate': DateTime.now().toIso8601String(),
+        'payments': payments,
+      },
+    );
+    return HouseholdPaymentResult.fromJson(_decodeMap(response));
+  }
+
+  Future<List<int>> downloadPaymentReceipts({
+    required String customSchoolId,
+    required List<int> paymentIds,
+  }) async {
+    if (paymentIds.isEmpty) {
+      throw const FeeApiException('Select at least one receipt to download.');
+    }
+    final response = await _send(
+      'GET',
+      '/api/payments/school/$customSchoolId/receipts.pdf?paymentIds=${paymentIds.join(',')}',
+    );
+    return response.bodyBytes;
+  }
+
   Future<FeePaymentReceipt> recordPayment(FeePaymentRequest request) async {
     Future<FeePaymentReceipt> submit({
       required bool includeReceiptPhoto,
@@ -722,6 +780,80 @@ class FeeApiClient {
         .whereType<Map<String, dynamic>>()
         .map(FeeStudentPayment.fromJson)
         .toList();
+  }
+
+  Future<List<PaymentReversal>> getPaymentReversals({
+    required String customSchoolId,
+    required int paymentId,
+  }) async {
+    final response = await _send(
+      'GET',
+      '/api/payments/schools/$customSchoolId/$paymentId/reversals',
+    );
+    return _decodeList(
+      response,
+    ).whereType<Map<String, dynamic>>().map(PaymentReversal.fromJson).toList();
+  }
+
+  Future<List<PaymentReversal>> getSchoolPaymentReversals({
+    required String customSchoolId,
+  }) async {
+    final response = await _send(
+      'GET',
+      '/api/payments/schools/$customSchoolId/reversals',
+    );
+    return _decodeList(
+      response,
+    ).whereType<Map<String, dynamic>>().map(PaymentReversal.fromJson).toList();
+  }
+
+  Future<PaymentReversal> createPaymentReversal({
+    required String customSchoolId,
+    required int paymentId,
+    required String reason,
+    int? approverId,
+    required bool submitForApproval,
+  }) async {
+    final response = await _send(
+      'POST',
+      '/api/payments/schools/$customSchoolId/$paymentId/reversals',
+      body: {
+        'reason': reason.trim(),
+        if (approverId != null) 'approverId': approverId,
+        'submitForApproval': submitForApproval,
+      },
+    );
+    return PaymentReversal.fromJson(_decodeMap(response));
+  }
+
+  Future<PaymentReversal> performPaymentReversalAction({
+    required String customSchoolId,
+    required int reversalId,
+    required String action,
+    required String reason,
+    int? approverId,
+  }) async {
+    final response = await _send(
+      'POST',
+      '/api/payments/schools/$customSchoolId/reversals/$reversalId/actions',
+      body: {
+        'action': action,
+        'reason': reason.trim(),
+        if (approverId != null) 'approverId': approverId,
+      },
+    );
+    return PaymentReversal.fromJson(_decodeMap(response));
+  }
+
+  Future<List<int>> downloadPaymentReversalConfirmation({
+    required String customSchoolId,
+    required int reversalId,
+  }) async {
+    final response = await _send(
+      'GET',
+      '/api/payments/schools/$customSchoolId/reversals/$reversalId/confirmation.pdf',
+    );
+    return response.bodyBytes;
   }
 
   Future<SchoolFee> createFee(FeeSaveRequest request) async {

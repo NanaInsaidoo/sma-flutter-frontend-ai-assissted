@@ -34,6 +34,45 @@ void main() {
     expect(find.text('Bad state: No element'), findsNothing);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'teacher workspace remains available when administrator metrics are forbidden',
+    (tester) async {
+      tester.view.physicalSize = const Size(1600, 1200);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: AdministratorDashboard(
+            repository: _ForbiddenDashboardRepository(),
+            schoolId: 'SCH-001',
+            schoolName: 'Test School',
+            userDisplayName: 'Adwoa Teacher',
+            role: 'CLASS_TEACHER',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Welcome, Adwoa Teacher'), findsOneWidget);
+      expect(find.text('Open assessments'), findsOneWidget);
+      expect(find.text('Open term review'), findsOneWidget);
+      expect(find.text('Staff Management'), findsNothing);
+      expect(find.text('Fees & Requirements'), findsNothing);
+      expect(find.text('Dashboard data is not available yet.'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+}
+
+class _ForbiddenDashboardRepository extends _EmptyDashboardRepository {
+  @override
+  Future<DashboardSnapshot> getAdministratorDashboard(String schoolId) {
+    throw Exception('Forbidden');
+  }
 }
 
 class _EmptyDashboardRepository implements DashboardRepository {

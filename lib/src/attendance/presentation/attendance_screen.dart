@@ -31,6 +31,7 @@ class AttendanceScreen extends StatefulWidget {
     this.repository,
     this.initialGradeLevelId,
     this.initialStreamId,
+    this.initialDate,
     this.onBack,
     this.showClassSelectors = true,
   });
@@ -43,6 +44,7 @@ class AttendanceScreen extends StatefulWidget {
   final AttendanceRepository? repository;
   final int? initialGradeLevelId;
   final int? initialStreamId;
+  final DateTime? initialDate;
   final VoidCallback? onBack;
   final bool showClassSelectors;
 
@@ -71,6 +73,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   @override
   void initState() {
     super.initState();
+    if (widget.initialDate != null) {
+      _selectedDate = DateUtils.dateOnly(widget.initialDate!);
+    }
     _repository =
         widget.repository ??
         AttendanceApiClient(
@@ -204,6 +209,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _header(),
+                const SizedBox(height: 14),
+                _attendanceDateBanner(),
                 if (widget.showClassSelectors) ...[
                   const SizedBox(height: 20),
                   _selectionCard(),
@@ -353,6 +360,78 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
               const SizedBox(height: 14),
               const LinearProgressIndicator(minHeight: 2),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _attendanceDateBanner() {
+    final today = DateUtils.dateOnly(DateTime.now());
+    final selected = DateUtils.dateOnly(_selectedDate);
+    final relation = selected == today
+        ? 'Today'
+        : selected.isBefore(today)
+        ? 'Past attendance date'
+        : 'Future attendance date';
+    final color = selected.isAfter(today) ? AppColors.amber : AppColors.green;
+    final background = selected.isAfter(today)
+        ? const Color(0xFFFFF7E7)
+        : AppColors.greenSoft;
+    return Semantics(
+      container: true,
+      label: 'Attendance date ${_friendlyDate(_selectedDate)}',
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
+        decoration: BoxDecoration(
+          color: background,
+          border: Border.all(color: color.withValues(alpha: .35)),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.event_available_outlined, color: color, size: 26),
+            const SizedBox(width: 13),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'TAKING ATTENDANCE FOR',
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: .8,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    _friendlyDate(_selectedDate),
+                    key: const ValueKey('prominent-attendance-date'),
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  Text(
+                    relation,
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            OutlinedButton.icon(
+              key: const ValueKey('change-attendance-date'),
+              onPressed: _pickDate,
+              icon: const Icon(Icons.edit_calendar_outlined, size: 18),
+              label: const Text('Change date'),
+            ),
           ],
         ),
       ),
@@ -722,14 +801,28 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       child: Row(
         children: [
           Expanded(
-            child: Text(
-              complete
-                  ? 'All students have been marked.'
-                  : 'Mark ${_unmarkedCount()} more student${_unmarkedCount() == 1 ? '' : 's'} to submit.',
-              style: TextStyle(
-                color: complete ? AppColors.green : AppColors.muted,
-                fontWeight: FontWeight.w600,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  complete
+                      ? 'All students have been marked.'
+                      : 'Mark ${_unmarkedCount()} more student${_unmarkedCount() == 1 ? '' : 's'} to submit.',
+                  style: TextStyle(
+                    color: complete ? AppColors.green : AppColors.muted,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  'This register will be saved for ${_friendlyDate(_selectedDate)}.',
+                  style: const TextStyle(
+                    color: AppColors.text,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
             ),
           ),
           OutlinedButton(
@@ -739,7 +832,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           const SizedBox(width: 10),
           FilledButton.icon(
             key: const ValueKey('submit-attendance'),
-            onPressed: complete && !_saving ? _saveAttendance : null,
+            onPressed: complete && !_saving ? () => _saveAttendance() : null,
             icon: _saving
                 ? const SizedBox.square(
                     dimension: 16,
@@ -763,7 +856,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     );
   }
 
-  Future<void> _saveAttendance() async {
+  Future<void> _saveAttendance({String? vacationOverrideReason}) async {
     final grade = _selectedGrade;
     final stream = _selectedStream;
     if (grade == null || stream == null || _unmarkedCount() != 0) return;
@@ -776,6 +869,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         date: _selectedDate,
         entries: _entries,
         updateExisting: _hasExistingAttendance,
+        vacationOverrideReason: vacationOverrideReason,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -790,12 +884,71 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       await _loadRoster();
     } catch (error) {
       if (!mounted) return;
+      if (vacationOverrideReason == null &&
+          error.toString().toLowerCase().contains('teaching begins')) {
+        setState(() => _saving = false);
+        final reason = await _requestVacationOverrideReason(error.toString());
+        if (reason != null && mounted) {
+          await _saveAttendance(vacationOverrideReason: reason);
+        }
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Could not save attendance. $error')),
       );
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  Future<String?> _requestVacationOverrideReason(String warning) async {
+    final controller = TextEditingController();
+    String? validation;
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          icon: const Icon(Icons.warning_amber_rounded, color: Colors.orange),
+          title: const Text('Teaching has not started'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(warning.replaceFirst('AttendanceApiException: ', '')),
+              const SizedBox(height: 16),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                maxLines: 3,
+                decoration: InputDecoration(
+                  labelText: 'Reason for recording attendance early',
+                  errorText: validation,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final value = controller.text.trim();
+                if (value.length < 5) {
+                  setDialogState(() => validation = 'Enter a clear reason.');
+                  return;
+                }
+                Navigator.pop(dialogContext, value);
+              },
+              child: const Text('Continue and record'),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+    return result;
   }
 
   void _markAll(AttendanceMark mark) {

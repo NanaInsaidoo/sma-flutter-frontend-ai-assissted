@@ -46,6 +46,16 @@ class StaffApiClient {
         .toList();
   }
 
+  Future<List<StaffProfileRecord>> getSchoolStaffProfiles(
+    String customSchoolId,
+  ) async {
+    final response = await _send(
+      'GET',
+      '/api/v1/staff-management/schools/$customSchoolId/profiles',
+    );
+    return _decodeList(response).map(StaffProfileRecord.fromJson).toList();
+  }
+
   Future<CreatedSchoolUser> createSchoolUser({
     required String customSchoolId,
     required Map<String, dynamic> body,
@@ -81,16 +91,105 @@ class StaffApiClient {
   }
 
   Future<void> uploadResume({
+    required String customSchoolId,
     required String staffId,
     required List<int> bytes,
     required String fileName,
   }) async {
-    await _sendMultipart(
-      '/api/v1/staff-management/$staffId/documents/resume',
-      fields: const {'documentType': 'RESUME'},
-      fileBytes: bytes,
-      fileName: fileName,
+    final contentType = _resumeContentType(fileName);
+    final requestResponse = await _send(
+      'POST',
+      '/api/schools/$customSchoolId/documents/upload-requests',
+      body: {
+        'fileName': fileName,
+        'contentType': contentType,
+        'fileSize': bytes.length,
+        'documentType': 'RESUME',
+        'description': 'Staff resume',
+      },
     );
+    final requestJson = _unwrapMap(_decodeMap(requestResponse));
+    final documentId = _firstString(requestJson, const [
+      'documentId',
+      'documentID',
+      'id',
+    ]);
+    final uploadUrl = _firstString(requestJson, const [
+      'uploadUrl',
+      'uploadURL',
+      'presignedUrl',
+      'presignedURL',
+    ]);
+    if (documentId.isEmpty || uploadUrl.isEmpty) {
+      throw const StaffApiException(
+        'The resume upload instructions were incomplete.',
+      );
+    }
+    final uploadUri = Uri.tryParse(uploadUrl);
+    if (uploadUri == null ||
+        !uploadUri.hasQuery ||
+        !uploadUri.queryParameters.keys.any(
+          (key) => key.toLowerCase().startsWith('x-amz-'),
+        )) {
+      throw const StaffApiException(
+        'The resume upload URL is not a valid presigned S3 URL.',
+      );
+    }
+    late http.Response uploadResponse;
+    try {
+      uploadResponse = await _client
+          .put(uploadUri, headers: {'Content-Type': contentType}, body: bytes)
+          .timeout(const Duration(seconds: 45));
+    } catch (_) {
+      throw const StaffApiException(
+        'S3 blocked the resume upload. Check bucket CORS and storage configuration.',
+      );
+    }
+    if (uploadResponse.statusCode < 200 || uploadResponse.statusCode >= 300) {
+      throw StaffApiException(
+        'Resume upload failed with ${uploadResponse.statusCode}.',
+      );
+    }
+    final eTag = (uploadResponse.headers['etag'] ?? '').replaceAll('"', '');
+    if (eTag.isEmpty) {
+      throw const StaffApiException(
+        'S3 did not expose the resume upload ETag.',
+      );
+    }
+    await _send(
+      'POST',
+      '/api/schools/$customSchoolId/documents/$documentId/confirm',
+      body: {'eTag': eTag, 'fileSize': bytes.length},
+    );
+    await _send(
+      'POST',
+      '/api/v1/staff-management/$staffId/documents/resume/$documentId/attach',
+      body: const {},
+    );
+  }
+
+  String _resumeContentType(String fileName) {
+    final lower = fileName.toLowerCase();
+    if (lower.endsWith('.pdf')) return 'application/pdf';
+    if (lower.endsWith('.docx')) {
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    }
+    if (lower.endsWith('.doc')) return 'application/msword';
+    if (lower.endsWith('.rtf')) return 'application/rtf';
+    return 'application/octet-stream';
+  }
+
+  Map<String, dynamic> _unwrapMap(Map<String, dynamic> json) {
+    final data = json['data'];
+    return data is Map<String, dynamic> ? data : json;
+  }
+
+  String _firstString(Map<String, dynamic> json, List<String> keys) {
+    for (final key in keys) {
+      final value = json[key];
+      if (value != null && '$value'.trim().isNotEmpty) return '$value'.trim();
+    }
+    return '';
   }
 
   Future<void> createEmploymentReference({
@@ -152,52 +251,6 @@ class StaffApiClient {
       throw const StaffApiException(
         'Unable to reach the staff service right now.',
       );
-    }
-  }
-
-  Future<http.Response> _sendMultipart(
-    String path, {
-    required Map<String, String> fields,
-    required List<int> fileBytes,
-    required String fileName,
-  }) async {
-    if (accessToken == null || accessToken!.isEmpty) {
-      throw const StaffApiException('Please sign in again to continue.');
-    }
-
-    Future<http.StreamedResponse> send() {
-      final request = http.MultipartRequest('POST', Uri.parse('$baseUrl$path'));
-      request.headers['Authorization'] = 'Bearer $accessToken';
-      request.fields.addAll(fields);
-      request.files.add(
-        http.MultipartFile.fromBytes('file', fileBytes, filename: fileName),
-      );
-      return _client.send(request).timeout(const Duration(seconds: 30));
-    }
-
-    try {
-      var streamed = await send();
-      if ((streamed.statusCode == 401 || streamed.statusCode == 403) &&
-          onRefreshAccessToken != null) {
-        final nextToken = await onRefreshAccessToken!.call();
-        if (nextToken != null && nextToken.isNotEmpty) {
-          accessToken = nextToken;
-          streamed = await send();
-        }
-      }
-      final response = await http.Response.fromStream(streamed);
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        return response;
-      }
-      throw StaffApiException(_messageFromResponse(response));
-    } on TimeoutException {
-      throw const StaffApiException(
-        'The resume upload took too long. Please try again.',
-      );
-    } on StaffApiException {
-      rethrow;
-    } catch (_) {
-      throw const StaffApiException('Unable to upload the resume right now.');
     }
   }
 
@@ -339,6 +392,69 @@ class StaffLookupOption {
     return StaffLookupOption(
       id: rawId?.toString() ?? '',
       name: rawName?.toString() ?? '',
+    );
+  }
+}
+
+class StaffProfileRecord {
+  const StaffProfileRecord({
+    required this.staffId,
+    required this.userId,
+    required this.position,
+    required this.departmentName,
+    required this.employmentType,
+    required this.startDate,
+    required this.resumes,
+  });
+
+  final String staffId;
+  final String userId;
+  final String position;
+  final String departmentName;
+  final String employmentType;
+  final String startDate;
+  final List<StaffResumeRecord> resumes;
+
+  factory StaffProfileRecord.fromJson(dynamic value) {
+    final json = value is Map<String, dynamic> ? value : <String, dynamic>{};
+    final resumeValues = json['resumeDocuments'];
+    return StaffProfileRecord(
+      staffId: (json['staffId'] ?? '').toString(),
+      userId: (json['userId'] ?? '').toString(),
+      position: (json['position'] ?? '').toString(),
+      departmentName: (json['departmentName'] ?? '').toString(),
+      employmentType: (json['employmentType'] ?? '').toString(),
+      startDate: (json['startDate'] ?? '').toString(),
+      resumes: resumeValues is List
+          ? resumeValues.map(StaffResumeRecord.fromJson).toList()
+          : const [],
+    );
+  }
+}
+
+class StaffResumeRecord {
+  const StaffResumeRecord({
+    required this.documentId,
+    required this.fileName,
+    required this.fileType,
+    required this.fileSize,
+    required this.status,
+  });
+
+  final String documentId;
+  final String fileName;
+  final String fileType;
+  final int fileSize;
+  final String status;
+
+  factory StaffResumeRecord.fromJson(dynamic value) {
+    final json = value is Map<String, dynamic> ? value : <String, dynamic>{};
+    return StaffResumeRecord(
+      documentId: (json['documentId'] ?? '').toString(),
+      fileName: (json['fileName'] ?? '').toString(),
+      fileType: (json['fileType'] ?? '').toString(),
+      fileSize: int.tryParse('${json['fileSize'] ?? 0}') ?? 0,
+      status: (json['status'] ?? '').toString(),
     );
   }
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:school_management_app/src/students/presentation/students_screen.dart';
+import 'package:school_management_app/src/students/domain/student_models.dart';
 import 'package:school_management_app/src/theme/app_theme.dart';
 
 import 'support/fake_students_repository.dart';
@@ -9,6 +10,7 @@ void main() {
   Future<void> pumpStudents(
     WidgetTester tester, {
     VoidCallback? onOpenHousehold,
+    StudentsRepository repository = const FakeStudentsRepository(),
   }) async {
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1;
@@ -22,7 +24,7 @@ void main() {
           body: StudentsScreen(
             term: 'Term 2',
             academicYear: '2025/26',
-            repository: const FakeStudentsRepository(),
+            repository: repository,
             onOpenHousehold: onOpenHousehold,
           ),
         ),
@@ -67,6 +69,36 @@ void main() {
     await tester.tap(find.byKey(const Key('back-to-students')));
     await tester.pumpAndSettle();
     expect(find.text('Enrolled students (6)'), findsOneWidget);
+  });
+
+  testWidgets('reviews and confirms a same-grade stream transfer', (
+    tester,
+  ) async {
+    final repository = _CountingStudentsRepository();
+    await pumpStudents(tester, repository: repository);
+    await tester.tap(find.byKey(const Key('student-row-STU-FA1BC0-9043')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('change-class-grade')));
+    await tester.pumpAndSettle();
+    expect(find.text('Change class/grade'), findsWidgets);
+    await tester.tap(find.byKey(const Key('transfer-destination')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('JHS 1 — B').last);
+    await tester.enterText(
+      find.byKey(const Key('transfer-reason')),
+      'Move to the other stream.',
+    );
+    await tester.tap(find.text('Review transfer'));
+    await tester.pumpAndSettle();
+    expect(find.text('Review transfer'), findsOneWidget);
+    expect(find.text('No grade-level fee change is expected.'), findsOneWidget);
+    await tester.tap(find.text('Confirm transfer'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Student class/grade changed successfully.'),
+      findsOneWidget,
+    );
+    expect(repository.registerLoads, 2);
   });
 
   testWidgets('shows medical conditions, allergies, and vaccinations', (
@@ -246,4 +278,14 @@ void main() {
     expect(find.byKey(const Key('adjustment-menu-ADJ-1042-01')), findsNothing);
     expect(find.text('Approved'), findsWidgets);
   });
+}
+
+class _CountingStudentsRepository extends FakeStudentsRepository {
+  int registerLoads = 0;
+
+  @override
+  Future<List<EnrolledStudent>> getEnrolledStudents() {
+    registerLoads += 1;
+    return super.getEnrolledStudents();
+  }
 }

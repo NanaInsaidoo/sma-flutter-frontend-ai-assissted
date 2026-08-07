@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../domain/class_models.dart';
+import '../../attendance/data/attendance_api_client.dart';
+import '../../attendance/domain/attendance_models.dart';
+import '../../attendance/presentation/attendance_screen.dart';
 import '../../theme/app_theme.dart';
 
 class GradeDetailScreen extends StatefulWidget {
@@ -8,12 +11,19 @@ class GradeDetailScreen extends StatefulWidget {
     super.key,
     required this.customSchoolId,
     required this.streamId,
+    required this.gradeLevelId,
     required this.gradeName,
     required this.streamName,
     required this.enrolled,
     required this.capacity,
     required this.active,
     this.classTeacherName,
+    this.accessToken,
+    this.onRefreshAccessToken,
+    this.onOpenAttendance,
+    this.onOpenAssessments,
+    this.onOpenIncidents,
+    this.onOpenCalendar,
     required this.repository,
     this.onClassTeachersChanged,
     required this.onBack,
@@ -21,12 +31,19 @@ class GradeDetailScreen extends StatefulWidget {
 
   final String customSchoolId;
   final int streamId;
+  final int gradeLevelId;
   final String gradeName;
   final String streamName;
   final int enrolled;
   final int? capacity;
   final bool active;
   final String? classTeacherName;
+  final String? accessToken;
+  final Future<String?> Function()? onRefreshAccessToken;
+  final VoidCallback? onOpenAttendance;
+  final VoidCallback? onOpenAssessments;
+  final VoidCallback? onOpenIncidents;
+  final VoidCallback? onOpenCalendar;
   final ClassesRepository repository;
   final Future<void> Function()? onClassTeachersChanged;
   final VoidCallback onBack;
@@ -36,6 +53,7 @@ class GradeDetailScreen extends StatefulWidget {
 }
 
 class _GradeDetailScreenState extends State<GradeDetailScreen> {
+  _StreamDetailTab _selectedTab = _StreamDetailTab.overview;
   final List<_Subject> _gesSubjects = const [
     _Subject(
       name: 'Literacy (Ghanaian Language)',
@@ -108,8 +126,22 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
   bool _loadingTeachers = true;
   bool _teacherActionBusy = false;
   String? _teacherError;
+  List<ClassSubject> _subjects = const [];
+  List<SubjectTeacherAssignment> _subjectTeachers = const [];
+  List<SchoolStaffOption> _staff = const [];
+  bool _loadingSubjects = true;
+  bool _subjectActionBusy = false;
+  String? _subjectError;
+  late final AttendanceRepository _attendanceRepository = AttendanceApiClient(
+    accessToken: widget.accessToken,
+    onRefreshAccessToken: widget.onRefreshAccessToken,
+  );
+  late Future<AttendanceRoster> _rosterFuture;
+  late Future<AttendanceTermHistory> _attendanceHistoryFuture;
+  bool _attendanceRegisterOpen = false;
+  DateTime? _attendanceRegisterDate;
 
-  int get _totalSubjects => _gesSubjects.length + _customSubjects.length;
+  int get _totalSubjects => _subjects.length;
 
   @override
   void dispose() {
@@ -123,10 +155,76 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
   void initState() {
     super.initState();
     _loadClassTeachers();
+    _loadSubjects();
+    _rosterFuture = _attendanceRepository.getRoster(
+      customSchoolId: widget.customSchoolId,
+      gradeLevelId: widget.gradeLevelId,
+      streamId: widget.streamId,
+      date: DateTime.now(),
+    );
+    _attendanceHistoryFuture = _loadAttendanceHistory();
+  }
+
+  Future<void> _loadSubjects() async {
+    setState(() {
+      _loadingSubjects = true;
+      _subjectError = null;
+    });
+    try {
+      final result = await Future.wait([
+        widget.repository.getGradeSubjects(
+          customSchoolId: widget.customSchoolId,
+          gradeLevelId: widget.gradeLevelId,
+        ),
+        widget.repository.getSubjectTeacherAssignments(
+          customSchoolId: widget.customSchoolId,
+          streamId: widget.streamId,
+        ),
+        widget.repository.getSchoolStaff(widget.customSchoolId),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _subjects = result[0] as List<ClassSubject>;
+        _subjectTeachers = result[1] as List<SubjectTeacherAssignment>;
+        _staff = (result[2] as List<SchoolStaffOption>)
+            .where((s) => s.active)
+            .toList();
+        _loadingSubjects = false;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _subjectError = '$e';
+          _loadingSubjects = false;
+        });
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_attendanceRegisterOpen) {
+      return AttendanceScreen(
+        customSchoolId: widget.customSchoolId,
+        repository: _attendanceRepository,
+        initialGradeLevelId: widget.gradeLevelId,
+        initialStreamId: widget.streamId,
+        initialDate: _attendanceRegisterDate,
+        showClassSelectors: false,
+        onBack: () {
+          setState(() {
+            _attendanceRegisterOpen = false;
+            _rosterFuture = _attendanceRepository.getRoster(
+              customSchoolId: widget.customSchoolId,
+              gradeLevelId: widget.gradeLevelId,
+              streamId: widget.streamId,
+              date: DateTime.now(),
+            );
+            _attendanceHistoryFuture = _loadAttendanceHistory();
+          });
+        },
+      );
+    }
     return Stack(
       children: [
         Column(
@@ -154,48 +252,97 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
                           totalSubjects: _totalSubjects,
                         ),
                         const SizedBox(height: 18),
-                        _ClassStats(
-                          enrolled: widget.enrolled,
-                          capacity: widget.capacity,
-                          active: widget.active,
+                        _StreamDetailTabs(
+                          selected: _selectedTab,
+                          pendingAttendance: 0,
+                          onChanged: (tab) =>
+                              setState(() => _selectedTab = tab),
                         ),
                         const SizedBox(height: 18),
-                        _ClassTeachersCard(
-                          teachers: _classTeachers,
-                          loading: _loadingTeachers,
-                          error: _teacherError,
-                          busy: _teacherActionBusy,
-                          fallbackTeacherName: widget.classTeacherName,
-                          onRetry: _loadClassTeachers,
-                          onAddTeacher: _showAddClassTeacherDialog,
-                          onSetPrimary: _setPrimaryClassTeacher,
-                          onToggleActive: _toggleClassTeacher,
-                          onRemove: _removeClassTeacher,
-                        ),
-                        const SizedBox(height: 18),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
-                              child: _StudentsCard(
+                        switch (_selectedTab) {
+                          _StreamDetailTab.overview => Column(
+                            children: [
+                              _ClassStats(
                                 enrolled: widget.enrolled,
-                                capacityReady: widget.capacity != null,
+                                capacity: widget.capacity,
+                                active: widget.active,
                               ),
-                            ),
-                            const SizedBox(width: 16),
-                            SizedBox(
-                              width: 290,
-                              child: _SidePanel(
-                                totalSubjects: _totalSubjects,
-                                gesCount: _gesSubjects.length,
-                                customCount: _customSubjects.length,
-                                onManageSubjects: () {
-                                  setState(() => _drawerOpen = true);
-                                },
+                              const SizedBox(height: 18),
+                              _ClassTeachersCard(
+                                teachers: _classTeachers,
+                                loading: _loadingTeachers,
+                                error: _teacherError,
+                                busy: _teacherActionBusy,
+                                fallbackTeacherName: widget.classTeacherName,
+                                onRetry: _loadClassTeachers,
+                                onAddTeacher: _showAddClassTeacherDialog,
+                                onSetPrimary: _setPrimaryClassTeacher,
+                                onToggleActive: _toggleClassTeacher,
+                                onRemove: _removeClassTeacher,
                               ),
+                              const SizedBox(height: 18),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: _StudentsCard(
+                                      rosterFuture: _rosterFuture,
+                                      onRetry: _reloadRoster,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 16),
+                                  SizedBox(
+                                    width: 290,
+                                    child: _SidePanel(
+                                      totalSubjects: _totalSubjects,
+                                      gesCount: _subjects
+                                          .where((subject) => !subject.custom)
+                                          .length,
+                                      customCount: _subjects
+                                          .where((subject) => subject.custom)
+                                          .length,
+                                      onManageSubjects: () => setState(
+                                        () => _selectedTab =
+                                            _StreamDetailTab.subjects,
+                                      ),
+                                      onOpenAttendance: () => setState(
+                                        () => _selectedTab =
+                                            _StreamDetailTab.attendance,
+                                      ),
+                                      onOpenAssessments:
+                                          widget.onOpenAssessments,
+                                      onOpenIncidents: widget.onOpenIncidents,
+                                      onOpenCalendar: widget.onOpenCalendar,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                          _StreamDetailTab.subjects => _StreamSubjectsCard(
+                            subjects: _subjects,
+                            assignments: _subjectTeachers,
+                            loading: _loadingSubjects,
+                            busy: _subjectActionBusy,
+                            error: _subjectError,
+                            onRetry: _loadSubjects,
+                            onManage: _manageSubjectTeachers,
+                          ),
+                          _StreamDetailTab.attendance => _StreamAttendanceTab(
+                            streamName: widget.streamName,
+                            enrolled: widget.enrolled,
+                            rosterFuture: _rosterFuture,
+                            historyFuture: _attendanceHistoryFuture,
+                            onTakeAttendance: () =>
+                                _openAttendanceRegister(DateTime.now()),
+                            onOpenDay: _openAttendanceRegister,
+                            onResolveDay: _resolveNonSchoolDay,
+                            onRetry: () => setState(
+                              () => _attendanceHistoryFuture =
+                                  _loadAttendanceHistory(),
                             ),
-                          ],
-                        ),
+                          ),
+                        },
                       ],
                     ),
                   ),
@@ -239,6 +386,264 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
         ),
       ],
     );
+  }
+
+  void _reloadRoster() => setState(() {
+    _rosterFuture = _attendanceRepository.getRoster(
+      customSchoolId: widget.customSchoolId,
+      gradeLevelId: widget.gradeLevelId,
+      streamId: widget.streamId,
+      date: DateTime.now(),
+    );
+  });
+
+  Future<AttendanceTermHistory> _loadAttendanceHistory() =>
+      _attendanceRepository.getTermHistory(
+        customSchoolId: widget.customSchoolId,
+        gradeLevelId: widget.gradeLevelId,
+        streamId: widget.streamId,
+      );
+
+  void _openAttendanceRegister(DateTime date) => setState(() {
+    _attendanceRegisterDate = date;
+    _attendanceRegisterOpen = true;
+  });
+
+  Future<void> _resolveNonSchoolDay(
+    AttendanceDaySummary day,
+    int termId,
+  ) async {
+    final name = TextEditingController(text: 'No school');
+    final description = TextEditingController();
+    var type = 'Holiday';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialog) => AlertDialog(
+          title: const Text('Resolve as non-school day'),
+          content: SizedBox(
+            width: 440,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Date: ${_attendanceDate(day.date)}'),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: name,
+                  decoration: const InputDecoration(labelText: 'Event name'),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  value: type,
+                  decoration: const InputDecoration(labelText: 'Event type'),
+                  items: const ['Holiday', 'Other']
+                      .map(
+                        (value) =>
+                            DropdownMenuItem(value: value, child: Text(value)),
+                      )
+                      .toList(),
+                  onChanged: (value) => setDialog(() => type = value ?? type),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: description,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Reason / description',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Mark as non-school day'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || name.text.trim().isEmpty) return;
+    await _attendanceRepository.markNonSchoolDay(
+      customSchoolId: widget.customSchoolId,
+      termId: termId,
+      date: day.date,
+      name: name.text.trim(),
+      type: type,
+      description: description.text,
+    );
+    if (!mounted) return;
+    setState(() => _attendanceHistoryFuture = _loadAttendanceHistory());
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Date resolved as a non-school day.')),
+    );
+  }
+
+  Future<void> _manageSubjectTeachers(ClassSubject subject) async {
+    final current = _subjectTeachers
+        .where(
+          (a) =>
+              a.active &&
+              a.subjectId == subject.id &&
+              a.subjectType == (subject.custom ? 'CUSTOM' : 'GES'),
+        )
+        .toList();
+    final selected = current.map((a) => a.staffId).toSet();
+    final reason = TextEditingController();
+    var effectiveFrom = DateTime.now();
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialog) => AlertDialog(
+          title: Text('${subject.name} teachers'),
+          content: SizedBox(
+            width: 520,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Select every teacher who teaches this subject in this stream.',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (_staff.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Text('No active staff members are available.'),
+                  )
+                else
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 300),
+                    child: ListView(
+                      shrinkWrap: true,
+                      children: _staff
+                          .map(
+                            (person) => CheckboxListTile(
+                              value: selected.contains(person.id),
+                              title: Text(person.name),
+                              subtitle: Text(
+                                '${person.role} · ${person.email}',
+                              ),
+                              onChanged: (v) => setDialog(() {
+                                if (v == true) {
+                                  selected.add(person.id);
+                                } else {
+                                  selected.remove(person.id);
+                                }
+                              }),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ),
+                const SizedBox(height: 10),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.event_outlined),
+                  title: const Text('Effective from'),
+                  subtitle: Text(
+                    '${effectiveFrom.day.toString().padLeft(2, '0')}/${effectiveFrom.month.toString().padLeft(2, '0')}/${effectiveFrom.year}',
+                  ),
+                  trailing: const Icon(Icons.edit_calendar_outlined),
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: effectiveFrom,
+                      firstDate: DateTime(effectiveFrom.year - 1),
+                      lastDate: DateTime(effectiveFrom.year + 1),
+                    );
+                    if (picked != null) {
+                      setDialog(() => effectiveFrom = picked);
+                    }
+                  },
+                ),
+                const Text(
+                  'Unselecting an assigned teacher deactivates the assignment from this date. Its history is retained.',
+                  style: TextStyle(color: AppColors.muted, fontSize: 12),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: reason,
+                  decoration: const InputDecoration(
+                    labelText: 'Reason for change',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Save teachers'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved != true) return;
+    final existingIds = current.map((a) => a.staffId).toSet();
+    final hasChanges =
+        selected.difference(existingIds).isNotEmpty ||
+        existingIds.difference(selected).isNotEmpty;
+    if (hasChanges && reason.text.trim().isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Enter a reason for this teacher change.'),
+          ),
+        );
+      }
+      return;
+    }
+    setState(() => _subjectActionBusy = true);
+    try {
+      for (final staffId in selected.difference(existingIds)) {
+        await widget.repository.addSubjectTeacherAssignment(
+          customSchoolId: widget.customSchoolId,
+          streamId: widget.streamId,
+          gradeLevelId: widget.gradeLevelId,
+          subject: subject,
+          staffId: staffId,
+          effectiveFrom: effectiveFrom,
+          reason: reason.text,
+        );
+      }
+      for (final assignment in current.where(
+        (a) => !selected.contains(a.staffId),
+      )) {
+        await widget.repository.removeSubjectTeacherAssignment(
+          customSchoolId: widget.customSchoolId,
+          streamId: widget.streamId,
+          assignmentId: assignment.id,
+          effectiveFrom: effectiveFrom,
+          reason: reason.text,
+        );
+      }
+      await _loadSubjects();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${subject.name} teachers updated.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+    if (mounted) setState(() => _subjectActionBusy = false);
   }
 
   void _closeDrawer() {
@@ -723,30 +1128,693 @@ class _StatCard extends StatelessWidget {
   }
 }
 
-class _StudentsCard extends StatelessWidget {
-  const _StudentsCard({required this.enrolled, required this.capacityReady});
+enum _StreamDetailTab { overview, subjects, attendance }
 
-  final int enrolled;
-  final bool capacityReady;
+class _StreamDetailTabs extends StatelessWidget {
+  const _StreamDetailTabs({
+    required this.selected,
+    required this.pendingAttendance,
+    required this.onChanged,
+  });
+
+  final _StreamDetailTab selected;
+  final int pendingAttendance;
+  final ValueChanged<_StreamDetailTab> onChanged;
 
   @override
   Widget build(BuildContext context) {
     return Card(
       margin: EdgeInsets.zero,
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        children: [
-          _SectionHeader(title: 'Students', trailing: '$enrolled enrolled'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 48),
-            child: _ComingSoonState(
-              icon: Icons.people_outline_rounded,
-              title: 'Student roster will appear here',
-              message:
-                  'The stream summary confirms $enrolled enrolled student${enrolled == 1 ? '' : 's'}. We need a stream-students API before we can show names, balances, and quick actions here.',
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _tab(
+              _StreamDetailTab.overview,
+              'Overview',
+              Icons.dashboard_outlined,
+            ),
+            _tab(
+              _StreamDetailTab.subjects,
+              'Subjects',
+              Icons.menu_book_outlined,
+            ),
+            _tab(
+              _StreamDetailTab.attendance,
+              'Attendance',
+              Icons.fact_check_outlined,
+              badge: pendingAttendance,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _tab(
+    _StreamDetailTab value,
+    String label,
+    IconData icon, {
+    int? badge,
+  }) {
+    final active = selected == value;
+    return InkWell(
+      onTap: () => onChanged(value),
+      borderRadius: BorderRadius.circular(12),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+        decoration: BoxDecoration(
+          color: active ? AppColors.greenSoft : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: active ? AppColors.green : Colors.transparent,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 18,
+              color: active ? AppColors.green : AppColors.muted,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                color: active ? AppColors.green : AppColors.text,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            if (badge != null && badge > 0) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFE9BE),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '$badge',
+                  style: const TextStyle(
+                    color: Color(0xFF946000),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StreamAttendanceTab extends StatefulWidget {
+  const _StreamAttendanceTab({
+    required this.streamName,
+    required this.enrolled,
+    required this.rosterFuture,
+    required this.historyFuture,
+    required this.onTakeAttendance,
+    required this.onOpenDay,
+    required this.onResolveDay,
+    required this.onRetry,
+  });
+
+  final String streamName;
+  final int enrolled;
+  final Future<AttendanceRoster> rosterFuture;
+  final Future<AttendanceTermHistory> historyFuture;
+  final VoidCallback onTakeAttendance;
+  final ValueChanged<DateTime> onOpenDay;
+  final void Function(AttendanceDaySummary day, int termId) onResolveDay;
+  final VoidCallback onRetry;
+
+  @override
+  State<_StreamAttendanceTab> createState() => _StreamAttendanceTabState();
+}
+
+class _StreamAttendanceTabState extends State<_StreamAttendanceTab> {
+  final _search = TextEditingController();
+  AttendanceDayStatus? _filter;
+  int _page = 0;
+  static const _pageSize = 10;
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Card(
+          margin: EdgeInsets.zero,
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Attendance records',
+                            style: TextStyle(
+                              fontSize: 19,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          Text(
+                            'Completed, missing, and non-school days for the current term.',
+                            style: TextStyle(color: AppColors.muted),
+                          ),
+                        ],
+                      ),
+                    ),
+                    FilledButton.icon(
+                      onPressed: widget.onTakeAttendance,
+                      icon: const Icon(Icons.add_task_rounded),
+                      label: const Text('Take attendance'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                FutureBuilder<AttendanceTermHistory>(
+                  future: widget.historyFuture,
+                  builder: (context, snapshot) {
+                    final history = snapshot.data;
+                    final days =
+                        history?.days ?? const <AttendanceDaySummary>[];
+                    final schoolDays = days
+                        .where(
+                          (day) =>
+                              day.status != AttendanceDayStatus.nonSchoolDay,
+                        )
+                        .toList();
+                    final completed = schoolDays
+                        .where(
+                          (day) => day.status == AttendanceDayStatus.completed,
+                        )
+                        .toList();
+                    final missing = schoolDays.length - completed.length;
+                    final expectedMarks = completed.fold<int>(
+                      0,
+                      (sum, day) => sum + day.expectedStudents,
+                    );
+                    final attended = completed.fold<int>(
+                      0,
+                      (sum, day) => sum + day.present + day.late,
+                    );
+                    final average = expectedMarks == 0
+                        ? 0
+                        : (attended / expectedMarks * 100).round();
+                    return Row(
+                      children: [
+                        Expanded(
+                          child: _AttendanceMetric(
+                            'School days',
+                            '${schoolDays.length}',
+                          ),
+                        ),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: _AttendanceMetric(
+                            'Completed',
+                            '${completed.length}',
+                          ),
+                        ),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: _AttendanceMetric(
+                            'Missing',
+                            '$missing',
+                            warning: missing > 0,
+                          ),
+                        ),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: _AttendanceMetric('Term average', '$average%'),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _search,
+                        onChanged: (_) => setState(() => _page = 0),
+                        decoration: InputDecoration(
+                          prefixIcon: Icon(Icons.search_rounded),
+                          hintText: 'Search attendance records',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    OutlinedButton.icon(
+                      onPressed: widget.onTakeAttendance,
+                      icon: const Icon(Icons.calendar_month_outlined),
+                      label: const Text('Select date'),
+                    ),
+                    const SizedBox(width: 10),
+                    PopupMenuButton<AttendanceDayStatus?>(
+                      onSelected: (value) => setState(() {
+                        _filter = value;
+                        _page = 0;
+                      }),
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(value: null, child: Text('All statuses')),
+                        PopupMenuItem(
+                          value: AttendanceDayStatus.completed,
+                          child: Text('Completed'),
+                        ),
+                        PopupMenuItem(
+                          value: AttendanceDayStatus.missing,
+                          child: Text('Missing'),
+                        ),
+                        PopupMenuItem(
+                          value: AttendanceDayStatus.nonSchoolDay,
+                          child: Text('Non-school day'),
+                        ),
+                      ],
+                      child: _AttendanceFilterChip(
+                        label: _filter == null
+                            ? 'All statuses'
+                            : _filter == AttendanceDayStatus.completed
+                            ? 'Completed'
+                            : _filter == AttendanceDayStatus.missing
+                            ? 'Missing'
+                            : 'Non-school day',
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
-        ],
+        ),
+        const SizedBox(height: 14),
+        Card(
+          margin: EdgeInsets.zero,
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            children: [
+              const _AttendanceTableHeader(),
+              FutureBuilder<AttendanceTermHistory>(
+                future: widget.historyFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Padding(
+                      padding: EdgeInsets.all(28),
+                      child: CircularProgressIndicator(),
+                    );
+                  }
+                  if (snapshot.hasError || snapshot.data == null) {
+                    return Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        children: [
+                          const Text(
+                            'Term attendance history could not be loaded.',
+                          ),
+                          TextButton(
+                            onPressed: widget.onRetry,
+                            child: const Text('Try again'),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+                  final history = snapshot.data!;
+                  final query = _search.text.trim().toLowerCase();
+                  final filtered = history.days.where((day) {
+                    if (_filter != null && day.status != _filter) return false;
+                    return query.isEmpty ||
+                        _attendanceDate(
+                          day.date,
+                        ).toLowerCase().contains(query) ||
+                        day.eventName.toLowerCase().contains(query);
+                  }).toList();
+                  final pages = filtered.isEmpty
+                      ? 1
+                      : (filtered.length / _pageSize).ceil();
+                  final safePage = _page.clamp(0, pages - 1);
+                  final visible = filtered
+                      .skip(safePage * _pageSize)
+                      .take(_pageSize)
+                      .toList();
+                  if (visible.isEmpty) {
+                    return Padding(
+                      padding: const EdgeInsets.all(28),
+                      child: Text(
+                        history.days.isEmpty
+                            ? 'No attendance is due yet. Teaching begins ${_attendanceDate(history.teachingStartDate)}.'
+                            : 'No attendance days match the current search or status filter.',
+                      ),
+                    );
+                  }
+                  return Column(
+                    children: [
+                      ...visible.map((day) {
+                        final completed =
+                            day.status == AttendanceDayStatus.completed;
+                        final nonSchool =
+                            day.status == AttendanceDayStatus.nonSchoolDay;
+                        return _AttendanceRecordRow(
+                          date: _attendanceDate(day.date),
+                          status: completed
+                              ? 'Completed'
+                              : nonSchool
+                              ? 'Non-school day'
+                              : 'Missing',
+                          summary: completed
+                              ? '${day.present + day.late}/${day.expectedStudents} present · ${day.absent} absent · ${day.late} late'
+                              : nonSchool
+                              ? '${day.eventName}${day.eventDescription.isEmpty ? '' : ' · ${day.eventDescription}'}'
+                              : 'No register submitted for ${day.expectedStudents} students',
+                          action: completed
+                              ? 'View / Correct'
+                              : nonSchool
+                              ? 'View'
+                              : 'Resolve',
+                          warning: !completed && !nonSchool,
+                          onPressed: () => nonSchool
+                              ? _showNonSchoolDay(day)
+                              : completed
+                              ? widget.onOpenDay(day.date)
+                              : _showMissingActions(day, history.termId),
+                        );
+                      }),
+                      if (pages > 1)
+                        Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              Text('${safePage + 1} of $pages'),
+                              IconButton(
+                                onPressed: safePage == 0
+                                    ? null
+                                    : () =>
+                                          setState(() => _page = safePage - 1),
+                                icon: const Icon(Icons.chevron_left),
+                              ),
+                              IconButton(
+                                onPressed: safePage + 1 >= pages
+                                    ? null
+                                    : () =>
+                                          setState(() => _page = safePage + 1),
+                                icon: const Icon(Icons.chevron_right),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _showMissingActions(AttendanceDaySummary day, int termId) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.fact_check_outlined),
+              title: const Text('Take attendance'),
+              subtitle: Text(_attendanceDate(day.date)),
+              onTap: () => Navigator.pop(context, 'take'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.event_busy_outlined),
+              title: const Text('Resolve as non-school day'),
+              subtitle: const Text(
+                'Creates a school calendar event for this date',
+              ),
+              onTap: () => Navigator.pop(context, 'resolve'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (action == 'take') widget.onOpenDay(day.date);
+    if (action == 'resolve') widget.onResolveDay(day, termId);
+  }
+
+  Future<void> _showNonSchoolDay(AttendanceDaySummary day) => showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      icon: const Icon(Icons.event_busy_outlined, color: AppColors.green),
+      title: Text(day.eventName.isEmpty ? 'Non-school day' : day.eventName),
+      content: Text(
+        '${_attendanceDate(day.date)}${day.eventDescription.isEmpty ? '' : '\n\n${day.eventDescription}'}',
+      ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+      ],
+    ),
+  );
+}
+
+class _AttendanceMetric extends StatelessWidget {
+  const _AttendanceMetric(this.label, this.value, {this.warning = false});
+  final String label;
+  final String value;
+  final bool warning;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: warning ? const Color(0xFFFFF7E7) : const Color(0xFFF7FAFA),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: AppColors.border),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(color: AppColors.muted, fontSize: 12),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w900,
+            color: warning ? const Color(0xFFB26A00) : AppColors.text,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _AttendanceFilterChip extends StatelessWidget {
+  const _AttendanceFilterChip({required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+    decoration: BoxDecoration(
+      border: Border.all(color: AppColors.border),
+      borderRadius: BorderRadius.circular(10),
+    ),
+    child: Row(
+      children: [
+        Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+        const SizedBox(width: 8),
+        const Icon(Icons.expand_more_rounded, size: 18),
+      ],
+    ),
+  );
+}
+
+class _AttendanceTableHeader extends StatelessWidget {
+  const _AttendanceTableHeader();
+
+  @override
+  Widget build(BuildContext context) => const Padding(
+    padding: EdgeInsets.symmetric(horizontal: 18, vertical: 13),
+    child: Row(
+      children: [
+        SizedBox(width: 150, child: Text('DATE')),
+        SizedBox(width: 120, child: Text('STATUS')),
+        Expanded(child: Text('REGISTER SUMMARY')),
+        SizedBox(width: 100, child: Text('ACTION')),
+      ],
+    ),
+  );
+}
+
+class _AttendanceRecordRow extends StatelessWidget {
+  const _AttendanceRecordRow({
+    required this.date,
+    required this.status,
+    required this.summary,
+    required this.action,
+    required this.onPressed,
+    this.warning = false,
+  });
+
+  final String date;
+  final String status;
+  final String summary;
+  final String action;
+  final VoidCallback onPressed;
+  final bool warning;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    decoration: const BoxDecoration(
+      border: Border(top: BorderSide(color: AppColors.border)),
+    ),
+    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+    child: Row(
+      children: [
+        SizedBox(
+          width: 150,
+          child: Text(
+            date,
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+        ),
+        SizedBox(
+          width: 120,
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+              decoration: BoxDecoration(
+                color: warning ? const Color(0xFFFFEBC3) : AppColors.greenSoft,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                status,
+                style: TextStyle(
+                  color: warning ? const Color(0xFF8C5A00) : AppColors.green,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ),
+        ),
+        Expanded(
+          child: Text(summary, style: const TextStyle(color: AppColors.muted)),
+        ),
+        SizedBox(
+          width: 100,
+          child: TextButton(onPressed: onPressed, child: Text(action)),
+        ),
+      ],
+    ),
+  );
+}
+
+String _attendanceDate(DateTime value) {
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  return '${value.day} ${months[value.month - 1]} ${value.year}';
+}
+
+class _StudentsCard extends StatelessWidget {
+  const _StudentsCard({required this.rosterFuture, required this.onRetry});
+
+  final Future<AttendanceRoster> rosterFuture;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<AttendanceRoster>(
+      future: rosterFuture,
+      builder: (context, snapshot) => Card(
+        margin: EdgeInsets.zero,
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          children: [
+            _SectionHeader(
+              title: 'Students',
+              trailing: '${snapshot.data?.students.length ?? 0} enrolled',
+            ),
+            if (snapshot.connectionState == ConnectionState.waiting)
+              const Padding(
+                padding: EdgeInsets.all(42),
+                child: CircularProgressIndicator(),
+              )
+            else if (snapshot.hasError)
+              Padding(
+                padding: const EdgeInsets.all(28),
+                child: Column(
+                  children: [
+                    const Text('Unable to load the student roster.'),
+                    TextButton(
+                      onPressed: onRetry,
+                      child: const Text('Try again'),
+                    ),
+                  ],
+                ),
+              )
+            else if (snapshot.data?.students.isEmpty ?? true)
+              const Padding(
+                padding: EdgeInsets.all(42),
+                child: Text('No active students are assigned to this stream.'),
+              )
+            else
+              ...snapshot.data!.students.map(
+                (student) => ListTile(
+                  leading: CircleAvatar(
+                    child: Text(
+                      student.fullName.isEmpty
+                          ? '?'
+                          : student.fullName[0].toUpperCase(),
+                    ),
+                  ),
+                  title: Text(
+                    student.fullName,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  subtitle: Text(student.customStudentId),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -1246,25 +2314,192 @@ class _TeacherSelection {
   final bool isPrimary;
 }
 
+class _StreamSubjectsCard extends StatelessWidget {
+  const _StreamSubjectsCard({
+    required this.subjects,
+    required this.assignments,
+    required this.loading,
+    required this.busy,
+    required this.error,
+    required this.onRetry,
+    required this.onManage,
+  });
+  final List<ClassSubject> subjects;
+  final List<SubjectTeacherAssignment> assignments;
+  final bool loading, busy;
+  final String? error;
+  final VoidCallback onRetry;
+  final ValueChanged<ClassSubject> onManage;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.menu_book_rounded, color: AppColors.green),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Subjects and teachers',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    Text(
+                      'Each subject belongs to this grade. Assign one or more teachers for this stream.',
+                      style: TextStyle(color: AppColors.muted),
+                    ),
+                  ],
+                ),
+              ),
+              if (!loading)
+                Text(
+                  '${subjects.length} subjects',
+                  style: const TextStyle(
+                    color: AppColors.muted,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (loading)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(20),
+                child: CircularProgressIndicator(),
+              ),
+            )
+          else if (error != null)
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    error!,
+                    style: const TextStyle(color: AppColors.red),
+                  ),
+                ),
+                TextButton(onPressed: onRetry, child: const Text('Retry')),
+              ],
+            )
+          else if (subjects.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(18),
+              child: Text('No subjects are configured for this grade level.'),
+            )
+          else
+            ...subjects.map((subject) {
+              final type = subject.custom ? 'CUSTOM' : 'GES';
+              final assigned = assignments
+                  .where(
+                    (a) =>
+                        a.active &&
+                        a.subjectId == subject.id &&
+                        a.subjectType == type,
+                  )
+                  .toList();
+              return ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                leading: CircleAvatar(
+                  backgroundColor: AppColors.green.withValues(alpha: .12),
+                  child: Text(
+                    subject.name.isEmpty ? '?' : subject.name[0],
+                    style: const TextStyle(
+                      color: AppColors.green,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                title: Text(
+                  subject.name,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                subtitle: Text(
+                  assigned.isEmpty
+                      ? 'No subject teacher assigned'
+                      : assigned.map((a) => a.staffName).join(', '),
+                ),
+                trailing: OutlinedButton.icon(
+                  onPressed: busy ? null : () => onManage(subject),
+                  icon: Icon(
+                    assigned.isEmpty
+                        ? Icons.person_add_alt_1
+                        : Icons.edit_outlined,
+                    size: 18,
+                  ),
+                  label: Text(assigned.isEmpty ? 'Assign teachers' : 'Manage'),
+                ),
+              );
+            }),
+          if (assignments.any((a) => !a.active)) ...[
+            const Divider(height: 28),
+            ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              title: Text(
+                'Inactive assignment history (${assignments.where((a) => !a.active).length})',
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              children: assignments
+                  .where((a) => !a.active)
+                  .map(
+                    (a) => ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.history_rounded),
+                      title: Text('${a.subjectName} · ${a.staffName}'),
+                      subtitle: Text(
+                        [
+                          if (a.effectiveFrom != null)
+                            'Effective ${a.effectiveFrom!.day.toString().padLeft(2, '0')}/${a.effectiveFrom!.month.toString().padLeft(2, '0')}/${a.effectiveFrom!.year}',
+                          if (a.changeReason.trim().isNotEmpty) a.changeReason,
+                        ].join(' · '),
+                      ),
+                      trailing: const Chip(label: Text('Inactive')),
+                    ),
+                  )
+                  .toList(),
+            ),
+          ],
+        ],
+      ),
+    ),
+  );
+}
+
 class _SidePanel extends StatelessWidget {
   const _SidePanel({
     required this.totalSubjects,
     required this.gesCount,
     required this.customCount,
     required this.onManageSubjects,
+    required this.onOpenAttendance,
+    this.onOpenAssessments,
+    this.onOpenIncidents,
+    this.onOpenCalendar,
   });
 
   final int totalSubjects;
   final int gesCount;
   final int customCount;
   final VoidCallback onManageSubjects;
+  final VoidCallback onOpenAttendance;
+  final VoidCallback? onOpenAssessments;
+  final VoidCallback? onOpenIncidents;
+  final VoidCallback? onOpenCalendar;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
         InkWell(
-          onTap: null,
+          onTap: onManageSubjects,
           borderRadius: BorderRadius.circular(16),
           child: Container(
             padding: const EdgeInsets.all(14),
@@ -1294,7 +2529,7 @@ class _SidePanel extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Subject management unavailable',
+                        'Subject overview',
                         style: TextStyle(
                           color: AppColors.green,
                           fontSize: 15,
@@ -1302,8 +2537,8 @@ class _SidePanel extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 2),
-                      const Text(
-                        'API-backed subject editing is not available yet',
+                      Text(
+                        '$totalSubjects subjects · $gesCount GES · $customCount custom',
                         style: TextStyle(
                           color: AppColors.muted,
                           fontSize: 12,
@@ -1314,7 +2549,7 @@ class _SidePanel extends StatelessWidget {
                   ),
                 ),
                 const Icon(
-                  Icons.lock_outline_rounded,
+                  Icons.refresh_rounded,
                   color: AppColors.muted,
                   size: 22,
                 ),
@@ -1323,7 +2558,7 @@ class _SidePanel extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 14),
-        const _QuickLinksCard(
+        _QuickLinksCard(
           title: 'Quick Links',
           links: [
             _ClassQuickLink(
@@ -1331,30 +2566,35 @@ class _SidePanel extends StatelessWidget {
               title: 'Timetable',
               subtitle: '',
               color: AppColors.amber,
+              onTap: onOpenCalendar,
             ),
             _ClassQuickLink(
               icon: Icons.fact_check_rounded,
               title: 'Attendance',
               subtitle: '',
               color: AppColors.green,
+              onTap: onOpenAttendance,
             ),
             _ClassQuickLink(
               icon: Icons.assessment_rounded,
               title: 'Assessments',
               subtitle: '',
               color: AppColors.blue,
+              onTap: onOpenAssessments,
             ),
             _ClassQuickLink(
               icon: Icons.warning_amber_rounded,
               title: 'Record Incident',
               subtitle: '',
               color: AppColors.amber,
+              onTap: onOpenIncidents,
             ),
             _ClassQuickLink(
               icon: Icons.star_border_rounded,
               title: 'Evaluations',
               subtitle: '',
               color: AppColors.purple,
+              onTap: onOpenAssessments,
             ),
           ],
         ),
@@ -1429,6 +2669,7 @@ class _ClassQuickLink {
     required this.subtitle,
     required this.color,
     this.badge,
+    this.onTap,
   });
 
   final IconData icon;
@@ -1436,6 +2677,7 @@ class _ClassQuickLink {
   final String subtitle;
   final Color color;
   final String? badge;
+  final VoidCallback? onTap;
 }
 
 class _QuickLinkRow extends StatelessWidget {
@@ -1446,11 +2688,13 @@ class _QuickLinkRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: () {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${link.title} will be connected soon.')),
-        );
-      },
+      onTap:
+          link.onTap ??
+          () {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('${link.title} is not available yet.')),
+            );
+          },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: const BoxDecoration(
@@ -1523,55 +2767,6 @@ class _QuickLinkRow extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _ComingSoonState extends StatelessWidget {
-  const _ComingSoonState({
-    required this.icon,
-    required this.title,
-    required this.message,
-  });
-
-  final IconData icon;
-  final String title;
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 46,
-          height: 46,
-          decoration: BoxDecoration(
-            color: AppColors.greenSoft,
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Icon(icon, color: AppColors.green, size: 23),
-        ),
-        const SizedBox(height: 12),
-        Text(
-          title,
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-            color: AppColors.text,
-            fontWeight: FontWeight.w900,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          message,
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-            color: AppColors.muted,
-            fontSize: 12,
-            height: 1.35,
-          ),
-        ),
-      ],
     );
   }
 }

@@ -153,6 +153,29 @@ class _FakeAttendanceRepository implements AttendanceRepository {
   }
 
   @override
+  Future<AttendanceTermHistory> getTermHistory({
+    required String customSchoolId,
+    required int gradeLevelId,
+    required int streamId,
+  }) async => AttendanceTermHistory(
+    termId: 1,
+    teachingStartDate: DateTime(2026, 7, 1),
+    teachingEndDate: DateTime(2026, 9, 30),
+    expectedStudents: 3,
+    days: const [],
+  );
+
+  @override
+  Future<void> markNonSchoolDay({
+    required String customSchoolId,
+    required int termId,
+    required DateTime date,
+    required String name,
+    required String type,
+    String? description,
+  }) async {}
+
+  @override
   Future<void> saveAttendance({
     required String customSchoolId,
     required int gradeLevelId,
@@ -160,6 +183,7 @@ class _FakeAttendanceRepository implements AttendanceRepository {
     required DateTime date,
     required List<AttendanceEntry> entries,
     required bool updateExisting,
+    String? vacationOverrideReason,
   }) async {
     saveCount += 1;
     lastUpdateExisting = updateExisting;

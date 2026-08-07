@@ -14,7 +14,16 @@ import '../../expenses/presentation/expenses_screen.dart';
 import '../../fees/presentation/fee_management_screen.dart';
 import '../../incidents/presentation/incidents_screen.dart';
 import '../../settings/presentation/school_settings_screen.dart';
+import '../../term_review/presentation/term_review_screen.dart';
+import '../../term_review/data/staff_review_api_client.dart';
+import '../../term_review/data/teacher_term_review_api_client.dart';
+import '../../term_review/data/bursar_term_closure_api_client.dart';
+import '../../term_review/data/headmaster_term_closure_api_client.dart';
+import '../../term_review/presentation/teacher_term_closing_screen.dart';
+import '../../term_review/presentation/bursar_term_closing_screen.dart';
 import '../../staff/presentation/staff_screen.dart';
+import '../../staff_attendance/data/staff_attendance_api_client.dart';
+import '../../staff_attendance/presentation/staff_attendance_screen.dart';
 import '../../students/data/api_students_repository.dart';
 import '../../students/presentation/students_screen.dart';
 import '../../readiness/data/school_readiness_repository.dart';
@@ -26,6 +35,7 @@ enum _SchoolAdminPage {
   admissions,
   students,
   attendance,
+  staffAttendance,
   assessments,
   households,
   staff,
@@ -34,6 +44,7 @@ enum _SchoolAdminPage {
   expenses,
   incidents,
   calendar,
+  termReview,
   settings,
 }
 
@@ -88,8 +99,14 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
 
   void _refresh() {
     setState(() {
-      _dashboard = widget.repository.getAdministratorDashboard(_schoolId);
+      _dashboard = _loadDashboard();
     });
+  }
+
+  Future<DashboardSnapshot> _loadDashboard() {
+    return Future.sync(
+      () => widget.repository.getAdministratorDashboard(_schoolId),
+    ).then((value) => value);
   }
 
   void _refreshReadiness() {
@@ -105,7 +122,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
     setState(() {
       _selectedPage = page;
       if (page == _SchoolAdminPage.dashboard) {
-        _dashboard = widget.repository.getAdministratorDashboard(_schoolId);
+        _dashboard = _loadDashboard();
       }
     });
   }
@@ -159,7 +176,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
         if (!readiness.ready) {
           return _buildReadinessGate(readiness);
         }
-        _dashboard ??= widget.repository.getAdministratorDashboard(_schoolId);
+        _dashboard ??= _loadDashboard();
         return _buildDashboard();
       },
     );
@@ -169,16 +186,17 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
     return FutureBuilder<DashboardSnapshot>(
       future: _dashboard,
       builder: (context, snapshot) {
-        if (snapshot.hasError) {
+        final teachingRole = _isTeachingRole(widget.role);
+        if (snapshot.hasError && !teachingRole) {
           return _ErrorView(onRetry: _refresh);
         }
-        if (!snapshot.hasData) {
+        if (!snapshot.hasData && !snapshot.hasError) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
           );
         }
 
-        final data = snapshot.requireData;
+        final data = snapshot.data ?? _teachingWorkspaceSnapshot();
         return LayoutBuilder(
           builder: (context, constraints) {
             final desktop = constraints.maxWidth >= 1100;
@@ -288,6 +306,31 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
           },
         );
       },
+    );
+  }
+
+  DashboardSnapshot _teachingWorkspaceSnapshot() {
+    return DashboardSnapshot(
+      schoolName: widget.schoolName?.trim() ?? '',
+      administratorName: widget.userDisplayName?.trim() ?? '',
+      term: '',
+      academicYear: '',
+      termStartDate: '',
+      termEndDate: '',
+      lastUpdated: DateTime.now(),
+      metrics: const [],
+      admissions: const [],
+      alerts: const [],
+      events: const [],
+      calendarEvents: const [],
+      activities: const [],
+      attendance: const AttendanceSummary(
+        total: 0,
+        present: 0,
+        absent: 0,
+        late: 0,
+      ),
+      fees: const FeeSummary(collected: 0, outstanding: 0, waivers: 0),
     );
   }
 
@@ -692,6 +735,16 @@ class _DashboardBody extends StatelessWidget {
       );
     }
 
+    if (selectedPage == _SchoolAdminPage.staffAttendance) {
+      return StaffAttendanceScreen(
+        schoolId: schoolId,
+        repository: StaffAttendanceApiClient(
+          accessToken: accessToken,
+          onRefreshAccessToken: onRefreshAccessToken,
+        ),
+      );
+    }
+
     if (selectedPage == _SchoolAdminPage.assessments) {
       return AssessmentDashboardScreen(
         schoolName: schoolName?.trim().isNotEmpty == true
@@ -764,6 +817,10 @@ class _DashboardBody extends StatelessWidget {
         customSchoolId: schoolId,
         accessToken: accessToken,
         onRefreshAccessToken: onRefreshAccessToken,
+        onOpenAttendance: () => onSelectPage(_SchoolAdminPage.attendance),
+        onOpenAssessments: () => onSelectPage(_SchoolAdminPage.assessments),
+        onOpenIncidents: () => onSelectPage(_SchoolAdminPage.incidents),
+        onOpenCalendar: () => onSelectPage(_SchoolAdminPage.calendar),
       );
     }
 
@@ -784,11 +841,67 @@ class _DashboardBody extends StatelessWidget {
       );
     }
 
+    if (selectedPage == _SchoolAdminPage.termReview) {
+      final normalizedRole = role?.trim().toUpperCase();
+      final teacherRepository = TeacherTermReviewApiClient(
+        accessToken: accessToken,
+        onRefreshAccessToken: onRefreshAccessToken,
+      );
+      final bursarRepository = BursarTermClosureApiClient(
+        accessToken: accessToken,
+        onRefreshAccessToken: onRefreshAccessToken,
+      );
+      if ((normalizedRole == 'CLASS_TEACHER' ||
+              normalizedRole == 'SUBJECT_TEACHER') &&
+          userId != null) {
+        return TeacherTermClosingScreen(
+          schoolId: schoolId,
+          teacherUserId: userId!,
+          repository: teacherRepository,
+          onOpenAssessments: () => onSelectPage(_SchoolAdminPage.assessments),
+          onOpenIncidents: () => onSelectPage(_SchoolAdminPage.incidents),
+        );
+      }
+      if (normalizedRole == 'BURSAR') {
+        return BursarTermClosingScreen(
+          schoolId: schoolId,
+          actorUserId: userId,
+          repository: bursarRepository,
+          onOpenFees: () => onSelectPage(_SchoolAdminPage.fees),
+          onOpenExpenses: () => onSelectPage(_SchoolAdminPage.expenses),
+        );
+      }
+      return TermReviewScreen(
+        schoolId: schoolId,
+        reviewerUserId: userId,
+        repository: StaffReviewApiClient(
+          accessToken: accessToken,
+          onRefreshAccessToken: onRefreshAccessToken,
+        ),
+        teacherReviewRepository: teacherRepository,
+        bursarClosureRepository: bursarRepository,
+        headmasterClosureRepository: HeadmasterTermClosureApiClient(
+          accessToken: accessToken,
+          onRefreshAccessToken: onRefreshAccessToken,
+        ),
+      );
+    }
+
     if (selectedPage == _SchoolAdminPage.settings) {
       return SchoolSettingsScreen(
         customSchoolId: schoolId,
         accessToken: accessToken,
         onRefreshAccessToken: onRefreshAccessToken,
+      );
+    }
+
+    if (_isTeachingRole(role)) {
+      return _TeacherWorkspaceLanding(
+        displayName: userDisplayName?.trim().isNotEmpty == true
+            ? userDisplayName!.trim()
+            : data.administratorName,
+        onOpenAssessments: () => onSelectPage(_SchoolAdminPage.assessments),
+        onOpenTermReview: () => onSelectPage(_SchoolAdminPage.termReview),
       );
     }
 
@@ -3635,6 +3748,140 @@ String _monthName(int month) {
   return months[month - 1];
 }
 
+bool _isTeachingRole(String? role) {
+  final value = role?.trim().toUpperCase() ?? '';
+  return value == 'TEACHER' ||
+      value == 'CLASS_TEACHER' ||
+      value == 'SUBJECT_TEACHER';
+}
+
+class _TeacherWorkspaceLanding extends StatelessWidget {
+  const _TeacherWorkspaceLanding({
+    required this.displayName,
+    required this.onOpenAssessments,
+    required this.onOpenTermReview,
+  });
+
+  final String displayName;
+  final VoidCallback onOpenAssessments;
+  final VoidCallback onOpenTermReview;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(28),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 900),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              displayName.isEmpty
+                  ? 'Teacher workspace'
+                  : 'Welcome, $displayName',
+              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                fontWeight: FontWeight.w800,
+                color: AppColors.navyDark,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Complete your teaching records and end-of-term responsibilities.',
+              style: TextStyle(color: Color(0xFF718096), fontSize: 16),
+            ),
+            const SizedBox(height: 28),
+            Wrap(
+              spacing: 18,
+              runSpacing: 18,
+              children: [
+                _TeacherWorkspaceCard(
+                  icon: Icons.assessment_outlined,
+                  title: 'Assessments & evaluations',
+                  description:
+                      'Enter academic records and complete student evaluations assigned to you.',
+                  actionLabel: 'Open assessments',
+                  onTap: onOpenAssessments,
+                ),
+                _TeacherWorkspaceCard(
+                  icon: Icons.fact_check_outlined,
+                  title: 'Term review',
+                  description:
+                      'Complete your term-closing declarations and recommendations.',
+                  actionLabel: 'Open term review',
+                  onTap: onOpenTermReview,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TeacherWorkspaceCard extends StatelessWidget {
+  const _TeacherWorkspaceCard({
+    required this.icon,
+    required this.title,
+    required this.description,
+    required this.actionLabel,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String description;
+  final String actionLabel;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 390,
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: AppColors.green.withValues(alpha: .12),
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: Icon(icon, color: AppColors.green),
+              ),
+              const SizedBox(height: 18),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 18,
+                  color: AppColors.navyDark,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                description,
+                style: const TextStyle(color: Color(0xFF718096), height: 1.45),
+              ),
+              const SizedBox(height: 18),
+              FilledButton.icon(
+                onPressed: onTap,
+                icon: const Icon(Icons.arrow_forward_rounded),
+                label: Text(actionLabel),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _Sidebar extends StatelessWidget {
   const _Sidebar({
     required this.data,
@@ -3667,6 +3914,7 @@ class _Sidebar extends StatelessWidget {
     final displaySchoolName = _displaySchoolName(data, schoolName);
     final displayRole = _displayRole(role);
     final isBursar = role?.trim().toUpperCase() == 'BURSAR';
+    final isTeacher = _isTeachingRole(role);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
       width: width,
@@ -3746,7 +3994,7 @@ class _Sidebar extends StatelessWidget {
                     active: selectedPage == _SchoolAdminPage.dashboard,
                     onTap: () => onSelectPage(_SchoolAdminPage.dashboard),
                   ),
-                  if (!isBursar)
+                  if (!isBursar && !isTeacher)
                     _SidebarButton(
                       icon: Icons.assignment_ind_rounded,
                       label: 'Admissions',
@@ -3754,14 +4002,15 @@ class _Sidebar extends StatelessWidget {
                       active: selectedPage == _SchoolAdminPage.admissions,
                       onTap: () => onSelectPage(_SchoolAdminPage.admissions),
                     ),
-                  _SidebarButton(
-                    icon: Icons.school_rounded,
-                    label: 'Students',
-                    collapsed: collapsed,
-                    active: selectedPage == _SchoolAdminPage.students,
-                    onTap: () => onSelectPage(_SchoolAdminPage.students),
-                  ),
-                  if (!isBursar) ...[
+                  if (!isBursar)
+                    _SidebarButton(
+                      icon: Icons.school_rounded,
+                      label: 'Students',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.students,
+                      onTap: () => onSelectPage(_SchoolAdminPage.students),
+                    ),
+                  if (!isBursar && !isTeacher) ...[
                     _SidebarButton(
                       icon: Icons.fact_check_outlined,
                       label: 'Attendance',
@@ -3770,11 +4019,12 @@ class _Sidebar extends StatelessWidget {
                       onTap: () => onSelectPage(_SchoolAdminPage.attendance),
                     ),
                     _SidebarButton(
-                      icon: Icons.assessment_outlined,
-                      label: 'Assessments',
+                      icon: Icons.badge_outlined,
+                      label: 'Staff Attendance',
                       collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.assessments,
-                      onTap: () => onSelectPage(_SchoolAdminPage.assessments),
+                      active: selectedPage == _SchoolAdminPage.staffAttendance,
+                      onTap: () =>
+                          onSelectPage(_SchoolAdminPage.staffAttendance),
                     ),
                     _SidebarButton(
                       icon: Icons.groups_rounded,
@@ -3798,20 +4048,30 @@ class _Sidebar extends StatelessWidget {
                       onTap: () => onSelectPage(_SchoolAdminPage.classes),
                     ),
                   ],
-                  _SidebarButton(
-                    icon: Icons.account_balance_wallet_rounded,
-                    label: 'Fees & Requirements',
-                    collapsed: collapsed,
-                    active: selectedPage == _SchoolAdminPage.fees,
-                    onTap: () => onSelectPage(_SchoolAdminPage.fees),
-                  ),
-                  _SidebarButton(
-                    icon: Icons.receipt_long_rounded,
-                    label: 'Expenses & Petty Cash',
-                    collapsed: collapsed,
-                    active: selectedPage == _SchoolAdminPage.expenses,
-                    onTap: () => onSelectPage(_SchoolAdminPage.expenses),
-                  ),
+                  if (!isBursar)
+                    _SidebarButton(
+                      icon: Icons.assessment_outlined,
+                      label: 'Assessments',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.assessments,
+                      onTap: () => onSelectPage(_SchoolAdminPage.assessments),
+                    ),
+                  if (!isTeacher) ...[
+                    _SidebarButton(
+                      icon: Icons.account_balance_wallet_rounded,
+                      label: 'Fees & Requirements',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.fees,
+                      onTap: () => onSelectPage(_SchoolAdminPage.fees),
+                    ),
+                    _SidebarButton(
+                      icon: Icons.receipt_long_rounded,
+                      label: 'Expenses & Petty Cash',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.expenses,
+                      onTap: () => onSelectPage(_SchoolAdminPage.expenses),
+                    ),
+                  ],
                   if (!isBursar) ...[
                     _SidebarButton(
                       icon: Icons.warning_amber_rounded,
@@ -3820,18 +4080,28 @@ class _Sidebar extends StatelessWidget {
                       active: selectedPage == _SchoolAdminPage.incidents,
                       onTap: () => onSelectPage(_SchoolAdminPage.incidents),
                     ),
+                    if (!isTeacher)
+                      _SidebarButton(
+                        icon: Icons.campaign_rounded,
+                        label: 'Communication',
+                        collapsed: collapsed,
+                      ),
+                  ],
+                  if (!isTeacher)
                     _SidebarButton(
-                      icon: Icons.campaign_rounded,
-                      label: 'Communication',
+                      icon: Icons.bar_chart_rounded,
+                      label: 'Reports',
                       collapsed: collapsed,
                     ),
-                  ],
-                  _SidebarButton(
-                    icon: Icons.bar_chart_rounded,
-                    label: 'Reports',
-                    collapsed: collapsed,
-                  ),
                   if (!isBursar)
+                    _SidebarButton(
+                      icon: Icons.event_available_outlined,
+                      label: 'Term Review',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.termReview,
+                      onTap: () => onSelectPage(_SchoolAdminPage.termReview),
+                    ),
+                  if (!isBursar && !isTeacher)
                     _SidebarButton(
                       icon: Icons.admin_panel_settings_rounded,
                       label: 'Settings',

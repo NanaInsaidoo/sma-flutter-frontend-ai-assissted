@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../theme/app_theme.dart';
 import '../domain/student_models.dart';
 import '../../fees/domain/fee_models.dart';
+import 'student_transfer_dialog.dart';
 
 const _allClasses = 'All classes';
 const _allStatuses = 'All statuses';
@@ -49,6 +50,17 @@ class _StudentsScreenState extends State<StudentsScreen> {
 
   void _openStudent(String studentId) {
     setState(() {
+      _selectedStudent = null;
+      _selectedStudentId = studentId;
+      _selectedStudentFuture = widget.repository.getStudent(studentId);
+    });
+  }
+
+  void _refreshAfterTransfer(String studentId) {
+    setState(() {
+      // Refresh both views from the same confirmed backend state. Without
+      // this, the profile changed but the register retained its old class.
+      _studentsFuture = widget.repository.getEnrolledStudents();
       _selectedStudent = null;
       _selectedStudentId = studentId;
       _selectedStudentFuture = widget.repository.getStudent(studentId);
@@ -105,6 +117,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
             academicYear: widget.academicYear,
             onBack: _closeStudent,
             onOpenStudent: _openStudent,
+            onStudentTransferred: _refreshAfterTransfer,
             onOpenHousehold: widget.onOpenHousehold,
             repository: widget.repository,
           );
@@ -118,6 +131,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         academicYear: widget.academicYear,
         onBack: _closeStudent,
         onOpenStudent: _openStudent,
+        onStudentTransferred: _refreshAfterTransfer,
         onOpenHousehold: widget.onOpenHousehold,
         repository: widget.repository,
       );
@@ -963,6 +977,7 @@ class StudentProfileView extends StatefulWidget {
     required this.academicYear,
     required this.onBack,
     required this.onOpenStudent,
+    this.onStudentTransferred,
     this.onOpenHousehold,
     this.repository,
   });
@@ -972,6 +987,7 @@ class StudentProfileView extends StatefulWidget {
   final String academicYear;
   final VoidCallback onBack;
   final ValueChanged<String> onOpenStudent;
+  final ValueChanged<String>? onStudentTransferred;
   final VoidCallback? onOpenHousehold;
   final StudentsRepository? repository;
 
@@ -981,6 +997,9 @@ class StudentProfileView extends StatefulWidget {
 
 class _StudentProfileViewState extends State<StudentProfileView> {
   _StudentProfileTab _tab = _StudentProfileTab.overview;
+  late final Future<List<StudentPlacement>>? _placementHistory = widget
+      .repository
+      ?.getPlacementHistory(widget.student.id);
 
   @override
   Widget build(BuildContext context) {
@@ -999,7 +1018,14 @@ class _StudentProfileViewState extends State<StudentProfileView> {
                 label: const Text('Back to students'),
               ),
               const SizedBox(height: 8),
-              _StudentProfileHeader(student: widget.student),
+              _StudentProfileHeader(
+                student: widget.student,
+                onTransfer: widget.repository == null ? null : _transfer,
+              ),
+              if (_placementHistory != null) ...[
+                const SizedBox(height: 12),
+                _PlacementHistoryPanel(future: _placementHistory),
+              ],
               const SizedBox(height: 16),
               _ProfileTabs(
                 selected: _tab,
@@ -1038,12 +1064,75 @@ class _StudentProfileViewState extends State<StudentProfileView> {
       },
     );
   }
+
+  Future<void> _transfer() async {
+    final changed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => StudentTransferDialog(
+        student: widget.student,
+        repository: widget.repository!,
+      ),
+    );
+    if (changed == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Student class/grade changed successfully.'),
+        ),
+      );
+      (widget.onStudentTransferred ?? widget.onOpenStudent)(widget.student.id);
+    }
+  }
 }
 
+class _PlacementHistoryPanel extends StatelessWidget {
+  const _PlacementHistoryPanel({required this.future});
+  final Future<List<StudentPlacement>> future;
+  @override
+  Widget build(BuildContext context) => FutureBuilder<List<StudentPlacement>>(
+    future: future,
+    builder: (context, snapshot) {
+      if (!snapshot.hasData || snapshot.requireData.isEmpty) {
+        return const SizedBox.shrink();
+      }
+      final history = snapshot.requireData;
+      return ExpansionTile(
+        key: const Key('placement-history'),
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+        title: const Text(
+          'Placement history',
+          style: TextStyle(fontWeight: FontWeight.w800),
+        ),
+        subtitle: Text(
+          '${history.length} placement record${history.length == 1 ? '' : 's'}',
+        ),
+        children: history
+            .map(
+              (p) => ListTile(
+                leading: Icon(
+                  p.active ? Icons.school : Icons.history,
+                  color: p.active ? AppColors.green : AppColors.muted,
+                ),
+                title: Text(p.label),
+                subtitle: Text(
+                  '${_shortDate(p.effectiveFrom)}${p.effectiveTo == null ? ' — current' : ' — ${_shortDate(p.effectiveTo!)}'}${p.reason.isEmpty ? '' : '\n${p.reason}'}',
+                ),
+                isThreeLine: p.reason.isNotEmpty,
+              ),
+            )
+            .toList(),
+      );
+    },
+  );
+}
+
+String _shortDate(DateTime d) => '${d.day}/${d.month}/${d.year}';
+
 class _StudentProfileHeader extends StatelessWidget {
-  const _StudentProfileHeader({required this.student});
+  const _StudentProfileHeader({required this.student, this.onTransfer});
 
   final EnrolledStudent student;
+  final VoidCallback? onTransfer;
 
   @override
   Widget build(BuildContext context) {
@@ -1080,7 +1169,21 @@ class _StudentProfileHeader extends StatelessWidget {
                 ),
               ],
             );
-            final contextBadge = _StatusBadge(status: student.status);
+            final contextBadge = Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (onTransfer != null) ...[
+                  OutlinedButton.icon(
+                    key: const Key('change-class-grade'),
+                    onPressed: onTransfer,
+                    icon: const Icon(Icons.swap_horiz),
+                    label: const Text('Change class/grade'),
+                  ),
+                  const SizedBox(width: 12),
+                ],
+                _StatusBadge(status: student.status),
+              ],
+            );
             if (compact) {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,

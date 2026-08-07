@@ -64,6 +64,48 @@ class AttendanceRoster {
   bool get hasExistingAttendance => records.isNotEmpty;
 }
 
+enum AttendanceDayStatus { completed, missing, nonSchoolDay }
+
+class AttendanceDaySummary {
+  const AttendanceDaySummary({
+    required this.date,
+    required this.status,
+    required this.expectedStudents,
+    this.markedStudents = 0,
+    this.present = 0,
+    this.absent = 0,
+    this.late = 0,
+    this.eventName = '',
+    this.eventDescription = '',
+  });
+
+  final DateTime date;
+  final AttendanceDayStatus status;
+  final int expectedStudents;
+  final int markedStudents;
+  final int present;
+  final int absent;
+  final int late;
+  final String eventName;
+  final String eventDescription;
+}
+
+class AttendanceTermHistory {
+  const AttendanceTermHistory({
+    required this.termId,
+    required this.teachingStartDate,
+    required this.teachingEndDate,
+    required this.expectedStudents,
+    required this.days,
+  });
+
+  final int termId;
+  final DateTime teachingStartDate;
+  final DateTime teachingEndDate;
+  final int expectedStudents;
+  final List<AttendanceDaySummary> days;
+}
+
 class AttendanceDashboardOverview {
   const AttendanceDashboardOverview({
     required this.currentDate,
@@ -194,6 +236,21 @@ abstract class AttendanceRepository {
     required DateTime date,
   });
 
+  Future<AttendanceTermHistory> getTermHistory({
+    required String customSchoolId,
+    required int gradeLevelId,
+    required int streamId,
+  });
+
+  Future<void> markNonSchoolDay({
+    required String customSchoolId,
+    required int termId,
+    required DateTime date,
+    required String name,
+    required String type,
+    String? description,
+  });
+
   Future<void> saveAttendance({
     required String customSchoolId,
     required int gradeLevelId,
@@ -201,5 +258,6 @@ abstract class AttendanceRepository {
     required DateTime date,
     required List<AttendanceEntry> entries,
     required bool updateExisting,
+    String? vacationOverrideReason,
   });
 }

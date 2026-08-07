@@ -12,12 +12,20 @@ class GradeStreamsScreen extends StatefulWidget {
     required this.customSchoolId,
     this.accessToken,
     this.onRefreshAccessToken,
+    this.onOpenAttendance,
+    this.onOpenAssessments,
+    this.onOpenIncidents,
+    this.onOpenCalendar,
     ClassesRepository? repository,
   }) : _repository = repository;
 
   final String customSchoolId;
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
+  final VoidCallback? onOpenAttendance;
+  final VoidCallback? onOpenAssessments;
+  final VoidCallback? onOpenIncidents;
+  final VoidCallback? onOpenCalendar;
   final ClassesRepository? _repository;
 
   @override
@@ -143,7 +151,9 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
           return ClassStreamSummary(
             id: stream.id,
             name: stream.name,
-            gradeLevelId: stream.gradeLevelId,
+            gradeLevelId: live.gradeLevelId > 0
+                ? live.gradeLevelId
+                : stream.gradeLevelId,
             teacherName: stream.teacherName.isNotEmpty
                 ? stream.teacherName
                 : live.teacherName,
@@ -163,14 +173,21 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
       return GradeDetailScreen(
         customSchoolId: widget.customSchoolId,
         streamId: selected.streamId,
+        gradeLevelId: selected.gradeLevelId,
         gradeName: selected.gradeName,
         streamName: selected.streamName,
         enrolled: selected.enrolled,
         capacity: selected.capacity,
         active: selected.active,
         classTeacherName: selected.classTeacherName,
+        accessToken: widget.accessToken,
+        onRefreshAccessToken: widget.onRefreshAccessToken,
         repository: _repository,
         onClassTeachersChanged: _loadGradeStreams,
+        onOpenAttendance: widget.onOpenAttendance,
+        onOpenAssessments: widget.onOpenAssessments,
+        onOpenIncidents: widget.onOpenIncidents,
+        onOpenCalendar: widget.onOpenCalendar,
         onBack: () => setState(() => _selectedStream = null),
       );
     }
@@ -216,6 +233,11 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
     setState(() {
       _selectedStream = _SelectedStream(
         streamId: stream.id,
+        // Attendance and student roster endpoints use the canonical grade-level
+        // id carried by the live stream, not the school-grade configuration id.
+        gradeLevelId: stream.gradeLevelId > 0
+            ? stream.gradeLevelId
+            : level.gradeLevelId,
         gradeName: level.name,
         streamName: stream.name,
         enrolled: stream.enrolled,
@@ -1275,6 +1297,7 @@ class _GradeLevel {
           .map(
             (stream) => _StreamSummary(
               id: stream.id,
+              gradeLevelId: stream.gradeLevelId,
               name: stream.name,
               phase: phase,
               teacherName: stream.teacherName,
@@ -1297,6 +1320,7 @@ class _GradeLevel {
 class _SelectedStream {
   const _SelectedStream({
     required this.streamId,
+    required this.gradeLevelId,
     required this.gradeName,
     required this.streamName,
     required this.enrolled,
@@ -1306,6 +1330,7 @@ class _SelectedStream {
   });
 
   final int streamId;
+  final int gradeLevelId;
   final String gradeName;
   final String streamName;
   final int enrolled;
@@ -1327,6 +1352,7 @@ class _NewStreamDraft {
 class _StreamSummary {
   const _StreamSummary({
     required this.id,
+    required this.gradeLevelId,
     required this.name,
     required this.phase,
     required this.teacherName,
@@ -1336,6 +1362,7 @@ class _StreamSummary {
   });
 
   final int id;
+  final int gradeLevelId;
   final String name;
   final _PhaseFilter phase;
   final String teacherName;

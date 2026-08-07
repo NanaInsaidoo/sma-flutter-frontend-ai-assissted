@@ -6,6 +6,7 @@ import '../../platform/presentation/document_opener.dart';
 import '../../theme/app_theme.dart';
 import 'assessment_csv_export.dart';
 import 'report_pdf_download.dart';
+import 'term_evaluation_workflow_screen.dart';
 
 enum _Route {
   dashboard,
@@ -57,6 +58,7 @@ class _CompleteAssessmentWorkflowState
     extends State<CompleteAssessmentWorkflow> {
   late final AssessmentApiClient _assessmentApi;
   late Future<AssessmentFormSetup> _assessmentFormSetup;
+  AssessmentFormSetup? _loadedSetup;
   bool _loadingAssessments = true;
   String? _assessmentLoadError;
   _Route _route = _Route.dashboard;
@@ -100,6 +102,20 @@ class _CompleteAssessmentWorkflowState
   String _reportCardFilter = 'All Students';
   final List<_FinalReportStream> _finalReportStreams = [];
 
+  String get _displayTerm {
+    final configured = widget.term.trim();
+    if (configured.isNotEmpty) return configured;
+    final loaded = _loadedSetup?.termName.trim() ?? '';
+    return loaded.isEmpty ? 'Current Term' : loaded;
+  }
+
+  String get _displayAcademicYear {
+    final configured = widget.academicYear.trim();
+    if (configured.isNotEmpty) return configured;
+    final loaded = _loadedSetup?.academicYearName.trim() ?? '';
+    return loaded.isEmpty ? 'Current Academic Year' : loaded;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -126,7 +142,18 @@ class _CompleteAssessmentWorkflowState
     }
     try {
       final setup = await _assessmentFormSetup;
-      _configuredGradeLevels = setup.gradeLevels
+      if (mounted) {
+        setState(() => _loadedSetup = setup);
+      } else {
+        _loadedSetup = setup;
+      }
+      final orderedGrades = [...setup.gradeLevels]
+        ..sort((a, b) {
+          final aOrder = a.displayOrder == 0 ? a.id : a.displayOrder;
+          final bOrder = b.displayOrder == 0 ? b.id : b.displayOrder;
+          return aOrder.compareTo(bOrder);
+        });
+      _configuredGradeLevels = orderedGrades
           .map((grade) => grade.name.trim())
           .where((name) => name.isNotEmpty)
           .toSet()
@@ -877,7 +904,7 @@ class _CompleteAssessmentWorkflowState
               _assessments.length;
     return _page(
       title: 'Assessment Dashboard',
-      subtitle: '${widget.term} - ${widget.academicYear} Academic Year',
+      subtitle: '$_displayTerm - $_displayAcademicYear',
       showBack: false,
       children: [
         LayoutBuilder(
@@ -938,7 +965,7 @@ class _CompleteAssessmentWorkflowState
                     'Record terminal conduct',
                     Icons.fact_check_outlined,
                     AppColors.amber,
-                    () => _selectClass('Student Evaluations'),
+                    _openTermEvaluations,
                   ),
                   _actionCard(
                     width,
@@ -1037,6 +1064,27 @@ class _CompleteAssessmentWorkflowState
     );
   }
 
+  Future<void> _openTermEvaluations() async {
+    try {
+      final setup = await _assessmentFormSetup;
+      if (!mounted) return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => TermEvaluationWorkflowScreen(
+            api: _assessmentApi,
+            schoolId: widget.customSchoolId,
+            viewerName: widget.viewerName,
+            viewerRole: widget.viewerRole,
+            setup: setup,
+          ),
+        ),
+      );
+    } on AssessmentApiException catch (error) {
+      if (mounted) _notice(error.message);
+    }
+  }
+
   Widget _assessmentRegister() {
     final visibleAssessments = _assessments.where((assessment) {
       final query = _assessmentQuery.trim().toLowerCase();
@@ -1127,7 +1175,7 @@ class _CompleteAssessmentWorkflowState
                   ),
                   const SizedBox(height: 7),
                   Text(
-                    '${widget.term} • ${widget.academicYear}',
+                    '$_displayTerm • $_displayAcademicYear',
                     style: const TextStyle(
                       color: Color(0xFF6B7280),
                       fontSize: 12.5,
@@ -2308,7 +2356,7 @@ class _CompleteAssessmentWorkflowState
     final notStarted = _students.length - submitted - drafts;
     return _page(
       title: 'Student Evaluations',
-      subtitle: '${widget.term} - Conduct and terminal evaluation',
+      subtitle: '$_displayTerm - Conduct and terminal evaluation',
       actions: [
         _filledButton(
           'Evaluate by Student',
@@ -2957,7 +3005,7 @@ class _CompleteAssessmentWorkflowState
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(
-                          widget.term.replaceAll('Term ', 'Term'),
+                          _displayTerm.replaceAll('Term ', 'Term'),
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 10.5,
@@ -3877,9 +3925,9 @@ class _CompleteAssessmentWorkflowState
         'Pending Head Comments',
       ),
       (
-        'MISSING PROMOTION',
+        'MISSING DECISION',
         '$missingPromotion',
-        'Next grade not selected',
+        'Progression decision not selected',
         Icons.trending_up,
         const Color(0xFFF59E0B),
         'Missing Promotion',
@@ -4037,8 +4085,8 @@ class _CompleteAssessmentWorkflowState
                     icon: const Icon(Icons.trending_up, size: 14),
                     label: Text(
                       _selectedReportStudents.isEmpty
-                          ? 'Set Promotion'
-                          : 'Set Promotion (${_selectedReportStudents.length})',
+                          ? 'Set Progression'
+                          : 'Set Progression (${_selectedReportStudents.length})',
                     ),
                   ),
                 if (widget.viewerRole.toLowerCase().contains('admin') ||
@@ -4385,7 +4433,13 @@ class _CompleteAssessmentWorkflowState
 
   List<String> _promotionGradeOptions([String? currentValue]) {
     final values = <String>{
+      'Repeat current grade',
+      'Pending review',
       ..._configuredGradeLevels,
+      if (_configuredGradeLevels.isNotEmpty &&
+          _selectedClass.trim().toLowerCase() ==
+              _configuredGradeLevels.last.trim().toLowerCase())
+        'Graduate',
       if (currentValue != null && currentValue.trim().isNotEmpty)
         currentValue.trim(),
     }.toList();
@@ -4409,7 +4463,7 @@ class _CompleteAssessmentWorkflowState
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Set Student Promotion'),
+          title: const Text('Set progression decision'),
           content: SizedBox(
             width: 440,
             child: Column(
@@ -4418,15 +4472,15 @@ class _CompleteAssessmentWorkflowState
               children: [
                 Text(
                   _selectedReportStudents.isEmpty
-                      ? 'Apply a promotion grade to all ${targets.length} students.'
-                      : 'Apply a promotion grade to ${targets.length} selected student(s).',
+                      ? 'Apply a progression decision to all ${targets.length} students.'
+                      : 'Apply a progression decision to ${targets.length} selected student(s).',
                   style: const TextStyle(color: Color(0xFF64748B)),
                 ),
                 const SizedBox(height: 18),
                 DropdownButtonFormField<String>(
                   value: grade,
-                  decoration: const InputDecoration(labelText: 'Promoted To'),
-                  hint: const Text('Select class or grade level'),
+                  decoration: const InputDecoration(labelText: 'Decision'),
+                  hint: const Text('Promote, repeat, review or graduate'),
                   items: gradeOptions.map((item) {
                     return DropdownMenuItem(value: item, child: Text(item));
                   }).toList(),
@@ -4452,7 +4506,7 @@ class _CompleteAssessmentWorkflowState
               onPressed: grade == null
                   ? null
                   : () => Navigator.pop(dialogContext, true),
-              child: const Text('Apply Promotion'),
+              child: const Text('Apply decision'),
             ),
           ],
         ),
@@ -4473,7 +4527,7 @@ class _CompleteAssessmentWorkflowState
         _touchReportAudit(student);
       }
     });
-    _notice('Promotion updated for ${targets.length} student(s).');
+    _notice('Progression decision updated for ${targets.length} student(s).');
   }
 
   // ignore: unused_element
@@ -4624,14 +4678,16 @@ class _CompleteAssessmentWorkflowState
                                     : null,
                               ),
                               const SizedBox(height: 22),
-                              _remarksSectionLabel('Promotion'),
+                              _remarksSectionLabel('Progression decision'),
                               const SizedBox(height: 10),
                               DropdownButtonFormField<String>(
                                 value: promotedTo.isEmpty ? null : promotedTo,
                                 isExpanded: true,
-                                hint: const Text('Select class or grade level'),
+                                hint: const Text(
+                                  'Promote, repeat, review or graduate',
+                                ),
                                 decoration: const InputDecoration(
-                                  labelText: 'Promoted To',
+                                  labelText: 'Decision',
                                   prefixIcon: Icon(Icons.school_outlined),
                                 ),
                                 items: _promotionGradeOptions(promotedTo).map((
@@ -4642,7 +4698,7 @@ class _CompleteAssessmentWorkflowState
                                     child: Text(grade),
                                   );
                                 }).toList(),
-                                onChanged: canEditHead
+                                onChanged: canEditClass
                                     ? (value) => setDrawerState(
                                         () => promotedTo = value ?? '',
                                       )
@@ -4732,7 +4788,7 @@ class _CompleteAssessmentWorkflowState
         borderRadius: BorderRadius.circular(10),
       ),
       child: Text(
-        '$_selectedClass • ${widget.term}\nViewing as ${widget.viewerRole}',
+        '$_selectedClass • $_displayTerm\nViewing as ${widget.viewerRole}',
         style: const TextStyle(
           color: Color(0xFF416D66),
           fontSize: 12,
@@ -4954,7 +5010,7 @@ class _CompleteAssessmentWorkflowState
             final promotionSection = _studentReportPromotionSection(
               student,
               remarks,
-              canEdit: canEditHead,
+              canEdit: canEditClass,
             );
             if (compact) {
               return Column(
@@ -5016,7 +5072,7 @@ class _CompleteAssessmentWorkflowState
                   ),
                 ),
                 Text(
-                  '${student.id} • $_selectedClass • ${widget.term}',
+                  '${student.id} • $_selectedClass • $_displayTerm',
                   style: const TextStyle(
                     color: Color(0xFF64748B),
                     fontSize: 12,
@@ -5039,7 +5095,7 @@ class _CompleteAssessmentWorkflowState
       ('Report generated', status == 'Generated' || status == 'Published'),
       ('Class Teacher remark', remarks.classTeacherRemarks.isNotEmpty),
       ('Head comment or Ignore', remarks.headTeacherRequirementSatisfied),
-      ('Promotion selected', remarks.promotedTo.isNotEmpty),
+      ('Progression selected', remarks.promotedTo.isNotEmpty),
     ];
     return _section(
       title: 'Publication Readiness',
@@ -5230,16 +5286,16 @@ class _CompleteAssessmentWorkflowState
     required bool canEdit,
   }) {
     return _section(
-      title: 'Promotion & Attendance',
+      title: 'Progression & Attendance',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           DropdownButtonFormField<String>(
             value: remarks.promotedTo.isEmpty ? null : remarks.promotedTo,
             isExpanded: true,
-            hint: const Text('Select class or grade level'),
+            hint: const Text('Promote, repeat, review or graduate'),
             decoration: const InputDecoration(
-              labelText: 'Promoted To',
+              labelText: 'Progression decision',
               prefixIcon: Icon(Icons.school_outlined),
             ),
             items: _promotionGradeOptions(remarks.promotedTo).map((grade) {
@@ -5724,7 +5780,7 @@ class _CompleteAssessmentWorkflowState
                               borderRadius: BorderRadius.circular(999),
                             ),
                             child: Text(
-                              '${widget.term} ${widget.academicYear.replaceAll(' Academic Year', '')}',
+                              '$_displayTerm ${_displayAcademicYear.replaceAll(' Academic Year', '')}',
                               style: const TextStyle(
                                 color: Color(0xFF009688),
                                 fontSize: 11.5,
@@ -6384,7 +6440,7 @@ class _CompleteAssessmentWorkflowState
   Widget _classes() {
     return _page(
       title: 'Classes',
-      subtitle: '${widget.academicYear} - ${widget.term}',
+      subtitle: '$_displayAcademicYear - $_displayTerm',
       children: [
         _filterBar(
           hint: 'Search classes',
@@ -6770,7 +6826,7 @@ class _CompleteAssessmentWorkflowState
                               fontWeight: FontWeight.w800,
                             ),
                           ),
-                          Text('${widget.term} - ${widget.academicYear}'),
+                          Text('$_displayTerm - $_displayAcademicYear'),
                         ],
                       ),
                     ),
@@ -8621,7 +8677,9 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
     return null;
   }
 
-  Future<void> _submit() async {
+  Future<void> _submit() => _submitWithReason(null);
+
+  Future<void> _submitWithReason(String? vacationOverrideReason) async {
     final detailsAreValid = _key.currentState!.validate();
     final indicatorsAreValid = _selectedIndicators.isNotEmpty;
     setState(() {
@@ -8656,6 +8714,8 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
       'curriculumIndicatorCodes': _selectedIndicators
           .map((indicator) => indicator.code)
           .toList(),
+      if (vacationOverrideReason?.trim().isNotEmpty == true)
+        'vacationOverrideReason': vacationOverrideReason!.trim(),
     };
 
     setState(() {
@@ -8713,10 +8773,69 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
       );
     } on AssessmentApiException catch (error) {
       if (!mounted) return;
+      if (vacationOverrideReason == null &&
+          error.message.toLowerCase().contains('teaching begins')) {
+        setState(() => _saving = false);
+        final reason = await _requestEarlyAcademicReason(error.message);
+        if (reason != null && mounted) {
+          await _submitWithReason(reason);
+        }
+        return;
+      }
       setState(() => _saveError = error.message);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  Future<String?> _requestEarlyAcademicReason(String warning) async {
+    final controller = TextEditingController();
+    String? validation;
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          icon: const Icon(Icons.warning_amber_rounded, color: Colors.orange),
+          title: const Text('Teaching has not started'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(warning),
+              const SizedBox(height: 16),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                maxLines: 3,
+                decoration: InputDecoration(
+                  labelText: 'Reason for recording this early',
+                  errorText: validation,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final value = controller.text.trim();
+                if (value.length < 5) {
+                  setDialogState(() => validation = 'Enter a clear reason.');
+                  return;
+                }
+                Navigator.pop(dialogContext, value);
+              },
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+    return result;
   }
 
   String _assessmentTypeValue(String label) => switch (label) {

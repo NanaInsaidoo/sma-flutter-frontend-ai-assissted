@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../fees/presentation/household_split_payment_screen.dart';
 import 'package:file_picker/file_picker.dart';
 
 import '../data/admissions_api_client.dart';
@@ -2741,6 +2743,25 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
                     deletingHousehold: _deletingHousehold,
                     onApprovePendingHousehold: _approvePendingHousehold,
                     onDeleteEmptyHousehold: _deleteEmptyHousehold,
+                    onSplitPayment: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => HouseholdSplitPaymentScreen(
+                          householdName: _household.householdName,
+                          customSchoolId: widget.customSchoolId,
+                          householdId: _household.householdId,
+                          api: FeeApiClient(
+                            accessToken: widget.api.accessToken,
+                            onRefreshAccessToken:
+                                widget.api.onRefreshAccessToken,
+                          ),
+                          studentNames:
+                              (snapshot.data?.students ??
+                                      const <AdmissionStudent>[])
+                                  .map((student) => student.displayName)
+                                  .toList(),
+                        ),
+                      ),
+                    ),
                   );
                 },
               ),
@@ -2771,6 +2792,7 @@ class _HouseholdWorkspace extends StatelessWidget {
     required this.deletingHousehold,
     required this.onApprovePendingHousehold,
     required this.onDeleteEmptyHousehold,
+    required this.onSplitPayment,
   });
 
   final _HouseholdRecord household;
@@ -2790,6 +2812,7 @@ class _HouseholdWorkspace extends StatelessWidget {
   final bool deletingHousehold;
   final VoidCallback onApprovePendingHousehold;
   final VoidCallback onDeleteEmptyHousehold;
+  final VoidCallback onSplitPayment;
 
   bool get _hasGuardian => guardians.isNotEmpty;
   bool get _hasStudent => students.isNotEmpty;
@@ -2806,6 +2829,18 @@ class _HouseholdWorkspace extends StatelessWidget {
               final main = Column(
                 children: [
                   _HouseholdIdentityCard(household: household),
+                  if (students.isNotEmpty) ...[
+                    const SizedBox(height: 14),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: FilledButton.icon(
+                        key: const Key('split-household-payment'),
+                        onPressed: onSplitPayment,
+                        icon: const Icon(Icons.call_split_rounded),
+                        label: const Text('Split payment among children'),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 14),
                   _HouseholdSectionCard(
                     title: 'Parents & Guardians',

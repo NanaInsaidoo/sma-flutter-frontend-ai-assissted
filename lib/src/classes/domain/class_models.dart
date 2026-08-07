@@ -94,6 +94,29 @@ abstract class ClassesRepository {
   });
 
   Future<List<SchoolStaffOption>> getSchoolStaff(String customSchoolId);
+
+  Future<List<SubjectTeacherAssignment>> getSubjectTeacherAssignments({
+    required String customSchoolId,
+    required int streamId,
+  });
+
+  Future<SubjectTeacherAssignment> addSubjectTeacherAssignment({
+    required String customSchoolId,
+    required int streamId,
+    required int gradeLevelId,
+    required ClassSubject subject,
+    required String staffId,
+    DateTime? effectiveFrom,
+    String? reason,
+  });
+
+  Future<void> removeSubjectTeacherAssignment({
+    required String customSchoolId,
+    required int streamId,
+    required int assignmentId,
+    DateTime? effectiveFrom,
+    String? reason,
+  });
 }
 
 class StreamCapacityUpdate {
@@ -205,4 +228,25 @@ class SchoolStaffOption {
   final String status;
 
   bool get active => status.trim().toUpperCase() == 'ACTIVE';
+}
+
+class SubjectTeacherAssignment {
+  const SubjectTeacherAssignment({
+    required this.id,
+    required this.streamId,
+    required this.subjectId,
+    required this.subjectType,
+    required this.subjectName,
+    required this.subjectCode,
+    required this.staffId,
+    required this.staffName,
+    required this.active,
+    this.effectiveFrom,
+    this.changeReason = '',
+  });
+  final int id, streamId, subjectId;
+  final String subjectType, subjectName, subjectCode, staffId, staffName;
+  final bool active;
+  final DateTime? effectiveFrom;
+  final String changeReason;
 }

@@ -37,6 +37,168 @@ class ApiStudentsRepository implements StudentsRepository {
   String? _accessToken;
 
   @override
+  Future<StudentPlacement> getCurrentPlacement(
+    String studentId,
+  ) async => _placement(
+    Map<String, dynamic>.from(
+      await _json(
+            'GET',
+            '/api/schools/$customSchoolId/students/$studentId/placements/current',
+          )
+          as Map,
+    ),
+  );
+
+  @override
+  Future<List<StudentPlacement>> getPlacementHistory(String studentId) async {
+    final value = await _json(
+      'GET',
+      '/api/schools/$customSchoolId/students/$studentId/placements',
+    );
+    return (value as List? ?? const [])
+        .whereType<Map>()
+        .map((e) => _placement(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  @override
+  Future<List<StudentTransferDestination>> getTransferDestinations(
+    String studentId,
+  ) async {
+    final value = await _json(
+      'GET',
+      '/api/schools/$customSchoolId/students/$studentId/transfer-destinations',
+    );
+    return (value as List? ?? const []).whereType<Map>().map((raw) {
+      final e = Map<String, dynamic>.from(raw);
+      return StudentTransferDestination(
+        gradeLevelId: _integer(e['gradeLevelId']),
+        gradeName: '${e['gradeName'] ?? ''}',
+        streamId: _integer(e['streamId']),
+        streamName: '${e['streamName'] ?? ''}',
+      );
+    }).toList();
+  }
+
+  @override
+  Future<StudentTransferPreview> previewTransfer(
+    String studentId,
+    StudentTransferInput input,
+  ) async {
+    final j = Map<String, dynamic>.from(
+      await _json(
+            'POST',
+            '/api/schools/$customSchoolId/students/$studentId/transfers/preview',
+            body: _transferBody(input),
+          )
+          as Map,
+    );
+    final d = Map<String, dynamic>.from(j['destination'] as Map);
+    return StudentTransferPreview(
+      previewToken: '${j['previewToken']}',
+      source: _placement(Map<String, dynamic>.from(j['source'] as Map)),
+      destination: StudentTransferDestination(
+        gradeLevelId: _integer(d['gradeLevelId']),
+        gradeName: '${d['gradeName']}',
+        streamId: _integer(d['streamId']),
+        streamName: '${d['streamName']}',
+      ),
+      effectiveDate: _requiredDate(j['effectiveDate'], 'effective date'),
+      reason: '${j['reason']}',
+      gradeChanged: j['gradeChanged'] == true,
+      feeMessage: '${j['feeMessage']}',
+      attendanceMessage: '${j['attendanceMessage']}',
+    );
+  }
+
+  @override
+  Future<StudentPlacement> confirmTransfer(
+    String studentId,
+    StudentTransferInput input,
+  ) async {
+    final j = Map<String, dynamic>.from(
+      await _json(
+            'POST',
+            '/api/schools/$customSchoolId/students/$studentId/transfers',
+            body: _transferBody(input),
+          )
+          as Map,
+    );
+    return _placement(Map<String, dynamic>.from(j['placement'] as Map));
+  }
+
+  Map<String, Object?> _transferBody(StudentTransferInput i) => {
+    'transferType': i.type == StudentTransferType.sameGradeDifferentStream
+        ? 'SAME_GRADE_DIFFERENT_STREAM'
+        : 'DIFFERENT_GRADE_LEVEL',
+    'destinationGradeLevelId': i.destinationGradeLevelId,
+    'destinationStreamId': i.destinationStreamId,
+    'effectiveDate':
+        '${i.effectiveDate.year.toString().padLeft(4, '0')}-${i.effectiveDate.month.toString().padLeft(2, '0')}-${i.effectiveDate.day.toString().padLeft(2, '0')}',
+    'reason': i.reason.trim(),
+    'previewToken': i.previewToken,
+    'actorUserId': i.actorUserId,
+  };
+
+  StudentPlacement _placement(Map<String, dynamic> j) => StudentPlacement(
+    placementId: _integer(j['placementId']),
+    gradeLevelId: _integer(j['gradeLevelId']),
+    gradeName: '${j['gradeName'] ?? ''}',
+    streamId: _integer(j['streamId']),
+    streamName: '${j['streamName'] ?? ''}',
+    effectiveFrom: _requiredDate(j['effectiveFrom'], 'placement start'),
+    effectiveTo: _date(j['effectiveTo']),
+    active: j['active'] == true,
+    termStart: _date(j['termStart']),
+    termEnd: _date(j['termEnd']),
+    reason: '${j['reason'] ?? ''}',
+  );
+
+  Future<Object?> _json(String method, String path, {Object? body}) async {
+    Future<http.Response> send() => method == 'POST'
+        ? _client
+              .post(
+                Uri.parse('${ApiConfig.baseUrl}$path'),
+                headers: {
+                  'Content-Type': 'application/json',
+                  if (_accessToken?.isNotEmpty == true)
+                    'Authorization': 'Bearer $_accessToken',
+                },
+                body: jsonEncode(body),
+              )
+              .timeout(const Duration(seconds: 15))
+        : _client
+              .get(
+                Uri.parse('${ApiConfig.baseUrl}$path'),
+                headers: {
+                  if (_accessToken?.isNotEmpty == true)
+                    'Authorization': 'Bearer $_accessToken',
+                },
+              )
+              .timeout(const Duration(seconds: 15));
+    var response = await send();
+    if ((response.statusCode == 401 || response.statusCode == 403) &&
+        onRefreshAccessToken != null) {
+      _accessToken = await onRefreshAccessToken!();
+      response = await send();
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      try {
+        final e = jsonDecode(response.body);
+        throw ApiStudentsException(
+          '${e['message'] ?? e['error'] ?? 'Transfer request failed'}',
+        );
+      } catch (e) {
+        if (e is ApiStudentsException) rethrow;
+        throw ApiStudentsException(
+          'Transfer request failed (${response.statusCode}).',
+        );
+      }
+    }
+    return jsonDecode(response.body);
+  }
+
+  @override
   Future<List<FeeAdjustmentApprover>> getFeeAdjustmentApprovers() =>
       _fees.getFeeAdjustmentApprovers(customSchoolId);
 
@@ -252,10 +414,14 @@ class ApiStudentsRepository implements StudentsRepository {
       householdStudents: householdStudents,
       documents: documents,
       requirements: requirements,
-      feeAdjustments: termAdjustments
-          ?.where((item) => item.customStudentId == studentId)
-          .map(_studentAdjustment)
-          .toList(growable: false),
+      feeAdjustments: termAdjustments == null
+          ? null
+          : [
+              ...termAdjustments
+                  .where((item) => item.customStudentId == studentId)
+                  .map(_studentAdjustment),
+              ..._feeAdjustments(feeAccount, onlyWaivers: true),
+            ],
     );
   }
 
@@ -638,9 +804,18 @@ List<StudentFeeItem> _feeItems(FeeStudentAccount? account) {
       .toList();
 }
 
-List<StudentFeeAdjustment> _feeAdjustments(FeeStudentAccount? account) {
+List<StudentFeeAdjustment> _feeAdjustments(
+  FeeStudentAccount? account, {
+  bool onlyWaivers = false,
+}) {
   if (account == null) return const [];
-  return account.adjustments.map((item) {
+  return account.adjustments
+      .where(
+        (item) =>
+            !onlyWaivers ||
+            item.adjustmentType.toUpperCase().startsWith('WAIVER:'),
+      )
+      .map((item) {
     final type = item.adjustmentType.toUpperCase();
     return StudentFeeAdjustment(
       id: '${item.adjustmentId}',
@@ -658,7 +833,8 @@ List<StudentFeeAdjustment> _feeAdjustments(FeeStudentAccount? account) {
           )),
       createdBy: 'School administration',
     );
-  }).toList();
+      })
+      .toList();
 }
 
 StudentFeeAdjustment _studentAdjustment(FeeAdjustment item) {
@@ -718,6 +894,7 @@ StudentFeeAdjustmentStatus _adjustmentStatus(String status) =>
       'PENDING' || 'PENDING_APPROVAL' => StudentFeeAdjustmentStatus.pending,
       'CHANGES_REQUESTED' => StudentFeeAdjustmentStatus.changesRequested,
       'APPROVED' => StudentFeeAdjustmentStatus.approved,
+      'ACTIVE' => StudentFeeAdjustmentStatus.approved,
       'COMPLETE' || 'COMPLETED' => StudentFeeAdjustmentStatus.complete,
       'REJECTED' => StudentFeeAdjustmentStatus.rejected,
       'REVERSED' => StudentFeeAdjustmentStatus.reversed,
