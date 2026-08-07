@@ -282,6 +282,16 @@ class _TermEvaluationWorkflowScreenState
                 )
               else if (own && submitted)
                 const Chip(label: Text('Submitted · locked')),
+              if (_manager &&
+                  !own &&
+                  submitted &&
+                  assignment['assignmentType'] == 'CLASS_TEACHER')
+                FilledButton.tonalIcon(
+                  key: ValueKey('manager-review-${assignment['id']}'),
+                  onPressed: () => _review(assignment),
+                  icon: const Icon(Icons.fact_check_outlined),
+                  label: const Text('Review results'),
+                ),
               if (_manager && submitted)
                 TextButton(
                   onPressed: () => _reopen(assignment),
@@ -332,6 +342,7 @@ class _TermEvaluationWorkflowScreenState
           schoolId: widget.schoolId,
           termId: widget.setup.termId,
           staffId: assignment['staffId'].toString(),
+          canManageFinalWordings: _manager,
           students: (assignment['students'] as List)
               .whereType<Map<String, dynamic>>()
               .toList(),
@@ -809,6 +820,7 @@ class _ConsolidatedReview extends StatelessWidget {
     required this.schoolId,
     required this.termId,
     required this.staffId,
+    required this.canManageFinalWordings,
     required this.students,
   });
 
@@ -816,11 +828,18 @@ class _ConsolidatedReview extends StatelessWidget {
   final String schoolId;
   final int termId;
   final String staffId;
+  final bool canManageFinalWordings;
   final List<Map<String, dynamic>> students;
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Class-teacher evaluation review')),
+    appBar: AppBar(
+      title: Text(
+        canManageFinalWordings
+            ? 'Final evaluation review'
+            : 'Class-teacher evaluation review',
+      ),
+    ),
     body: ListView.separated(
       padding: const EdgeInsets.all(24),
       itemCount: students.length,
@@ -841,6 +860,7 @@ class _ConsolidatedReview extends StatelessWidget {
                   schoolId: schoolId,
                   termId: termId,
                   staffId: staffId,
+                  canManageFinalWordings: canManageFinalWordings,
                   student: student,
                 ),
               ),
@@ -858,6 +878,7 @@ class _StudentFinalReview extends StatefulWidget {
     required this.schoolId,
     required this.termId,
     required this.staffId,
+    required this.canManageFinalWordings,
     required this.student,
   });
 
@@ -865,6 +886,7 @@ class _StudentFinalReview extends StatefulWidget {
   final String schoolId;
   final int termId;
   final String staffId;
+  final bool canManageFinalWordings;
   final Map<String, dynamic> student;
 
   @override
@@ -874,6 +896,7 @@ class _StudentFinalReview extends StatefulWidget {
 class _StudentFinalReviewState extends State<_StudentFinalReview> {
   final _comment = TextEditingController();
   final _final = <String, String>{};
+  final _originalFinal = <String, String>{};
   Map<String, String> _calculated = const {};
   bool _loading = true;
   bool _busy = false;
@@ -916,11 +939,16 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
         _final
           ..clear()
           ..addAll(finalRatings);
+        _originalFinal
+          ..clear()
+          ..addAll(finalRatings);
         _comment.text = data['comment']?.toString() ?? '';
         _status = data['status']?.toString() ?? 'PENDING';
         _loading = false;
       });
-      await _loadSuggestion(resetVariant: true);
+      if (!widget.canManageFinalWordings) {
+        await _loadSuggestion(resetVariant: true);
+      }
     } on AssessmentApiException catch (error) {
       if (!mounted) return;
       setState(() => _loading = false);
@@ -984,14 +1012,6 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
       _comment.text = suggestion;
       _appliedSuggestion = suggestion;
     });
-  }
-
-  void _refreshSuggestionAfterRatingChange() {
-    if (_appliedSuggestion != null && _comment.text == _appliedSuggestion) {
-      _comment.clear();
-    }
-    _appliedSuggestion = null;
-    _loadSuggestion(resetVariant: true);
   }
 
   Future<void> _previewAndFinalize() async {
@@ -1068,7 +1088,7 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
         schoolId: widget.schoolId,
         termId: widget.termId,
         staffId: widget.staffId,
-        finalRatings: _final,
+        finalRatings: _calculated,
         comment: _comment.text.trim(),
       );
       if (!mounted) return;
@@ -1087,6 +1107,83 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
     }
   }
 
+  Future<void> _saveManagerChanges() async {
+    var enteredReason = '';
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Confirm final wording changes'),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'These wordings will replace the calculated wording on the report card. The change and your reason will be recorded in the audit history.',
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  key: const ValueKey('headmaster-wording-reason'),
+                  autofocus: true,
+                  maxLines: 3,
+                  onChanged: (value) =>
+                      setDialogState(() => enteredReason = value),
+                  decoration: const InputDecoration(
+                    labelText: 'Reason for change',
+                    hintText: 'Explain why the calculated result must change',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Keep current wording'),
+            ),
+            FilledButton(
+              key: const ValueKey('confirm-headmaster-wordings'),
+              onPressed: enteredReason.trim().length >= 5
+                  ? () => Navigator.pop(dialogContext, enteredReason.trim())
+                  : null,
+              child: const Text('Save changes'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (reason == null || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      await widget.api.adjustFinalTermEvaluationWordings(
+        studentId: widget.student['id'],
+        schoolId: widget.schoolId,
+        termId: widget.termId,
+        finalRatings: Map<String, String>.from(_final),
+        reason: reason,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Final wording updated and recorded in the audit history.',
+          ),
+        ),
+      );
+      await _load();
+    } on AssessmentApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -1094,8 +1191,11 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
     }
     final complete = _calculated.keys.toSet().containsAll(_criteria.keys);
     final finalized = _status == 'FINALIZED';
-    final changed = _criteria.keys
+    final differsFromCalculated = _criteria.keys
         .where((criterion) => _final[criterion] != _calculated[criterion])
+        .length;
+    final edited = _criteria.keys
+        .where((criterion) => _final[criterion] != _originalFinal[criterion])
         .length;
     return Scaffold(
       appBar: AppBar(title: Text(widget.student['name'].toString())),
@@ -1110,7 +1210,13 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                   Expanded(
                     child: Text(
                       complete
-                          ? 'Review the calculated wording and set the final report-card wording.'
+                          ? widget.canManageFinalWordings
+                                ? finalized
+                                      ? 'Review the combined teacher evaluation. Only an authorized head or administrator can correct the final report-card wording.'
+                                      : 'The combined wording is ready, but the class teacher must add the final comment and finalize it first.'
+                                : finalized
+                                ? 'The combined teacher evaluation and your report-card comment are finalized.'
+                                : 'Review the combined teacher evaluation and add the final class-teacher comment.'
                           : 'Teacher submissions are incomplete. This student cannot be finalized yet.',
                     ),
                   ),
@@ -1132,111 +1238,121 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                 ),
                 trailing: SizedBox(
                   width: 280,
-                  child: DropdownButtonFormField<String>(
-                    isExpanded: true,
-                    value: _final[criterion.key],
-                    decoration: const InputDecoration(
-                      labelText: 'Final wording',
-                    ),
-                    items: _ratings
-                        .where((rating) => rating != 'Not observed')
-                        .map(
-                          (rating) => DropdownMenuItem(
-                            value: rating,
-                            child: Text(rating),
+                  child: widget.canManageFinalWordings && finalized
+                      ? DropdownButtonFormField<String>(
+                          key: ValueKey('headmaster-wording-${criterion.key}'),
+                          isExpanded: true,
+                          value: _final[criterion.key],
+                          decoration: const InputDecoration(
+                            labelText: 'Final report wording',
                           ),
+                          items: _ratings
+                              .where((rating) => rating != 'Not observed')
+                              .map(
+                                (rating) => DropdownMenuItem(
+                                  value: rating,
+                                  child: Text(rating),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: complete
+                              ? (value) => setState(
+                                  () => _final[criterion.key] = value!,
+                                )
+                              : null,
                         )
-                        .toList(),
-                    onChanged: complete && !finalized
-                        ? (value) {
-                            setState(() => _final[criterion.key] = value!);
-                            _refreshSuggestionAfterRatingChange();
-                          }
-                        : null,
-                  ),
+                      : Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            _final[criterion.key] ?? 'Incomplete',
+                            key: ValueKey('final-wording-${criterion.key}'),
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                        ),
                 ),
               ),
             ),
           ),
           const SizedBox(height: 12),
-          Card(
-            color: Theme.of(
-              context,
-            ).colorScheme.primaryContainer.withValues(alpha: 0.35),
-            child: Padding(
-              padding: const EdgeInsets.all(18),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.auto_awesome_outlined,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        child: Text(
-                          'Suggested class-teacher comment',
-                          style: TextStyle(fontWeight: FontWeight.w800),
-                        ),
-                      ),
-                      if (_suggestionLoading)
-                        const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    _suggestion ??
-                        _suggestionMessage ??
-                        'Preparing a suggestion from the consolidated evaluation…',
-                    key: const ValueKey('evaluation-comment-suggestion'),
-                  ),
-                  if (_suggestion != null) ...[
-                    const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
+          if (!widget.canManageFinalWordings)
+            Card(
+              color: Theme.of(
+                context,
+              ).colorScheme.primaryContainer.withValues(alpha: 0.35),
+              child: Padding(
+                padding: const EdgeInsets.all(18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
                       children: [
-                        FilledButton.tonalIcon(
-                          key: const ValueKey('use-evaluation-suggestion'),
-                          onPressed: finalized ? null : _useSuggestion,
-                          icon: const Icon(Icons.check),
-                          label: const Text('Use suggestion'),
+                        Icon(
+                          Icons.auto_awesome_outlined,
+                          color: Theme.of(context).colorScheme.primary,
                         ),
-                        TextButton.icon(
-                          key: const ValueKey(
-                            'try-another-evaluation-suggestion',
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Suggested class-teacher comment',
+                            style: TextStyle(fontWeight: FontWeight.w800),
                           ),
-                          onPressed: finalized || _suggestionLoading
-                              ? null
-                              : _tryAnotherSuggestion,
-                          icon: const Icon(Icons.refresh),
-                          label: const Text('Try another'),
                         ),
+                        if (_suggestionLoading)
+                          const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
                       ],
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 10),
                     Text(
-                      finalized
-                          ? 'This suggestion is informational. The finalized comment is shown below and cannot be changed without reopening the evaluation.'
-                          : 'Review and edit the wording before finalizing. The suggestion is never saved automatically.',
-                      style: Theme.of(context).textTheme.bodySmall,
+                      _suggestion ??
+                          _suggestionMessage ??
+                          'Preparing a suggestion from the consolidated evaluation…',
+                      key: const ValueKey('evaluation-comment-suggestion'),
                     ),
+                    if (_suggestion != null) ...[
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          FilledButton.tonalIcon(
+                            key: const ValueKey('use-evaluation-suggestion'),
+                            onPressed: finalized ? null : _useSuggestion,
+                            icon: const Icon(Icons.check),
+                            label: const Text('Use suggestion'),
+                          ),
+                          TextButton.icon(
+                            key: const ValueKey(
+                              'try-another-evaluation-suggestion',
+                            ),
+                            onPressed: finalized || _suggestionLoading
+                                ? null
+                                : _tryAnotherSuggestion,
+                            icon: const Icon(Icons.refresh),
+                            label: const Text('Try another'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        finalized
+                            ? 'This suggestion is informational. The finalized comment is shown below and cannot be changed without reopening the evaluation.'
+                            : 'Review and edit the wording before finalizing. The suggestion is never saved automatically.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 12),
+          if (!widget.canManageFinalWordings) const SizedBox(height: 12),
           TextField(
             key: const ValueKey('evaluation-final-comment'),
             controller: _comment,
-            readOnly: finalized,
+            readOnly: finalized || widget.canManageFinalWordings,
             maxLines: 4,
             onChanged: (_) => setState(() {}),
             decoration: const InputDecoration(
@@ -1245,18 +1361,29 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
             ),
           ),
           const SizedBox(height: 12),
-          if (changed > 0)
+          if (widget.canManageFinalWordings &&
+              (edited > 0 || differsFromCalculated > 0))
             Text(
-              finalized
-                  ? '$changed calculated ${changed == 1 ? 'wording was' : 'wordings were'} adjusted before finalization. ${changed == 1 ? 'The change is' : 'The changes are'} recorded in the audit history.'
-                  : '$changed calculated ${changed == 1 ? 'wording has' : 'wordings have'} been adjusted. The changes will be recorded automatically.',
+              edited > 0
+                  ? '$edited ${edited == 1 ? 'wording edit is' : 'wording edits are'} waiting to be saved. A reason is required and every change will be audited.'
+                  : '$differsFromCalculated final ${differsFromCalculated == 1 ? 'wording differs' : 'wordings differ'} from the calculated result because of an existing authorized correction.',
               style: const TextStyle(
                 color: Colors.orange,
                 fontWeight: FontWeight.w700,
               ),
             ),
           const SizedBox(height: 18),
-          if (finalized)
+          if (widget.canManageFinalWordings && finalized)
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton.icon(
+                key: const ValueKey('save-headmaster-wordings'),
+                onPressed: edited > 0 && !_busy ? _saveManagerChanges : null,
+                icon: const Icon(Icons.admin_panel_settings_outlined),
+                label: const Text('Save wording changes'),
+              ),
+            )
+          else if (finalized)
             const Card(
               child: Padding(
                 padding: EdgeInsets.all(16),
@@ -1266,14 +1393,14 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                     SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        'This evaluation is finalized and read-only. An authorized head or administrator must reopen it before the class teacher can make changes.',
+                        'This evaluation is finalized. The combined wording cannot be changed by the class teacher; only an authorized head or administrator can correct it with a recorded reason.',
                       ),
                     ),
                   ],
                 ),
               ),
             )
-          else
+          else if (!widget.canManageFinalWordings)
             Align(
               alignment: Alignment.centerRight,
               child: FilledButton.icon(

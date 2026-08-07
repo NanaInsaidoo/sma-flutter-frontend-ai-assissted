@@ -130,7 +130,7 @@ void main() {
     },
   );
 
-  testWidgets('class teacher can finalize the consolidated wording directly', (
+  testWidgets('class teacher confirms calculated wording and adds comment', (
     tester,
   ) async {
     await useWideScreen(tester);
@@ -221,6 +221,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Calculated: Good'), findsNWidgets(6));
+    expect(find.byType(DropdownButtonFormField<String>), findsNothing);
     expect(find.textContaining('override'), findsNothing);
     expect(find.text('Suggested class-teacher comment'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('use-evaluation-suggestion')));
@@ -268,12 +269,123 @@ void main() {
     expect(sentRequest.body, contains('Ama has made steady progress.'));
     expect(commentField().readOnly, isTrue);
     expect(
-      find.textContaining('This evaluation is finalized and read-only'),
+      find.textContaining('combined wording cannot be changed'),
       findsOneWidget,
     );
     expect(
       find.byKey(const ValueKey('preview-student-evaluation')),
       findsNothing,
+    );
+  });
+
+  testWidgets('headmaster alone can correct finalized wording with a reason', (
+    tester,
+  ) async {
+    await useWideScreen(tester);
+    http.Request? adjustmentRequest;
+    final calculated = {
+      'HOMEWORK_HABITS': 'Good',
+      'ATTENTIVENESS': 'Good',
+      'TEAMWORK': 'Good',
+      'CLASS_PARTICIPATION': 'Good',
+      'RESPECT_AND_DISCIPLINE': 'Good',
+      'NEATNESS': 'Good',
+    };
+    final api = AssessmentApiClient(
+      accessToken: 'token',
+      client: MockClient((request) async {
+        if (request.method == 'POST' &&
+            request.url.path.endsWith('/final-wordings')) {
+          adjustmentRequest = request;
+          return http.Response('{"status":"FINALIZED"}', 200);
+        }
+        if (request.url.path.endsWith('/review')) {
+          return http.Response(
+            jsonEncode({
+              'calculated': calculated,
+              'finalRatings': calculated,
+              'comment': 'Ama has worked well this term.',
+              'status': 'FINALIZED',
+            }),
+            200,
+          );
+        }
+        return http.Response(
+          jsonEncode({
+            'released': true,
+            'totalAssignments': 1,
+            'submitted': 1,
+            'incomplete': 0,
+            'assignments': [
+              {
+                'id': 15,
+                'staffId': 'CLASS-1',
+                'staffName': 'Adwoa Teacher',
+                'subjectName': 'Class-teacher evaluation',
+                'assignmentType': 'CLASS_TEACHER',
+                'status': 'SUBMITTED',
+                'studentCount': 1,
+                'completionPercent': 100,
+                'students': [
+                  {'id': 'STU-1', 'name': 'Ama Mensah'},
+                ],
+              },
+            ],
+          }),
+          200,
+        );
+      }),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: TermEvaluationWorkflowScreen(
+          api: api,
+          schoolId: 'SCHOOL-1',
+          viewerName: 'Nana Headmaster',
+          viewerRole: 'HEADMASTER',
+          setup: setup,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Review results'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Ama Mensah'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(DropdownButtonFormField<String>), findsNWidgets(6));
+    final comment = tester.widget<TextField>(
+      find.byKey(const ValueKey('evaluation-final-comment')),
+    );
+    expect(comment.readOnly, isTrue);
+
+    await tester.tap(
+      find.byKey(const ValueKey('headmaster-wording-HOMEWORK_HABITS')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Excellent').last);
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(ListView).last, const Offset(0, -1200));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('save-headmaster-wordings')).hitTestable(),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Confirm final wording changes'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const ValueKey('headmaster-wording-reason')),
+      'Verified against the signed class record',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('confirm-headmaster-wordings')));
+    await tester.pumpAndSettle();
+
+    expect(adjustmentRequest, isNotNull);
+    expect(adjustmentRequest!.body, contains('"HOMEWORK_HABITS":"Excellent"'));
+    expect(
+      adjustmentRequest!.body,
+      contains('Verified against the signed class record'),
     );
   });
 }

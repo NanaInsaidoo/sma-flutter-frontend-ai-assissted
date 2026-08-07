@@ -808,6 +808,23 @@ class AssessmentApiClient {
     );
   }
 
+  Future<void> adjustFinalTermEvaluationWordings({
+    required String studentId,
+    required String schoolId,
+    required int termId,
+    required Map<String, String> finalRatings,
+    required String reason,
+  }) async {
+    final q = Uri(
+      queryParameters: {'customSchoolId': schoolId, 'termId': '$termId'},
+    ).query;
+    await _send(
+      '/api/term-evaluations/students/${Uri.encodeComponent(studentId)}/final-wordings?$q',
+      method: 'POST',
+      body: {'finalRatings': finalRatings, 'reason': reason},
+    );
+  }
+
   Future<void> requestEvaluationOverride({
     required String studentId,
     required String schoolId,

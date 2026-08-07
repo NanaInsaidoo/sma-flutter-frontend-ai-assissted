@@ -620,6 +620,34 @@ void main() {
       expect(request.body, contains('"comment":"Consistent progress."'));
     });
 
+    test('sends an audited headmaster final-wording correction', () async {
+      late http.Request request;
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((value) async {
+          request = value;
+          return http.Response('{"status":"FINALIZED"}', 200);
+        }),
+      );
+
+      await api.adjustFinalTermEvaluationWordings(
+        studentId: 'STU/1',
+        schoolId: 'SCHOOL-1',
+        termId: 7,
+        finalRatings: {'ATTENTIVENESS': 'Excellent'},
+        reason: 'Verified against the signed class record',
+      );
+
+      expect(request.method, 'POST');
+      expect(request.url.path, endsWith('/students/STU%2F1/final-wordings'));
+      expect(request.url.queryParameters['termId'], '7');
+      expect(request.body, contains('"ATTENTIVENESS":"Excellent"'));
+      expect(
+        request.body,
+        contains('Verified against the signed class record'),
+      );
+    });
+
     test(
       'requests a comment suggestion from the current final wording',
       () async {
