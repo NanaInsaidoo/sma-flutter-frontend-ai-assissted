@@ -3559,7 +3559,10 @@ class _CompleteAssessmentWorkflowState
     'Dec',
   ][month - 1];
 
-  Future<void> _generateReports(Iterable<_StudentRecord> students) async {
+  Future<void> _generateReports(
+    Iterable<_StudentRecord> students, {
+    String? vacationOverrideReason,
+  }) async {
     final ready = students.toList();
     if (ready.isEmpty) {
       _notice('Select at least one student.');
@@ -3588,6 +3591,7 @@ class _CompleteAssessmentWorkflowState
           academicYearId: setup.academicYearId,
           generatedBy: widget.viewerName,
           customStudentIds: ready.map((student) => student.id).toList(),
+          vacationOverrideReason: vacationOverrideReason,
         );
         final results = response['generationResults'];
         final generated = results is Map<String, dynamic>
@@ -3619,6 +3623,14 @@ class _CompleteAssessmentWorkflowState
           _isGeneratingReports = false;
           _reportGenerationProgress = 0;
         });
+        if (vacationOverrideReason == null &&
+            error.message.toLowerCase().contains('teaching begins')) {
+          final reason = await _requestReportVacationReason(error.message);
+          if (reason != null && mounted) {
+            await _generateReports(ready, vacationOverrideReason: reason);
+          }
+          return;
+        }
         _notice(error.message);
         return;
       }
@@ -3726,6 +3738,60 @@ class _CompleteAssessmentWorkflowState
     } finally {
       if (mounted) setState(() => _refreshingReportCards = false);
     }
+  }
+
+  Future<String?> _requestReportVacationReason(String warning) async {
+    final controller = TextEditingController();
+    String? validation;
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          icon: const Icon(Icons.warning_amber_rounded, color: Colors.orange),
+          title: const Text('Teaching has not started'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(warning),
+              const SizedBox(height: 16),
+              TextField(
+                key: const Key('report-vacation-reason'),
+                controller: controller,
+                autofocus: true,
+                maxLines: 3,
+                decoration: InputDecoration(
+                  labelText: 'Reason for generating reports early',
+                  errorText: validation,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              key: const Key('continue-early-report-generation'),
+              onPressed: () {
+                final reason = controller.text.trim();
+                if (reason.length < 5) {
+                  setDialogState(() {
+                    validation = 'Enter a reason of at least 5 characters.';
+                  });
+                  return;
+                }
+                Navigator.pop(dialogContext, reason);
+              },
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+    return result;
   }
 
   Future<void> _openStudentReport(_StudentRecord student) async {
@@ -5147,21 +5213,36 @@ class _CompleteAssessmentWorkflowState
     _StudentRecord student,
     _EvaluationDraft evaluation,
   ) {
-    final items = [
-      ('Homework', evaluation.homework),
-      ('Attentiveness', evaluation.punctuality),
-      ('Teamwork', evaluation.neatness),
-      ('Participation', evaluation.attitude),
-      ('Discipline', evaluation.discipline),
-      ('Neatness', evaluation.organization),
-    ];
+    final rawConduct = _studentReportCards[student.id]?['conductItems'];
+    final consolidatedItems = rawConduct is List
+        ? rawConduct.whereType<Map>().map((raw) {
+            final item = Map<String, dynamic>.from(raw);
+            return (
+              item['criterion']?.toString() ?? 'Criterion',
+              item['rating']?.toString() ?? 'Not entered',
+            );
+          }).toList()
+        : <(String, String)>[];
+    final hasConsolidated = consolidatedItems.isNotEmpty;
+    final items = hasConsolidated
+        ? consolidatedItems
+        : <(String, String)>[
+            ('Homework', '${evaluation.homework}/10'),
+            ('Attentiveness', '${evaluation.punctuality}/10'),
+            ('Teamwork', '${evaluation.neatness}/10'),
+            ('Participation', '${evaluation.attitude}/10'),
+            ('Discipline', '${evaluation.discipline}/10'),
+            ('Neatness', '${evaluation.organization}/10'),
+          ];
     return _section(
       title: 'Student Evaluation',
-      action: OutlinedButton.icon(
-        onPressed: () => _editEvaluationOnReport(student),
-        icon: const Icon(Icons.edit_outlined, size: 14),
-        label: const Text('Edit Evaluation'),
-      ),
+      action: hasConsolidated
+          ? null
+          : OutlinedButton.icon(
+              onPressed: () => _editEvaluationOnReport(student),
+              icon: const Icon(Icons.edit_outlined, size: 14),
+              label: const Text('Edit Evaluation'),
+            ),
       child: Column(
         children: [
           Wrap(
@@ -5187,7 +5268,7 @@ class _CompleteAssessmentWorkflowState
                       ),
                     ),
                     Text(
-                      '${item.$2}/10',
+                      item.$2,
                       style: const TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 12,
@@ -5198,24 +5279,26 @@ class _CompleteAssessmentWorkflowState
               );
             }).toList(),
           ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Text(
-                'Average: ${evaluation.average.toStringAsFixed(1)}/10',
-                style: const TextStyle(fontWeight: FontWeight.w800),
-              ),
-              if (evaluation.remark.isNotEmpty) ...[
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Text(
-                    evaluation.remark,
-                    style: const TextStyle(color: Color(0xFF64748B)),
-                  ),
+          if (!hasConsolidated) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Text(
+                  'Average: ${evaluation.average.toStringAsFixed(1)}/10',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
+                if (evaluation.remark.isNotEmpty) ...[
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Text(
+                      evaluation.remark,
+                      style: const TextStyle(color: Color(0xFF64748B)),
+                    ),
+                  ),
+                ],
               ],
-            ],
-          ),
+            ),
+          ],
         ],
       ),
     );

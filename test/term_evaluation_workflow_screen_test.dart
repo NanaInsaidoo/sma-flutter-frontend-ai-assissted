@@ -134,7 +134,7 @@ void main() {
     tester,
   ) async {
     await useWideScreen(tester);
-    late http.Request finalizeRequest;
+    http.Request? finalizeRequest;
     final calculated = {
       'HOMEWORK_HABITS': 'Good',
       'ATTENTIVENESS': 'Good',
@@ -146,6 +146,20 @@ void main() {
     final api = AssessmentApiClient(
       accessToken: 'token',
       client: MockClient((request) async {
+        if (request.method == 'POST' &&
+            request.url.path.endsWith('/comment-suggestion')) {
+          final alternate = request.url.queryParameters['variant'] == '1';
+          return http.Response(
+            jsonEncode({
+              'available': true,
+              'suggestion': alternate
+                  ? 'Ama has made steady progress. Continue the encouraging effort next term.'
+                  : 'Ama has worked well this term. Her strengths include careful attentiveness. Keep up the positive effort next term.',
+              'variant': request.url.queryParameters['variant'],
+            }),
+            200,
+          );
+        }
         if (request.method == 'POST' &&
             request.url.path.endsWith('/finalize')) {
           finalizeRequest = request;
@@ -208,19 +222,58 @@ void main() {
 
     expect(find.text('Calculated: Good'), findsNWidgets(6));
     expect(find.textContaining('override'), findsNothing);
-    await tester.enterText(
-      find.byType(TextField).last,
-      'Ama participated thoughtfully this term.',
+    expect(find.text('Suggested class-teacher comment'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('use-evaluation-suggestion')));
+    await tester.pump();
+    TextField commentField() => tester.widget<TextField>(
+      find.byKey(const ValueKey('evaluation-final-comment')),
     );
-    await tester.tap(find.byKey(const ValueKey('finalize-student-evaluation')));
+    expect(commentField().controller!.text, contains('Ama has worked well'));
+
+    await tester.tap(
+      find.byKey(const ValueKey('try-another-evaluation-suggestion')),
+    );
+    await tester.pumpAndSettle();
+    expect(commentField().controller!.text, isEmpty);
+    expect(find.textContaining('Ama has made steady progress'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('use-evaluation-suggestion')));
+    await tester.pump();
+    expect(
+      commentField().controller!.text,
+      contains('Ama has made steady progress'),
+    );
+    await tester.drag(find.byType(ListView).last, const Offset(0, -1200));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find
+          .byKey(const ValueKey('preview-student-evaluation'))
+          .hitTestable()
+          .last,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Preview report-card comment'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('evaluation-comment-preview')),
+      findsOneWidget,
+    );
+    expect(finalizeRequest, isNull);
+    await tester.tap(find.byKey(const ValueKey('send-student-evaluation')));
     await tester.pumpAndSettle();
 
-    expect(finalizeRequest.url.queryParameters['staffId'], 'CLASS-1');
-    expect(finalizeRequest.body, contains('"finalRatings"'));
+    final sentRequest = finalizeRequest;
+    expect(sentRequest, isNotNull);
+    expect(sentRequest!.url.queryParameters['staffId'], 'CLASS-1');
+    expect(sentRequest.body, contains('"finalRatings"'));
+    expect(sentRequest.body, contains('Ama has made steady progress.'));
+    expect(commentField().readOnly, isTrue);
     expect(
-      finalizeRequest.body,
-      contains('Ama participated thoughtfully this term.'),
+      find.textContaining('This evaluation is finalized and read-only'),
+      findsOneWidget,
     );
-    expect(find.text('FINALIZED'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('preview-student-evaluation')),
+      findsNothing,
+    );
   });
 }

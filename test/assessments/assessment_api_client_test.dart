@@ -281,6 +281,7 @@ void main() {
         academicYearId: 3,
         generatedBy: 'teacher-1',
         customStudentIds: const ['STU-1'],
+        vacationOverrideReason: 'Vacation report preparation',
       );
 
       expect(grades.single['percentage'], 84);
@@ -288,6 +289,10 @@ void main() {
       expect(requests.last.url.path, endsWith('/stream/generate-reports'));
       expect(requests.last.headers['X-School-ID'], 'SCHOOL-1');
       expect(requests.last.body, contains('"customStudentIds":["STU-1"]'));
+      expect(
+        requests.last.body,
+        contains('"vacationOverrideReason":"Vacation report preparation"'),
+      );
     });
 
     test('loads and saves report-card remarks', () async {
@@ -614,5 +619,40 @@ void main() {
       expect(request.body, contains('"ATTENTIVENESS":"Excellent"'));
       expect(request.body, contains('"comment":"Consistent progress."'));
     });
+
+    test(
+      'requests a comment suggestion from the current final wording',
+      () async {
+        late http.Request request;
+        final api = AssessmentApiClient(
+          accessToken: 'test-token',
+          client: MockClient((value) async {
+            request = value;
+            return http.Response(
+              '{"available":true,"suggestion":"A positive comment."}',
+              200,
+            );
+          }),
+        );
+
+        final result = await api.suggestTermEvaluationComment(
+          studentId: 'STU/1',
+          schoolId: 'SCHOOL-1',
+          termId: 7,
+          variant: 2,
+          finalRatings: {'ATTENTIVENESS': 'Good'},
+        );
+
+        expect(request.method, 'POST');
+        expect(
+          request.url.path,
+          endsWith('/students/STU%2F1/comment-suggestion'),
+        );
+        expect(request.url.queryParameters['variant'], '2');
+        expect(request.body, contains('"finalRatings"'));
+        expect(request.body, contains('"ATTENTIVENESS":"Good"'));
+        expect(result['suggestion'], 'A positive comment.');
+      },
+    );
   });
 }

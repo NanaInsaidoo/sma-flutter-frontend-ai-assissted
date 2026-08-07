@@ -877,6 +877,12 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
   Map<String, String> _calculated = const {};
   bool _loading = true;
   bool _busy = false;
+  bool _suggestionLoading = false;
+  String? _suggestion;
+  String? _appliedSuggestion;
+  String? _suggestionMessage;
+  int _suggestionVariant = 0;
+  int _suggestionRequest = 0;
   String _status = 'PENDING';
 
   @override
@@ -914,6 +920,7 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
         _status = data['status']?.toString() ?? 'PENDING';
         _loading = false;
       });
+      await _loadSuggestion(resetVariant: true);
     } on AssessmentApiException catch (error) {
       if (!mounted) return;
       setState(() => _loading = false);
@@ -921,6 +928,136 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
         context,
       ).showSnackBar(SnackBar(content: Text(error.message)));
     }
+  }
+
+  Future<void> _loadSuggestion({bool resetVariant = false}) async {
+    if (resetVariant) _suggestionVariant = 0;
+    final request = ++_suggestionRequest;
+    setState(() {
+      _suggestionLoading = true;
+      _suggestionMessage = null;
+    });
+    try {
+      final data = await widget.api.suggestTermEvaluationComment(
+        studentId: widget.student['id'],
+        schoolId: widget.schoolId,
+        termId: widget.termId,
+        finalRatings: Map<String, String>.from(_final),
+        variant: _suggestionVariant,
+      );
+      if (!mounted || request != _suggestionRequest) return;
+      setState(() {
+        _suggestionLoading = false;
+        if (data['available'] == true) {
+          _suggestion = data['suggestion']?.toString();
+          _suggestionMessage = null;
+        } else {
+          _suggestion = null;
+          _suggestionMessage =
+              data['message']?.toString() ??
+              'A suggestion is not available for this student yet.';
+        }
+      });
+    } on AssessmentApiException catch (error) {
+      if (!mounted || request != _suggestionRequest) return;
+      setState(() {
+        _suggestionLoading = false;
+        _suggestion = null;
+        _suggestionMessage = error.message;
+      });
+    }
+  }
+
+  void _tryAnotherSuggestion() {
+    if (_appliedSuggestion != null && _comment.text == _appliedSuggestion) {
+      _comment.clear();
+    }
+    _appliedSuggestion = null;
+    _suggestionVariant += 1;
+    _loadSuggestion();
+  }
+
+  void _useSuggestion() {
+    final suggestion = _suggestion;
+    if (suggestion == null) return;
+    setState(() {
+      _comment.text = suggestion;
+      _appliedSuggestion = suggestion;
+    });
+  }
+
+  void _refreshSuggestionAfterRatingChange() {
+    if (_appliedSuggestion != null && _comment.text == _appliedSuggestion) {
+      _comment.clear();
+    }
+    _appliedSuggestion = null;
+    _loadSuggestion(resetVariant: true);
+  }
+
+  Future<void> _previewAndFinalize() async {
+    final comment = _comment.text.trim();
+    if (comment.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enter a comment or choose Use suggestion first.'),
+        ),
+      );
+      return;
+    }
+    final send = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Preview report-card comment'),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.student['name'].toString(),
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 12),
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Theme.of(
+                    dialogContext,
+                  ).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                    comment,
+                    key: const ValueKey('evaluation-comment-preview'),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'This exact wording will appear as the class-teacher comment on the report card.',
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Back to edit'),
+          ),
+          FilledButton.icon(
+            key: const ValueKey('send-student-evaluation'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.send_outlined),
+            label: Text(
+              _status == 'FINALIZED' ? 'Send updated comment' : 'Send comment',
+            ),
+          ),
+        ],
+      ),
+    );
+    if (send == true && mounted) await _finalize();
   }
 
   Future<void> _finalize() async {
@@ -956,6 +1093,7 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     final complete = _calculated.keys.toSet().containsAll(_criteria.keys);
+    final finalized = _status == 'FINALIZED';
     final changed = _criteria.keys
         .where((criterion) => _final[criterion] != _calculated[criterion])
         .length;
@@ -1009,9 +1147,11 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                           ),
                         )
                         .toList(),
-                    onChanged: complete
-                        ? (value) =>
-                              setState(() => _final[criterion.key] = value!)
+                    onChanged: complete && !finalized
+                        ? (value) {
+                            setState(() => _final[criterion.key] = value!);
+                            _refreshSuggestionAfterRatingChange();
+                          }
                         : null,
                   ),
                 ),
@@ -1019,9 +1159,86 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
             ),
           ),
           const SizedBox(height: 12),
+          Card(
+            color: Theme.of(
+              context,
+            ).colorScheme.primaryContainer.withValues(alpha: 0.35),
+            child: Padding(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.auto_awesome_outlined,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'Suggested class-teacher comment',
+                          style: TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                      if (_suggestionLoading)
+                        const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    _suggestion ??
+                        _suggestionMessage ??
+                        'Preparing a suggestion from the consolidated evaluation…',
+                    key: const ValueKey('evaluation-comment-suggestion'),
+                  ),
+                  if (_suggestion != null) ...[
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        FilledButton.tonalIcon(
+                          key: const ValueKey('use-evaluation-suggestion'),
+                          onPressed: finalized ? null : _useSuggestion,
+                          icon: const Icon(Icons.check),
+                          label: const Text('Use suggestion'),
+                        ),
+                        TextButton.icon(
+                          key: const ValueKey(
+                            'try-another-evaluation-suggestion',
+                          ),
+                          onPressed: finalized || _suggestionLoading
+                              ? null
+                              : _tryAnotherSuggestion,
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('Try another'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      finalized
+                          ? 'This suggestion is informational. The finalized comment is shown below and cannot be changed without reopening the evaluation.'
+                          : 'Review and edit the wording before finalizing. The suggestion is never saved automatically.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           TextField(
+            key: const ValueKey('evaluation-final-comment'),
             controller: _comment,
+            readOnly: finalized,
             maxLines: 4,
+            onChanged: (_) => setState(() {}),
             decoration: const InputDecoration(
               labelText: 'Final class-teacher comment',
               hintText: 'Comment that will accompany the finalized evaluation',
@@ -1030,26 +1247,44 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
           const SizedBox(height: 12),
           if (changed > 0)
             Text(
-              '$changed calculated ${changed == 1 ? 'wording has' : 'wordings have'} been adjusted. The changes will be recorded automatically.',
+              finalized
+                  ? '$changed calculated ${changed == 1 ? 'wording was' : 'wordings were'} adjusted before finalization. ${changed == 1 ? 'The change is' : 'The changes are'} recorded in the audit history.'
+                  : '$changed calculated ${changed == 1 ? 'wording has' : 'wordings have'} been adjusted. The changes will be recorded automatically.',
               style: const TextStyle(
                 color: Colors.orange,
                 fontWeight: FontWeight.w700,
               ),
             ),
           const SizedBox(height: 18),
-          Align(
-            alignment: Alignment.centerRight,
-            child: FilledButton.icon(
-              key: const ValueKey('finalize-student-evaluation'),
-              onPressed: complete && !_busy ? _finalize : null,
-              icon: const Icon(Icons.verified_outlined),
-              label: Text(
-                _status == 'FINALIZED'
-                    ? 'Save final changes'
-                    : 'Finalize evaluation',
+          if (finalized)
+            const Card(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Icon(Icons.lock_outline),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'This evaluation is finalized and read-only. An authorized head or administrator must reopen it before the class teacher can make changes.',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton.icon(
+                key: const ValueKey('preview-student-evaluation'),
+                onPressed: complete && !_busy && _comment.text.trim().isNotEmpty
+                    ? _previewAndFinalize
+                    : null,
+                icon: const Icon(Icons.preview_outlined),
+                label: const Text('Preview comment'),
               ),
             ),
-          ),
         ],
       ),
     );

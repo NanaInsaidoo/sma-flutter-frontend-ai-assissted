@@ -388,6 +388,7 @@ class AssessmentApiClient {
     required int academicYearId,
     required String generatedBy,
     List<String> customStudentIds = const [],
+    String? vacationOverrideReason,
   }) async {
     return _map(
       _decodeBody(
@@ -406,6 +407,8 @@ class AssessmentApiClient {
             'generatedBy': generatedBy,
             if (customStudentIds.isNotEmpty)
               'customStudentIds': customStudentIds,
+            if (vacationOverrideReason?.trim().isNotEmpty == true)
+              'vacationOverrideReason': vacationOverrideReason!.trim(),
           },
         ),
       ),
@@ -753,6 +756,31 @@ class AssessmentApiClient {
       _decodeBody(
         await _send(
           '/api/term-evaluations/students/${Uri.encodeComponent(studentId)}/review?$q',
+        ),
+      ),
+    );
+  }
+
+  Future<Map<String, dynamic>> suggestTermEvaluationComment({
+    required String studentId,
+    required String schoolId,
+    required int termId,
+    required Map<String, String> finalRatings,
+    int variant = 0,
+  }) async {
+    final q = Uri(
+      queryParameters: {
+        'customSchoolId': schoolId,
+        'termId': '$termId',
+        'variant': '$variant',
+      },
+    ).query;
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/term-evaluations/students/${Uri.encodeComponent(studentId)}/comment-suggestion?$q',
+          method: 'POST',
+          body: {'finalRatings': finalRatings},
         ),
       ),
     );
