@@ -458,4 +458,126 @@ void main() {
     expect(find.text('Review results'), findsNothing);
     expect(find.text('Reopen'), findsOneWidget);
   });
+
+  testWidgets(
+    'headmaster can inspect report blockers and remind the responsible teacher',
+    (tester) async {
+      await useWideScreen(tester);
+      http.Request? reminderRequest;
+      final api = AssessmentApiClient(
+        accessToken: 'token',
+        client: MockClient((request) async {
+          if (request.method == 'POST' &&
+              request.url.path.endsWith('/remind')) {
+            reminderRequest = request;
+            return http.Response('', 204);
+          }
+          return http.Response(
+            jsonEncode({
+              'released': true,
+              'totalAssignments': 1,
+              'submitted': 0,
+              'incomplete': 1,
+              'assignments': [
+                {
+                  'id': 24,
+                  'staffId': 'T-2',
+                  'staffName': 'Kojo Teacher',
+                  'subjectName': 'Mathematics',
+                  'streamName': 'JHS 1 Gold',
+                  'assignmentType': 'SUBJECT_TEACHER',
+                  'status': 'IN_PROGRESS',
+                  'studentCount': 1,
+                  'completionPercent': 50,
+                  'students': [
+                    {'id': 'STU-9', 'name': 'Esi Boateng'},
+                  ],
+                },
+              ],
+              'readiness': {
+                'released': true,
+                'readyForReportCards': false,
+                'totalStudents': 1,
+                'readyStudents': 0,
+                'blockedStudents': 1,
+                'incompleteAssignments': 1,
+                'students': [
+                  {
+                    'customStudentId': 'STU-9',
+                    'studentName': 'Esi Boateng',
+                    'streamName': 'JHS 1 Gold',
+                    'reviewStatus': 'PENDING',
+                    'ready': false,
+                    'blockers': [
+                      {
+                        'type': 'MISSING_CONTRIBUTORS',
+                        'title': 'Homework habits needs one more teacher',
+                        'message':
+                            'Kojo Teacher (Mathematics) has not submitted an observed rating.',
+                      },
+                    ],
+                    'assignments': [
+                      {
+                        'assignmentId': 24,
+                        'staffName': 'Kojo Teacher',
+                        'subjectName': 'Mathematics',
+                        'assignmentType': 'SUBJECT_TEACHER',
+                        'status': 'IN_PROGRESS',
+                        'completionPercent': 50,
+                        'missingCriteria': ['Homework habits'],
+                      },
+                    ],
+                  },
+                ],
+              },
+            }),
+            200,
+          );
+        }),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TermEvaluationWorkflowScreen(
+            api: api,
+            schoolId: 'SCHOOL-1',
+            viewerName: 'Nana Headmaster',
+            viewerRole: 'HEADMASTER',
+            setup: setup,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Report readiness'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('1 student blocked from report generation'),
+        findsOneWidget,
+      );
+      expect(find.text('Esi Boateng'), findsOneWidget);
+      expect(find.textContaining('JHS 1 Gold'), findsOneWidget);
+
+      await tester.tap(
+        find.byKey(const ValueKey('evaluation-readiness-STU-9')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('What is blocking this report'), findsOneWidget);
+      expect(
+        find.text('Homework habits needs one more teacher'),
+        findsOneWidget,
+      );
+      expect(find.text('Teacher contributions'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('Remind'),
+        250,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.tap(find.text('Remind'));
+      await tester.pumpAndSettle();
+
+      expect(reminderRequest, isNotNull);
+      expect(reminderRequest!.url.path, endsWith('/assignments/24/remind'));
+    },
+  );
 }

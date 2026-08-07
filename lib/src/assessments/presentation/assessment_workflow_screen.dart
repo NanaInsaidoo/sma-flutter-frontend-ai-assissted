@@ -649,6 +649,14 @@ class _CompleteAssessmentWorkflowState
                 .whereType<Map<String, dynamic>>()
                 .map((item) {
                   final ready = item['canGenerateReport'] == true;
+                  final assessmentDataReady =
+                      item['assessmentDataReady'] == true;
+                  final evaluationReady = item['evaluationReady'] != false;
+                  final evaluationBlockers =
+                      (item['evaluationBlockers'] as List? ?? const [])
+                          .map((value) => value.toString())
+                          .where((value) => value.trim().isNotEmpty)
+                          .toList();
                   final studentId = item['customStudentId']?.toString() ?? '';
                   final studentGrades =
                       gradesByStudent[studentId] ??
@@ -673,7 +681,14 @@ class _CompleteAssessmentWorkflowState
                     grade: percentages.isEmpty
                         ? '—'
                         : _gesOverallGrade(classLabel, average),
-                    readiness: ready ? 'Ready' : 'Scores incomplete',
+                    readiness: ready
+                        ? 'Ready'
+                        : assessmentDataReady
+                        ? 'Evaluation incomplete'
+                        : 'Scores incomplete',
+                    assessmentDataReady: assessmentDataReady,
+                    evaluationReady: evaluationReady,
+                    evaluationBlockers: evaluationBlockers,
                     reportStatus: reportStatus == 'PUBLISHED'
                         ? 'Published'
                         : studentGrades.isEmpty
@@ -3498,13 +3513,18 @@ class _CompleteAssessmentWorkflowState
   bool _remarksComplete(_StudentRecord student) =>
       _reportRemarks[student.id]?.remarksComplete ?? false;
 
-  bool _gradesComplete(_StudentRecord student) =>
-      student.readiness != 'Scores incomplete';
+  bool _gradesComplete(_StudentRecord student) => student.assessmentDataReady;
+
+  bool _evaluationComplete(_StudentRecord student) => student.evaluationReady;
+
+  bool _generationReady(_StudentRecord student) =>
+      _gradesComplete(student) && _evaluationComplete(student);
 
   String _publicationReadiness(_StudentRecord student) {
     final remarks = _reportRemarks[student.id] ?? _ReportRemarksDraft.empty();
     final status = _reportStatusFor(student);
     if (!_gradesComplete(student)) return 'Missing grades';
+    if (!_evaluationComplete(student)) return 'Evaluation pending';
     if (status != 'Generated' && status != 'Published') {
       return 'Not generated';
     }
@@ -3566,6 +3586,23 @@ class _CompleteAssessmentWorkflowState
     final ready = students.toList();
     if (ready.isEmpty) {
       _notice('Select at least one student.');
+      return;
+    }
+    final blocked = ready
+        .where((student) => !_generationReady(student))
+        .toList();
+    if (blocked.isNotEmpty) {
+      final evaluationBlocked = blocked
+          .where(
+            (student) =>
+                _gradesComplete(student) && !_evaluationComplete(student),
+          )
+          .length;
+      _notice(
+        evaluationBlocked > 0
+            ? '$evaluationBlocked selected student${evaluationBlocked == 1 ? '' : 's'} still need final evaluations before report generation.'
+            : 'Complete all required grades before generating report cards.',
+      );
       return;
     }
     setState(() {
@@ -3879,6 +3916,12 @@ class _CompleteAssessmentWorkflowState
     final missingGrades = _reportCardStudents
         .where((student) => !_gradesComplete(student))
         .length;
+    final pendingEvaluations = _reportCardStudents
+        .where(
+          (student) =>
+              _gradesComplete(student) && !_evaluationComplete(student),
+        )
+        .length;
     final missingTeacherRemarks = _reportCardStudents.where((student) {
       return (_reportRemarks[student.id]?.classTeacherRemarks ?? '').isEmpty;
     }).length;
@@ -3899,6 +3942,7 @@ class _CompleteAssessmentWorkflowState
         'Published' => status == 'Published',
         'Pending Generation' => status != 'Generated' && status != 'Published',
         'Missing Grades' => !_gradesComplete(student),
+        'Evaluations Pending' => !_evaluationComplete(student),
         'Missing Teacher Remarks' =>
           (_reportRemarks[student.id]?.classTeacherRemarks ?? '').isEmpty,
         'Pending Head Comments' =>
@@ -3923,6 +3967,7 @@ class _CompleteAssessmentWorkflowState
             total: _reportCardStudents.length,
             readyToPublish: readyToPublish,
             missingGrades: missingGrades,
+            pendingEvaluations: pendingEvaluations,
             missingTeacherRemarks: missingTeacherRemarks,
             pendingHeadComments: pendingHeadComments,
             missingPromotion: missingPromotion,
@@ -3945,6 +3990,7 @@ class _CompleteAssessmentWorkflowState
     required int total,
     required int readyToPublish,
     required int missingGrades,
+    required int pendingEvaluations,
     required int missingTeacherRemarks,
     required int pendingHeadComments,
     required int missingPromotion,
@@ -3975,11 +4021,19 @@ class _CompleteAssessmentWorkflowState
         'Missing Grades',
       ),
       (
+        'EVALUATIONS PENDING',
+        '$pendingEvaluations',
+        'Final conduct review incomplete',
+        Icons.fact_check_outlined,
+        const Color(0xFF8B5CF6),
+        'Evaluations Pending',
+      ),
+      (
         'TEACHER REMARKS',
         '$missingTeacherRemarks',
         'Class teacher remarks missing',
         Icons.rate_review_outlined,
-        const Color(0xFF8B5CF6),
+        const Color(0xFF7C3AED),
         'Missing Teacher Remarks',
       ),
       (
@@ -3999,8 +4053,8 @@ class _CompleteAssessmentWorkflowState
         'Missing Promotion',
       ),
     ];
-    final columns = maxWidth >= 1350
-        ? 6
+    final columns = maxWidth >= 1450
+        ? 7
         : maxWidth >= 820
         ? 3
         : maxWidth >= 560
@@ -4130,6 +4184,7 @@ class _CompleteAssessmentWorkflowState
                           'Pending Generation',
                           'Published',
                           'Missing Grades',
+                          'Evaluations Pending',
                           'Missing Teacher Remarks',
                           'Pending Head Comments',
                           'Missing Promotion',
@@ -4279,7 +4334,7 @@ class _CompleteAssessmentWorkflowState
     final readiness = _publicationReadiness(student);
     final completed =
         _reportAssessmentsCompleted[student.id] ??
-        (student.readiness == 'Scores incomplete' ? 4 : 6);
+        (student.assessmentDataReady ? 6 : 4);
     final required = _reportAssessmentsRequired[student.id] ?? 6;
     final assessmentProgress = required == 0 ? 0.0 : completed / required;
     return InkWell(
@@ -4402,8 +4457,10 @@ class _CompleteAssessmentWorkflowState
               flex: 2,
               child: Center(
                 child: Tooltip(
-                  message: (_reportMissingComponents[student.id] ?? const [])
-                      .join('\n'),
+                  message: [
+                    ...(_reportMissingComponents[student.id] ?? const []),
+                    ...student.evaluationBlockers,
+                  ].join('\n'),
                   child: _reportStateBadge(readiness),
                 ),
               ),
@@ -5025,12 +5082,22 @@ class _CompleteAssessmentWorkflowState
         if (status != 'Published')
           _filledButton(
             generated
-                ? (_gradesComplete(student) ? 'Regenerate' : 'Regenerate Draft')
-                : (_gradesComplete(student) ? 'Generate' : 'Generate Draft'),
+                ? (_generationReady(student)
+                      ? 'Regenerate'
+                      : _gradesComplete(student)
+                      ? 'Complete evaluation first'
+                      : 'Complete grades first')
+                : (_generationReady(student)
+                      ? 'Generate'
+                      : _gradesComplete(student)
+                      ? 'Complete evaluation first'
+                      : 'Complete grades first'),
             generated ? Icons.refresh : Icons.description_outlined,
-            () => generated
-                ? _regenerateStudentReport(student)
-                : _generateReports([student]),
+            _generationReady(student)
+                ? () => generated
+                      ? _regenerateStudentReport(student)
+                      : _generateReports([student])
+                : null,
           ),
         if (status != 'Published')
           _filledButton(
@@ -5158,6 +5225,7 @@ class _CompleteAssessmentWorkflowState
     final status = _reportStatusFor(student);
     final checks = <(String, bool)>[
       ('All grades entered', _gradesComplete(student)),
+      ('Student evaluation finalized', _evaluationComplete(student)),
       ('Report generated', status == 'Generated' || status == 'Published'),
       ('Class Teacher remark', remarks.classTeacherRemarks.isNotEmpty),
       ('Head comment or Ignore', remarks.headTeacherRequirementSatisfied),
@@ -5166,45 +5234,64 @@ class _CompleteAssessmentWorkflowState
     return _section(
       title: 'Publication Readiness',
       action: _reportStateBadge(_publicationReadiness(student)),
-      child: Wrap(
-        spacing: 10,
-        runSpacing: 10,
-        children: checks.map((check) {
-          return Container(
-            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
-            decoration: BoxDecoration(
-              color: check.$2
-                  ? const Color(0xFFF0F8F6)
-                  : const Color(0xFFFFF7ED),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: check.$2
-                    ? const Color(0xFFD8ECE8)
-                    : const Color(0xFFFED7AA),
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  check.$2 ? Icons.check_circle : Icons.error_outline,
-                  size: 15,
-                  color: check.$2
-                      ? const Color(0xFF4F8F84)
-                      : const Color(0xFFC27832),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: checks.map((check) {
+              return Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 11,
+                  vertical: 8,
                 ),
-                const SizedBox(width: 6),
-                Text(
-                  check.$1,
-                  style: const TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w600,
+                decoration: BoxDecoration(
+                  color: check.$2
+                      ? const Color(0xFFF0F8F6)
+                      : const Color(0xFFFFF7ED),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: check.$2
+                        ? const Color(0xFFD8ECE8)
+                        : const Color(0xFFFED7AA),
                   ),
                 ),
-              ],
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      check.$2 ? Icons.check_circle : Icons.error_outline,
+                      size: 15,
+                      color: check.$2
+                          ? const Color(0xFF4F8F84)
+                          : const Color(0xFFC27832),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      check.$1,
+                      style: const TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ),
+          if (student.evaluationBlockers.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(
+              student.evaluationBlockers.join('\n'),
+              style: const TextStyle(
+                color: Color(0xFFB45309),
+                fontSize: 12,
+                height: 1.45,
+              ),
             ),
-          );
-        }).toList(),
+          ],
+        ],
       ),
     );
   }
@@ -10723,6 +10810,9 @@ class _StudentRecord {
     required this.average,
     required this.grade,
     required this.readiness,
+    required this.assessmentDataReady,
+    required this.evaluationReady,
+    required this.evaluationBlockers,
     required this.reportStatus,
     required this.parent,
   });
@@ -10733,6 +10823,9 @@ class _StudentRecord {
   final double average;
   final String grade;
   final String readiness;
+  final bool assessmentDataReady;
+  final bool evaluationReady;
+  final List<String> evaluationBlockers;
   final String reportStatus;
   final String parent;
 

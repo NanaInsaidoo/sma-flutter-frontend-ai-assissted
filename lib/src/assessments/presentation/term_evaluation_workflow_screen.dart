@@ -58,9 +58,13 @@ class TermEvaluationWorkflowScreen extends StatefulWidget {
 
 class _TermEvaluationWorkflowScreenState
     extends State<TermEvaluationWorkflowScreen> {
+  final _readinessSearch = TextEditingController();
   Map<String, dynamic>? _data;
   String? _error;
   bool _loading = true;
+  String _managerView = 'Assignments';
+  String _readinessFilter = 'All students';
+  String _classFilter = 'All classes';
 
   bool get _manager {
     final role = widget.viewerRole.toLowerCase();
@@ -74,6 +78,12 @@ class _TermEvaluationWorkflowScreenState
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _readinessSearch.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -116,13 +126,8 @@ class _TermEvaluationWorkflowScreenState
     final rows = (_data?['assignments'] as List? ?? const [])
         .whereType<Map<String, dynamic>>()
         .toList();
-    final readyForReview = rows
-        .where(
-          (value) =>
-              value['assignmentType'] == 'CLASS_TEACHER' &&
-              value['status'] == 'SUBMITTED',
-        )
-        .length;
+    final readiness = _readiness;
+    final readyStudents = (readiness?['readyStudents'] as num?)?.toInt() ?? 0;
     return Scaffold(
       appBar: AppBar(title: const Text('Term-end student evaluations')),
       body: _loading
@@ -175,28 +180,15 @@ class _TermEvaluationWorkflowScreenState
                     ),
                     _metric('Submitted', '${_data?['submitted'] ?? 0}'),
                     _metric('Incomplete', '${_data?['incomplete'] ?? 0}'),
-                    _metric('Ready for review', '$readyForReview'),
+                    _metric('Ready for reports', '$readyStudents'),
                   ],
                 ),
                 const SizedBox(height: 22),
-                const Text(
-                  'Teacher assignments',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-                ),
-                const SizedBox(height: 10),
-                if (rows.isEmpty)
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(28),
-                      child: Text(
-                        _data?['released'] == true
-                            ? 'No assignments were generated. Add active subject-teacher and class-teacher allocations, then refresh assignments.'
-                            : 'The headmaster must release the exercise before teachers can evaluate students.',
-                      ),
-                    ),
-                  )
+                if (_manager) ...[_managerTabs(), const SizedBox(height: 16)],
+                if (_manager && _managerView == 'Report readiness')
+                  _readinessView()
                 else
-                  ...rows.map(_assignmentCard),
+                  _assignmentsView(rows),
               ],
             ),
     );
@@ -229,6 +221,433 @@ class _TermEvaluationWorkflowScreenState
     ),
   );
 
+  Map<String, dynamic>? get _readiness {
+    final raw = _data?['readiness'];
+    if (raw is! Map) return null;
+    return raw.map((key, value) => MapEntry(key.toString(), value));
+  }
+
+  List<Map<String, dynamic>> get _readinessStudents =>
+      (_readiness?['students'] as List? ?? const [])
+          .whereType<Map>()
+          .map(
+            (value) => value.map((key, item) => MapEntry(key.toString(), item)),
+          )
+          .toList();
+
+  Widget _managerTabs() => SegmentedButton<String>(
+    segments: const [
+      ButtonSegment(
+        value: 'Assignments',
+        icon: Icon(Icons.assignment_ind_outlined),
+        label: Text('Teacher assignments'),
+      ),
+      ButtonSegment(
+        value: 'Report readiness',
+        icon: Icon(Icons.fact_check_outlined),
+        label: Text('Report readiness'),
+      ),
+    ],
+    selected: {_managerView},
+    onSelectionChanged: (value) => setState(() => _managerView = value.first),
+  );
+
+  Widget _assignmentsView(List<Map<String, dynamic>> rows) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      const Text(
+        'Teacher assignments',
+        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+      ),
+      const SizedBox(height: 10),
+      if (rows.isEmpty)
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(28),
+            child: Text(
+              _data?['released'] == true
+                  ? 'No assignments were generated. Add active subject-teacher and class-teacher allocations, then refresh assignments.'
+                  : 'The headmaster must release the exercise before teachers can evaluate students.',
+            ),
+          ),
+        )
+      else
+        ...rows.map(_assignmentCard),
+    ],
+  );
+
+  Widget _readinessView() {
+    final readiness = _readiness;
+    if (readiness == null) {
+      return const Card(
+        child: Padding(
+          padding: EdgeInsets.all(28),
+          child: Text(
+            'Report readiness is not available yet. Refresh the evaluation assignments and try again.',
+          ),
+        ),
+      );
+    }
+    final students = _readinessStudents;
+    final classNames =
+        students
+            .map((student) => student['streamName']?.toString() ?? '')
+            .where((name) => name.isNotEmpty)
+            .toSet()
+            .toList()
+          ..sort();
+    if (_classFilter != 'All classes' && !classNames.contains(_classFilter)) {
+      _classFilter = 'All classes';
+    }
+    final query = _readinessSearch.text.trim().toLowerCase();
+    final filtered = students.where((student) {
+      final ready = student['ready'] == true;
+      final matchesStatus = switch (_readinessFilter) {
+        'Ready' => ready,
+        'Blocked' => !ready,
+        _ => true,
+      };
+      final matchesClass =
+          _classFilter == 'All classes' ||
+          student['streamName']?.toString() == _classFilter;
+      final searchable =
+          '${student['studentName']} ${student['customStudentId']} ${student['streamName']}'
+              .toLowerCase();
+      return matchesStatus &&
+          matchesClass &&
+          (query.isEmpty || searchable.contains(query));
+    }).toList();
+    final readyForAll = readiness['readyForReportCards'] == true;
+    final released = readiness['released'] == true;
+    final blocked = (readiness['blockedStudents'] as num?)?.toInt() ?? 0;
+    final incompleteAssignments =
+        (readiness['incompleteAssignments'] as num?)?.toInt() ?? 0;
+
+    return Column(
+      key: const ValueKey('evaluation-report-readiness-view'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: !released
+                ? const Color(0xFFF1F5F9)
+                : readyForAll
+                ? const Color(0xFFECFDF5)
+                : const Color(0xFFFFF7ED),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: !released
+                  ? const Color(0xFFCBD5E1)
+                  : readyForAll
+                  ? const Color(0xFFA7F3D0)
+                  : const Color(0xFFFED7AA),
+            ),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                !released
+                    ? Icons.lock_clock_outlined
+                    : readyForAll
+                    ? Icons.check_circle_outline
+                    : Icons.warning_amber_rounded,
+                color: !released
+                    ? Colors.blueGrey
+                    : readyForAll
+                    ? const Color(0xFF047857)
+                    : const Color(0xFFC27832),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      !released
+                          ? 'Evaluation exercise has not been released'
+                          : readyForAll
+                          ? 'All students are ready for report cards'
+                          : '$blocked student${blocked == 1 ? '' : 's'} blocked from report generation',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      !released
+                          ? 'Release evaluations to create teacher assignments and begin readiness tracking.'
+                          : incompleteAssignments > 0
+                          ? '$incompleteAssignments teacher assignment${incompleteAssignments == 1 ? ' is' : 's are'} still incomplete. Open a student to see whether it is a report blocker.'
+                          : readyForAll
+                          ? 'Required observations, the class-teacher submission, and final reviews are complete.'
+                          : 'Open a blocked student to see the exact missing teacher, criterion, or review action.',
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 18),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            SizedBox(
+              width: 320,
+              child: TextField(
+                controller: _readinessSearch,
+                onChanged: (_) => setState(() {}),
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.search),
+                  labelText: 'Search students',
+                ),
+              ),
+            ),
+            SizedBox(
+              width: 250,
+              child: DropdownButtonFormField<String>(
+                value: _classFilter,
+                decoration: const InputDecoration(labelText: 'Class'),
+                items: ['All classes', ...classNames]
+                    .map(
+                      (value) =>
+                          DropdownMenuItem(value: value, child: Text(value)),
+                    )
+                    .toList(),
+                onChanged: (value) =>
+                    setState(() => _classFilter = value ?? 'All classes'),
+              ),
+            ),
+            for (final value in const ['All students', 'Ready', 'Blocked'])
+              ChoiceChip(
+                label: Text(value),
+                selected: _readinessFilter == value,
+                onSelected: (_) => setState(() => _readinessFilter = value),
+              ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        Text(
+          '${filtered.length} student${filtered.length == 1 ? '' : 's'}',
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 8),
+        if (filtered.isEmpty)
+          const Card(
+            child: Padding(
+              padding: EdgeInsets.all(28),
+              child: Text('No students match the selected readiness filters.'),
+            ),
+          )
+        else
+          ...filtered.map(_studentReadinessCard),
+      ],
+    );
+  }
+
+  Widget _studentReadinessCard(Map<String, dynamic> student) {
+    final ready = student['ready'] == true;
+    final blockers = (student['blockers'] as List? ?? const []);
+    return Card(
+      child: ListTile(
+        key: ValueKey('evaluation-readiness-${student['customStudentId']}'),
+        onTap: () => _showReadinessDetail(student),
+        leading: CircleAvatar(
+          backgroundColor: ready
+              ? const Color(0xFFDCFCE7)
+              : const Color(0xFFFFEDD5),
+          child: Icon(
+            ready ? Icons.check_rounded : Icons.priority_high_rounded,
+            color: ready ? const Color(0xFF047857) : const Color(0xFFC2410C),
+          ),
+        ),
+        title: Text(
+          student['studentName']?.toString() ?? 'Student',
+          style: const TextStyle(fontWeight: FontWeight.w800),
+        ),
+        subtitle: Text(
+          '${student['streamName'] ?? 'Unassigned class'} · ${student['customStudentId']}\n'
+          '${student['reviewStatus'] == 'FINALIZED' ? 'Final review complete' : 'Final review pending'} · '
+          '${blockers.length} blocker${blockers.length == 1 ? '' : 's'}',
+        ),
+        isThreeLine: true,
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Chip(label: Text(ready ? 'READY' : 'BLOCKED')),
+            const SizedBox(width: 6),
+            const Icon(Icons.chevron_right),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showReadinessDetail(Map<String, dynamic> student) async {
+    final blockers = (student['blockers'] as List? ?? const [])
+        .whereType<Map>()
+        .map(
+          (value) => value.map((key, item) => MapEntry(key.toString(), item)),
+        )
+        .toList();
+    final assignmentRows = (student['assignments'] as List? ?? const [])
+        .whereType<Map>()
+        .map(
+          (value) => value.map((key, item) => MapEntry(key.toString(), item)),
+        )
+        .toList();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: .88,
+        minChildSize: .55,
+        maxChildSize: .95,
+        builder: (context, controller) => ListView(
+          controller: controller,
+          padding: const EdgeInsets.fromLTRB(24, 4, 24, 30),
+          children: [
+            Text(
+              student['studentName']?.toString() ?? 'Student',
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+            ),
+            Text(
+              '${student['streamName'] ?? 'Unassigned class'} · ${student['customStudentId']}',
+              style: const TextStyle(color: Colors.blueGrey),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              student['ready'] == true
+                  ? 'Ready for report cards'
+                  : 'What is blocking this report',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            if (blockers.isEmpty)
+              const Card(
+                color: Color(0xFFECFDF5),
+                child: ListTile(
+                  leading: Icon(Icons.check_circle_outline),
+                  title: Text('All evaluation requirements are complete.'),
+                ),
+              )
+            else
+              ...blockers.map(
+                (blocker) => Card(
+                  color: const Color(0xFFFFF7ED),
+                  child: ListTile(
+                    leading: const Icon(Icons.warning_amber_rounded),
+                    title: Text(
+                      blocker['title']?.toString() ?? 'Evaluation pending',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    subtitle: Text(blocker['message']?.toString() ?? ''),
+                  ),
+                ),
+              ),
+            const SizedBox(height: 18),
+            const Text(
+              'Teacher contributions',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            ...assignmentRows.map((assignment) {
+              final submitted = assignment['status'] == 'SUBMITTED';
+              final progress =
+                  (assignment['completionPercent'] as num?)?.round() ?? 0;
+              final missing =
+                  (assignment['missingCriteria'] as List? ?? const [])
+                      .map((value) => value.toString())
+                      .toList();
+              return Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      CircleAvatar(
+                        child: Icon(
+                          assignment['assignmentType'] == 'CLASS_TEACHER'
+                              ? Icons.groups_2_outlined
+                              : Icons.menu_book_outlined,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              assignment['staffName']?.toString() ??
+                                  'Assigned teacher',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            Text(
+                              assignment['subjectName']?.toString() ??
+                                  'Class-teacher evaluation',
+                            ),
+                            const SizedBox(height: 8),
+                            LinearProgressIndicator(
+                              value: progress / 100,
+                              minHeight: 5,
+                            ),
+                            const SizedBox(height: 5),
+                            Text(
+                              missing.isEmpty
+                                  ? '$progress% complete'
+                                  : '$progress% complete · Missing: ${missing.join(', ')}',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      if (submitted)
+                        const Chip(label: Text('SUBMITTED'))
+                      else
+                        OutlinedButton.icon(
+                          onPressed: () =>
+                              _remindById(assignment['assignmentId']),
+                          icon: const Icon(Icons.notifications_active_outlined),
+                          label: const Text('Remind'),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _remindById(dynamic assignmentId) async {
+    final id = assignmentId is num
+        ? assignmentId.toInt()
+        : int.tryParse(assignmentId?.toString() ?? '');
+    final rows = (_data?['assignments'] as List? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .where((assignment) => assignment['id'] == id)
+        .toList();
+    if (rows.isEmpty) {
+      _message(
+        'The teacher assignment could not be found. Refresh and try again.',
+      );
+      return;
+    }
+    await _remind(rows.single);
+  }
+
   Widget _assignmentCard(Map<String, dynamic> assignment) {
     final own =
         assignment['staffName'].toString().trim().toLowerCase() ==
@@ -254,7 +673,9 @@ class _TermEvaluationWorkflowScreenState
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '${assignment['studentCount']} students · ${assignment['assignmentType'].toString().replaceAll('_', ' ')}',
+                '${assignment['streamName'] ?? 'Unassigned class'} · '
+                '${assignment['studentCount']} students · '
+                '${assignment['assignmentType'].toString().replaceAll('_', ' ')}',
               ),
               const SizedBox(height: 6),
               LinearProgressIndicator(value: progress / 100, minHeight: 5),
