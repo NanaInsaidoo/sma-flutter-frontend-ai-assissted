@@ -388,4 +388,55 @@ void main() {
       contains('Verified against the signed class record'),
     );
   });
+
+  testWidgets('ordinary administrator cannot open final wording correction', (
+    tester,
+  ) async {
+    await useWideScreen(tester);
+    final api = AssessmentApiClient(
+      accessToken: 'token',
+      client: MockClient(
+        (_) async => http.Response(
+          jsonEncode({
+            'released': true,
+            'totalAssignments': 1,
+            'submitted': 1,
+            'incomplete': 0,
+            'assignments': [
+              {
+                'id': 15,
+                'staffId': 'CLASS-1',
+                'staffName': 'Adwoa Teacher',
+                'subjectName': 'Class-teacher evaluation',
+                'assignmentType': 'CLASS_TEACHER',
+                'status': 'SUBMITTED',
+                'studentCount': 1,
+                'completionPercent': 100,
+                'students': [
+                  {'id': 'STU-1', 'name': 'Ama Mensah'},
+                ],
+              },
+            ],
+          }),
+          200,
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: TermEvaluationWorkflowScreen(
+          api: api,
+          schoolId: 'SCHOOL-1',
+          viewerName: 'School Administrator',
+          viewerRole: 'ADMINISTRATOR',
+          setup: setup,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Review results'), findsNothing);
+    expect(find.text('Reopen'), findsOneWidget);
+  });
 }

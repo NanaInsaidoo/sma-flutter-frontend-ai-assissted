@@ -67,6 +67,9 @@ class _TermEvaluationWorkflowScreenState
     return role.contains('admin') || role.contains('head');
   }
 
+  bool get _headmaster =>
+      widget.viewerRole.toLowerCase().contains('headmaster');
+
   @override
   void initState() {
     super.initState();
@@ -282,7 +285,7 @@ class _TermEvaluationWorkflowScreenState
                 )
               else if (own && submitted)
                 const Chip(label: Text('Submitted · locked')),
-              if (_manager &&
+              if (_headmaster &&
                   !own &&
                   submitted &&
                   assignment['assignmentType'] == 'CLASS_TEACHER')
@@ -342,7 +345,7 @@ class _TermEvaluationWorkflowScreenState
           schoolId: widget.schoolId,
           termId: widget.setup.termId,
           staffId: assignment['staffId'].toString(),
-          canManageFinalWordings: _manager,
+          canManageFinalWordings: _headmaster,
           students: (assignment['students'] as List)
               .whereType<Map<String, dynamic>>()
               .toList(),
