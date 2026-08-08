@@ -80,9 +80,8 @@ class _CompleteAssessmentWorkflowState
   String _evaluationQuery = '';
   String _evaluationStatusFilter = 'All Status';
   final Set<String> _selectedEvaluationStudents = {};
-  String _finalReportGradeFilter = 'All Grade Levels';
-  String _finalReportStreamFilter = 'All Streams';
-  String _finalReportFilter = 'All Statuses';
+  String _finalReportSearchQuery = '';
+  String _finalReportFilter = 'All Streams';
   bool _isPublishingAllReports = false;
   bool _isGeneratingReports = false;
   double _reportGenerationProgress = 0;
@@ -676,7 +675,6 @@ class _CompleteAssessmentWorkflowState
                 .length;
             return _FinalReportStream(
               stream.label,
-              '',
               totalStudents,
               generated,
               generated,
@@ -686,7 +684,6 @@ class _CompleteAssessmentWorkflowState
             failedStreams++;
             return _FinalReportStream(
               stream.label,
-              '',
               stream.studentCount,
               0,
               0,
@@ -6113,11 +6110,7 @@ class _CompleteAssessmentWorkflowState
       0,
       (sum, stream) => sum + stream.published,
     );
-    final generated = _finalReportStreams.fold<int>(
-      0,
-      (sum, stream) => sum + stream.generated,
-    );
-    final pendingGeneration = _finalReportStreams.fold<int>(
+    final notGenerated = _finalReportStreams.fold<int>(
       0,
       (sum, stream) => sum + stream.pendingGeneration,
     );
@@ -6128,40 +6121,17 @@ class _CompleteAssessmentWorkflowState
     final streamsWithPending = _finalReportStreams
         .where((stream) => stream.pendingPublication > 0)
         .length;
-    final gradeLevels =
-        _finalReportStreams
-            .map((stream) => stream.name.split(' - ').first)
-            .toSet()
-            .toList()
-          ..sort();
-    final availableStreams =
-        _finalReportStreams
-            .where(
-              (stream) =>
-                  _finalReportGradeFilter == 'All Grade Levels' ||
-                  stream.name.split(' - ').first == _finalReportGradeFilter,
-            )
-            .map((stream) => stream.name.split(' - ').last)
-            .toSet()
-            .toList()
-          ..sort();
     final filteredStreams = _finalReportStreams.where((stream) {
-      final grade = stream.name.split(' - ').first;
-      final streamName = stream.name.split(' - ').last;
-      final matchesGrade =
-          _finalReportGradeFilter == 'All Grade Levels' ||
-          grade == _finalReportGradeFilter;
-      final matchesStream =
-          _finalReportStreamFilter == 'All Streams' ||
-          streamName == _finalReportStreamFilter;
+      final matchesSearch = stream.name.toLowerCase().contains(
+        _finalReportSearchQuery.trim().toLowerCase(),
+      );
       final matchesFilter = switch (_finalReportFilter) {
-        'Generated' => stream.generated > 0,
-        'Pending Generation' => stream.pendingGeneration > 0,
         'Pending Publication' => stream.pendingPublication > 0,
         'Published' => stream.published > 0,
+        'Not Generated' => stream.pendingGeneration > 0,
         _ => true,
       };
-      return matchesGrade && matchesStream && matchesFilter;
+      return matchesSearch && matchesFilter;
     }).toList();
 
     Future<void> publishAll() async {
@@ -6307,37 +6277,27 @@ class _CompleteAssessmentWorkflowState
                     _finalReportStat(
                       'Total Streams',
                       '${_finalReportStreams.length}',
-                      'All grade streams',
-                      Icons.class_outlined,
-                      const Color(0xFF3B82F6),
+                      const Color(0xFF111827),
                     ),
                     _finalReportStat(
                       'Total Students',
                       '$students',
-                      'Across all streams',
-                      Icons.groups_outlined,
-                      const Color(0xFF8B5CF6),
-                    ),
-                    _finalReportStat(
-                      'Generated',
-                      '$generated',
-                      'Report cards created',
-                      Icons.description_outlined,
-                      const Color(0xFF3B82F6),
-                    ),
-                    _finalReportStat(
-                      'Pending Generation',
-                      '$pendingGeneration',
-                      'Still to be generated',
-                      Icons.pending_actions_outlined,
-                      const Color(0xFFF59E0B),
+                      const Color(0xFF111827),
                     ),
                     _finalReportStat(
                       'Published',
                       '$published',
-                      'Report cards released',
-                      Icons.check_circle_outline,
-                      const Color(0xFF059669),
+                      const Color(0xFF009688),
+                    ),
+                    _finalReportStat(
+                      'Pending Publication',
+                      '$pendingPublication',
+                      const Color(0xFFD97706),
+                    ),
+                    _finalReportStat(
+                      'Not Generated',
+                      '$notGenerated',
+                      const Color(0xFFDC2626),
                     ),
                   ];
                   final columns = constraints.maxWidth < 600
@@ -6368,24 +6328,30 @@ class _CompleteAssessmentWorkflowState
                   border: Border.all(color: const Color(0xFFCCEDE9)),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Wrap(
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  spacing: 12,
-                  runSpacing: 10,
-                  children: [
-                    const Icon(
-                      Icons.info_outline,
-                      color: Color(0xFF009688),
-                      size: 20,
-                    ),
-                    Text(
-                      '$pendingPublication generated report cards across $streamsWithPending stream${streamsWithPending == 1 ? '' : 's'} are ready to publish.',
-                      style: const TextStyle(
-                        color: Color(0xFF047857),
-                        fontSize: 12.5,
-                      ),
-                    ),
-                    FilledButton.icon(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final message = Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.check_circle_outline,
+                          color: Color(0xFF009688),
+                          size: 17,
+                        ),
+                        const SizedBox(width: 10),
+                        Flexible(
+                          child: Text(
+                            '$pendingPublication report cards pending publication across $streamsWithPending stream${streamsWithPending == 1 ? '' : 's'}.',
+                            style: const TextStyle(
+                              color: Color(0xFF047857),
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                    final action = FilledButton.icon(
                       onPressed: _isPublishingAllReports ? null : publishAll,
                       icon: _isPublishingAllReports
                           ? const SizedBox(
@@ -6402,81 +6368,52 @@ class _CompleteAssessmentWorkflowState
                             ? 'Publishing...'
                             : 'Publish All ($pendingPublication)',
                       ),
-                    ),
-                  ],
+                    );
+                    if (constraints.maxWidth < 680) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [message, const SizedBox(height: 10), action],
+                      );
+                    }
+                    return Row(
+                      children: [
+                        Expanded(child: message),
+                        const SizedBox(width: 16),
+                        action,
+                      ],
+                    );
+                  },
                 ),
               ),
               const SizedBox(height: 16),
               Wrap(
-                spacing: 12,
-                runSpacing: 10,
+                spacing: 10,
+                runSpacing: 8,
                 children: [
                   SizedBox(
-                    width: 230,
-                    child: DropdownButtonFormField<String>(
-                      value: _finalReportGradeFilter,
-                      isExpanded: true,
+                    width: 300,
+                    child: TextFormField(
                       decoration: const InputDecoration(
-                        labelText: 'Grade Level',
-                        prefixIcon: Icon(Icons.school_outlined, size: 18),
+                        hintText: 'Search stream or grade...',
+                        prefixIcon: Icon(Icons.search, size: 18),
+                        isDense: true,
                       ),
-                      items: ['All Grade Levels', ...gradeLevels]
-                          .map(
-                            (item) => DropdownMenuItem(
-                              value: item,
-                              child: Text(
-                                item,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (value) => setState(() {
-                        _finalReportGradeFilter = value!;
-                        _finalReportStreamFilter = 'All Streams';
-                      }),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 210,
-                    child: DropdownButtonFormField<String>(
-                      value: _finalReportStreamFilter,
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Stream',
-                        prefixIcon: Icon(Icons.account_tree_outlined, size: 18),
-                      ),
-                      items: ['All Streams', ...availableStreams]
-                          .map(
-                            (item) => DropdownMenuItem(
-                              value: item,
-                              child: Text(
-                                item,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          )
-                          .toList(),
                       onChanged: (value) =>
-                          setState(() => _finalReportStreamFilter = value!),
+                          setState(() => _finalReportSearchQuery = value),
                     ),
                   ),
                   SizedBox(
-                    width: 240,
+                    width: 260,
                     child: DropdownButtonFormField<String>(
                       value: _finalReportFilter,
                       isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Report Status',
-                        prefixIcon: Icon(Icons.filter_alt_outlined, size: 18),
-                      ),
+                      decoration: const InputDecoration(isDense: true),
                       items:
                           const [
-                                'All Statuses',
-                                'Generated',
-                                'Pending Generation',
-                                'Pending Publication',
+                                'All Streams',
                                 'Published',
+                                'Pending Publication',
+                                'Not Generated',
                               ]
                               .map(
                                 (item) => DropdownMenuItem(
@@ -6503,62 +6440,35 @@ class _CompleteAssessmentWorkflowState
     );
   }
 
-  Widget _finalReportStat(
-    String title,
-    String value,
-    String subtitle,
-    IconData icon,
-    Color color,
-  ) {
+  Widget _finalReportStat(String title, String value, Color color) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      constraints: const BoxConstraints(minHeight: 72),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: Colors.white,
         border: Border.all(color: const Color(0xFFE5E7EB)),
-        borderRadius: BorderRadius.circular(11),
+        borderRadius: BorderRadius.circular(10),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: .12),
-              borderRadius: BorderRadius.circular(9),
+          Text(
+            title.toUpperCase(),
+            style: const TextStyle(
+              color: Color(0xFF9CA3AF),
+              fontSize: 9.5,
+              fontWeight: FontWeight.w800,
+              letterSpacing: .4,
             ),
-            child: Icon(icon, color: color, size: 20),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title.toUpperCase(),
-                  style: const TextStyle(
-                    color: Color(0xFF9CA3AF),
-                    fontSize: 9.5,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  value,
-                  style: const TextStyle(
-                    color: Color(0xFF111827),
-                    fontSize: 21,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                Text(
-                  subtitle,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFF6B7280),
-                    fontSize: 10.5,
-                  ),
-                ),
-              ],
+          const SizedBox(height: 3),
+          Text(
+            value,
+            style: TextStyle(
+              color: color,
+              fontSize: 23,
+              fontWeight: FontWeight.w800,
             ),
           ),
         ],
@@ -6619,18 +6529,21 @@ class _CompleteAssessmentWorkflowState
                       ),
                       Expanded(
                         flex: 2,
-                        child: _FinalReportHeader('GENERATED', centered: true),
+                        child: _FinalReportHeader('PUBLISHED', centered: true),
                       ),
                       Expanded(
                         flex: 3,
                         child: _FinalReportHeader(
-                          'PENDING GENERATION',
+                          'PENDING PUBLICATION',
                           centered: true,
                         ),
                       ),
                       Expanded(
                         flex: 2,
-                        child: _FinalReportHeader('PUBLISHED', centered: true),
+                        child: _FinalReportHeader(
+                          'NOT GENERATED',
+                          centered: true,
+                        ),
                       ),
                       Expanded(
                         flex: 3,
@@ -6643,51 +6556,24 @@ class _CompleteAssessmentWorkflowState
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 15,
+                    horizontal: 10,
+                    vertical: 8,
                   ),
                   decoration: const BoxDecoration(
-                    color: Color(0xFFE6F7F5),
+                    color: Color(0xFFF7F8F9),
                     border: Border(
-                      top: BorderSide(color: Color(0xFFCCEDE9)),
-                      bottom: BorderSide(color: Color(0xFFCCEDE9)),
+                      top: BorderSide(color: Color(0xFFE5E7EB)),
+                      bottom: BorderSide(color: Color(0xFFE5E7EB)),
                     ),
                   ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 34,
-                        height: 34,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF009688),
-                          borderRadius: BorderRadius.circular(9),
-                        ),
-                        child: const Icon(
-                          Icons.school_outlined,
-                          color: Colors.white,
-                          size: 18,
-                        ),
-                      ),
-                      const SizedBox(width: 11),
-                      Expanded(
-                        child: Text(
-                          entry.key,
-                          style: const TextStyle(
-                            color: Color(0xFF111827),
-                            fontSize: 18,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                      Text(
-                        '${entry.value.length} stream${entry.value.length == 1 ? '' : 's'}',
-                        style: const TextStyle(
-                          color: Color(0xFF00796B),
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
+                  child: Text(
+                    '${entry.key.toUpperCase()}  •  ${entry.value.length} STREAM${entry.value.length == 1 ? '' : 'S'}',
+                    style: const TextStyle(
+                      color: Color(0xFF8B95A5),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: .6,
+                    ),
                   ),
                 ),
                 for (final stream in entry.value)
@@ -6709,11 +6595,13 @@ class _CompleteAssessmentWorkflowState
         ? const Color(0xFF009688)
         : const Color(0xFFD1D5DB);
     return Material(
-      color: Colors.transparent,
+      color: Colors.white,
       child: InkWell(
         onTap: () => _openFinalReportStream(stream),
+        hoverColor: const Color(0xFFEAF8F6),
+        highlightColor: const Color(0xFFDFF3F0),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
           decoration: const BoxDecoration(
             border: Border(bottom: BorderSide(color: Color(0xFFF3F4F6))),
           ),
@@ -6738,7 +6626,7 @@ class _CompleteAssessmentWorkflowState
                       ),
                     ),
                     Text(
-                      stream.teacher,
+                      stream.name.split(' - ').first,
                       style: const TextStyle(
                         color: Color(0xFF9CA3AF),
                         fontSize: 11,
@@ -6753,25 +6641,27 @@ class _CompleteAssessmentWorkflowState
                 2,
               ),
               _finalReportNumber(
-                '${stream.generated}',
-                stream.generated > 0
-                    ? const Color(0xFF3B82F6)
+                stream.published > 0 ? '${stream.published}' : '—',
+                stream.published > 0
+                    ? const Color(0xFF009688)
                     : const Color(0xFFD1D5DB),
                 2,
+              ),
+              _finalReportNumber(
+                stream.pendingPublication > 0
+                    ? '${stream.pendingPublication}'
+                    : '—',
+                stream.pendingPublication > 0
+                    ? const Color(0xFFD97706)
+                    : const Color(0xFFD1D5DB),
+                3,
               ),
               _finalReportNumber(
                 stream.pendingGeneration > 0
                     ? '${stream.pendingGeneration}'
                     : '—',
                 stream.pendingGeneration > 0
-                    ? const Color(0xFFF59E0B)
-                    : const Color(0xFFD1D5DB),
-                3,
-              ),
-              _finalReportNumber(
-                stream.published > 0 ? '${stream.published}' : '—',
-                stream.published > 0
-                    ? const Color(0xFF009688)
+                    ? const Color(0xFFDC2626)
                     : const Color(0xFFD1D5DB),
                 2,
               ),
@@ -6785,7 +6675,7 @@ class _CompleteAssessmentWorkflowState
                     OutlinedButton.icon(
                       onPressed: () => _openFinalReportStream(stream),
                       icon: const Icon(Icons.visibility_outlined, size: 14),
-                      label: const Text('View Reports'),
+                      label: const Text('View'),
                     ),
                     _finalReportPublishAction(stream),
                   ],
@@ -6815,9 +6705,11 @@ class _CompleteAssessmentWorkflowState
 
   Widget _finalReportMobileCard(_FinalReportStream stream) {
     return Material(
-      color: Colors.transparent,
+      color: Colors.white,
       child: InkWell(
         onTap: () => _openFinalReportStream(stream),
+        hoverColor: const Color(0xFFEAF8F6),
+        highlightColor: const Color(0xFFDFF3F0),
         child: Container(
           padding: const EdgeInsets.all(14),
           decoration: const BoxDecoration(
@@ -6831,7 +6723,7 @@ class _CompleteAssessmentWorkflowState
                 style: const TextStyle(fontWeight: FontWeight.w800),
               ),
               Text(
-                stream.teacher,
+                stream.name.split(' - ').first,
                 style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 11),
               ),
               const SizedBox(height: 12),
@@ -6842,20 +6734,20 @@ class _CompleteAssessmentWorkflowState
                   ),
                   Expanded(
                     child: _finalMobileValue(
-                      'Generated',
-                      '${stream.generated}',
-                    ),
-                  ),
-                  Expanded(
-                    child: _finalMobileValue(
-                      'Pending generation',
-                      '${stream.pendingGeneration}',
-                    ),
-                  ),
-                  Expanded(
-                    child: _finalMobileValue(
                       'Published',
                       '${stream.published}',
+                    ),
+                  ),
+                  Expanded(
+                    child: _finalMobileValue(
+                      'Pending publication',
+                      '${stream.pendingPublication}',
+                    ),
+                  ),
+                  Expanded(
+                    child: _finalMobileValue(
+                      'Not generated',
+                      '${stream.pendingGeneration}',
                     ),
                   ),
                 ],
@@ -6867,7 +6759,7 @@ class _CompleteAssessmentWorkflowState
                     child: OutlinedButton.icon(
                       onPressed: () => _openFinalReportStream(stream),
                       icon: const Icon(Icons.visibility_outlined, size: 14),
-                      label: const Text('View Reports'),
+                      label: const Text('View'),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -6893,13 +6785,6 @@ class _CompleteAssessmentWorkflowState
         onPressed: onPressed,
         icon: const Icon(Icons.send, size: 14),
         label: Text('Publish (${stream.pendingPublication})'),
-      );
-    }
-    if (stream.published > 0) {
-      return OutlinedButton.icon(
-        onPressed: onPressed,
-        icon: const Icon(Icons.refresh, size: 14),
-        label: const Text('Republish'),
       );
     }
     return FilledButton(onPressed: null, child: const Text('Publish (0)'));
@@ -10894,7 +10779,6 @@ class _ReportActionLabel extends StatelessWidget {
 class _FinalReportStream {
   _FinalReportStream(
     this.name,
-    this.teacher,
     this.students,
     this.generated,
     this.ready,
@@ -10902,7 +10786,6 @@ class _FinalReportStream {
   );
 
   final String name;
-  final String teacher;
   final int students;
   final int generated;
   final int ready;
