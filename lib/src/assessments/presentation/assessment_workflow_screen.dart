@@ -4564,9 +4564,7 @@ class _CompleteAssessmentWorkflowState
       mainAxisSize: MainAxisSize.min,
       children: [
         OutlinedButton.icon(
-          onPressed: _reportPdfActions.contains(student.id)
-              ? null
-              : () => _previewReportPdf(student),
+          onPressed: () => _openStudentReport(student),
           icon: const Icon(Icons.visibility_outlined, size: 14),
           label: const Text('View Report'),
         ),
