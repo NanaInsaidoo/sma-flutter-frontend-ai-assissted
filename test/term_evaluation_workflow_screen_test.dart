@@ -580,4 +580,78 @@ void main() {
       expect(reminderRequest!.url.path, endsWith('/assignments/24/remind'));
     },
   );
+
+  testWidgets(
+    'focused progress shows only assignments for the selected stream',
+    (tester) async {
+      await useWideScreen(tester);
+      final api = AssessmentApiClient(
+        accessToken: 'token',
+        client: MockClient(
+          (_) async => http.Response(
+            jsonEncode({
+              'released': true,
+              'totalAssignments': 2,
+              'submitted': 1,
+              'incomplete': 1,
+              'assignments': [
+                {
+                  'id': 31,
+                  'streamId': 10,
+                  'staffId': 'T-10',
+                  'staffName': 'Kojo Pending',
+                  'subjectName': 'Mathematics',
+                  'streamName': 'Stream A',
+                  'assignmentType': 'SUBJECT_TEACHER',
+                  'status': 'IN_PROGRESS',
+                  'studentCount': 5,
+                  'completionPercent': 40,
+                  'students': const [],
+                },
+                {
+                  'id': 32,
+                  'streamId': 11,
+                  'staffId': 'T-11',
+                  'staffName': 'Esi Submitted',
+                  'subjectName': 'English Language',
+                  'streamName': 'Stream B',
+                  'assignmentType': 'SUBJECT_TEACHER',
+                  'status': 'SUBMITTED',
+                  'studentCount': 5,
+                  'completionPercent': 100,
+                  'students': const [],
+                },
+              ],
+            }),
+            200,
+          ),
+        ),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TermEvaluationWorkflowScreen(
+            api: api,
+            schoolId: 'SCHOOL-1',
+            viewerName: 'Nana Headmaster',
+            viewerRole: 'HEADMASTER',
+            setup: setup,
+            initialStreamId: 10,
+            initialStreamName: 'Grade 1 - Grade 1 - Stream A',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Evaluation progress — Grade 1 - Stream A'),
+        findsOneWidget,
+      );
+      expect(find.text('Teachers and assigned evaluations'), findsOneWidget);
+      expect(find.textContaining('Kojo Pending'), findsOneWidget);
+      expect(find.textContaining('Esi Submitted'), findsNothing);
+      expect(find.text('Remind'), findsOneWidget);
+      expect(find.text('Report readiness'), findsNothing);
+    },
+  );
 }

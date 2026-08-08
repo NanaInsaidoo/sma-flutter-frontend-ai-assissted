@@ -640,6 +640,43 @@ class _CompleteAssessmentWorkflowState
     try {
       final setup = await _assessmentFormSetup;
       var failedStreams = 0;
+      var evaluationProgressUnavailable = false;
+      var evaluationsReleased = false;
+      final pendingEvaluationsByStream = <int, int>{};
+      final evaluationAssignmentsByStream = <int, int>{};
+      try {
+        final evaluationDashboard = await _assessmentApi
+            .getTermEvaluationDashboard(
+              schoolId: widget.customSchoolId,
+              termId: setup.termId,
+            );
+        evaluationsReleased = evaluationDashboard['released'] == true;
+        final assignments =
+            (evaluationDashboard['assignments'] as List? ?? const [])
+                .whereType<Map<String, dynamic>>();
+        for (final assignment in assignments) {
+          final streamId = _jsonInt(assignment['streamId']);
+          final submitted =
+              assignment['status']?.toString().trim().toUpperCase() ==
+              'SUBMITTED';
+          if (streamId > 0) {
+            evaluationAssignmentsByStream.update(
+              streamId,
+              (count) => count + 1,
+              ifAbsent: () => 1,
+            );
+          }
+          if (streamId > 0 && !submitted) {
+            pendingEvaluationsByStream.update(
+              streamId,
+              (count) => count + 1,
+              ifAbsent: () => 1,
+            );
+          }
+        }
+      } on AssessmentApiException {
+        evaluationProgressUnavailable = true;
+      }
       final streams = await Future.wait(
         setup.streams.map((stream) async {
           try {
@@ -674,20 +711,30 @@ class _CompleteAssessmentWorkflowState
                 )
                 .length;
             return _FinalReportStream(
+              stream.id,
               stream.label,
               totalStudents,
               generated,
               generated,
               published,
+              pendingEvaluationsByStream[stream.id] ?? 0,
+              evaluationsReleased &&
+                  totalStudents > 0 &&
+                  (evaluationAssignmentsByStream[stream.id] ?? 0) == 0,
             );
           } on AssessmentApiException {
             failedStreams++;
             return _FinalReportStream(
+              stream.id,
               stream.label,
               stream.studentCount,
               0,
               0,
               0,
+              pendingEvaluationsByStream[stream.id] ?? 0,
+              evaluationsReleased &&
+                  stream.studentCount > 0 &&
+                  (evaluationAssignmentsByStream[stream.id] ?? 0) == 0,
             );
           }
         }),
@@ -699,9 +746,15 @@ class _CompleteAssessmentWorkflowState
           ..clear()
           ..addAll(streams);
         _loadingFinalReports = false;
-        _finalReportLoadError = failedStreams == 0
+        final warnings = <String>[
+          if (failedStreams > 0)
+            'Report totals could not be loaded for $failedStreams stream${failedStreams == 1 ? '' : 's'}.',
+          if (evaluationProgressUnavailable)
+            'Evaluation progress could not be loaded.',
+        ];
+        _finalReportLoadError = warnings.isEmpty
             ? null
-            : 'Report totals could not be loaded for $failedStreams stream${failedStreams == 1 ? '' : 's'}. The streams are still shown.';
+            : '${warnings.join(' ')} The streams are still shown.';
       });
     } on AssessmentApiException catch (error) {
       if (!mounted) return;
@@ -720,6 +773,30 @@ class _CompleteAssessmentWorkflowState
       final loaded = await _loadLiveReportReadiness(setup, stream.name);
       if (!loaded || !mounted) return;
       _open(_Route.reportCards);
+    } on AssessmentApiException catch (error) {
+      if (mounted) _notice(error.message);
+    }
+  }
+
+  Future<void> _openFinalReportEvaluations(_FinalReportStream stream) async {
+    try {
+      final setup = await _assessmentFormSetup;
+      if (!mounted) return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => TermEvaluationWorkflowScreen(
+            api: _assessmentApi,
+            schoolId: widget.customSchoolId,
+            viewerName: widget.viewerName,
+            viewerRole: widget.viewerRole,
+            setup: setup,
+            initialStreamId: stream.id,
+            initialStreamName: stream.name,
+          ),
+        ),
+      );
+      if (mounted) await _loadFinalReportOverview();
     } on AssessmentApiException catch (error) {
       if (mounted) _notice(error.message);
     }
@@ -6632,6 +6709,11 @@ class _CompleteAssessmentWorkflowState
                         fontSize: 11,
                       ),
                     ),
+                    if (stream.pendingEvaluations > 0 ||
+                        stream.evaluationAssignmentsMissing) ...[
+                      const SizedBox(height: 3),
+                      _evaluationPendingLink(stream),
+                    ],
                   ],
                 ),
               ),
@@ -6726,6 +6808,11 @@ class _CompleteAssessmentWorkflowState
                 stream.name.split(' - ').first,
                 style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 11),
               ),
+              if (stream.pendingEvaluations > 0 ||
+                  stream.evaluationAssignmentsMissing) ...[
+                const SizedBox(height: 4),
+                _evaluationPendingLink(stream),
+              ],
               const SizedBox(height: 12),
               Row(
                 children: [
@@ -6768,6 +6855,41 @@ class _CompleteAssessmentWorkflowState
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _evaluationPendingLink(_FinalReportStream stream) {
+    return InkWell(
+      key: ValueKey('pending-evaluations-${stream.id}'),
+      onTap: () => _openFinalReportEvaluations(stream),
+      borderRadius: BorderRadius.circular(5),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.assignment_late_outlined,
+              size: 12,
+              color: Color(0xFFD97706),
+            ),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                stream.evaluationAssignmentsMissing
+                    ? 'Evaluations pending · no teachers assigned'
+                    : '${stream.pendingEvaluations} teacher evaluation${stream.pendingEvaluations == 1 ? '' : 's'} pending',
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFFD97706),
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -10778,18 +10900,24 @@ class _ReportActionLabel extends StatelessWidget {
 
 class _FinalReportStream {
   _FinalReportStream(
+    this.id,
     this.name,
     this.students,
     this.generated,
     this.ready,
     this.published,
+    this.pendingEvaluations,
+    this.evaluationAssignmentsMissing,
   );
 
+  final int id;
   final String name;
   final int students;
   final int generated;
   final int ready;
   int published;
+  final int pendingEvaluations;
+  final bool evaluationAssignmentsMissing;
   bool publishing = false;
 
   int get pendingPublication {

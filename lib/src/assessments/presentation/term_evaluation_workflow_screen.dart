@@ -43,6 +43,8 @@ class TermEvaluationWorkflowScreen extends StatefulWidget {
     required this.viewerName,
     required this.viewerRole,
     required this.setup,
+    this.initialStreamId,
+    this.initialStreamName,
   });
 
   final AssessmentApiClient api;
@@ -50,6 +52,8 @@ class TermEvaluationWorkflowScreen extends StatefulWidget {
   final String viewerName;
   final String viewerRole;
   final AssessmentFormSetup setup;
+  final int? initialStreamId;
+  final String? initialStreamName;
 
   @override
   State<TermEvaluationWorkflowScreen> createState() =>
@@ -73,6 +77,19 @@ class _TermEvaluationWorkflowScreenState
 
   bool get _headmaster =>
       widget.viewerRole.toLowerCase().contains('headmaster');
+
+  String get _focusedStreamName {
+    final value = widget.initialStreamName?.trim() ?? '';
+    final parts = value
+        .split(' - ')
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .toList();
+    if (parts.length >= 3 && parts[0].toLowerCase() == parts[1].toLowerCase()) {
+      return [parts.first, ...parts.skip(2)].join(' - ');
+    }
+    return value.isEmpty ? 'Selected stream' : value;
+  }
 
   @override
   void initState() {
@@ -123,13 +140,42 @@ class _TermEvaluationWorkflowScreenState
 
   @override
   Widget build(BuildContext context) {
-    final rows = (_data?['assignments'] as List? ?? const [])
+    final dashboardRows = (_data?['assignments'] as List? ?? const [])
         .whereType<Map<String, dynamic>>()
         .toList();
+    final focusedStream = widget.initialStreamId != null;
+    final rows =
+        dashboardRows.where((assignment) {
+          if (!focusedStream) return true;
+          final value = assignment['streamId'];
+          final streamId = value is num
+              ? value.toInt()
+              : int.tryParse(value?.toString() ?? '');
+          return streamId == widget.initialStreamId;
+        }).toList()..sort((left, right) {
+          final leftSubmitted = left['status'] == 'SUBMITTED';
+          final rightSubmitted = right['status'] == 'SUBMITTED';
+          if (leftSubmitted == rightSubmitted) {
+            return left['staffName'].toString().compareTo(
+              right['staffName'].toString(),
+            );
+          }
+          return leftSubmitted ? 1 : -1;
+        });
+    final submittedAssignments = rows
+        .where((assignment) => assignment['status'] == 'SUBMITTED')
+        .length;
+    final incompleteAssignments = rows.length - submittedAssignments;
     final readiness = _readiness;
     final readyStudents = (readiness?['readyStudents'] as num?)?.toInt() ?? 0;
     return Scaffold(
-      appBar: AppBar(title: const Text('Term-end student evaluations')),
+      appBar: AppBar(
+        title: Text(
+          focusedStream
+              ? 'Evaluation progress'
+              : 'Term-end student evaluations',
+        ),
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
@@ -143,9 +189,11 @@ class _TermEvaluationWorkflowScreenState
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            'Evaluation exercise',
-                            style: TextStyle(
+                          Text(
+                            focusedStream
+                                ? 'Evaluation progress — $_focusedStreamName'
+                                : 'Evaluation exercise',
+                            style: const TextStyle(
                               fontSize: 24,
                               fontWeight: FontWeight.w800,
                             ),
@@ -175,20 +223,35 @@ class _TermEvaluationWorkflowScreenState
                   runSpacing: 12,
                   children: [
                     _metric(
-                      'Assignments',
-                      '${_data?['totalAssignments'] ?? 0}',
+                      focusedStream ? 'Assigned' : 'Assignments',
+                      '${focusedStream ? rows.length : _data?['totalAssignments'] ?? 0}',
                     ),
-                    _metric('Submitted', '${_data?['submitted'] ?? 0}'),
-                    _metric('Incomplete', '${_data?['incomplete'] ?? 0}'),
-                    _metric('Ready for reports', '$readyStudents'),
+                    _metric(
+                      'Submitted',
+                      '${focusedStream ? submittedAssignments : _data?['submitted'] ?? 0}',
+                    ),
+                    _metric(
+                      'Pending',
+                      '${focusedStream ? incompleteAssignments : _data?['incomplete'] ?? 0}',
+                    ),
+                    if (!focusedStream)
+                      _metric('Ready for reports', '$readyStudents'),
                   ],
                 ),
                 const SizedBox(height: 22),
-                if (_manager) ...[_managerTabs(), const SizedBox(height: 16)],
-                if (_manager && _managerView == 'Report readiness')
+                if (_manager && !focusedStream) ...[
+                  _managerTabs(),
+                  const SizedBox(height: 16),
+                ],
+                if (_manager &&
+                    !focusedStream &&
+                    _managerView == 'Report readiness')
                   _readinessView()
                 else
-                  _assignmentsView(rows),
+                  _assignmentsView(
+                    rows,
+                    streamName: focusedStream ? widget.initialStreamName : null,
+                  ),
               ],
             ),
     );
@@ -252,13 +315,25 @@ class _TermEvaluationWorkflowScreenState
     onSelectionChanged: (value) => setState(() => _managerView = value.first),
   );
 
-  Widget _assignmentsView(List<Map<String, dynamic>> rows) => Column(
+  Widget _assignmentsView(
+    List<Map<String, dynamic>> rows, {
+    String? streamName,
+  }) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      const Text(
-        'Teacher assignments',
-        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+      Text(
+        streamName == null
+            ? 'Teacher assignments'
+            : 'Teachers and assigned evaluations',
+        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
       ),
+      if (streamName != null) ...[
+        const SizedBox(height: 4),
+        Text(
+          'Pending assignments are listed first. Open the related report when all required teachers have submitted.',
+          style: const TextStyle(color: Colors.blueGrey),
+        ),
+      ],
       const SizedBox(height: 10),
       if (rows.isEmpty)
         Card(
