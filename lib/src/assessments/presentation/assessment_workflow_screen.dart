@@ -6128,7 +6128,7 @@ class _CompleteAssessmentWorkflowState
       final matchesFilter = switch (_finalReportFilter) {
         'Pending Publication' => stream.pendingPublication > 0,
         'Published' => stream.published > 0,
-        'Not Generated' => stream.pendingGeneration > 0,
+        'Awaiting Generation' => stream.pendingGeneration > 0,
         _ => true,
       };
       return matchesSearch && matchesFilter;
@@ -6295,7 +6295,7 @@ class _CompleteAssessmentWorkflowState
                       const Color(0xFFD97706),
                     ),
                     _finalReportStat(
-                      'Not Generated',
+                      'Awaiting Generation',
                       '$notGenerated',
                       const Color(0xFFDC2626),
                     ),
@@ -6413,7 +6413,7 @@ class _CompleteAssessmentWorkflowState
                                 'All Streams',
                                 'Published',
                                 'Pending Publication',
-                                'Not Generated',
+                                'Awaiting Generation',
                               ]
                               .map(
                                 (item) => DropdownMenuItem(
@@ -6541,7 +6541,7 @@ class _CompleteAssessmentWorkflowState
                       Expanded(
                         flex: 2,
                         child: _FinalReportHeader(
-                          'NOT GENERATED',
+                          'AWAITING GENERATION',
                           centered: true,
                         ),
                       ),
@@ -6746,7 +6746,7 @@ class _CompleteAssessmentWorkflowState
                   ),
                   Expanded(
                     child: _finalMobileValue(
-                      'Not generated',
+                      'Awaiting generation',
                       '${stream.pendingGeneration}',
                     ),
                   ),
