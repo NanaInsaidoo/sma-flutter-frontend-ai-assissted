@@ -37,6 +37,7 @@ enum _SchoolAdminPage {
   attendance,
   staffAttendance,
   assessments,
+  finalReports,
   households,
   staff,
   classes,
@@ -745,8 +746,10 @@ class _DashboardBody extends StatelessWidget {
       );
     }
 
-    if (selectedPage == _SchoolAdminPage.assessments) {
+    if (selectedPage == _SchoolAdminPage.assessments ||
+        selectedPage == _SchoolAdminPage.finalReports) {
       return AssessmentDashboardScreen(
+        key: ValueKey(selectedPage),
         schoolName: schoolName?.trim().isNotEmpty == true
             ? schoolName!.trim()
             : data.schoolName,
@@ -760,6 +763,7 @@ class _DashboardBody extends StatelessWidget {
         viewerName: userDisplayName?.trim().isNotEmpty == true
             ? userDisplayName!.trim()
             : data.administratorName,
+        openFinalReportsOnLoad: selectedPage == _SchoolAdminPage.finalReports,
         onRefreshAccessToken: onRefreshAccessToken,
       );
     }
@@ -4055,6 +4059,14 @@ class _Sidebar extends StatelessWidget {
                       collapsed: collapsed,
                       active: selectedPage == _SchoolAdminPage.assessments,
                       onTap: () => onSelectPage(_SchoolAdminPage.assessments),
+                    ),
+                  if (!isBursar && !isTeacher)
+                    _SidebarButton(
+                      icon: Icons.inventory_2_outlined,
+                      label: 'Final Report Management',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.finalReports,
+                      onTap: () => onSelectPage(_SchoolAdminPage.finalReports),
                     ),
                   if (!isTeacher) ...[
                     _SidebarButton(

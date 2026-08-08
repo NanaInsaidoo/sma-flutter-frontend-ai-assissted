@@ -38,6 +38,7 @@ class CompleteAssessmentWorkflow extends StatefulWidget {
     required this.accessToken,
     required this.viewerRole,
     required this.viewerName,
+    this.openFinalReportsOnLoad = false,
     this.onRefreshAccessToken,
   });
 
@@ -49,6 +50,7 @@ class CompleteAssessmentWorkflow extends StatefulWidget {
   final Future<String?> Function()? onRefreshAccessToken;
   final String viewerRole;
   final String viewerName;
+  final bool openFinalReportsOnLoad;
 
   @override
   State<CompleteAssessmentWorkflow> createState() =>
@@ -120,6 +122,9 @@ class _CompleteAssessmentWorkflowState
   @override
   void initState() {
     super.initState();
+    if (widget.openFinalReportsOnLoad) {
+      _route = _Route.finalReports;
+    }
     _assessmentApi = AssessmentApiClient(
       accessToken: widget.accessToken,
       onRefreshAccessToken: widget.onRefreshAccessToken,

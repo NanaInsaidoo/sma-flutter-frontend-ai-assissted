@@ -31,6 +31,7 @@ void main() {
     expect(find.text('No admissions recorded for this term yet.'), findsOne);
     expect(find.text('No upcoming events have been added.'), findsOne);
     expect(find.text('No recent activity to display.'), findsOne);
+    expect(find.text('Final Report Management'), findsOneWidget);
     expect(find.text('Bad state: No element'), findsNothing);
     expect(tester.takeException(), isNull);
   });
@@ -62,6 +63,7 @@ void main() {
       expect(find.text('Open term review'), findsOneWidget);
       expect(find.text('Staff Management'), findsNothing);
       expect(find.text('Fees & Requirements'), findsNothing);
+      expect(find.text('Final Report Management'), findsNothing);
       expect(find.text('Dashboard data is not available yet.'), findsNothing);
       expect(tester.takeException(), isNull);
     },

@@ -12,6 +12,7 @@ class AssessmentDashboardScreen extends StatelessWidget {
     required this.accessToken,
     required this.viewerRole,
     required this.viewerName,
+    this.openFinalReportsOnLoad = false,
     this.onRefreshAccessToken,
   });
 
@@ -22,6 +23,7 @@ class AssessmentDashboardScreen extends StatelessWidget {
   final String? accessToken;
   final String viewerRole;
   final String viewerName;
+  final bool openFinalReportsOnLoad;
   final Future<String?> Function()? onRefreshAccessToken;
 
   @override
@@ -34,6 +36,7 @@ class AssessmentDashboardScreen extends StatelessWidget {
       accessToken: accessToken,
       viewerRole: viewerRole,
       viewerName: viewerName,
+      openFinalReportsOnLoad: openFinalReportsOnLoad,
       onRefreshAccessToken: onRefreshAccessToken,
     );
   }
