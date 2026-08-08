@@ -104,6 +104,8 @@ class _CompleteAssessmentWorkflowState
   final Map<String, _ReportAudit> _reportAudit = {};
   String _reportCardFilter = 'All Students';
   final List<_FinalReportStream> _finalReportStreams = [];
+  bool _loadingFinalReports = false;
+  String? _finalReportLoadError;
 
   String get _displayTerm {
     final configured = widget.term.trim();
@@ -136,7 +138,11 @@ class _CompleteAssessmentWorkflowState
             ),
           )
         : _assessmentApi.getFormSetup(widget.customSchoolId);
-    _loadLiveAssessments();
+    if (widget.openFinalReportsOnLoad) {
+      _loadFinalReportOverview();
+    } else {
+      _loadLiveAssessments();
+    }
   }
 
   Future<void> _loadLiveAssessments() async {
@@ -610,10 +616,122 @@ class _CompleteAssessmentWorkflowState
     }
   }
 
+  Future<void> _openFinalReportManagement() async {
+    _open(_Route.finalReports);
+    await _loadFinalReportOverview();
+  }
+
+  Future<void> _loadFinalReportOverview() async {
+    if (widget.customSchoolId.trim().isEmpty) {
+      if (mounted) {
+        setState(() {
+          _finalReportStreams.clear();
+          _finalReportLoadError =
+              'A school must be selected before loading final reports.';
+        });
+      }
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _loadingFinalReports = true;
+        _finalReportLoadError = null;
+      });
+    }
+    try {
+      final setup = await _assessmentFormSetup;
+      var failedStreams = 0;
+      final streams = await Future.wait(
+        setup.streams.map((stream) async {
+          try {
+            final response = await _assessmentApi.getStreamReportReadiness(
+              customSchoolId: widget.customSchoolId,
+              streamId: stream.id,
+              term: setup.termSequence,
+              academicYearId: setup.academicYearId,
+              academicTermId: setup.termId,
+            );
+            final details =
+                (response['studentReadinessDetails'] as List? ?? const [])
+                    .whereType<Map<String, dynamic>>()
+                    .toList();
+            final totalStudents = _jsonInt(response['totalStudents']) > 0
+                ? _jsonInt(response['totalStudents'])
+                : details.isNotEmpty
+                ? details.length
+                : stream.studentCount;
+            final statuses = details
+                .map(
+                  (detail) =>
+                      normalizeReportStatus(detail['reportStatus']?.toString()),
+                )
+                .toList();
+            final published = statuses
+                .where((status) => status == 'Published')
+                .length;
+            final generated = statuses
+                .where(
+                  (status) => status == 'Generated' || status == 'Published',
+                )
+                .length;
+            return _FinalReportStream(
+              stream.label,
+              '',
+              totalStudents,
+              generated,
+              generated,
+              published,
+            );
+          } on AssessmentApiException {
+            failedStreams++;
+            return _FinalReportStream(
+              stream.label,
+              '',
+              stream.studentCount,
+              0,
+              0,
+              0,
+            );
+          }
+        }),
+      );
+      streams.sort((a, b) => a.name.compareTo(b.name));
+      if (!mounted) return;
+      setState(() {
+        _finalReportStreams
+          ..clear()
+          ..addAll(streams);
+        _loadingFinalReports = false;
+        _finalReportLoadError = failedStreams == 0
+            ? null
+            : 'Report totals could not be loaded for $failedStreams stream${failedStreams == 1 ? '' : 's'}. The streams are still shown.';
+      });
+    } on AssessmentApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _finalReportStreams.clear();
+        _loadingFinalReports = false;
+        _finalReportLoadError = error.message;
+      });
+    }
+  }
+
+  Future<void> _openFinalReportStream(_FinalReportStream stream) async {
+    try {
+      final setup = await _assessmentFormSetup;
+      setState(() => _selectedClass = stream.name);
+      final loaded = await _loadLiveReportReadiness(setup, stream.name);
+      if (!loaded || !mounted) return;
+      _open(_Route.reportCards);
+    } on AssessmentApiException catch (error) {
+      if (mounted) _notice(error.message);
+    }
+  }
+
   List<_StudentRecord> get _reportCardStudents =>
       _liveReportStudents ?? _students;
 
-  Future<void> _loadLiveReportReadiness(
+  Future<bool> _loadLiveReportReadiness(
     AssessmentFormSetup setup,
     String classLabel,
   ) async {
@@ -622,7 +740,7 @@ class _CompleteAssessmentWorkflowState
     );
     if (matching.isEmpty) {
       _notice('The selected stream could not be resolved.');
-      return;
+      return false;
     }
     try {
       final response = await _assessmentApi.getStreamReportReadiness(
@@ -789,8 +907,10 @@ class _CompleteAssessmentWorkflowState
           ..clear()
           ..addAll(missing);
       });
+      return true;
     } on AssessmentApiException catch (error) {
       _notice(error.message);
+      return false;
     }
   }
 
@@ -998,7 +1118,7 @@ class _CompleteAssessmentWorkflowState
                     'Manage reports across grades and streams',
                     Icons.inventory_2_outlined,
                     AppColors.green,
-                    () => _selectClass('Final Reports'),
+                    _openFinalReportManagement,
                   ),
                 ],
               );
@@ -6125,7 +6245,9 @@ class _CompleteAssessmentWorkflowState
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       OutlinedButton.icon(
-                        onPressed: () => setState(() {}),
+                        onPressed: _loadingFinalReports
+                            ? null
+                            : _loadFinalReportOverview,
                         icon: const Icon(Icons.refresh, size: 15),
                         label: const Text('Refresh'),
                       ),
@@ -6155,6 +6277,29 @@ class _CompleteAssessmentWorkflowState
                         );
                 },
               ),
+              if (_loadingFinalReports) ...[
+                const SizedBox(height: 12),
+                const LinearProgressIndicator(),
+              ],
+              if (_finalReportLoadError != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF7E6),
+                    border: Border.all(color: const Color(0xFFF7C873)),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    _finalReportLoadError!,
+                    style: const TextStyle(
+                      color: Color(0xFF8A5A00),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 16),
               LayoutBuilder(
                 builder: (context, constraints) {
@@ -6563,83 +6708,92 @@ class _CompleteAssessmentWorkflowState
         : stream.published > 0
         ? const Color(0xFF009688)
         : const Color(0xFFD1D5DB);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: Color(0xFFF3F4F6))),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 8,
-            height: 8,
-            margin: const EdgeInsets.only(right: 12),
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _openFinalReportStream(stream),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: Color(0xFFF3F4F6))),
           ),
-          Expanded(
-            flex: 3,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  stream.name.split(' - ').last,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13.5,
-                  ),
+          child: Row(
+            children: [
+              Container(
+                width: 8,
+                height: 8,
+                margin: const EdgeInsets.only(right: 12),
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              ),
+              Expanded(
+                flex: 3,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      stream.name.split(' - ').last,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13.5,
+                      ),
+                    ),
+                    Text(
+                      stream.teacher,
+                      style: const TextStyle(
+                        color: Color(0xFF9CA3AF),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
                 ),
-                Text(
-                  stream.teacher,
-                  style: const TextStyle(
-                    color: Color(0xFF9CA3AF),
-                    fontSize: 11,
-                  ),
+              ),
+              _finalReportNumber(
+                '${stream.students}',
+                const Color(0xFF374151),
+                2,
+              ),
+              _finalReportNumber(
+                '${stream.generated}',
+                stream.generated > 0
+                    ? const Color(0xFF3B82F6)
+                    : const Color(0xFFD1D5DB),
+                2,
+              ),
+              _finalReportNumber(
+                stream.pendingGeneration > 0
+                    ? '${stream.pendingGeneration}'
+                    : '—',
+                stream.pendingGeneration > 0
+                    ? const Color(0xFFF59E0B)
+                    : const Color(0xFFD1D5DB),
+                3,
+              ),
+              _finalReportNumber(
+                stream.published > 0 ? '${stream.published}' : '—',
+                stream.published > 0
+                    ? const Color(0xFF009688)
+                    : const Color(0xFFD1D5DB),
+                2,
+              ),
+              Expanded(
+                flex: 3,
+                child: Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: () => _openFinalReportStream(stream),
+                      icon: const Icon(Icons.visibility_outlined, size: 14),
+                      label: const Text('View Reports'),
+                    ),
+                    _finalReportPublishAction(stream),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-          _finalReportNumber('${stream.students}', const Color(0xFF374151), 2),
-          _finalReportNumber(
-            '${stream.generated}',
-            stream.generated > 0
-                ? const Color(0xFF3B82F6)
-                : const Color(0xFFD1D5DB),
-            2,
-          ),
-          _finalReportNumber(
-            stream.pendingGeneration > 0 ? '${stream.pendingGeneration}' : '—',
-            stream.pendingGeneration > 0
-                ? const Color(0xFFF59E0B)
-                : const Color(0xFFD1D5DB),
-            3,
-          ),
-          _finalReportNumber(
-            stream.published > 0 ? '${stream.published}' : '—',
-            stream.published > 0
-                ? const Color(0xFF009688)
-                : const Color(0xFFD1D5DB),
-            2,
-          ),
-          Expanded(
-            flex: 3,
-            child: Wrap(
-              alignment: WrapAlignment.end,
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                OutlinedButton.icon(
-                  onPressed: () {
-                    setState(() => _selectedClass = stream.name);
-                    _open(_Route.reportCards);
-                  },
-                  icon: const Icon(Icons.visibility_outlined, size: 14),
-                  label: const Text('View'),
-                ),
-                _finalReportPublishAction(stream),
-              ],
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -6660,60 +6814,69 @@ class _CompleteAssessmentWorkflowState
   }
 
   Widget _finalReportMobileCard(_FinalReportStream stream) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: Color(0xFFF3F4F6))),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            stream.name,
-            style: const TextStyle(fontWeight: FontWeight.w800),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _openFinalReportStream(stream),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: Color(0xFFF3F4F6))),
           ),
-          Text(
-            stream.teacher,
-            style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 11),
-          ),
-          const SizedBox(height: 12),
-          Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: _finalMobileValue('Students', '${stream.students}'),
+              Text(
+                stream.name,
+                style: const TextStyle(fontWeight: FontWeight.w800),
               ),
-              Expanded(
-                child: _finalMobileValue('Generated', '${stream.generated}'),
+              Text(
+                stream.teacher,
+                style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 11),
               ),
-              Expanded(
-                child: _finalMobileValue(
-                  'Pending generation',
-                  '${stream.pendingGeneration}',
-                ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: _finalMobileValue('Students', '${stream.students}'),
+                  ),
+                  Expanded(
+                    child: _finalMobileValue(
+                      'Generated',
+                      '${stream.generated}',
+                    ),
+                  ),
+                  Expanded(
+                    child: _finalMobileValue(
+                      'Pending generation',
+                      '${stream.pendingGeneration}',
+                    ),
+                  ),
+                  Expanded(
+                    child: _finalMobileValue(
+                      'Published',
+                      '${stream.published}',
+                    ),
+                  ),
+                ],
               ),
-              Expanded(
-                child: _finalMobileValue('Published', '${stream.published}'),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _openFinalReportStream(stream),
+                      icon: const Icon(Icons.visibility_outlined, size: 14),
+                      label: const Text('View Reports'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(child: _finalReportPublishAction(stream)),
+                ],
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () {
-                    setState(() => _selectedClass = stream.name);
-                    _open(_Route.reportCards);
-                  },
-                  icon: const Icon(Icons.visibility_outlined, size: 14),
-                  label: const Text('View'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(child: _finalReportPublishAction(stream)),
-            ],
-          ),
-        ],
+        ),
       ),
     );
   }
