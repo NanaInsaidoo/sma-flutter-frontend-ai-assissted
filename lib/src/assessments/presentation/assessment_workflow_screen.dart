@@ -120,6 +120,15 @@ class _CompleteAssessmentWorkflowState
     return loaded.isEmpty ? 'Current Academic Year' : loaded;
   }
 
+  bool get _evaluationManager {
+    final role = widget.viewerRole.trim().toUpperCase();
+    return role == 'ADMIN' ||
+        role == 'ADMINISTRATOR' ||
+        role == 'HEADMASTER' ||
+        role == 'HEAD_TEACHER' ||
+        role == 'ASSISTANT_HEAD_TEACHER';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -639,11 +648,28 @@ class _CompleteAssessmentWorkflowState
     }
     try {
       final setup = await _assessmentFormSetup;
+      _loadedSetup = setup;
+      final orderedGrades = [...setup.gradeLevels]
+        ..sort((a, b) {
+          final aOrder = a.displayOrder == 0 ? a.id : a.displayOrder;
+          final bOrder = b.displayOrder == 0 ? b.id : b.displayOrder;
+          return aOrder.compareTo(bOrder);
+        });
+      _configuredGradeLevels = orderedGrades
+          .map((grade) => grade.name.trim())
+          .where((name) => name.isNotEmpty)
+          .toSet()
+          .toList();
       var failedStreams = 0;
       var evaluationProgressUnavailable = false;
       var evaluationsReleased = false;
       final pendingEvaluationsByStream = <int, int>{};
       final evaluationAssignmentsByStream = <int, int>{};
+      final evaluationStudentsByStream = <int, int>{};
+      final completedEvaluationStudentsByStream = <int, int>{};
+      final remainingEvaluationStudentsByStream = <int, int>{};
+      final ratedEvaluationCriteriaByStream = <int, int>{};
+      final requiredEvaluationCriteriaByStream = <int, int>{};
       try {
         final evaluationDashboard = await _assessmentApi
             .getTermEvaluationDashboard(
@@ -659,11 +685,60 @@ class _CompleteAssessmentWorkflowState
           final submitted =
               assignment['status']?.toString().trim().toUpperCase() ==
               'SUBMITTED';
+          final studentCount = _jsonInt(assignment['studentCount']);
+          final requiredCount = _jsonInt(assignment['requiredCount']) > 0
+              ? _jsonInt(assignment['requiredCount'])
+              : studentCount * 6;
+          final completionPercent = _jsonInt(
+            assignment['completionPercent'],
+          ).clamp(0, 100);
+          final ratedCount = assignment.containsKey('ratedCount')
+              ? _jsonInt(assignment['ratedCount']).clamp(0, requiredCount)
+              : (requiredCount * completionPercent / 100).round();
+          final completedStudents =
+              assignment.containsKey('completedStudentCount')
+              ? _jsonInt(
+                  assignment['completedStudentCount'],
+                ).clamp(0, studentCount)
+              : submitted
+              ? studentCount
+              : (studentCount * completionPercent / 100).floor();
+          final remainingStudents =
+              assignment.containsKey('remainingStudentCount')
+              ? _jsonInt(
+                  assignment['remainingStudentCount'],
+                ).clamp(0, studentCount)
+              : studentCount - completedStudents;
           if (streamId > 0) {
             evaluationAssignmentsByStream.update(
               streamId,
               (count) => count + 1,
               ifAbsent: () => 1,
+            );
+            evaluationStudentsByStream.update(
+              streamId,
+              (count) => count + studentCount,
+              ifAbsent: () => studentCount,
+            );
+            completedEvaluationStudentsByStream.update(
+              streamId,
+              (count) => count + completedStudents,
+              ifAbsent: () => completedStudents,
+            );
+            remainingEvaluationStudentsByStream.update(
+              streamId,
+              (count) => count + remainingStudents,
+              ifAbsent: () => remainingStudents,
+            );
+            ratedEvaluationCriteriaByStream.update(
+              streamId,
+              (count) => count + ratedCount,
+              ifAbsent: () => ratedCount,
+            );
+            requiredEvaluationCriteriaByStream.update(
+              streamId,
+              (count) => count + requiredCount,
+              ifAbsent: () => requiredCount,
             );
           }
           if (streamId > 0 && !submitted) {
@@ -705,22 +780,29 @@ class _CompleteAssessmentWorkflowState
             final published = statuses
                 .where((status) => status == 'Published')
                 .length;
-            final generated = statuses
-                .where(
-                  (status) => status == 'Generated' || status == 'Published',
-                )
+            final updateRequired = statuses.where(reportNeedsUpdate).length;
+            final pendingPublication = statuses
+                .where((status) => status == 'Generated')
                 .length;
+            final generated = statuses.where(reportHasGeneratedVersion).length;
             return _FinalReportStream(
               stream.id,
               stream.label,
               totalStudents,
               generated,
-              generated,
+              pendingPublication,
               published,
+              updateRequired,
               pendingEvaluationsByStream[stream.id] ?? 0,
               evaluationsReleased &&
                   totalStudents > 0 &&
                   (evaluationAssignmentsByStream[stream.id] ?? 0) == 0,
+              evaluationAssignmentsByStream[stream.id] ?? 0,
+              evaluationStudentsByStream[stream.id] ?? 0,
+              completedEvaluationStudentsByStream[stream.id] ?? 0,
+              remainingEvaluationStudentsByStream[stream.id] ?? 0,
+              ratedEvaluationCriteriaByStream[stream.id] ?? 0,
+              requiredEvaluationCriteriaByStream[stream.id] ?? 0,
             );
           } on AssessmentApiException {
             failedStreams++;
@@ -731,10 +813,17 @@ class _CompleteAssessmentWorkflowState
               0,
               0,
               0,
+              0,
               pendingEvaluationsByStream[stream.id] ?? 0,
               evaluationsReleased &&
                   stream.studentCount > 0 &&
                   (evaluationAssignmentsByStream[stream.id] ?? 0) == 0,
+              evaluationAssignmentsByStream[stream.id] ?? 0,
+              evaluationStudentsByStream[stream.id] ?? 0,
+              completedEvaluationStudentsByStream[stream.id] ?? 0,
+              remainingEvaluationStudentsByStream[stream.id] ?? 0,
+              ratedEvaluationCriteriaByStream[stream.id] ?? 0,
+              requiredEvaluationCriteriaByStream[stream.id] ?? 0,
             );
           }
         }),
@@ -778,7 +867,7 @@ class _CompleteAssessmentWorkflowState
     }
   }
 
-  Future<void> _openFinalReportEvaluations(_FinalReportStream stream) async {
+  Future<void> _openFinalReportEvaluations() async {
     try {
       final setup = await _assessmentFormSetup;
       if (!mounted) return;
@@ -791,8 +880,7 @@ class _CompleteAssessmentWorkflowState
             viewerName: widget.viewerName,
             viewerRole: widget.viewerRole,
             setup: setup,
-            initialStreamId: stream.id,
-            initialStreamName: stream.name,
+            managementProgressOnly: true,
           ),
         ),
       );
@@ -850,8 +938,15 @@ class _CompleteAssessmentWorkflowState
                   final assessmentDataReady =
                       item['assessmentDataReady'] == true;
                   final evaluationReady = item['evaluationReady'] != false;
+                  final classTeacherCommentReady =
+                      item['classTeacherCommentReady'] == true;
                   final evaluationBlockers =
                       (item['evaluationBlockers'] as List? ?? const [])
+                          .map((value) => value.toString())
+                          .where((value) => value.trim().isNotEmpty)
+                          .toList();
+                  final reportUpdateReasons =
+                      (item['reportUpdateReasons'] as List? ?? const [])
                           .map((value) => value.toString())
                           .where((value) => value.trim().isNotEmpty)
                           .toList();
@@ -886,8 +981,17 @@ class _CompleteAssessmentWorkflowState
                         : 'Scores incomplete',
                     assessmentDataReady: assessmentDataReady,
                     evaluationReady: evaluationReady,
+                    classTeacherCommentReady: classTeacherCommentReady,
                     evaluationBlockers: evaluationBlockers,
                     reportStatus: normalizeReportStatus(reportStatus),
+                    reportUpdateReasons: reportUpdateReasons,
+                    reportRegenerationRequired:
+                        item['reportRegenerationRequired'] == true,
+                    reportRepublishRequired:
+                        item['reportRepublishRequired'] == true,
+                    reportVersion: _jsonInt(item['reportVersion']),
+                    reportGeneratedAt:
+                        item['reportGeneratedAt']?.toString() ?? '',
                     parent: '',
                   );
                 })
@@ -905,15 +1009,6 @@ class _CompleteAssessmentWorkflowState
       final completed = <String, int>{};
       final required = <String, int>{};
       final missing = <String, List<String>>{};
-      final publishedStudentIds = remarkRows
-          .where(
-            (row) =>
-                row['reportStatus']?.toString().trim().toUpperCase() ==
-                'PUBLISHED',
-          )
-          .map((row) => row['customStudentId']?.toString() ?? '')
-          .where((id) => id.isNotEmpty)
-          .toSet();
       if (values is List) {
         for (final value in values.whereType<Map<String, dynamic>>()) {
           final id = value['customStudentId']?.toString() ?? '';
@@ -942,13 +1037,24 @@ class _CompleteAssessmentWorkflowState
       }
       setState(() {
         _liveReportStudents = students;
+        if (_selectedReportStudent != null) {
+          final selectedId = _selectedReportStudent!.id;
+          final selected = students.where(
+            (student) => student.id == selectedId,
+          );
+          _selectedReportStudent = selected.isEmpty ? null : selected.first;
+        }
         for (var index = 0; index < students.length; index++) {
           _hydrateLiveEvaluation(students[index], evaluationRows[index]);
         }
         for (final student in students) {
-          _reportStatuses[student.id] = publishedStudentIds.contains(student.id)
-              ? 'Published'
-              : student.reportStatus;
+          _reportStatuses[student.id] = student.reportStatus;
+          // Remarks and progression are term-specific. Clear any values held
+          // by the long-lived workflow screen before hydrating the current
+          // term so an empty API response cannot display a previous term's
+          // decision as complete.
+          _reportRemarks.remove(student.id);
+          _reportAudit.remove(student.id);
         }
         for (final row in remarkRows) {
           final studentId = row['customStudentId']?.toString() ?? '';
@@ -1170,14 +1276,15 @@ class _CompleteAssessmentWorkflowState
                     AppColors.blue,
                     () => _selectClass('Manage Assessments'),
                   ),
-                  _actionCard(
-                    width,
-                    'Student Evaluations',
-                    'Record terminal conduct',
-                    Icons.fact_check_outlined,
-                    AppColors.amber,
-                    _openTermEvaluations,
-                  ),
+                  if (!_evaluationManager)
+                    _actionCard(
+                      width,
+                      'Student Evaluations',
+                      'Complete your assigned term-end evaluations',
+                      Icons.fact_check_outlined,
+                      AppColors.amber,
+                      _openTermEvaluations,
+                    ),
                   _actionCard(
                     width,
                     'Generate Report Cards',
@@ -3699,10 +3806,6 @@ class _CompleteAssessmentWorkflowState
   String _reportStatusFor(_StudentRecord student) {
     if (_processingReportStudents.contains(student.id)) return 'Processing';
     if (_publishingReportStudents.contains(student.id)) return 'Publishing';
-    if ((_reportRemarks[student.id]?.reportStatus ?? '').trim().toUpperCase() ==
-        'PUBLISHED') {
-      return 'Published';
-    }
     return normalizeReportStatus(
       _reportStatuses[student.id] ?? student.reportStatus,
     );
@@ -3712,13 +3815,29 @@ class _CompleteAssessmentWorkflowState
 
   bool _evaluationComplete(_StudentRecord student) => student.evaluationReady;
 
+  String _classTeacherCommentFor(
+    _StudentRecord student,
+    _ReportRemarksDraft legacyRemarks,
+  ) {
+    if (!student.classTeacherCommentReady) return '';
+    final generatedComment =
+        _studentReportCards[student.id]?['classTeacherRemarks']
+            ?.toString()
+            .trim();
+    if (generatedComment != null &&
+        generatedComment.isNotEmpty &&
+        generatedComment.toLowerCase() != 'remarks pending') {
+      return generatedComment;
+    }
+    return legacyRemarks.classTeacherRemarks.trim();
+  }
+
   List<String> _reportReadinessBlockers(_StudentRecord student) {
     final remarks = _reportRemarks[student.id] ?? _ReportRemarksDraft.empty();
     return [
       if (!_gradesComplete(student)) 'Grades incomplete',
       if (!_evaluationComplete(student)) 'Evaluation pending',
-      if (remarks.classTeacherRemarks.trim().isEmpty) 'Teacher remark pending',
-      if (!remarks.headTeacherRequirementSatisfied) 'Head comment pending',
+      if (!student.classTeacherCommentReady) 'Teacher remark pending',
       if (remarks.promotedTo.trim().isEmpty) 'Progression decision pending',
     ];
   }
@@ -3734,6 +3853,10 @@ class _CompleteAssessmentWorkflowState
     final blockers = _reportReadinessBlockers(student);
     if (blockers.isNotEmpty) return _reportReadinessSummary(student);
     final status = _reportStatusFor(student);
+    if (status == 'Update required' ||
+        status == 'Published · update required') {
+      return status;
+    }
     if (status != 'Generated' && status != 'Published') {
       return 'Ready to generate';
     }
@@ -3741,7 +3864,11 @@ class _CompleteAssessmentWorkflowState
   }
 
   bool _readyToPublish(_StudentRecord student) =>
-      _reportStatusFor(student) == 'Generated' && _generationReady(student);
+      (_reportStatusFor(student) == 'Generated' ||
+          (_reportStatusFor(student) == 'Published · update required' &&
+              student.reportRepublishRequired &&
+              !student.reportRegenerationRequired)) &&
+      _generationReady(student);
 
   _ReportAudit _auditFor(_StudentRecord student) {
     return _reportAudit.putIfAbsent(
@@ -3886,13 +4013,7 @@ class _CompleteAssessmentWorkflowState
   }
 
   Future<void> _publishStudentReports(Iterable<_StudentRecord> students) async {
-    final generated = students
-        .where(
-          (student) =>
-              _reportStatusFor(student) == 'Generated' &&
-              _readyToPublish(student),
-        )
-        .toList();
+    final generated = students.where(_readyToPublish).toList();
     if (generated.isEmpty) {
       _notice(
         'No selected report meets all publication-readiness requirements.',
@@ -4116,6 +4237,9 @@ class _CompleteAssessmentWorkflowState
     final generated = _reportCardStudents
         .where((student) => _reportStatusFor(student) == 'Generated')
         .length;
+    final updateRequired = _reportCardStudents
+        .where((student) => reportNeedsUpdate(_reportStatusFor(student)))
+        .length;
     final published = _reportCardStudents
         .where((student) => _reportStatusFor(student) == 'Published')
         .length;
@@ -4126,6 +4250,7 @@ class _CompleteAssessmentWorkflowState
         'Needs Attention' => !_generationReady(student),
         'Not Generated' => status == 'Not Generated',
         'Generated' => status == 'Generated',
+        'Update Required' => reportNeedsUpdate(status),
         'Published' => status == 'Published',
         _ => true,
       };
@@ -4146,6 +4271,7 @@ class _CompleteAssessmentWorkflowState
             needsAttention: needsAttention,
             notGenerated: notGenerated,
             generated: generated,
+            updateRequired: updateRequired,
             published: published,
           ),
         ),
@@ -4168,6 +4294,7 @@ class _CompleteAssessmentWorkflowState
     required int needsAttention,
     required int notGenerated,
     required int generated,
+    required int updateRequired,
     required int published,
   }) {
     final stats = <(String, String, String, IconData, Color, String)>[
@@ -4212,6 +4339,14 @@ class _CompleteAssessmentWorkflowState
         'Generated',
       ),
       (
+        'UPDATE REQUIRED',
+        '$updateRequired',
+        'Source data changed',
+        Icons.update_outlined,
+        const Color(0xFFD97706),
+        'Update Required',
+      ),
+      (
         'PUBLISHED',
         '$published',
         'Official reports released',
@@ -4220,8 +4355,10 @@ class _CompleteAssessmentWorkflowState
         'Published',
       ),
     ];
-    final columns = maxWidth >= 1280
-        ? 6
+    final columns = maxWidth >= 1450
+        ? 7
+        : maxWidth >= 1050
+        ? 4
         : maxWidth >= 820
         ? 3
         : maxWidth >= 560
@@ -4560,7 +4697,17 @@ class _CompleteAssessmentWorkflowState
               child: _reportReadinessButton(student, readiness),
             ),
           ),
-          Expanded(flex: 2, child: Center(child: _reportStateBadge(status))),
+          Expanded(
+            flex: 2,
+            child: Center(
+              child: _reportStateBadge(
+                status,
+                onTap: reportNeedsUpdate(status)
+                    ? () => _showReportUpdateDetails(student)
+                    : null,
+              ),
+            ),
+          ),
           Expanded(
             flex: 4,
             child: Padding(
@@ -4582,18 +4729,23 @@ class _CompleteAssessmentWorkflowState
     ),
   );
 
-  Widget _reportStateBadge(String label) {
+  Widget _reportStateBadge(String label, {VoidCallback? onTap}) {
     final normalized = label.toLowerCase();
     final (foreground, background) = switch (normalized) {
       'ready' => (const Color(0xFF4F8F84), const Color(0xFFF0F8F6)),
       'generated' => (const Color(0xFF527AA8), const Color(0xFFF1F6FB)),
       'published' => (const Color(0xFF4F8F84), const Color(0xFFF0F8F6)),
+      'update required' => (const Color(0xFFB45309), const Color(0xFFFFF7ED)),
+      'published · update required' => (
+        const Color(0xFFB45309),
+        const Color(0xFFFFF7ED),
+      ),
       'processing' ||
       'publishing' => (const Color(0xFF667085), const Color(0xFFF3F4F6)),
       'draft' => (const Color(0xFF8A7350), const Color(0xFFFAF7F1)),
       _ => (const Color(0xFF7A8597), const Color(0xFFF5F6F8)),
     };
-    return Container(
+    final badge = Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
         color: background,
@@ -4608,6 +4760,90 @@ class _CompleteAssessmentWorkflowState
           fontSize: 10.5,
           fontWeight: FontWeight.w600,
         ),
+      ),
+    );
+    if (onTap == null) return badge;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: badge,
+      ),
+    );
+  }
+
+  Future<void> _showReportUpdateDetails(_StudentRecord student) async {
+    final status = _reportStatusFor(student);
+    final reasons = student.reportUpdateReasons.isEmpty
+        ? const ['Report source data changed.']
+        : student.reportUpdateReasons;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('${student.name} · $status'),
+        content: SizedBox(
+          width: 520,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (student.reportVersion > 0)
+                Text(
+                  'Latest generated version: ${student.reportVersion}',
+                  style: const TextStyle(
+                    color: Color(0xFF64748B),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              if (student.reportVersion > 0) const SizedBox(height: 12),
+              for (final reason in reasons)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 9),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(
+                        Icons.update_outlined,
+                        size: 18,
+                        color: Color(0xFFD97706),
+                      ),
+                      const SizedBox(width: 9),
+                      Expanded(child: Text(reason)),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Close'),
+          ),
+          if (student.reportRegenerationRequired)
+            FilledButton.icon(
+              onPressed: _generationReady(student)
+                  ? () {
+                      Navigator.pop(dialogContext);
+                      _regenerateStudentReport(student);
+                    }
+                  : null,
+              icon: const Icon(Icons.refresh, size: 17),
+              label: const Text('Regenerate Report'),
+            )
+          else if (student.reportRepublishRequired)
+            FilledButton.icon(
+              onPressed: _generationReady(student)
+                  ? () {
+                      Navigator.pop(dialogContext);
+                      _publishStudentReports([student]);
+                    }
+                  : null,
+              icon: const Icon(Icons.send, size: 17),
+              label: const Text('Publish Updated Version'),
+            ),
+        ],
       ),
     );
   }
@@ -4663,19 +4899,10 @@ class _CompleteAssessmentWorkflowState
       ),
       (
         'Class-teacher remark',
-        remarks.classTeacherRemarks.trim().isNotEmpty,
-        remarks.classTeacherRemarks.trim().isNotEmpty
-            ? 'The final class-teacher remark has been entered.'
-            : 'A final class-teacher remark is required.',
-      ),
-      (
-        'Headmaster comment',
-        remarks.headTeacherRequirementSatisfied,
-        remarks.headTeacherRequirementSatisfied
-            ? remarks.ignoreHeadTeacherRemark
-                  ? 'The headmaster comment was explicitly marked unnecessary.'
-                  : 'The headmaster comment has been entered.'
-            : 'Enter a headmaster comment or explicitly mark it unnecessary.',
+        student.classTeacherCommentReady,
+        student.classTeacherCommentReady
+            ? 'The class teacher finalized the evaluation comment.'
+            : 'Finalize the class-teacher comment from Student Evaluations.',
       ),
       (
         'Progression decision',
@@ -4771,37 +4998,60 @@ class _CompleteAssessmentWorkflowState
         PopupMenuButton<_ReportRowAction>(
           tooltip: 'More report actions',
           onSelected: (action) => _handleReportRowAction(student, action),
-          itemBuilder: (context) => status == 'Generated'
-              ? const [
-                  PopupMenuItem(
+          itemBuilder: (context) {
+            if (status == 'Generated') {
+              return const [
+                PopupMenuItem(
+                  value: _ReportRowAction.regenerate,
+                  child: _ReportActionLabel(Icons.refresh, 'Regenerate'),
+                ),
+                PopupMenuItem(
+                  value: _ReportRowAction.publish,
+                  child: _ReportActionLabel(Icons.send, 'Publish'),
+                ),
+              ];
+            }
+            if (reportNeedsUpdate(status)) {
+              return [
+                if (student.reportRegenerationRequired)
+                  const PopupMenuItem(
                     value: _ReportRowAction.regenerate,
-                    child: _ReportActionLabel(Icons.refresh, 'Regenerate'),
+                    child: _ReportActionLabel(
+                      Icons.refresh,
+                      'Regenerate Report',
+                    ),
                   ),
-                  PopupMenuItem(
+                if (student.reportRepublishRequired)
+                  const PopupMenuItem(
                     value: _ReportRowAction.publish,
-                    child: _ReportActionLabel(Icons.send, 'Publish'),
-                  ),
-                ]
-              : const [
-                  PopupMenuItem(
-                    value: _ReportRowAction.print,
-                    child: _ReportActionLabel(Icons.print_outlined, 'Print'),
-                  ),
-                  PopupMenuItem(
-                    value: _ReportRowAction.sendToGuardian,
                     child: _ReportActionLabel(
-                      Icons.forward_to_inbox_outlined,
-                      'Send to Guardian',
+                      Icons.send,
+                      'Publish Updated Version',
                     ),
                   ),
-                  PopupMenuItem(
-                    value: _ReportRowAction.download,
-                    child: _ReportActionLabel(
-                      Icons.download_outlined,
-                      'Download PDF',
-                    ),
-                  ),
-                ],
+              ];
+            }
+            return const [
+              PopupMenuItem(
+                value: _ReportRowAction.print,
+                child: _ReportActionLabel(Icons.print_outlined, 'Print'),
+              ),
+              PopupMenuItem(
+                value: _ReportRowAction.sendToGuardian,
+                child: _ReportActionLabel(
+                  Icons.forward_to_inbox_outlined,
+                  'Send to Guardian',
+                ),
+              ),
+              PopupMenuItem(
+                value: _ReportRowAction.download,
+                child: _ReportActionLabel(
+                  Icons.download_outlined,
+                  'Download PDF',
+                ),
+              ),
+            ];
+          },
           icon: const Icon(Icons.more_vert),
         ),
       ],
@@ -4981,17 +5231,20 @@ class _CompleteAssessmentWorkflowState
   Future<void> _openRemarksEditor(_StudentRecord student) async {
     final existing = _reportRemarks[student.id] ?? _ReportRemarksDraft.empty();
     final classController = TextEditingController(
-      text: existing.classTeacherRemarks,
+      text: _classTeacherCommentFor(student, existing),
     );
     final headController = TextEditingController(
       text: existing.headTeacherRemarks,
     );
     var promotedTo = existing.promotedTo;
-    var ignoreHeadTeacherRemark = existing.ignoreHeadTeacherRemark;
     final role = widget.viewerRole.toLowerCase();
     final isAdministrator = role.contains('admin');
-    final canEditClass = isAdministrator || role.contains('class teacher');
-    final canEditHead = isAdministrator || role.contains('head teacher');
+    final isAcademicManager =
+        isAdministrator ||
+        role.contains('headmaster') ||
+        role.contains('head teacher');
+    final canEditClass = isAcademicManager || role.contains('class teacher');
+    final canEditHead = isAcademicManager;
     final drawerWidth = MediaQuery.sizeOf(context).width < 560
         ? MediaQuery.sizeOf(context).width
         : 520.0;
@@ -5061,12 +5314,14 @@ class _CompleteAssessmentWorkflowState
                               const SizedBox(height: 10),
                               TextField(
                                 controller: classController,
-                                enabled: canEditClass,
+                                readOnly: true,
                                 maxLines: 5,
                                 decoration: const InputDecoration(
-                                  labelText: 'Class Teacher Remarks',
-                                  hintText:
-                                      'Add a concise academic and conduct remark',
+                                  labelText: 'Final Class Teacher Comment',
+                                  hintText: 'Pending evaluation finalization',
+                                  helperText:
+                                      'Created from Student Evaluations → Review class.',
+                                  suffixIcon: Icon(Icons.lock_outline),
                                   alignLabelWithHint: true,
                                 ),
                               ),
@@ -5083,12 +5338,12 @@ class _CompleteAssessmentWorkflowState
                               const SizedBox(height: 10),
                               TextField(
                                 controller: headController,
-                                enabled:
-                                    canEditHead && !ignoreHeadTeacherRemark,
+                                enabled: canEditHead,
                                 maxLines: 5,
                                 decoration: const InputDecoration(
-                                  labelText: 'Head Teacher Remarks',
-                                  hintText: 'Add the final head teacher remark',
+                                  labelText: 'Head Teacher Remarks (optional)',
+                                  hintText:
+                                      'Add a head teacher remark if needed',
                                   alignLabelWithHint: true,
                                 ),
                               ),
@@ -5099,30 +5354,6 @@ class _CompleteAssessmentWorkflowState
                                   color: Color(0xFF94A3B8),
                                   fontSize: 11,
                                 ),
-                              ),
-                              const SizedBox(height: 8),
-                              CheckboxListTile(
-                                value: ignoreHeadTeacherRemark,
-                                contentPadding: EdgeInsets.zero,
-                                controlAffinity:
-                                    ListTileControlAffinity.leading,
-                                title: const Text(
-                                  'Ignore Head Teacher comment',
-                                  style: TextStyle(
-                                    fontSize: 12.5,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                subtitle: const Text(
-                                  'Treat this requirement as satisfied without a comment.',
-                                  style: TextStyle(fontSize: 11),
-                                ),
-                                onChanged: canEditHead
-                                    ? (value) => setDrawerState(
-                                        () => ignoreHeadTeacherRemark =
-                                            value ?? false,
-                                      )
-                                    : null,
                               ),
                               const SizedBox(height: 22),
                               _remarksSectionLabel('Progression decision'),
@@ -5178,8 +5409,7 @@ class _CompleteAssessmentWorkflowState
                                   classController.text,
                                   headController.text,
                                   promotedTo,
-                                  ignoreHeadTeacherRemark:
-                                      ignoreHeadTeacherRemark,
+                                  ignoreHeadTeacherRemark: false,
                                   draft: true,
                                 );
                                 Navigator.pop(dialogContext);
@@ -5193,8 +5423,7 @@ class _CompleteAssessmentWorkflowState
                                   classController.text,
                                   headController.text,
                                   promotedTo,
-                                  ignoreHeadTeacherRemark:
-                                      ignoreHeadTeacherRemark,
+                                  ignoreHeadTeacherRemark: false,
                                 );
                                 Navigator.pop(dialogContext);
                               },
@@ -5289,6 +5518,7 @@ class _CompleteAssessmentWorkflowState
             'promotedTo': remarks.promotedTo,
           },
         );
+        await _loadLiveReportReadiness(setup, _selectedClass);
       } on AssessmentApiException catch (error) {
         if (mounted) _notice(error.message);
         return;
@@ -5359,13 +5589,20 @@ class _CompleteAssessmentWorkflowState
   Widget _studentReportPage() {
     final student = _selectedReportStudent ?? _reportCardStudents.first;
     final remarks = _reportRemarks[student.id] ?? _ReportRemarksDraft.empty();
+    final classTeacherComment = _classTeacherCommentFor(student, remarks);
     final evaluation = _evaluationFor(student);
     final status = _reportStatusFor(student);
-    final generated = status == 'Generated' || status == 'Published';
+    final generated = reportHasGeneratedVersion(status);
+    final published = canDistributeReport(status);
+    final hasPublishedVersion = reportHasPublishedVersion(status);
     final role = widget.viewerRole.toLowerCase();
     final administrator = role.contains('admin');
-    final canEditClass = administrator || role.contains('class teacher');
-    final canEditHead = administrator || role.contains('head teacher');
+    final academicManager =
+        administrator ||
+        role.contains('headmaster') ||
+        role.contains('head teacher');
+    final canEditClass = academicManager || role.contains('class teacher');
+    final canEditHead = academicManager;
     final reportSubjects = _studentReportCards[student.id]?['subjects'];
     final generatedAcademicRows = reportSubjects is List
         ? reportSubjects.whereType<Map>().map((rawSubject) {
@@ -5413,20 +5650,59 @@ class _CompleteAssessmentWorkflowState
       compactHeader: true,
       maxContentWidth: 1320,
       actions: [
-        _outlineButton('Save Draft', Icons.save_outlined, () {
-          setState(() => _touchReportAudit(student));
-          _notice('${student.name} report saved as draft.');
-        }),
+        if (canEditClass || canEditHead)
+          _outlineButton(
+            hasPublishedVersion ? 'Save Changes' : 'Save Draft',
+            Icons.save_outlined,
+            () {
+              _saveReportRemarks(
+                student,
+                classTeacherComment,
+                remarks.headTeacherRemarks,
+                remarks.promotedTo,
+                ignoreHeadTeacherRemark: false,
+                draft: !hasPublishedVersion,
+              );
+            },
+          ),
         _outlineButton(
-          'Preview',
+          published ? 'View PDF' : 'Preview',
           Icons.visibility_outlined,
           generated && !_reportPdfActions.contains(student.id)
               ? () => _previewReportPdf(student)
               : null,
         ),
-        if (status != 'Published')
+        if (published)
+          _outlineButton(
+            'Print',
+            Icons.print_outlined,
+            _reportPdfActions.contains(student.id)
+                ? null
+                : () => _previewReportPdf(student),
+          ),
+        if (published)
+          _outlineButton(
+            'Send to Guardian',
+            Icons.forward_to_inbox_outlined,
+            () => _showGuardianDeliveryOptions(student),
+          ),
+        if (published)
           _filledButton(
-            generated
+            'Download',
+            Icons.download_outlined,
+            _reportPdfActions.contains(student.id)
+                ? null
+                : () => _downloadReportPdf(student),
+          ),
+        if (!published &&
+            !(status == 'Published · update required' &&
+                student.reportRepublishRequired))
+          _filledButton(
+            student.reportRegenerationRequired
+                ? (_generationReady(student)
+                      ? 'Regenerate Report'
+                      : 'Complete requirements')
+                : generated
                 ? (_generationReady(student)
                       ? 'Regenerate'
                       : 'Complete requirements')
@@ -5444,13 +5720,13 @@ class _CompleteAssessmentWorkflowState
                       : _generateReports([student])
                 : null,
           ),
-        if (status != 'Published')
+        if (!published && _readyToPublish(student))
           _filledButton(
-            'Publish',
+            status == 'Published · update required'
+                ? 'Publish Updated Version'
+                : 'Publish',
             Icons.send,
-            generated && _readyToPublish(student)
-                ? () => _publishStudentReports([student])
-                : null,
+            () => _publishStudentReports([student]),
           ),
       ],
       children: [
@@ -5482,7 +5758,7 @@ class _CompleteAssessmentWorkflowState
             final remarksSection = _studentReportRemarksSection(
               student,
               remarks,
-              canEditClass: canEditClass,
+              classTeacherComment: classTeacherComment,
               canEditHead: canEditHead,
             );
             final promotionSection = _studentReportPromotionSection(
@@ -5571,9 +5847,8 @@ class _CompleteAssessmentWorkflowState
     final checks = <(String, bool)>[
       ('All grades entered', _gradesComplete(student)),
       ('Student evaluation finalized', _evaluationComplete(student)),
-      ('Report generated', status == 'Generated' || status == 'Published'),
-      ('Class Teacher remark', remarks.classTeacherRemarks.isNotEmpty),
-      ('Head comment or Ignore', remarks.headTeacherRequirementSatisfied),
+      ('Report generated', reportHasGeneratedVersion(status)),
+      ('Class Teacher remark', student.classTeacherCommentReady),
       ('Progression selected', remarks.promotedTo.isNotEmpty),
     ];
     return _section(
@@ -5625,6 +5900,45 @@ class _CompleteAssessmentWorkflowState
               );
             }).toList(),
           ),
+          if (reportNeedsUpdate(status)) ...[
+            const SizedBox(height: 12),
+            InkWell(
+              onTap: () => _showReportUpdateDetails(student),
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(11),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF7ED),
+                  border: Border.all(color: const Color(0xFFFED7AA)),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.update_outlined,
+                      color: Color(0xFFD97706),
+                      size: 18,
+                    ),
+                    const SizedBox(width: 9),
+                    Expanded(
+                      child: Text(
+                        student.reportUpdateReasons.isEmpty
+                            ? 'Report source data changed. Open to review the update.'
+                            : '${student.reportUpdateReasons.first} Open to review.',
+                        style: const TextStyle(
+                          color: Color(0xFF9A5B08),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right, color: Color(0xFFD97706)),
+                  ],
+                ),
+              ),
+            ),
+          ],
           if (student.evaluationBlockers.isNotEmpty) ...[
             const SizedBox(height: 12),
             Text(
@@ -5739,7 +6053,7 @@ class _CompleteAssessmentWorkflowState
   Widget _studentReportRemarksSection(
     _StudentRecord student,
     _ReportRemarksDraft remarks, {
-    required bool canEditClass,
+    required String classTeacherComment,
     required bool canEditHead,
   }) {
     return _section(
@@ -5748,47 +6062,32 @@ class _CompleteAssessmentWorkflowState
         children: [
           TextFormField(
             key: ValueKey('${student.id}-class-report-remark'),
-            initialValue: remarks.classTeacherRemarks,
-            enabled: canEditClass,
+            initialValue: classTeacherComment,
+            readOnly: true,
             maxLines: 4,
             decoration: const InputDecoration(
-              labelText: 'Class Teacher Remarks',
+              labelText: 'Final Class Teacher Comment',
+              hintText: 'Pending evaluation finalization',
+              helperText: 'Created from Student Evaluations → Review class.',
+              suffixIcon: Icon(Icons.lock_outline),
               alignLabelWithHint: true,
             ),
-            onChanged: (value) =>
-                _updateReportRemarks(student, classTeacherRemarks: value),
           ),
           const SizedBox(height: 12),
           TextFormField(
             key: ValueKey('${student.id}-head-report-remark'),
             initialValue: remarks.headTeacherRemarks,
-            enabled: canEditHead && !remarks.ignoreHeadTeacherRemark,
+            enabled: canEditHead,
             maxLines: 4,
             decoration: const InputDecoration(
-              labelText: 'Head Teacher Remarks',
+              labelText: 'Head Teacher Remarks (optional)',
               alignLabelWithHint: true,
             ),
-            onChanged: (value) =>
-                _updateReportRemarks(student, headTeacherRemarks: value),
-          ),
-          CheckboxListTile(
-            value: remarks.ignoreHeadTeacherRemark,
-            contentPadding: EdgeInsets.zero,
-            controlAffinity: ListTileControlAffinity.leading,
-            title: const Text(
-              'Ignore Head Teacher comment',
-              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+            onChanged: (value) => _updateReportRemarks(
+              student,
+              headTeacherRemarks: value,
+              ignoreHeadTeacherRemark: false,
             ),
-            subtitle: const Text(
-              'Treat the Head Teacher requirement as satisfied.',
-              style: TextStyle(fontSize: 11),
-            ),
-            onChanged: canEditHead
-                ? (value) => _updateReportRemarks(
-                    student,
-                    ignoreHeadTeacherRemark: value ?? false,
-                  )
-                : null,
           ),
         ],
       ),
@@ -6195,9 +6494,39 @@ class _CompleteAssessmentWorkflowState
       0,
       (sum, stream) => sum + stream.pendingPublication,
     );
+    final updateRequired = _finalReportStreams.fold<int>(
+      0,
+      (sum, stream) => sum + stream.updateRequired,
+    );
     final streamsWithPending = _finalReportStreams
         .where((stream) => stream.pendingPublication > 0)
         .length;
+    final assignedEvaluations = _finalReportStreams.fold<int>(
+      0,
+      (sum, stream) => sum + stream.assignedEvaluations,
+    );
+    final completedEvaluations = _finalReportStreams.fold<int>(
+      0,
+      (sum, stream) => sum + stream.completedEvaluations,
+    );
+    final remainingEvaluations = _finalReportStreams.fold<int>(
+      0,
+      (sum, stream) => sum + stream.remainingEvaluations,
+    );
+    final ratedEvaluationCriteria = _finalReportStreams.fold<int>(
+      0,
+      (sum, stream) => sum + stream.ratedEvaluationCriteria,
+    );
+    final requiredEvaluationCriteria = _finalReportStreams.fold<int>(
+      0,
+      (sum, stream) => sum + stream.requiredEvaluationCriteria,
+    );
+    final evaluationPercent = requiredEvaluationCriteria == 0
+        ? 0
+        : (ratedEvaluationCriteria * 100 / requiredEvaluationCriteria)
+              .round()
+              .clamp(0, 100);
+    final evaluationRemainingPercent = 100 - evaluationPercent;
     final filteredStreams = _finalReportStreams.where((stream) {
       final matchesSearch = stream.name.toLowerCase().contains(
         _finalReportSearchQuery.trim().toLowerCase(),
@@ -6205,6 +6534,7 @@ class _CompleteAssessmentWorkflowState
       final matchesFilter = switch (_finalReportFilter) {
         'Pending Publication' => stream.pendingPublication > 0,
         'Published' => stream.published > 0,
+        'Update Required' => stream.updateRequired > 0,
         'Awaiting Generation' => stream.pendingGeneration > 0,
         _ => true,
       };
@@ -6372,6 +6702,11 @@ class _CompleteAssessmentWorkflowState
                       const Color(0xFFD97706),
                     ),
                     _finalReportStat(
+                      'Update Required',
+                      '$updateRequired',
+                      const Color(0xFFD97706),
+                    ),
+                    _finalReportStat(
                       'Awaiting Generation',
                       '$notGenerated',
                       const Color(0xFFDC2626),
@@ -6381,7 +6716,7 @@ class _CompleteAssessmentWorkflowState
                       ? 1
                       : constraints.maxWidth < 980
                       ? 2
-                      : 5;
+                      : 6;
                   final width =
                       (constraints.maxWidth - ((columns - 1) * 12)) / columns;
                   return Wrap(
@@ -6392,6 +6727,139 @@ class _CompleteAssessmentWorkflowState
                         .toList(),
                   );
                 },
+              ),
+              const SizedBox(height: 16),
+              Material(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                child: InkWell(
+                  key: const ValueKey('final-report-evaluation-progress'),
+                  onTap: _openFinalReportEvaluations,
+                  borderRadius: BorderRadius.circular(12),
+                  hoverColor: const Color(0xFFEAF8F6),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: const Color(0xFFD8E7E5)),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final summary = Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.fact_check_outlined,
+                                  color: Color(0xFF009688),
+                                  size: 20,
+                                ),
+                                SizedBox(width: 8),
+                                Text(
+                                  'Student evaluation progress',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 5),
+                            Text(
+                              '$completedEvaluations of $assignedEvaluations assigned student evaluations completed · $remainingEvaluations remaining',
+                              style: const TextStyle(
+                                color: Color(0xFF64748B),
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        );
+                        final progress = SizedBox(
+                          width: constraints.maxWidth < 700
+                              ? constraints.maxWidth
+                              : 380,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    '$evaluationPercent% done',
+                                    style: const TextStyle(
+                                      color: Color(0xFF00897B),
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  Text(
+                                    '$evaluationRemainingPercent% remaining',
+                                    style: const TextStyle(
+                                      color: Color(0xFFD97706),
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 7),
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(999),
+                                child: LinearProgressIndicator(
+                                  value: evaluationPercent / 100,
+                                  minHeight: 8,
+                                  color: const Color(0xFF009688),
+                                  backgroundColor: const Color(0xFFFDECC8),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                        final open = const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'View by staff or class',
+                              style: TextStyle(
+                                color: Color(0xFF00796B),
+                                fontWeight: FontWeight.w800,
+                                fontSize: 12,
+                              ),
+                            ),
+                            SizedBox(width: 5),
+                            Icon(
+                              Icons.arrow_forward,
+                              size: 16,
+                              color: Color(0xFF00796B),
+                            ),
+                          ],
+                        );
+                        if (constraints.maxWidth < 900) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              summary,
+                              const SizedBox(height: 14),
+                              progress,
+                              const SizedBox(height: 12),
+                              open,
+                            ],
+                          );
+                        }
+                        return Row(
+                          children: [
+                            Expanded(child: summary),
+                            progress,
+                            const SizedBox(width: 24),
+                            open,
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                ),
               ),
               const SizedBox(height: 16),
               Container(
@@ -6418,7 +6886,7 @@ class _CompleteAssessmentWorkflowState
                         const SizedBox(width: 10),
                         Flexible(
                           child: Text(
-                            '$pendingPublication report cards pending publication across $streamsWithPending stream${streamsWithPending == 1 ? '' : 's'}.',
+                            '$pendingPublication report cards pending publication across $streamsWithPending stream${streamsWithPending == 1 ? '' : 's'} · $updateRequired update${updateRequired == 1 ? '' : 's'} required.',
                             style: const TextStyle(
                               color: Color(0xFF047857),
                               fontSize: 12.5,
@@ -6490,6 +6958,7 @@ class _CompleteAssessmentWorkflowState
                                 'All Streams',
                                 'Published',
                                 'Pending Publication',
+                                'Update Required',
                                 'Awaiting Generation',
                               ]
                               .map(
@@ -6606,12 +7075,23 @@ class _CompleteAssessmentWorkflowState
                       ),
                       Expanded(
                         flex: 2,
+                        child: _FinalReportHeader('EVALUATION', centered: true),
+                      ),
+                      Expanded(
+                        flex: 2,
                         child: _FinalReportHeader('PUBLISHED', centered: true),
                       ),
                       Expanded(
                         flex: 3,
                         child: _FinalReportHeader(
                           'PENDING PUBLICATION',
+                          centered: true,
+                        ),
+                      ),
+                      Expanded(
+                        flex: 2,
+                        child: _FinalReportHeader(
+                          'UPDATE REQUIRED',
                           centered: true,
                         ),
                       ),
@@ -6666,7 +7146,9 @@ class _CompleteAssessmentWorkflowState
   }
 
   Widget _finalReportRow(_FinalReportStream stream) {
-    final color = stream.pendingPublication > 0
+    final color = stream.updateRequired > 0
+        ? const Color(0xFFD97706)
+        : stream.pendingPublication > 0
         ? const Color(0xFFF59E0B)
         : stream.published > 0
         ? const Color(0xFF009688)
@@ -6709,11 +7191,6 @@ class _CompleteAssessmentWorkflowState
                         fontSize: 11,
                       ),
                     ),
-                    if (stream.pendingEvaluations > 0 ||
-                        stream.evaluationAssignmentsMissing) ...[
-                      const SizedBox(height: 3),
-                      _evaluationPendingLink(stream),
-                    ],
                   ],
                 ),
               ),
@@ -6722,6 +7199,7 @@ class _CompleteAssessmentWorkflowState
                 const Color(0xFF374151),
                 2,
               ),
+              Expanded(flex: 2, child: _streamEvaluationProgress(stream)),
               _finalReportNumber(
                 stream.published > 0 ? '${stream.published}' : '—',
                 stream.published > 0
@@ -6737,6 +7215,13 @@ class _CompleteAssessmentWorkflowState
                     ? const Color(0xFFD97706)
                     : const Color(0xFFD1D5DB),
                 3,
+              ),
+              _finalReportNumber(
+                stream.updateRequired > 0 ? '${stream.updateRequired}' : '—',
+                stream.updateRequired > 0
+                    ? const Color(0xFFD97706)
+                    : const Color(0xFFD1D5DB),
+                2,
               ),
               _finalReportNumber(
                 stream.pendingGeneration > 0
@@ -6808,11 +7293,8 @@ class _CompleteAssessmentWorkflowState
                 stream.name.split(' - ').first,
                 style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 11),
               ),
-              if (stream.pendingEvaluations > 0 ||
-                  stream.evaluationAssignmentsMissing) ...[
-                const SizedBox(height: 4),
-                _evaluationPendingLink(stream),
-              ],
+              const SizedBox(height: 9),
+              _streamEvaluationProgress(stream),
               const SizedBox(height: 12),
               Row(
                 children: [
@@ -6829,6 +7311,12 @@ class _CompleteAssessmentWorkflowState
                     child: _finalMobileValue(
                       'Pending publication',
                       '${stream.pendingPublication}',
+                    ),
+                  ),
+                  Expanded(
+                    child: _finalMobileValue(
+                      'Update required',
+                      '${stream.updateRequired}',
                     ),
                   ),
                   Expanded(
@@ -6860,38 +7348,43 @@ class _CompleteAssessmentWorkflowState
     );
   }
 
-  Widget _evaluationPendingLink(_FinalReportStream stream) {
-    return InkWell(
-      key: ValueKey('pending-evaluations-${stream.id}'),
-      onTap: () => _openFinalReportEvaluations(stream),
-      borderRadius: BorderRadius.circular(5),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              Icons.assignment_late_outlined,
-              size: 12,
-              color: Color(0xFFD97706),
-            ),
-            const SizedBox(width: 4),
-            Flexible(
-              child: Text(
-                stream.evaluationAssignmentsMissing
-                    ? 'Evaluations pending · no teachers assigned'
-                    : '${stream.pendingEvaluations} teacher evaluation${stream.pendingEvaluations == 1 ? '' : 's'} pending',
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Color(0xFFD97706),
-                  fontSize: 10.5,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ],
+  Widget _streamEvaluationProgress(_FinalReportStream stream) {
+    if (stream.evaluationAssignmentsMissing) {
+      return const Text(
+        'Not assigned',
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          color: Color(0xFFDC2626),
+          fontSize: 10.5,
+          fontWeight: FontWeight.w700,
         ),
-      ),
+      );
+    }
+    if (stream.evaluationAssignments == 0) {
+      return const Text(
+        'Not released',
+        textAlign: TextAlign.center,
+        style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10.5),
+      );
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          '${stream.evaluationPercent}%',
+          style: TextStyle(
+            color: stream.evaluationPercent == 100
+                ? const Color(0xFF009688)
+                : const Color(0xFFD97706),
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        Text(
+          '${stream.evaluationRemainingPercent}% remaining',
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 9.5),
+        ),
+      ],
     );
   }
 
@@ -7295,6 +7788,11 @@ class _CompleteAssessmentWorkflowState
   }
 
   Future<void> _showReportCard(_StudentRecord student) async {
+    final published = canDistributeReport(_reportStatusFor(student));
+    final classTeacherComment = _classTeacherCommentFor(
+      student,
+      _reportRemarks[student.id] ?? _ReportRemarksDraft.empty(),
+    );
     await showDialog<void>(
       context: context,
       builder: (context) => Dialog(
@@ -7405,24 +7903,18 @@ class _CompleteAssessmentWorkflowState
                       _reportSection('TEACHER REMARKS', [
                         (
                           'Class teacher',
-                          _reportRemarks[student.id]
-                                      ?.classTeacherRemarks
-                                      .isNotEmpty ==
-                                  true
-                              ? _reportRemarks[student.id]!.classTeacherRemarks
+                          classTeacherComment.isNotEmpty
+                              ? classTeacherComment
                               : 'Pending',
                         ),
                         (
                           'Head teacher',
-                          _reportRemarks[student.id]?.ignoreHeadTeacherRemark ==
+                          _reportRemarks[student.id]
+                                      ?.headTeacherRemarks
+                                      .isNotEmpty ==
                                   true
-                              ? 'Ignored'
-                              : _reportRemarks[student.id]
-                                        ?.headTeacherRemarks
-                                        .isNotEmpty ==
-                                    true
                               ? _reportRemarks[student.id]!.headTeacherRemarks
-                              : 'Pending',
+                              : 'Not provided',
                         ),
                       ]),
                       const SizedBox(height: 16),
@@ -7458,22 +7950,24 @@ class _CompleteAssessmentWorkflowState
                       icon: const Icon(Icons.rate_review_outlined),
                       label: const Text('Back to Report'),
                     ),
-                    const SizedBox(width: 10),
-                    OutlinedButton.icon(
-                      onPressed: _reportPdfActions.contains(student.id)
-                          ? null
-                          : () => _previewReportPdf(student),
-                      icon: const Icon(Icons.print_outlined),
-                      label: const Text('Print'),
-                    ),
-                    const SizedBox(width: 10),
-                    FilledButton.icon(
-                      onPressed: _reportPdfActions.contains(student.id)
-                          ? null
-                          : () => _downloadReportPdf(student),
-                      icon: const Icon(Icons.download_outlined),
-                      label: const Text('Download'),
-                    ),
+                    if (published) ...[
+                      const SizedBox(width: 10),
+                      OutlinedButton.icon(
+                        onPressed: _reportPdfActions.contains(student.id)
+                            ? null
+                            : () => _previewReportPdf(student),
+                        icon: const Icon(Icons.print_outlined),
+                        label: const Text('Print'),
+                      ),
+                      const SizedBox(width: 10),
+                      FilledButton.icon(
+                        onPressed: _reportPdfActions.contains(student.id)
+                            ? null
+                            : () => _downloadReportPdf(student),
+                        icon: const Icon(Icons.download_outlined),
+                        label: const Text('Download'),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -7484,7 +7978,10 @@ class _CompleteAssessmentWorkflowState
     );
   }
 
-  Future<List<int>> _loadReportPdf(_StudentRecord student) async {
+  Future<List<int>> _loadReportPdf(
+    _StudentRecord student, {
+    bool download = false,
+  }) async {
     if (widget.customSchoolId.trim().isEmpty) {
       throw const AssessmentApiException(
         'A live school session is required to generate the PDF.',
@@ -7496,6 +7993,7 @@ class _CompleteAssessmentWorkflowState
       customStudentId: student.id,
       termId: setup.termId,
       academicYearId: setup.academicYearId,
+      download: download,
     );
   }
 
@@ -7522,9 +8020,13 @@ class _CompleteAssessmentWorkflowState
 
   Future<void> _downloadReportPdf(_StudentRecord student) async {
     if (_reportPdfActions.contains(student.id)) return;
+    if (!canDistributeReport(_reportStatusFor(student))) {
+      _notice('Publish this report before downloading it.');
+      return;
+    }
     setState(() => _reportPdfActions.add(student.id));
     try {
-      final bytes = await _loadReportPdf(student);
+      final bytes = await _loadReportPdf(student, download: true);
       final downloaded = await downloadReportPdf(
         _reportPdfFileName(student),
         bytes,
@@ -10906,8 +11408,15 @@ class _FinalReportStream {
     this.generated,
     this.ready,
     this.published,
+    this.updateRequired,
     this.pendingEvaluations,
     this.evaluationAssignmentsMissing,
+    this.evaluationAssignments,
+    this.assignedEvaluations,
+    this.completedEvaluations,
+    this.remainingEvaluations,
+    this.ratedEvaluationCriteria,
+    this.requiredEvaluationCriteria,
   );
 
   final int id;
@@ -10916,13 +11425,27 @@ class _FinalReportStream {
   final int generated;
   final int ready;
   int published;
+  final int updateRequired;
   final int pendingEvaluations;
   final bool evaluationAssignmentsMissing;
+  final int evaluationAssignments;
+  final int assignedEvaluations;
+  final int completedEvaluations;
+  final int remainingEvaluations;
+  final int ratedEvaluationCriteria;
+  final int requiredEvaluationCriteria;
   bool publishing = false;
 
+  int get evaluationPercent => requiredEvaluationCriteria == 0
+      ? 0
+      : (ratedEvaluationCriteria * 100 / requiredEvaluationCriteria)
+            .round()
+            .clamp(0, 100);
+
+  int get evaluationRemainingPercent => 100 - evaluationPercent;
+
   int get pendingPublication {
-    final value = ready - published;
-    return value < 0 ? 0 : value;
+    return ready;
   }
 
   int get pendingGeneration {
@@ -10932,7 +11455,9 @@ class _FinalReportStream {
 
   String get status {
     if (published >= students) return 'Published';
-    if (ready < students || generated < students) return 'Needs attention';
+    if (updateRequired > 0 || ready < students || generated < students) {
+      return 'Needs attention';
+    }
     return 'Ready';
   }
 }
@@ -10976,11 +11501,7 @@ class _ReportRemarksDraft {
     );
   }
 
-  bool get headTeacherRequirementSatisfied =>
-      headTeacherRemarks.isNotEmpty || ignoreHeadTeacherRemark;
-
-  bool get remarksComplete =>
-      classTeacherRemarks.isNotEmpty && headTeacherRequirementSatisfied;
+  bool get remarksComplete => classTeacherRemarks.isNotEmpty;
 }
 
 class _ReportAudit {
@@ -11153,8 +11674,14 @@ class _StudentRecord {
     required this.readiness,
     required this.assessmentDataReady,
     required this.evaluationReady,
+    required this.classTeacherCommentReady,
     required this.evaluationBlockers,
     required this.reportStatus,
+    required this.reportUpdateReasons,
+    required this.reportRegenerationRequired,
+    required this.reportRepublishRequired,
+    required this.reportVersion,
+    required this.reportGeneratedAt,
     required this.parent,
   });
 
@@ -11166,8 +11693,14 @@ class _StudentRecord {
   final String readiness;
   final bool assessmentDataReady;
   final bool evaluationReady;
+  final bool classTeacherCommentReady;
   final List<String> evaluationBlockers;
   final String reportStatus;
+  final List<String> reportUpdateReasons;
+  final bool reportRegenerationRequired;
+  final bool reportRepublishRequired;
+  final int reportVersion;
+  final String reportGeneratedAt;
   final String parent;
 
   String get initials => name.split(' ').map((part) => part[0]).take(2).join();

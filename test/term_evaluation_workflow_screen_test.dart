@@ -654,4 +654,212 @@ void main() {
       expect(find.text('Report readiness'), findsNothing);
     },
   );
+
+  testWidgets(
+    'management progress summarizes evaluation work by staff and class',
+    (tester) async {
+      await useWideScreen(tester);
+      final api = AssessmentApiClient(
+        accessToken: 'token',
+        client: MockClient(
+          (_) async => http.Response(
+            jsonEncode({
+              'released': true,
+              'totalAssignments': 3,
+              'submitted': 1,
+              'incomplete': 2,
+              'assignments': [
+                {
+                  'id': 41,
+                  'streamId': 10,
+                  'staffId': 'T-1',
+                  'staffName': 'Ama Teacher',
+                  'subjectName': 'Mathematics',
+                  'streamName': 'Grade 1 - Stream A',
+                  'assignmentType': 'SUBJECT_TEACHER',
+                  'status': 'IN_PROGRESS',
+                  'studentCount': 5,
+                  'completedStudentCount': 2,
+                  'remainingStudentCount': 3,
+                  'ratedCount': 24,
+                  'requiredCount': 30,
+                  'completionPercent': 80,
+                },
+                {
+                  'id': 42,
+                  'streamId': 11,
+                  'staffId': 'T-1',
+                  'staffName': 'Ama Teacher',
+                  'subjectName': 'English Language',
+                  'streamName': 'Grade 1 - Stream B',
+                  'assignmentType': 'SUBJECT_TEACHER',
+                  'status': 'SUBMITTED',
+                  'studentCount': 4,
+                  'completedStudentCount': 4,
+                  'remainingStudentCount': 0,
+                  'ratedCount': 24,
+                  'requiredCount': 24,
+                  'completionPercent': 100,
+                },
+                {
+                  'id': 43,
+                  'streamId': 10,
+                  'staffId': 'T-2',
+                  'staffName': 'Kojo Teacher',
+                  'subjectName': 'Class-teacher evaluation',
+                  'streamName': 'Grade 1 - Stream A',
+                  'assignmentType': 'CLASS_TEACHER',
+                  'status': 'IN_PROGRESS',
+                  'studentCount': 5,
+                  'completedStudentCount': 1,
+                  'remainingStudentCount': 4,
+                  'ratedCount': 12,
+                  'requiredCount': 30,
+                  'completionPercent': 40,
+                },
+              ],
+              'insights': {
+                'totalStudents': 5,
+                'studentsAnalyzed': 4,
+                'studentsWithCompleteObservations': 3,
+                'studentsMissingObservations': 2,
+                'observationCompletenessPercent': 80,
+                'notObservedPercent': 10,
+                'overallDistribution': {
+                  'Excellent': 6,
+                  'Good': 10,
+                  'Satisfactory': 5,
+                  'Needs improvement': 1,
+                },
+                'criteria': [
+                  {
+                    'criterion': 'HOMEWORK_HABITS',
+                    'label': 'Homework habits',
+                    'observedStudents': 4,
+                    'missingStudents': 1,
+                    'needsSupportStudents': 1,
+                    'distribution': {
+                      'Excellent': 1,
+                      'Good': 2,
+                      'Satisfactory': 0,
+                      'Needs improvement': 1,
+                    },
+                  },
+                ],
+              },
+            }),
+            200,
+          ),
+        ),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TermEvaluationWorkflowScreen(
+            api: api,
+            schoolId: 'SCHOOL-1',
+            viewerName: 'Nana Headmaster',
+            viewerRole: 'HEADMASTER',
+            setup: setup,
+            managementProgressOnly: true,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Student evaluation progress'), findsNWidgets(2));
+      expect(find.text('71%'), findsOneWidget);
+      expect(find.text('29%'), findsOneWidget);
+      expect(find.byKey(const ValueKey('evaluation-by-staff')), findsOneWidget);
+      expect(find.text('Ama Teacher'), findsOneWidget);
+      expect(find.text('Kojo Teacher'), findsOneWidget);
+      expect(find.text('89% done · 11% remaining'), findsOneWidget);
+
+      await tester.tap(find.text('Evaluation by class'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('evaluation-by-class')), findsOneWidget);
+      expect(find.text('Grade 1 - Stream A'), findsOneWidget);
+      expect(find.text('Grade 1 - Stream B'), findsOneWidget);
+      expect(find.text('60% done · 40% remaining'), findsOneWidget);
+      expect(find.text('Remind'), findsNothing);
+
+      await tester.tap(find.text('Evaluation insights'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('evaluation-insights')), findsOneWidget);
+      expect(find.text('Students analyzed'), findsOneWidget);
+      expect(find.text('4 of 5'), findsOneWidget);
+      expect(find.text('Observation completeness'), findsOneWidget);
+      expect(find.text('80%'), findsOneWidget);
+      expect(find.text('Homework habits'), findsOneWidget);
+      expect(find.text('NEEDS SUPPORT'), findsOneWidget);
+      expect(
+        find.textContaining('Individual teacher ratings are not shown'),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets('headmaster locks and releases the evaluation entry window', (
+    tester,
+  ) async {
+    await useWideScreen(tester);
+    var locked = false;
+    http.Request? lockRequest;
+    final api = AssessmentApiClient(
+      accessToken: 'token',
+      client: MockClient((request) async {
+        if (request.method == 'POST' &&
+            request.url.path.endsWith('/term-evaluations/lock')) {
+          lockRequest = request;
+          locked = true;
+          return http.Response('{"status":"LOCKED"}', 200);
+        }
+        return http.Response(
+          jsonEncode({
+            'released': true,
+            'cycleStatus': locked ? 'LOCKED' : 'RELEASED',
+            'teacherEntryOpen': !locked,
+            'locked': locked,
+            'totalAssignments': 0,
+            'submitted': 0,
+            'incomplete': 0,
+            'assignments': const [],
+            'insights': {'totalStudents': 0, 'criteria': const []},
+          }),
+          200,
+        );
+      }),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: TermEvaluationWorkflowScreen(
+          api: api,
+          schoolId: 'SCHOOL-1',
+          viewerName: 'Nana Headmaster',
+          viewerRole: 'HEADMASTER',
+          setup: setup,
+          managementProgressOnly: true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Released'), findsOneWidget);
+    expect(find.byKey(const ValueKey('lock-evaluations')), findsOneWidget);
+    expect(find.text('Refresh'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('lock-evaluations')));
+    await tester.pumpAndSettle();
+    expect(find.text('Lock evaluations?'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('confirm-lock-evaluations')));
+    await tester.pumpAndSettle();
+
+    expect(lockRequest, isNotNull);
+    expect(lockRequest!.url.queryParameters['termId'], '7');
+    expect(find.text('Locked'), findsOneWidget);
+    expect(find.byKey(const ValueKey('release-evaluations')), findsOneWidget);
+  });
 }

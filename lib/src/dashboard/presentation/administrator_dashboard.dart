@@ -8,6 +8,7 @@ import '../../admissions/presentation/admissions_screen.dart';
 import '../../attendance/data/attendance_api_client.dart';
 import '../../attendance/presentation/attendance_dashboard_screen.dart';
 import '../../assessments/presentation/assessment_dashboard_screen.dart';
+import '../../assessments/presentation/evaluation_management_screen.dart';
 import '../../classes/presentation/grade_streams_screen.dart';
 import '../../classes/presentation/class_subject_configuration_screen.dart';
 import '../../expenses/presentation/expenses_screen.dart';
@@ -37,6 +38,7 @@ enum _SchoolAdminPage {
   attendance,
   staffAttendance,
   assessments,
+  evaluations,
   finalReports,
   households,
   staff,
@@ -743,6 +745,21 @@ class _DashboardBody extends StatelessWidget {
           accessToken: accessToken,
           onRefreshAccessToken: onRefreshAccessToken,
         ),
+      );
+    }
+
+    if (selectedPage == _SchoolAdminPage.evaluations) {
+      return EvaluationManagementScreen(
+        key: const ValueKey('evaluation-management-screen'),
+        schoolId: schoolId,
+        accessToken: accessToken,
+        onRefreshAccessToken: onRefreshAccessToken,
+        viewerRole: role?.trim().isNotEmpty == true
+            ? role!.trim()
+            : 'Administrator',
+        viewerName: userDisplayName?.trim().isNotEmpty == true
+            ? userDisplayName!.trim()
+            : data.administratorName,
       );
     }
 
@@ -4059,6 +4076,14 @@ class _Sidebar extends StatelessWidget {
                       collapsed: collapsed,
                       active: selectedPage == _SchoolAdminPage.assessments,
                       onTap: () => onSelectPage(_SchoolAdminPage.assessments),
+                    ),
+                  if (!isBursar && !isTeacher)
+                    _SidebarButton(
+                      icon: Icons.fact_check_outlined,
+                      label: 'Evaluation Management',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.evaluations,
+                      onTap: () => onSelectPage(_SchoolAdminPage.evaluations),
                     ),
                   if (!isBursar && !isTeacher)
                     _SidebarButton(

@@ -523,6 +523,7 @@ class AssessmentApiClient {
     required String customStudentId,
     required int termId,
     required int academicYearId,
+    bool download = false,
   }) async {
     final studentPath = Uri.encodeComponent(customStudentId);
     final query = Uri(
@@ -530,7 +531,7 @@ class AssessmentApiClient {
         'customSchoolId': customSchoolId,
         'termId': '$termId',
         'academicYearId': '$academicYearId',
-        'download': 'false',
+        'download': '$download',
       },
     ).query;
     final response = await _send(
@@ -650,6 +651,29 @@ class AssessmentApiClient {
       _decodeBody(
         await _send(
           '/api/term-evaluations/release?$q',
+          method: 'POST',
+          body: const {},
+        ),
+      ),
+    );
+  }
+
+  Future<Map<String, dynamic>> lockTermEvaluations({
+    required String schoolId,
+    required int termId,
+    required String actor,
+  }) async {
+    final q = Uri(
+      queryParameters: {
+        'customSchoolId': schoolId,
+        'termId': '$termId',
+        'actor': actor,
+      },
+    ).query;
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/term-evaluations/lock?$q',
           method: 'POST',
           body: const {},
         ),

@@ -385,10 +385,11 @@ void main() {
         customStudentId: 'STU-1',
         termId: 4,
         academicYearId: 3,
+        download: true,
       );
 
       expect(request.url.path, endsWith('/student/STU-1/pdf'));
-      expect(request.url.queryParameters['download'], 'false');
+      expect(request.url.queryParameters['download'], 'true');
       expect(request.headers['Accept'], 'application/pdf');
       expect(bytes, const [0x25, 0x50, 0x44, 0x46]);
     });

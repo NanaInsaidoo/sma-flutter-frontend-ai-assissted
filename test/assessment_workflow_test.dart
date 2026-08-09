@@ -34,6 +34,7 @@ void main() {
     expect(find.text('CAT 1 – Number & Algebra'), findsNothing);
     expect(find.text('Environmental Science Project'), findsNothing);
     expect(find.text('Ama Boateng'), findsNothing);
+    expect(find.text('Student Evaluations'), findsNothing);
   });
 
   testWidgets('requires a real school before opening assessment data', (

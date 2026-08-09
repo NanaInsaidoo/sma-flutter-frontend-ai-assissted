@@ -35,6 +35,32 @@ const _ratings = <String>[
   'Not observed',
 ];
 
+class _EvaluationProgressGroup {
+  const _EvaluationProgressGroup({
+    required this.name,
+    required this.assignmentCount,
+    required this.assignedEvaluations,
+    required this.completedEvaluations,
+    required this.remainingEvaluations,
+    required this.ratedCriteria,
+    required this.requiredCriteria,
+  });
+
+  final String name;
+  final int assignmentCount;
+  final int assignedEvaluations;
+  final int completedEvaluations;
+  final int remainingEvaluations;
+  final int ratedCriteria;
+  final int requiredCriteria;
+
+  int get completedPercent => requiredCriteria == 0
+      ? 0
+      : (ratedCriteria * 100 / requiredCriteria).round().clamp(0, 100);
+
+  int get remainingPercent => 100 - completedPercent;
+}
+
 class TermEvaluationWorkflowScreen extends StatefulWidget {
   const TermEvaluationWorkflowScreen({
     super.key,
@@ -45,6 +71,7 @@ class TermEvaluationWorkflowScreen extends StatefulWidget {
     required this.setup,
     this.initialStreamId,
     this.initialStreamName,
+    this.managementProgressOnly = false,
   });
 
   final AssessmentApiClient api;
@@ -54,6 +81,7 @@ class TermEvaluationWorkflowScreen extends StatefulWidget {
   final AssessmentFormSetup setup;
   final int? initialStreamId;
   final String? initialStreamName;
+  final bool managementProgressOnly;
 
   @override
   State<TermEvaluationWorkflowScreen> createState() =>
@@ -66,6 +94,7 @@ class _TermEvaluationWorkflowScreenState
   Map<String, dynamic>? _data;
   String? _error;
   bool _loading = true;
+  bool _updatingWindow = false;
   String _managerView = 'Assignments';
   String _readinessFilter = 'All students';
   String _classFilter = 'All classes';
@@ -94,6 +123,7 @@ class _TermEvaluationWorkflowScreenState
   @override
   void initState() {
     super.initState();
+    if (widget.managementProgressOnly) _managerView = 'By staff';
     _load();
   }
 
@@ -120,6 +150,8 @@ class _TermEvaluationWorkflowScreenState
   }
 
   Future<void> _release() async {
+    if (_updatingWindow) return;
+    setState(() => _updatingWindow = true);
     try {
       await widget.api.releaseTermEvaluations(
         schoolId: widget.schoolId,
@@ -127,9 +159,75 @@ class _TermEvaluationWorkflowScreenState
         actor: widget.viewerName,
       );
       await _load();
-      _message('Evaluation exercise released and assignments generated.');
+      _message('Evaluations released. Teachers can now save and submit work.');
     } on AssessmentApiException catch (error) {
       _message(error.message);
+    } finally {
+      if (mounted) setState(() => _updatingWindow = false);
+    }
+  }
+
+  Future<void> _lock() async {
+    if (_updatingWindow) return;
+    setState(() => _updatingWindow = true);
+    try {
+      await widget.api.lockTermEvaluations(
+        schoolId: widget.schoolId,
+        termId: widget.setup.termId,
+        actor: widget.viewerName,
+      );
+      await _load();
+      _message('Evaluations locked. Teacher work has been preserved.');
+    } on AssessmentApiException catch (error) {
+      _message(error.message);
+    } finally {
+      if (mounted) setState(() => _updatingWindow = false);
+    }
+  }
+
+  bool get _teacherEntryOpen {
+    if (_data?['teacherEntryOpen'] is bool) {
+      return _data!['teacherEntryOpen'] == true;
+    }
+    final status = _data?['cycleStatus']?.toString().toUpperCase();
+    if (status != null && status.isNotEmpty) return status == 'RELEASED';
+    return _data?['released'] == true && _data?['locked'] != true;
+  }
+
+  Future<void> _confirmWindowChange() async {
+    final locking = _teacherEntryOpen;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(locking ? 'Lock evaluations?' : 'Release evaluations?'),
+        content: Text(
+          locking
+              ? 'Teachers will no longer be able to save or submit ratings. Existing drafts and submissions will be preserved, and class-teacher review can continue.'
+              : 'Evaluation assignments will be generated from current teaching allocations. Teachers will be able to save drafts and submit ratings.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            key: ValueKey(
+              locking
+                  ? 'confirm-lock-evaluations'
+                  : 'confirm-release-evaluations',
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            icon: Icon(locking ? Icons.lock_outline : Icons.lock_open_outlined),
+            label: Text(locking ? 'Lock evaluations' : 'Release evaluations'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    if (locking) {
+      await _lock();
+    } else {
+      await _release();
     }
   }
 
@@ -166,12 +264,16 @@ class _TermEvaluationWorkflowScreenState
         .where((assignment) => assignment['status'] == 'SUBMITTED')
         .length;
     final incompleteAssignments = rows.length - submittedAssignments;
+    final managementProgress = widget.managementProgressOnly && _manager;
+    final progress = _evaluationProgress(rows);
     final readiness = _readiness;
     final readyStudents = (readiness?['readyStudents'] as num?)?.toInt() ?? 0;
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          focusedStream
+          managementProgress
+              ? 'Student evaluation progress'
+              : focusedStream
               ? 'Evaluation progress'
               : 'Term-end student evaluations',
         ),
@@ -190,7 +292,9 @@ class _TermEvaluationWorkflowScreenState
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            focusedStream
+                            managementProgress
+                                ? 'Student evaluation progress'
+                                : focusedStream
                                 ? 'Evaluation progress — $_focusedStreamName'
                                 : 'Evaluation exercise',
                             style: const TextStyle(
@@ -206,48 +310,64 @@ class _TermEvaluationWorkflowScreenState
                       ),
                     ),
                     if (_manager)
-                      FilledButton.icon(
-                        onPressed: _release,
-                        icon: const Icon(Icons.campaign_outlined),
-                        label: Text(
-                          rows.isEmpty
-                              ? 'Release evaluations'
-                              : 'Refresh assignments',
-                        ),
-                      ),
+                      _evaluationWindowControls()
+                    else
+                      _evaluationWindowStatusBadge(),
                   ],
                 ),
                 const SizedBox(height: 20),
                 Wrap(
                   spacing: 12,
                   runSpacing: 12,
-                  children: [
-                    _metric(
-                      focusedStream ? 'Assigned' : 'Assignments',
-                      '${focusedStream ? rows.length : _data?['totalAssignments'] ?? 0}',
-                    ),
-                    _metric(
-                      'Submitted',
-                      '${focusedStream ? submittedAssignments : _data?['submitted'] ?? 0}',
-                    ),
-                    _metric(
-                      'Pending',
-                      '${focusedStream ? incompleteAssignments : _data?['incomplete'] ?? 0}',
-                    ),
-                    if (!focusedStream)
-                      _metric('Ready for reports', '$readyStudents'),
-                  ],
+                  children: managementProgress
+                      ? [
+                          _metric(
+                            'Evaluation work done',
+                            '${progress.completedPercent}%',
+                          ),
+                          _metric(
+                            'Evaluation work remaining',
+                            '${progress.remainingPercent}%',
+                          ),
+                          _metric(
+                            'Completed evaluations',
+                            '${progress.completedEvaluations}',
+                          ),
+                          _metric(
+                            'Evaluations remaining',
+                            '${progress.remainingEvaluations}',
+                          ),
+                        ]
+                      : [
+                          _metric(
+                            focusedStream ? 'Assigned' : 'Assignments',
+                            '${focusedStream ? rows.length : _data?['totalAssignments'] ?? 0}',
+                          ),
+                          _metric(
+                            'Submitted',
+                            '${focusedStream ? submittedAssignments : _data?['submitted'] ?? 0}',
+                          ),
+                          _metric(
+                            'Pending',
+                            '${focusedStream ? incompleteAssignments : _data?['incomplete'] ?? 0}',
+                          ),
+                          if (!focusedStream)
+                            _metric('Ready for reports', '$readyStudents'),
+                        ],
                 ),
                 const SizedBox(height: 22),
-                if (_manager && !focusedStream) ...[
+                if (managementProgress) ...[
+                  _progressTabs(),
+                  const SizedBox(height: 16),
+                  _progressDashboard(rows),
+                ] else if (_manager && !focusedStream) ...[
                   _managerTabs(),
                   const SizedBox(height: 16),
-                ],
-                if (_manager &&
-                    !focusedStream &&
-                    _managerView == 'Report readiness')
-                  _readinessView()
-                else
+                  if (_managerView == 'Report readiness')
+                    _readinessView()
+                  else
+                    _assignmentsView(rows),
+                ] else
                   _assignmentsView(
                     rows,
                     streamName: focusedStream ? widget.initialStreamName : null,
@@ -284,6 +404,63 @@ class _TermEvaluationWorkflowScreenState
     ),
   );
 
+  Widget _evaluationWindowControls() {
+    final open = _teacherEntryOpen;
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 10,
+      runSpacing: 8,
+      children: [
+        _evaluationWindowStatusBadge(),
+        if (open)
+          OutlinedButton.icon(
+            key: const ValueKey('lock-evaluations'),
+            onPressed: _updatingWindow ? null : _confirmWindowChange,
+            icon: const Icon(Icons.lock_outline),
+            label: const Text('Lock evaluations'),
+          )
+        else
+          FilledButton.icon(
+            key: const ValueKey('release-evaluations'),
+            onPressed: _updatingWindow ? null : _confirmWindowChange,
+            icon: const Icon(Icons.lock_open_outlined),
+            label: const Text('Release evaluations'),
+          ),
+      ],
+    );
+  }
+
+  Widget _evaluationWindowStatusBadge() {
+    final open = _teacherEntryOpen;
+    final color = open ? const Color(0xFF00897B) : const Color(0xFF64748B);
+    return Container(
+      key: const ValueKey('evaluation-window-status'),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: open ? const Color(0xFFE0F2F1) : const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: open ? const Color(0xFF99D5CE) : const Color(0xFFCBD5E1),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            open ? Icons.lock_open_outlined : Icons.lock_outline,
+            size: 17,
+            color: color,
+          ),
+          const SizedBox(width: 7),
+          Text(
+            open ? 'Released' : 'Locked',
+            style: TextStyle(color: color, fontWeight: FontWeight.w800),
+          ),
+        ],
+      ),
+    );
+  }
+
   Map<String, dynamic>? get _readiness {
     final raw = _data?['readiness'];
     if (raw is! Map) return null;
@@ -314,6 +491,687 @@ class _TermEvaluationWorkflowScreenState
     selected: {_managerView},
     onSelectionChanged: (value) => setState(() => _managerView = value.first),
   );
+
+  Widget _progressTabs() => SegmentedButton<String>(
+    key: const ValueKey('evaluation-progress-tabs'),
+    segments: const [
+      ButtonSegment(
+        value: 'By staff',
+        icon: Icon(Icons.people_outline),
+        label: Text('Evaluation by staff'),
+      ),
+      ButtonSegment(
+        value: 'By class',
+        icon: Icon(Icons.school_outlined),
+        label: Text('Evaluation by class'),
+      ),
+      ButtonSegment(
+        value: 'Insights',
+        icon: Icon(Icons.insights_outlined),
+        label: Text('Evaluation insights'),
+      ),
+    ],
+    selected: {_managerView},
+    onSelectionChanged: (value) => setState(() => _managerView = value.first),
+  );
+
+  Widget _progressDashboard(List<Map<String, dynamic>> rows) {
+    if (_managerView == 'Insights') return _insightsDashboard();
+    final byStaff = _managerView == 'By staff';
+    final groups = _groupEvaluationProgress(rows, byStaff: byStaff);
+    return Column(
+      key: ValueKey(byStaff ? 'evaluation-by-staff' : 'evaluation-by-class'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          byStaff
+              ? 'Evaluation progress by staff'
+              : 'Evaluation progress by class',
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          byStaff
+              ? 'See how much evaluation work each staff member has completed and what remains.'
+              : 'See evaluation completion across every class. Follow-up is handled manually.',
+          style: const TextStyle(color: Colors.blueGrey),
+        ),
+        const SizedBox(height: 12),
+        if (groups.isEmpty)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(28),
+              child: Text(
+                _data?['released'] == true
+                    ? 'No evaluation assignments are available yet.'
+                    : 'Release the evaluation exercise to generate progress information.',
+              ),
+            ),
+          )
+        else
+          LayoutBuilder(
+            builder: (context, constraints) => constraints.maxWidth < 820
+                ? Column(children: groups.map(_progressCard).toList())
+                : _progressTable(groups, byStaff: byStaff),
+          ),
+      ],
+    );
+  }
+
+  Widget _insightsDashboard() {
+    final raw = _data?['insights'];
+    final insights = raw is Map
+        ? raw.map((key, value) => MapEntry(key.toString(), value))
+        : <String, dynamic>{};
+    final totalStudents = _intValue(insights['totalStudents']);
+    final criteria = (insights['criteria'] as List? ?? const [])
+        .whereType<Map>()
+        .map((value) => value.map((key, item) => MapEntry('$key', item)))
+        .toList();
+    final distributionRaw = insights['overallDistribution'];
+    final distribution = distributionRaw is Map
+        ? distributionRaw.map((key, value) => MapEntry('$key', value))
+        : <String, dynamic>{};
+    return Column(
+      key: const ValueKey('evaluation-insights'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Evaluation insights',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'School-wide patterns from combined student results. Individual teacher ratings are not shown.',
+          style: TextStyle(color: Colors.blueGrey),
+        ),
+        const SizedBox(height: 16),
+        if (totalStudents == 0)
+          const Card(
+            child: Padding(
+              padding: EdgeInsets.all(28),
+              child: Text(
+                'Insights will appear after evaluation assignments contain student observations.',
+              ),
+            ),
+          )
+        else ...[
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: [
+              _insightMetric(
+                'Students analyzed',
+                '${_intValue(insights['studentsAnalyzed'])} of $totalStudents',
+                Icons.groups_outlined,
+              ),
+              _insightMetric(
+                'Observation completeness',
+                '${_intValue(insights['observationCompletenessPercent'])}%',
+                Icons.fact_check_outlined,
+              ),
+              _insightMetric(
+                'Not observed responses',
+                '${_intValue(insights['notObservedPercent'])}%',
+                Icons.visibility_off_outlined,
+              ),
+              _insightMetric(
+                'Students missing observations',
+                '${_intValue(insights['studentsMissingObservations'])}',
+                Icons.warning_amber_rounded,
+                warning: _intValue(insights['studentsMissingObservations']) > 0,
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'Overall wording distribution',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: _ratings
+                .where((rating) => rating != 'Not observed')
+                .map(
+                  (rating) => _distributionCard(
+                    rating,
+                    _intValue(distribution[rating]),
+                    distribution.values.fold<int>(
+                      0,
+                      (total, value) => total + _intValue(value),
+                    ),
+                  ),
+                )
+                .toList(),
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'Analysis by evaluation criterion',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Needs support counts only students whose combined wording is Needs improvement.',
+            style: TextStyle(color: Colors.blueGrey, fontSize: 12),
+          ),
+          const SizedBox(height: 10),
+          LayoutBuilder(
+            builder: (context, constraints) => constraints.maxWidth < 900
+                ? Column(children: criteria.map(_criterionInsightCard).toList())
+                : _criterionInsightsTable(criteria),
+          ),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFFE2E8F0)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.history, size: 18, color: Colors.blueGrey),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Previous-term comparison will appear once a comparable completed term has evaluation results.',
+                    style: TextStyle(color: Colors.blueGrey),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _insightMetric(
+    String label,
+    String value,
+    IconData icon, {
+    bool warning = false,
+  }) => SizedBox(
+    width: 230,
+    child: Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: warning
+                    ? const Color(0xFFFFF3E0)
+                    : const Color(0xFFE0F2F1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                icon,
+                color: warning
+                    ? const Color(0xFFD97706)
+                    : const Color(0xFF00897B),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    value,
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      color: Colors.blueGrey,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  Widget _distributionCard(String rating, int count, int total) => Container(
+    width: 210,
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      border: Border.all(color: const Color(0xFFE2E8F0)),
+      borderRadius: BorderRadius.circular(10),
+    ),
+    child: Row(
+      children: [
+        Container(
+          width: 8,
+          height: 36,
+          decoration: BoxDecoration(
+            color: _ratingColor(rating),
+            borderRadius: BorderRadius.circular(999),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(rating, style: const TextStyle(fontWeight: FontWeight.w700)),
+              Text(
+                '$count result${count == 1 ? '' : 's'} · ${total == 0 ? 0 : (count * 100 / total).round()}%',
+                style: const TextStyle(color: Colors.blueGrey, fontSize: 11),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _criterionInsightsTable(List<Map<String, dynamic>> criteria) =>
+      Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: const Color(0xFFE2E8F0)),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          children: [
+            Container(
+              color: const Color(0xFFF8FAFC),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: const Row(
+                children: [
+                  Expanded(
+                    flex: 3,
+                    child: Text('CRITERION', style: _progressHeaderStyle),
+                  ),
+                  Expanded(
+                    child: Text(
+                      'EXCELLENT',
+                      textAlign: TextAlign.center,
+                      style: _progressHeaderStyle,
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      'GOOD',
+                      textAlign: TextAlign.center,
+                      style: _progressHeaderStyle,
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      'SATISFACTORY',
+                      textAlign: TextAlign.center,
+                      style: _progressHeaderStyle,
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      'NEEDS SUPPORT',
+                      textAlign: TextAlign.center,
+                      style: _progressHeaderStyle,
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      'MISSING',
+                      textAlign: TextAlign.center,
+                      style: _progressHeaderStyle,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            ...criteria.map((criterion) {
+              final raw = criterion['distribution'];
+              final values = raw is Map
+                  ? raw.map((key, value) => MapEntry('$key', value))
+                  : <String, dynamic>{};
+              return Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 14,
+                ),
+                decoration: const BoxDecoration(
+                  border: Border(top: BorderSide(color: Color(0xFFF1F5F9))),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: Text(
+                        criterion['label']?.toString() ?? 'Criterion',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    _insightNumber(_intValue(values['Excellent'])),
+                    _insightNumber(_intValue(values['Good'])),
+                    _insightNumber(_intValue(values['Satisfactory'])),
+                    _insightNumber(
+                      _intValue(criterion['needsSupportStudents']),
+                      warning: _intValue(criterion['needsSupportStudents']) > 0,
+                    ),
+                    _insightNumber(
+                      _intValue(criterion['missingStudents']),
+                      warning: _intValue(criterion['missingStudents']) > 0,
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ],
+        ),
+      );
+
+  Widget _insightNumber(int value, {bool warning = false}) => Expanded(
+    child: Text(
+      '$value',
+      textAlign: TextAlign.center,
+      style: TextStyle(
+        fontWeight: FontWeight.w800,
+        color: warning ? const Color(0xFFD97706) : const Color(0xFF334155),
+      ),
+    ),
+  );
+
+  Widget _criterionInsightCard(Map<String, dynamic> criterion) {
+    final raw = criterion['distribution'];
+    final values = raw is Map
+        ? raw.map((key, value) => MapEntry('$key', value))
+        : <String, dynamic>{};
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              criterion['label']?.toString() ?? 'Criterion',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 12,
+              runSpacing: 6,
+              children: [
+                for (final rating in _ratings.where(
+                  (value) => value != 'Not observed',
+                ))
+                  Text('$rating ${_intValue(values[rating])}'),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '${_intValue(criterion['needsSupportStudents'])} need support · ${_intValue(criterion['missingStudents'])} missing observations',
+              style: const TextStyle(color: Colors.blueGrey, fontSize: 12),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Color _ratingColor(String rating) => switch (rating) {
+    'Excellent' => const Color(0xFF00897B),
+    'Good' => const Color(0xFF3B82F6),
+    'Satisfactory' => const Color(0xFFD97706),
+    _ => const Color(0xFFDC2626),
+  };
+
+  Widget _progressTable(
+    List<_EvaluationProgressGroup> groups, {
+    required bool byStaff,
+  }) => Container(
+    decoration: BoxDecoration(
+      color: Colors.white,
+      border: Border.all(color: const Color(0xFFE2E8F0)),
+      borderRadius: BorderRadius.circular(12),
+    ),
+    clipBehavior: Clip.antiAlias,
+    child: Column(
+      children: [
+        Container(
+          color: const Color(0xFFF8FAFC),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+          child: Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: Text(
+                  byStaff ? 'STAFF' : 'CLASS',
+                  style: _progressHeaderStyle,
+                ),
+              ),
+              const Expanded(
+                child: Text(
+                  'ASSIGNED',
+                  textAlign: TextAlign.center,
+                  style: _progressHeaderStyle,
+                ),
+              ),
+              const Expanded(
+                child: Text(
+                  'COMPLETED',
+                  textAlign: TextAlign.center,
+                  style: _progressHeaderStyle,
+                ),
+              ),
+              const Expanded(
+                child: Text(
+                  'REMAINING',
+                  textAlign: TextAlign.center,
+                  style: _progressHeaderStyle,
+                ),
+              ),
+              const Expanded(
+                flex: 3,
+                child: Text('PROGRESS', style: _progressHeaderStyle),
+              ),
+            ],
+          ),
+        ),
+        ...groups.map(
+          (group) => Container(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: Color(0xFFF1F5F9))),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        group.name,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      Text(
+                        '${group.assignmentCount} assignment${group.assignmentCount == 1 ? '' : 's'}',
+                        style: const TextStyle(
+                          color: Colors.blueGrey,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                _progressNumber(group.assignedEvaluations),
+                _progressNumber(
+                  group.completedEvaluations,
+                  color: const Color(0xFF00897B),
+                ),
+                _progressNumber(
+                  group.remainingEvaluations,
+                  color: group.remainingEvaluations > 0
+                      ? const Color(0xFFD97706)
+                      : const Color(0xFF94A3B8),
+                ),
+                Expanded(flex: 3, child: _progressBar(group)),
+              ],
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _progressNumber(int value, {Color color = const Color(0xFF334155)}) =>
+      Expanded(
+        child: Text(
+          '$value',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: color, fontWeight: FontWeight.w800),
+        ),
+      );
+
+  Widget _progressCard(_EvaluationProgressGroup group) => Card(
+    margin: const EdgeInsets.only(bottom: 10),
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(group.name, style: const TextStyle(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 3),
+          Text(
+            '${group.completedEvaluations} completed · ${group.remainingEvaluations} remaining · ${group.assignmentCount} assignment${group.assignmentCount == 1 ? '' : 's'}',
+            style: const TextStyle(color: Colors.blueGrey, fontSize: 12),
+          ),
+          const SizedBox(height: 10),
+          _progressBar(group),
+        ],
+      ),
+    ),
+  );
+
+  Widget _progressBar(_EvaluationProgressGroup group) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      ClipRRect(
+        borderRadius: BorderRadius.circular(999),
+        child: LinearProgressIndicator(
+          value: group.completedPercent / 100,
+          minHeight: 7,
+          backgroundColor: const Color(0xFFFDECC8),
+          color: const Color(0xFF009688),
+        ),
+      ),
+      const SizedBox(height: 4),
+      Text(
+        '${group.completedPercent}% done · ${group.remainingPercent}% remaining',
+        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+      ),
+    ],
+  );
+
+  static const _progressHeaderStyle = TextStyle(
+    color: Color(0xFF64748B),
+    fontSize: 10,
+    fontWeight: FontWeight.w800,
+    letterSpacing: .35,
+  );
+
+  _EvaluationProgressGroup _evaluationProgress(
+    List<Map<String, dynamic>> rows,
+  ) => _aggregateEvaluationProgress('All evaluations', rows);
+
+  List<_EvaluationProgressGroup> _groupEvaluationProgress(
+    List<Map<String, dynamic>> rows, {
+    required bool byStaff,
+  }) {
+    final grouped = <String, List<Map<String, dynamic>>>{};
+    final names = <String, String>{};
+    for (final row in rows) {
+      final keyValue = byStaff ? row['staffId'] : row['streamId'];
+      final nameValue = byStaff ? row['staffName'] : row['streamName'];
+      final name = nameValue?.toString().trim();
+      final key = keyValue?.toString().trim();
+      final resolvedName = name == null || name.isEmpty
+          ? (byStaff ? 'Unassigned staff' : 'Unassigned class')
+          : name;
+      final resolvedKey = key == null || key.isEmpty ? resolvedName : key;
+      grouped.putIfAbsent(resolvedKey, () => []).add(row);
+      names[resolvedKey] = resolvedName;
+    }
+    final result =
+        grouped.entries
+            .map(
+              (entry) =>
+                  _aggregateEvaluationProgress(names[entry.key]!, entry.value),
+            )
+            .toList()
+          ..sort((left, right) {
+            final pending = right.remainingEvaluations.compareTo(
+              left.remainingEvaluations,
+            );
+            return pending != 0 ? pending : left.name.compareTo(right.name);
+          });
+    return result;
+  }
+
+  _EvaluationProgressGroup _aggregateEvaluationProgress(
+    String name,
+    List<Map<String, dynamic>> rows,
+  ) {
+    var assigned = 0;
+    var completed = 0;
+    var remaining = 0;
+    var rated = 0;
+    var required = 0;
+    for (final row in rows) {
+      final students = _intValue(row['studentCount']);
+      final rowRequired = _intValue(row['requiredCount']) > 0
+          ? _intValue(row['requiredCount'])
+          : students * _criteria.length;
+      final percent = _intValue(row['completionPercent']).clamp(0, 100);
+      final rowRated = row.containsKey('ratedCount')
+          ? _intValue(row['ratedCount']).clamp(0, rowRequired)
+          : (rowRequired * percent / 100).round();
+      final rowCompleted = row.containsKey('completedStudentCount')
+          ? _intValue(row['completedStudentCount']).clamp(0, students)
+          : row['status'] == 'SUBMITTED'
+          ? students
+          : (students * percent / 100).floor();
+      final rowRemaining = row.containsKey('remainingStudentCount')
+          ? _intValue(row['remainingStudentCount']).clamp(0, students)
+          : students - rowCompleted;
+      assigned += students;
+      completed += rowCompleted;
+      remaining += rowRemaining;
+      rated += rowRated;
+      required += rowRequired;
+    }
+    return _EvaluationProgressGroup(
+      name: name,
+      assignmentCount: rows.length,
+      assignedEvaluations: assigned,
+      completedEvaluations: completed,
+      remainingEvaluations: remaining,
+      ratedCriteria: rated,
+      requiredCriteria: required,
+    );
+  }
+
+  int _intValue(dynamic value) =>
+      value is num ? value.toInt() : int.tryParse(value?.toString() ?? '') ?? 0;
 
   Widget _assignmentsView(
     List<Map<String, dynamic>> rows, {
@@ -767,11 +1625,13 @@ class _TermEvaluationWorkflowScreenState
                   assignment['status'].toString().replaceAll('_', ' '),
                 ),
               ),
-              if (own && !submitted)
+              if (own && !submitted && _teacherEntryOpen)
                 FilledButton(
                   onPressed: () => _openAssignment(assignment),
                   child: Text(progress == 0 ? 'Start' : 'Continue'),
-                ),
+                )
+              else if (own && !submitted)
+                const Chip(label: Text('Entry locked')),
               if (own &&
                   submitted &&
                   assignment['assignmentType'] == 'CLASS_TEACHER')
