@@ -252,7 +252,19 @@ class FakeStudentsRepository implements StudentsRepository {
     required String description,
     String? changeReason,
     int? approverId,
-  }) async => adjustment.copyWith(amount: amount, description: description);
+  }) async => adjustment.copyWith(
+    amount: amount,
+    description: description,
+    status:
+        adjustment.status == StudentFeeAdjustmentStatus.draft &&
+            approverId != null
+        ? StudentFeeAdjustmentStatus.pending
+        : adjustment.status,
+    assignedApproverId: approverId ?? adjustment.assignedApproverId,
+    assignedApproverName: approverId == null
+        ? adjustment.assignedApproverName
+        : 'Efua Nyarko',
+  );
 
   @override
   Future<StudentFeeAdjustment> cancelFeeAdjustment({

@@ -20,6 +20,7 @@ class SchoolDetailScreen extends StatefulWidget {
     required this.onBack,
     required this.onViewAccountManager,
     required this.canViewAccountManagerDetails,
+    required this.canManageSchoolLifecycle,
   });
 
   final ManagedSchool school;
@@ -30,6 +31,7 @@ class SchoolDetailScreen extends StatefulWidget {
   final VoidCallback onBack;
   final ValueChanged<String> onViewAccountManager;
   final bool canViewAccountManagerDetails;
+  final bool canManageSchoolLifecycle;
 
   @override
   State<SchoolDetailScreen> createState() => _SchoolDetailScreenState();
@@ -403,7 +405,8 @@ class _SchoolDetailScreenState extends State<SchoolDetailScreen> {
             statusLabel: status.$1,
             statusColor: status.$2,
             actions: [
-              if (school.status == SchoolStatus.pendingApproval)
+              if (widget.canManageSchoolLifecycle &&
+                  school.status == SchoolStatus.pendingApproval)
                 FilledButton.icon(
                   onPressed: actionsDisabled ? null : _approveSchool,
                   icon: _approvingSchool
@@ -420,18 +423,20 @@ class _SchoolDetailScreenState extends State<SchoolDetailScreen> {
                     _approvingSchool ? 'Approving...' : 'Approve school',
                   ),
                 ),
-              OutlinedButton.icon(
-                onPressed: actionsDisabled ? null : _openReassignDialog,
-                icon: _preparingReassign
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.swap_horiz_rounded, size: 18),
-                label: Text(_preparingReassign ? 'Preparing...' : 'Reassign'),
-              ),
-              if (school.status != SchoolStatus.suspended &&
+              if (widget.canManageSchoolLifecycle)
+                OutlinedButton.icon(
+                  onPressed: actionsDisabled ? null : _openReassignDialog,
+                  icon: _preparingReassign
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.swap_horiz_rounded, size: 18),
+                  label: Text(_preparingReassign ? 'Preparing...' : 'Reassign'),
+                ),
+              if (widget.canManageSchoolLifecycle &&
+                  school.status != SchoolStatus.suspended &&
                   school.status != SchoolStatus.deleted)
                 OutlinedButton.icon(
                   onPressed: actionsDisabled ? null : _suspendSchool,
@@ -445,14 +450,18 @@ class _SchoolDetailScreenState extends State<SchoolDetailScreen> {
                           height: 16,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Icon(Icons.pause_circle_outline_rounded, size: 18),
+                      : const Icon(
+                          Icons.pause_circle_outline_rounded,
+                          size: 18,
+                        ),
                   label: Text(
                     changingStatus == SchoolStatus.suspended
                         ? 'Suspending...'
                         : 'Suspend',
                   ),
                 ),
-              if (school.status != SchoolStatus.deleted)
+              if (widget.canManageSchoolLifecycle &&
+                  school.status != SchoolStatus.deleted)
                 OutlinedButton.icon(
                   onPressed: actionsDisabled ? null : _deleteSchool,
                   style: OutlinedButton.styleFrom(
@@ -676,7 +685,9 @@ class _AccountManagerDetailScreenState
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Could not update account manager. ${_actionError(error)}'),
+          content: Text(
+            'Could not update account manager. ${_actionError(error)}',
+          ),
         ),
       );
     } finally {
@@ -709,7 +720,9 @@ class _AccountManagerDetailScreenState
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Could not delete account manager. ${_actionError(error)}'),
+          content: Text(
+            'Could not delete account manager. ${_actionError(error)}',
+          ),
         ),
       );
       setState(() => _busy = false);
@@ -4200,8 +4213,8 @@ class _ReassignTransferPreview extends StatelessWidget {
                 ? 'Search and select below'
                 : selectedNewManager,
             icon: Icons.person_add_alt_1_rounded,
-            highlighted: selectedNewManager != null &&
-                selectedNewManager.isNotEmpty,
+            highlighted:
+                selectedNewManager != null && selectedNewManager.isNotEmpty,
           );
           final arrow = Container(
             width: 42,

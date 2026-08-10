@@ -9,10 +9,12 @@ class HeadmasterTermClosureScreen extends StatefulWidget {
     required this.schoolId,
     required this.repository,
     this.actorUserId,
+    this.onTermTransitioned,
   });
   final String schoolId;
   final HeadmasterTermClosureRepository repository;
   final int? actorUserId;
+  final VoidCallback? onTermTransitioned;
   @override
   State<HeadmasterTermClosureScreen> createState() => _State();
 }
@@ -171,11 +173,11 @@ class _State extends State<HeadmasterTermClosureScreen> {
               children: [
                 _transitionValue(
                   'Operational start',
-                  '${p['operationalStartDate'] ?? '—'}',
+                  _displayDate(p['operationalStartDate']),
                 ),
                 _transitionValue(
                   'Teaching begins',
-                  '${p['teachingStartDate'] ?? '—'}',
+                  _displayDate(p['teachingStartDate']),
                 ),
                 _transitionValue('Students', '${p['students'] ?? 0}'),
                 _transitionValue(
@@ -382,7 +384,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Teaching begins ${data?.transitionPreview['teachingStartDate'] ?? 'on the configured date'}. Academic activity before then remains available with a warning and mandatory reason.',
+              'Teaching begins ${_displayDate(data?.transitionPreview['teachingStartDate'])}. Academic activity before then remains available with a warning and mandatory reason.',
             ),
             const SizedBox(height: 8),
             const Text(
@@ -420,6 +422,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
       );
       if (mounted && data?.transition.isNotEmpty == true) {
         await _showTransitionComplete();
+        widget.onTermTransitioned?.call();
       }
     }
   }
@@ -538,4 +541,20 @@ class _State extends State<HeadmasterTermClosureScreen> {
       style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 12),
     ),
   );
+
+  String _displayDate(dynamic value) {
+    if (value == null) return '—';
+    if (value is List && value.length >= 3) {
+      final year = int.tryParse('${value[0]}');
+      final month = int.tryParse('${value[1]}');
+      final day = int.tryParse('${value[2]}');
+      if (year != null && month != null && day != null) {
+        return '${year.toString().padLeft(4, '0')}-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}';
+      }
+    }
+    final text = '$value';
+    final parsed = DateTime.tryParse(text);
+    if (parsed == null) return text;
+    return '${parsed.year.toString().padLeft(4, '0')}-${parsed.month.toString().padLeft(2, '0')}-${parsed.day.toString().padLeft(2, '0')}';
+  }
 }

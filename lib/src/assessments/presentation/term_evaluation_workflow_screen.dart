@@ -516,7 +516,9 @@ class _TermEvaluationWorkflowScreenState
   );
 
   Widget _progressDashboard(List<Map<String, dynamic>> rows) {
-    if (_managerView == 'Insights') return _insightsDashboard();
+    if (_managerView == 'Insights') {
+      return _insightsDashboard(_evaluationProgress(rows));
+    }
     final byStaff = _managerView == 'By staff';
     final groups = _groupEvaluationProgress(rows, byStaff: byStaff);
     return Column(
@@ -558,7 +560,7 @@ class _TermEvaluationWorkflowScreenState
     );
   }
 
-  Widget _insightsDashboard() {
+  Widget _insightsDashboard(_EvaluationProgressGroup progress) {
     final raw = _data?['insights'];
     final insights = raw is Map
         ? raw.map((key, value) => MapEntry(key.toString(), value))
@@ -582,9 +584,31 @@ class _TermEvaluationWorkflowScreenState
         ),
         const SizedBox(height: 4),
         const Text(
-          'School-wide patterns from combined student results. Individual teacher ratings are not shown.',
+          'School-wide patterns from submitted evaluations. Individual teacher ratings are not shown.',
           style: TextStyle(color: Colors.blueGrey),
         ),
+        if (progress.remainingEvaluations > 0) ...[
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF7E6),
+              border: Border.all(color: const Color(0xFFFFD58A)),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              'Preliminary analysis: ${progress.completedEvaluations} of '
+              '${progress.assignedEvaluations} assigned evaluations are submitted. '
+              'Results may change as the remaining ${progress.remainingEvaluations} '
+              'are completed.',
+              style: const TextStyle(
+                color: Color(0xFF8A5A00),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
         const SizedBox(height: 16),
         if (totalStudents == 0)
           const Card(
@@ -606,7 +630,7 @@ class _TermEvaluationWorkflowScreenState
                 Icons.groups_outlined,
               ),
               _insightMetric(
-                'Observation completeness',
+                'Observed criteria in submitted work',
                 '${_intValue(insights['observationCompletenessPercent'])}%',
                 Icons.fact_check_outlined,
               ),

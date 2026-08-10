@@ -109,6 +109,7 @@ class AttendanceTermHistory {
 class AttendanceDashboardOverview {
   const AttendanceDashboardOverview({
     required this.currentDate,
+    required this.schoolDay,
     required this.today,
     required this.week,
     required this.month,
@@ -118,6 +119,7 @@ class AttendanceDashboardOverview {
   });
 
   final DateTime currentDate;
+  final bool schoolDay;
   final AttendancePeriodSummary today;
   final AttendancePeriodSummary week;
   final AttendancePeriodSummary month;

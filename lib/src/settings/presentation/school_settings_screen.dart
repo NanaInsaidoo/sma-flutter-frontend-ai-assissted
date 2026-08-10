@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../../classes/presentation/class_stream_settings_screen.dart';
 import '../../theme/app_theme.dart';
+import 'academic_term_management_screen.dart';
 
-enum _SchoolSettingPage { hub, streamCapacity, classTeachers }
+enum _SchoolSettingPage { hub, streamCapacity, classTeachers, academicTerms }
 
 class SchoolSettingsScreen extends StatefulWidget {
   const SchoolSettingsScreen({
@@ -36,6 +37,14 @@ class _SchoolSettingsScreenState extends State<SchoolSettingsScreen> {
     }
     if (_page == _SchoolSettingPage.classTeachers) {
       return ClassTeacherSettingsScreen(
+        customSchoolId: widget.customSchoolId,
+        accessToken: widget.accessToken,
+        onRefreshAccessToken: widget.onRefreshAccessToken,
+        onBack: () => setState(() => _page = _SchoolSettingPage.hub),
+      );
+    }
+    if (_page == _SchoolSettingPage.academicTerms) {
+      return AcademicTermManagementScreen(
         customSchoolId: widget.customSchoolId,
         accessToken: widget.accessToken,
         onRefreshAccessToken: widget.onRefreshAccessToken,
@@ -105,14 +114,15 @@ class _SchoolSettingsScreenState extends State<SchoolSettingsScreen> {
                 title: 'Academic Term Settings',
                 description:
                     'Manage academic years, active term dates, school days, holidays, and term rollover.',
-                status: 'Planned',
-                actionLabel: 'Review',
+                status: 'Available',
+                actionLabel: 'Manage',
                 summary: const [
-                  _SettingSummary(label: 'Current term', value: 'From API'),
-                  _SettingSummary(label: 'School days', value: 'Planned'),
-                  _SettingSummary(label: 'Rollover', value: 'Planned'),
+                  _SettingSummary(label: 'Term history', value: 'Live data'),
+                  _SettingSummary(label: 'Office opening', value: 'Supported'),
+                  _SettingSummary(label: 'Next term', value: 'Prepare safely'),
                 ],
-                onTap: () => _showComingSoon('Academic Term Settings'),
+                onTap: () =>
+                    setState(() => _page = _SchoolSettingPage.academicTerms),
               ),
               _SettingsTile(
                 icon: Icons.schedule_rounded,

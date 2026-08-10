@@ -132,7 +132,7 @@ class _CompleteAssessmentWorkflowState
   @override
   void initState() {
     super.initState();
-    if (widget.openFinalReportsOnLoad) {
+    if (widget.openFinalReportsOnLoad && _evaluationManager) {
       _route = _Route.finalReports;
     }
     _assessmentApi = AssessmentApiClient(
@@ -146,7 +146,7 @@ class _CompleteAssessmentWorkflowState
             ),
           )
         : _assessmentApi.getFormSetup(widget.customSchoolId);
-    if (widget.openFinalReportsOnLoad) {
+    if (widget.openFinalReportsOnLoad && _evaluationManager) {
       _loadFinalReportOverview();
     } else {
       _loadLiveAssessments();
@@ -199,9 +199,16 @@ class _CompleteAssessmentWorkflowState
       if (!mounted) return;
       setState(() {
         _selectedClass = stream.label;
+        final selectedId = _selectedAssessment?.id;
         _assessments
           ..clear()
           ..addAll(values.map((item) => _assessmentFromApi(item, setup)));
+        if (selectedId != null) {
+          final refreshed = _assessments.where(
+            (assessment) => assessment.id == selectedId,
+          );
+          if (refreshed.isNotEmpty) _selectedAssessment = refreshed.first;
+        }
         _loadingAssessments = false;
       });
     } on AssessmentApiException catch (error) {
@@ -606,6 +613,10 @@ class _CompleteAssessmentWorkflowState
         }
         _open(_Route.assessments);
       case 'Generate Report Cards':
+        if (!_evaluationManager) {
+          _notice('Only authorized academic managers can generate report cards.');
+          return;
+        }
         if (widget.customSchoolId.trim().isNotEmpty) {
           await _loadLiveReportReadiness(setup, result);
           if (!mounted) return;
@@ -625,6 +636,10 @@ class _CompleteAssessmentWorkflowState
   }
 
   Future<void> _openFinalReportManagement() async {
+    if (!_evaluationManager) {
+      _notice('Final Report Management is available to authorized academic managers only.');
+      return;
+    }
     _open(_Route.finalReports);
     await _loadFinalReportOverview();
   }
@@ -754,6 +769,25 @@ class _CompleteAssessmentWorkflowState
       }
       final streams = await Future.wait(
         setup.streams.map((stream) async {
+          if (stream.studentCount <= 0) {
+            return _FinalReportStream(
+              stream.id,
+              stream.label,
+              0,
+              0,
+              0,
+              0,
+              0,
+              pendingEvaluationsByStream[stream.id] ?? 0,
+              false,
+              evaluationAssignmentsByStream[stream.id] ?? 0,
+              0,
+              0,
+              0,
+              0,
+              0,
+            );
+          }
           try {
             final response = await _assessmentApi.getStreamReportReadiness(
               customSchoolId: widget.customSchoolId,
@@ -1285,22 +1319,24 @@ class _CompleteAssessmentWorkflowState
                       AppColors.amber,
                       _openTermEvaluations,
                     ),
-                  _actionCard(
-                    width,
-                    'Generate Report Cards',
-                    'Review readiness and publish',
-                    Icons.description_outlined,
-                    AppColors.purple,
-                    () => _selectClass('Generate Report Cards'),
-                  ),
-                  _actionCard(
-                    width,
-                    'Final Reports',
-                    'Manage reports across grades and streams',
-                    Icons.inventory_2_outlined,
-                    AppColors.green,
-                    _openFinalReportManagement,
-                  ),
+                  if (_evaluationManager) ...[
+                    _actionCard(
+                      width,
+                      'Generate Report Cards',
+                      'Review readiness and publish',
+                      Icons.description_outlined,
+                      AppColors.purple,
+                      () => _selectClass('Generate Report Cards'),
+                    ),
+                    _actionCard(
+                      width,
+                      'Final Reports',
+                      'Manage reports across grades and streams',
+                      Icons.inventory_2_outlined,
+                      AppColors.green,
+                      _openFinalReportManagement,
+                    ),
+                  ],
                 ],
               );
             },
@@ -5210,6 +5246,7 @@ class _CompleteAssessmentWorkflowState
       ),
     );
     if (applied != true || !mounted) return;
+    final changedTargets = <_StudentRecord>[];
     setState(() {
       for (final student in targets) {
         final current =
@@ -5221,10 +5258,47 @@ class _CompleteAssessmentWorkflowState
           promotedTo: grade!,
           ignoreHeadTeacherRemark: current.ignoreHeadTeacherRemark,
         );
+        changedTargets.add(student);
         _touchReportAudit(student);
       }
     });
-    _notice('Progression decision updated for ${targets.length} student(s).');
+    if (changedTargets.isEmpty) {
+      _notice('No progression decisions were changed.');
+      return;
+    }
+    if (widget.customSchoolId.trim().isNotEmpty) {
+      try {
+        final setup = await _assessmentFormSetup;
+        await Future.wait(
+          changedTargets.map((student) {
+            final remarks = _reportRemarks[student.id]!;
+            return _assessmentApi.saveReportCardRemarks(
+              submittedBy: widget.viewerName,
+              body: {
+                'customStudentId': student.id,
+                'customSchoolId': widget.customSchoolId,
+                'termId': setup.termId,
+                'classTeacherRemarks': remarks.classTeacherRemarks,
+                'headTeacherRemarks': remarks.headTeacherRemarks,
+                'ignoreHeadTeacherRemarks': remarks.ignoreHeadTeacherRemark,
+                'classTeacherName': widget.viewerName,
+                'classTeacherId': widget.viewerName,
+                'promotedTo': remarks.promotedTo,
+              },
+            );
+          }),
+        );
+        await _loadLiveReportReadiness(setup, _selectedClass);
+      } on AssessmentApiException catch (error) {
+        if (!mounted) return;
+        _notice(error.message);
+        return;
+      }
+    }
+    if (!mounted) return;
+    _notice(
+      'Progression decision updated for ${changedTargets.length} student(s).',
+    );
   }
 
   // ignore: unused_element
@@ -10149,7 +10223,7 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
                       'Hi / Lo',
                       high == null
                           ? '—'
-                          : '${high.toStringAsFixed(0)} / ${low!.toStringAsFixed(0)}',
+                          : '${high.toStringAsFixed(1)} / ${low!.toStringAsFixed(1)}',
                       const Color(0xFF111827),
                     ),
                   ];

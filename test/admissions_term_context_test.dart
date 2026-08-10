@@ -15,6 +15,22 @@ void main() {
     expect(term.endDate, '2026-07-31');
   });
 
+  test('uses operational opening and closing dates for the active term', () {
+    final term = AdmissionTermContext.fromJson({
+      'id': 4,
+      'academicYear': {'name': '2026-2027'},
+      'termType': {'name': 'Second Term'},
+      'startDate': [2026, 12, 19],
+      'endDate': [2027, 4, 16],
+      'operationalStartDate': [2026, 8, 9],
+      'teachingStartDate': [2027, 1, 11],
+      'closingDate': [2027, 4, 16],
+    });
+
+    expect(term.startDate, '2026-08-09');
+    expect(term.endDate, '2027-04-16');
+  });
+
   test('maps full student details used by the household dashboard', () {
     final student = AdmissionStudent.fromJson({
       'customStudentId': 'STU-ABC-1234',

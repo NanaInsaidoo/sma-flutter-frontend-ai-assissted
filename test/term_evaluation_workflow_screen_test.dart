@@ -788,9 +788,13 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(const ValueKey('evaluation-insights')), findsOneWidget);
+      expect(
+        find.textContaining('Preliminary analysis: 7 of 14 assigned evaluations'),
+        findsOneWidget,
+      );
       expect(find.text('Students analyzed'), findsOneWidget);
       expect(find.text('4 of 5'), findsOneWidget);
-      expect(find.text('Observation completeness'), findsOneWidget);
+      expect(find.text('Observed criteria in submitted work'), findsOneWidget);
       expect(find.text('80%'), findsOneWidget);
       expect(find.text('Homework habits'), findsOneWidget);
       expect(find.text('NEEDS SUPPORT'), findsOneWidget);

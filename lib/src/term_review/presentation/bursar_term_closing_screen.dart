@@ -355,8 +355,53 @@ class _State extends State<BursarTermClosingScreen> {
           ],
         ),
         const SizedBox(height: 12),
+        if (data!.teacherRecommendations.isNotEmpty) ...[
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Teacher submissions',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+              if (!locked)
+                TextButton.icon(
+                  onPressed: _copyTeacherRecommendations,
+                  icon: const Icon(Icons.copy_all_outlined),
+                  label: const Text('Copy all to consolidated list'),
+                ),
+            ],
+          ),
+          ...data!.teacherRecommendations.map(
+            (item) => ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.lightbulb_outline),
+              title: Text(
+                '${item['name'] ?? 'Item'} · ${item['category'] ?? 'Uncategorised'}',
+              ),
+              subtitle: Text(
+                '${item['description'] ?? ''}\nQty ${item['quantity'] ?? 1} · ${_gh(double.tryParse('${item['unitPrice']}') ?? 0)} each · ${item['reason'] ?? ''}',
+              ),
+              isThreeLine: true,
+              trailing: locked
+                  ? null
+                  : IconButton(
+                      tooltip: 'Add to consolidated list',
+                      onPressed: () => _copyTeacherRecommendation(item),
+                      icon: const Icon(Icons.add_circle_outline),
+                    ),
+            ),
+          ),
+          const Divider(height: 28),
+          const Text(
+            'Bursar consolidated list',
+            style: TextStyle(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 8),
+        ],
         if (consolidated.isEmpty)
-          const Text('No items have been recommended.')
+          const Text('No consolidated items yet.')
         else
           ...List.generate(consolidated.length, (index) {
             final item = consolidated[index];
@@ -392,6 +437,36 @@ class _State extends State<BursarTermClosingScreen> {
       ],
     ),
   );
+
+  void _copyTeacherRecommendations() {
+    setState(() {
+      for (final item in data!.teacherRecommendations) {
+        _addConsolidatedCopy(item);
+      }
+      recommendations = true;
+    });
+  }
+
+  void _copyTeacherRecommendation(Map<String, dynamic> item) {
+    setState(() {
+      _addConsolidatedCopy(item);
+      recommendations = true;
+    });
+  }
+
+  void _addConsolidatedCopy(Map<String, dynamic> source) {
+    final copy = Map<String, dynamic>.from(source);
+    final duplicate = consolidated.any(
+      (item) =>
+          '${item['name']}'.trim().toLowerCase() ==
+              '${copy['name']}'.trim().toLowerCase() &&
+          '${item['category']}'.trim().toLowerCase() ==
+              '${copy['category']}'.trim().toLowerCase() &&
+          '${item['description']}'.trim().toLowerCase() ==
+              '${copy['description']}'.trim().toLowerCase(),
+    );
+    if (!duplicate) consolidated.add(copy);
+  }
 
   Future<void> _editItem(int? index) async {
     final old = index == null ? <String, dynamic>{} : consolidated[index];

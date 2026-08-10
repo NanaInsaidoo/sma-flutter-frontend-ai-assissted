@@ -174,8 +174,10 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
                   ? 0
                   : ((item.present + item.late) / item.totalStudents) * 100,
               pending:
-                  !item.submitted ||
-                  item.present + item.absent + item.late < item.totalStudents,
+                  (_overview?.schoolDay ?? true) &&
+                  (!item.submitted ||
+                      item.present + item.absent + item.late <
+                          item.totalStudents),
             ),
           )
           .toList();

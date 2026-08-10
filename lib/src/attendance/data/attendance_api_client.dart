@@ -89,6 +89,7 @@ class AttendanceApiClient implements AttendanceRepository {
 
     return AttendanceDashboardOverview(
       currentDate: _dateTime(json['currentDate']) ?? DateTime.now(),
+      schoolDay: json['schoolDay'] != false,
       today: AttendancePeriodSummary(
         attendanceRate: _decimal(todayStats['attendanceRate']),
         present: _integer(todayStats['present']),

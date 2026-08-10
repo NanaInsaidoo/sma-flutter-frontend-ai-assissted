@@ -180,7 +180,9 @@ class ApiDashboardRepository implements DashboardRepository {
             () => _getTermEvents(schoolId),
           ) ??
           <Map<String, dynamic>>[];
-      final schoolEvents = _buildSchoolEvents(termEvents);
+      final schoolEvents = _buildSchoolEvents(
+        termEvents,
+      ).where((event) => event.academicTermId == term.id).toList();
       final totalStudents = _integer(statistics['totalStudents']);
       final activeClasses = _integer(statistics['totalActiveClasses']);
       final totalClasses = _integer(statistics['totalClasses']);
@@ -189,10 +191,12 @@ class ApiDashboardRepository implements DashboardRepository {
           : ((attendance.today.present + attendance.today.late) /
                     attendance.today.totalStudents) *
                 100;
-      final streamsPending = attendance.classes.where((item) {
-        final recorded = item.present + item.absent + item.late;
-        return !item.submitted || recorded < item.totalStudents;
-      }).length;
+      final streamsPending = attendance.schoolDay
+          ? attendance.classes.where((item) {
+              final recorded = item.present + item.absent + item.late;
+              return !item.submitted || recorded < item.totalStudents;
+            }).length
+          : 0;
 
       return DashboardSnapshot(
         schoolName: schoolName?.trim().isNotEmpty == true
@@ -246,13 +250,13 @@ class ApiDashboardRepository implements DashboardRepository {
         admissions: _buildAdmissionGroups(admissions),
         alerts: [
           ...attendance.alerts.map(
-              (alert) => SchoolAlert(
-                title: alert.title,
-                message: alert.message,
-                context: 'Attendance',
-                level: _alertLevel(alert.severity),
-              ),
+            (alert) => SchoolAlert(
+              title: alert.title,
+              message: alert.message,
+              context: 'Attendance',
+              level: _alertLevel(alert.severity),
             ),
+          ),
           if (paymentReversals.any(
             (item) =>
                 item.status == 'PENDING_APPROVAL' && item.termId == term.id,

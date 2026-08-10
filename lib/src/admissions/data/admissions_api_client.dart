@@ -887,8 +887,11 @@ class AdmissionTermContext {
       id: _intValue(json['id']),
       academicYear: _text(academicYear?['name']),
       term: _text(termType?['name']),
-      startDate: _dateText(json['startDate']),
-      endDate: _dateText(json['endDate']),
+      // Vacation operations belong to the new term. Admissions, fees and the
+      // shared term header therefore begin at the operational opening date,
+      // while older records fall back to the legacy start/end fields.
+      startDate: _dateText(json['operationalStartDate'] ?? json['startDate']),
+      endDate: _dateText(json['closingDate'] ?? json['endDate']),
     );
     if (result.startDate.isEmpty || result.endDate.isEmpty) {
       throw const AdmissionsApiException(

@@ -265,6 +265,69 @@ void main() {
     expect(find.text('Pending'), findsWidgets);
   });
 
+  testWidgets('saved draft can later be submitted with an approver', (
+    tester,
+  ) async {
+    await pumpStudents(tester);
+
+    await tester.tap(find.byKey(const Key('student-row-STU-FA1BC0-9043')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('student-tab-fees')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('create-fee-adjustment')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('adjustment-fee-item')));
+    await tester.pumpAndSettle();
+    final tuitionOption = find.byKey(const Key('adjustment-fee-option-501'));
+    await tester.ensureVisible(tuitionOption);
+    await tester.tap(tuitionOption);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('adjustment-amount')), '35');
+    await tester.enterText(
+      find.byKey(const Key('adjustment-reason')),
+      'Draft hardship support request',
+    );
+    final processing = find.byKey(const Key('adjustment-processing'));
+    await tester.ensureVisible(processing);
+    await tester.tap(processing);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save as draft').last);
+    await tester.pumpAndSettle();
+    final create = find.byKey(const Key('save-fee-adjustment'));
+    await tester.ensureVisible(create);
+    await tester.tap(create);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Draft hardship support request'), findsWidgets);
+    final draftMenu = find.byKey(const Key('adjustment-menu-ADJ-SERVER-1'));
+    await tester.ensureVisible(draftMenu);
+    await tester.tap(draftMenu);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Edit').last);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('adjustment-processing')), findsOneWidget);
+
+    final draftProcessing = find.byKey(const Key('adjustment-processing'));
+    await tester.ensureVisible(draftProcessing);
+    await tester.tap(draftProcessing);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Submit for approval').last);
+    await tester.pumpAndSettle();
+    final approver = find.byKey(const Key('adjustment-approver'));
+    await tester.ensureVisible(approver);
+    await tester.tap(approver);
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('Efua Nyarko').last);
+    await tester.pumpAndSettle();
+    final submit = find.byKey(const Key('save-fee-adjustment'));
+    await tester.ensureVisible(submit);
+    await tester.tap(submit);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Pending'), findsWidgets);
+  });
+
   testWidgets('approved adjustments cannot be mutated from student profile', (
     tester,
   ) async {

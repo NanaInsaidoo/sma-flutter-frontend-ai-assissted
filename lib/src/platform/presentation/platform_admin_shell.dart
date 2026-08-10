@@ -298,13 +298,15 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
                     onViewAccountManager: _openManagerByName,
                     canViewAccountManagerDetails:
                         widget.role.canManageAccountManagers,
+                    canManageSchoolLifecycle:
+                        widget.role.canManageSchoolLifecycle,
                   )
                 : _selectedManager != null
                 ? AccountManagerDetailScreen(
                     manager: _selectedManager!,
                     schools: data.schools,
                     repository: widget.repository,
-                  onBack: () => setState(() => _selectedManager = null),
+                    onBack: () => setState(() => _selectedManager = null),
                     onManagerUpdated: (manager) {
                       setState(() => _selectedManager = manager);
                       widget.onRefreshDashboard();
@@ -3694,7 +3696,7 @@ class _SchoolsScreenState extends State<_SchoolsScreen> {
   double _searchOverlayWidth = 340;
   String _region = 'All Regions';
   String _district = 'All Districts';
-  String _status = 'Approved';
+  String _status = 'All Statuses';
   List<String> _lookupRegions = const [];
   Map<String, int> _lookupRegionIds = const {};
   List<String> _lookupDistricts = const [];

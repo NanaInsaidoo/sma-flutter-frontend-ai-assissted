@@ -905,6 +905,7 @@ class _DashboardBody extends StatelessWidget {
           accessToken: accessToken,
           onRefreshAccessToken: onRefreshAccessToken,
         ),
+        onTermTransitioned: onRefresh,
       );
     }
 
@@ -4130,14 +4131,13 @@ class _Sidebar extends StatelessWidget {
                       label: 'Reports',
                       collapsed: collapsed,
                     ),
-                  if (!isBursar)
-                    _SidebarButton(
-                      icon: Icons.event_available_outlined,
-                      label: 'Term Review',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.termReview,
-                      onTap: () => onSelectPage(_SchoolAdminPage.termReview),
-                    ),
+                  _SidebarButton(
+                    icon: Icons.event_available_outlined,
+                    label: 'Term Review',
+                    collapsed: collapsed,
+                    active: selectedPage == _SchoolAdminPage.termReview,
+                    onTap: () => onSelectPage(_SchoolAdminPage.termReview),
+                  ),
                   if (!isBursar && !isTeacher)
                     _SidebarButton(
                       icon: Icons.admin_panel_settings_rounded,

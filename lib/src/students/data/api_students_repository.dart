@@ -253,6 +253,16 @@ class ApiStudentsRepository implements StudentsRepository {
       description: description,
       changeReason: changeReason,
     );
+    if (adjustment.status == StudentFeeAdjustmentStatus.draft &&
+        approverId != null) {
+      updated = await _fees.performFeeAdjustmentAction(
+        customSchoolId: customSchoolId,
+        adjustmentId: id,
+        action: 'SUBMIT',
+        reason: description,
+        approverId: approverId,
+      );
+    }
     if (adjustment.status == StudentFeeAdjustmentStatus.pending &&
         approverId != null &&
         approverId != adjustment.assignedApproverId) {
@@ -555,7 +565,7 @@ class ApiStudentsRepository implements StudentsRepository {
       cityOfBirth: _namedValue(json['cityOfBirth']),
       religion: _namedValue(json['religion']),
       address: _address(json['address']),
-      bloodGroup: '${json['bloodGroup'] ?? ''}',
+      bloodGroup: _namedValue(medical?['bloodGroup']),
       medicalAlerts: _medicalAlerts(medical),
       medicalConditions: _medicalConditions(medical),
       allergies: StudentAllergies(
@@ -816,23 +826,23 @@ List<StudentFeeAdjustment> _feeAdjustments(
             item.adjustmentType.toUpperCase().startsWith('WAIVER:'),
       )
       .map((item) {
-    final type = item.adjustmentType.toUpperCase();
-    return StudentFeeAdjustment(
-      id: '${item.adjustmentId}',
-      feeName: item.feeName.isEmpty ? 'Overall fee account' : item.feeName,
-      type: type.contains('SURCHARGE') || item.amount > 0
-          ? StudentFeeAdjustmentType.surcharge
-          : StudentFeeAdjustmentType.discount,
-      amount: item.amount.abs(),
-      description: item.description,
-      status: _adjustmentStatus(item.status),
-      createdOn:
-          item.createdDate ??
-          (throw const ApiStudentsException(
-            'A fee adjustment is missing its creation date.',
-          )),
-      createdBy: 'School administration',
-    );
+        final type = item.adjustmentType.toUpperCase();
+        return StudentFeeAdjustment(
+          id: '${item.adjustmentId}',
+          feeName: item.feeName.isEmpty ? 'Overall fee account' : item.feeName,
+          type: type.contains('SURCHARGE') || item.amount > 0
+              ? StudentFeeAdjustmentType.surcharge
+              : StudentFeeAdjustmentType.discount,
+          amount: item.amount.abs(),
+          description: item.description,
+          status: _adjustmentStatus(item.status),
+          createdOn:
+              item.createdDate ??
+              (throw const ApiStudentsException(
+                'A fee adjustment is missing its creation date.',
+              )),
+          createdBy: 'School administration',
+        );
       })
       .toList();
 }

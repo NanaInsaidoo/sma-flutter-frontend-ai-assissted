@@ -69,6 +69,7 @@ class FakeAttendanceRepository implements AttendanceRepository {
         .toList();
     return AttendanceDashboardOverview(
       currentDate: DateTime.now(),
+      schoolDay: true,
       today: const AttendancePeriodSummary(
         attendanceRate: 0,
         present: 0,

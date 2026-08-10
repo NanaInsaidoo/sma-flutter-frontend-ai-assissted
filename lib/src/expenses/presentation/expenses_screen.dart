@@ -298,6 +298,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   Widget _buildCycleSetupState() {
+    final canSetUpCycle = _canApproveFinance;
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 680),
@@ -315,8 +316,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                     color: AppColors.green,
                   ),
                   const SizedBox(height: 16),
-                  const Text(
-                    'Set up petty cash for this term',
+                  Text(
+                    canSetUpCycle
+                        ? 'Set up petty cash for this term'
+                        : 'Petty cash setup is pending',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: AppColors.text,
@@ -325,19 +328,24 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                     ),
                   ),
                   const SizedBox(height: 10),
-                  const Text(
-                    'This academic term does not yet have a petty-cash cycle. '
-                    'Configure the float controls before recording expenses, '
-                    'transfers, top-ups, or reconciliations.',
+                  Text(
+                    canSetUpCycle
+                        ? 'This academic term does not yet have a petty-cash cycle. '
+                              'Configure the float controls before recording expenses, '
+                              'transfers, top-ups, or reconciliations.'
+                        : 'An administrator or head teacher must configure the term’s '
+                              'float controls before the bursar can record expenses, '
+                              'transfers, top-ups, or reconciliations.',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: AppColors.muted, height: 1.45),
                   ),
                   const SizedBox(height: 22),
-                  FilledButton.icon(
-                    onPressed: _openCycleSetupDialog,
-                    icon: const Icon(Icons.settings_outlined),
-                    label: const Text('Set up cycle'),
-                  ),
+                  if (canSetUpCycle)
+                    FilledButton.icon(
+                      onPressed: _openCycleSetupDialog,
+                      icon: const Icon(Icons.settings_outlined),
+                      label: const Text('Set up cycle'),
+                    ),
                 ],
               ),
             ),
@@ -814,7 +822,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         actualMomo: _nullableDouble(item['actualMomo']),
         confirmedAt: _nullableDate(item['confirmedAt']),
         confirmedBy: _nullableText(item['confirmedBy']),
-        notes: _asText(item['resolutionNotes']),
+        notes: _asText(item['confirmationNotes']),
+        evidenceReference: _asText(item['evidenceReference']),
         varianceResolution: _asText(item['resolutionType']),
         varianceResolvedAt: _nullableDate(item['closedAt']),
         varianceResolvedBy: _nullableText(item['closedBy']),
@@ -4168,14 +4177,14 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             subtitle: 'Confirm the cash actually received into the float.',
             primaryLabel: 'Confirm received',
             width: 500,
-            onPrimary: () {
+            onPrimary: () async {
               final value = _parseAmount(actual.text);
               if (code.text.trim() != item.approvalCode || value <= 0) {
                 _snack('Enter valid approval code and amount.');
                 return;
               }
               Navigator.pop(context);
-              _runFinanceMutation(
+              final saved = await _runFinanceMutation(
                 request: () => _financeApi.post(
                   '/api/schools/${widget.customSchoolId}/finance/top-ups/${item.serverId}/confirm',
                   body: {
@@ -4189,6 +4198,12 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                     ? 'Top-up confirmed and float restored.'
                     : 'Top-up confirmed with discrepancy for review.',
               );
+              if (saved && mounted) {
+                setState(() {
+                  _selectedTopUp = null;
+                  _financeLedgerPage = _FinanceLedgerPage.topUps;
+                });
+              }
             },
             child: Column(
               children: [
@@ -4690,29 +4705,29 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         subtitle: 'Ask staff to count cash and confirm the MoMo wallet.',
         primaryLabel: 'Send request',
         width: 560,
-        onPrimary: () {
+        onPrimary: () async {
           final assignedTo = assignee.text.trim();
           if (assignedTo.isEmpty) {
             _snack('Choose the staff member responsible for the count.');
             return;
           }
-          setState(() {
-            _reconciliations.insert(
-              0,
-              _ReconciliationRecord(
-                reference: _nextId('REC'),
-                requestedAt: DateTime.now(),
-                requestedBy: widget.recordedBy?.trim().isNotEmpty == true
-                    ? widget.recordedBy!.trim()
-                    : 'Administrator',
-                assignedTo: assignedTo,
-                reason: reason.text.trim(),
-                status: _ReconciliationStatus.requested,
-              ),
-            );
-          });
-          Navigator.pop(context);
-          _snack('Reconciliation request sent to $assignedTo.');
+          final requestReason = reason.text.trim();
+          if (requestReason.isEmpty) {
+            _snack('Enter the reason for this reconciliation.');
+            return;
+          }
+          final saved = await _runFinanceMutation(
+            request: () => _financeApi.post(
+              '/api/schools/${widget.customSchoolId}/finance/reconciliations',
+              body: {
+                'academicTermId': _academicTermId,
+                'assignedTo': assignedTo,
+                'reason': requestReason,
+              },
+            ),
+            successMessage: 'Reconciliation request sent to $assignedTo.',
+          );
+          if (saved && context.mounted) Navigator.pop(context);
         },
         child: Column(
           children: [
@@ -4731,7 +4746,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                     controller: reason,
                     maxLines: 2,
                     decoration: const InputDecoration(
-                      labelText: 'Reason or cycle note (optional)',
+                      labelText: 'Reason or cycle note',
                     ),
                   ),
                 ],
@@ -4750,19 +4765,28 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     );
   }
 
-  void _startReconciliation(_ReconciliationRecord item) {
-    setState(() {
-      item.expectedCash = _cashBalance;
-      item.expectedMomo = _momoBalance;
-      item.startedAt = DateTime.now();
-      item.startedBy = widget.recordedBy?.trim().isNotEmpty == true
-          ? widget.recordedBy!.trim()
-          : item.assignedTo;
-      item.status = _ReconciliationStatus.inProgress;
-    });
-    _snack(
-      'Count started. The current Cash and MoMo balances have been captured for ${item.reference}.',
+  Future<void> _startReconciliation(_ReconciliationRecord item) async {
+    if (item.serverId == null) {
+      _snack(
+        'This reconciliation is missing its server ID. Refresh and retry.',
+      );
+      return;
+    }
+    final saved = await _runFinanceMutation(
+      request: () => _financeApi.post(
+        '/api/schools/${widget.customSchoolId}/finance/reconciliations/${item.serverId}/start',
+      ),
+      successMessage:
+          'Count started. The current Cash and MoMo balances have been captured for ${item.reference}.',
     );
+    if (saved && mounted) {
+      final refreshed = _reconciliations.where(
+        (record) => record.serverId == item.serverId,
+      );
+      if (refreshed.isNotEmpty) {
+        setState(() => _selectedReconciliation = refreshed.first);
+      }
+    }
   }
 
   void _openReconciliationConfirmationDialog(_ReconciliationRecord item) {
@@ -4790,30 +4814,42 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             subtitle: '${item.reference} · requested by ${item.requestedBy}',
             primaryLabel: 'Record confirmation',
             width: 560,
-            onPrimary: () {
+            onPrimary: () async {
               if (actualCash < 0 || actualMomo < 0) {
                 _snack('Enter valid non-negative pocket balances.');
                 return;
               }
-              setState(() {
-                item.actualCash = actualCash;
-                item.actualMomo = actualMomo;
-                item.notes = notes.text.trim();
-                item.evidenceReference = evidence.text.trim();
-                item.confirmedAt = DateTime.now();
-                item.confirmedBy = widget.recordedBy?.trim().isNotEmpty == true
-                    ? widget.recordedBy!.trim()
-                    : item.assignedTo;
-                item.status = variance == 0
-                    ? _ReconciliationStatus.confirmed
-                    : _ReconciliationStatus.varianceOpen;
-              });
-              Navigator.pop(context);
-              _snack(
-                variance == 0
+              if (item.serverId == null) {
+                _snack(
+                  'This reconciliation is missing its server ID. Refresh and retry.',
+                );
+                return;
+              }
+              final evidenceText = evidence.text.trim();
+              final noteText = notes.text.trim();
+              final saved = await _runFinanceMutation(
+                request: () => _financeApi.post(
+                  '/api/schools/${widget.customSchoolId}/finance/reconciliations/${item.serverId}/confirm',
+                  body: {
+                    'actualCash': actualCash,
+                    'actualMomo': actualMomo,
+                    'evidenceReference': evidenceText,
+                    'note': noteText,
+                  },
+                ),
+                successMessage: variance == 0
                     ? 'Reconciliation confirmed. The system and physical balances match.'
                     : 'Reconciliation recorded with a ${variance > 0 ? 'surplus' : 'shortfall'} of ${_money(variance.abs())}.',
               );
+              if (saved && context.mounted) {
+                final refreshed = _reconciliations.where(
+                  (record) => record.serverId == item.serverId,
+                );
+                if (refreshed.isNotEmpty && mounted) {
+                  setState(() => _selectedReconciliation = refreshed.first);
+                }
+                Navigator.pop(context);
+              }
             },
             child: Column(
               children: [

@@ -362,6 +362,7 @@ class _HouseholdsGuardiansScreenState extends State<HouseholdsGuardiansScreen> {
                       households: _visibleHouseholds(households),
                       customSchoolId: widget.customSchoolId,
                       api: _api,
+                      onChanged: _reloadHouseholds,
                     ),
                 ],
               ),
@@ -847,11 +848,13 @@ class _HouseholdsTable extends StatelessWidget {
     required this.households,
     required this.customSchoolId,
     required this.api,
+    required this.onChanged,
   });
 
   final List<_HouseholdRecord> households;
   final String customSchoolId;
   final AdmissionsApiClient api;
+  final VoidCallback onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -879,6 +882,7 @@ class _HouseholdsTable extends StatelessWidget {
                 household: household,
                 customSchoolId: customSchoolId,
                 api: api,
+                onChanged: onChanged,
               );
             }),
         ],
@@ -1975,24 +1979,29 @@ class _HouseholdRow extends StatelessWidget {
     required this.household,
     required this.customSchoolId,
     required this.api,
+    required this.onChanged,
   });
 
   final _HouseholdRecord household;
   final String customSchoolId;
   final AdmissionsApiClient api;
+  final VoidCallback onChanged;
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: () => Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => _HouseholdDashboardScreen(
-            household: household,
-            customSchoolId: customSchoolId,
-            api: api,
+      onTap: () async {
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => _HouseholdDashboardScreen(
+              household: household,
+              customSchoolId: customSchoolId,
+              api: api,
+            ),
           ),
-        ),
-      ),
+        );
+        onChanged();
+      },
       child: _ResponsiveRow(
         leadingTitle: household.householdName,
         leadingSubtitle: household.phone,
@@ -2902,6 +2911,9 @@ class _HouseholdWorkspace extends StatelessWidget {
                 household: household,
                 guardians: guardians.length,
                 students: students.length,
+                pendingApplications: students.where((student) {
+                  return _isPendingReviewGuardian(student.status);
+                }).length,
                 hasPendingMembers:
                     guardians.any((guardian) {
                       return _isPendingReviewGuardian(guardian.status);
@@ -3594,6 +3606,7 @@ class _HouseholdSidebar extends StatelessWidget {
     required this.household,
     required this.guardians,
     required this.students,
+    required this.pendingApplications,
     required this.hasPendingMembers,
     required this.canDeleteHousehold,
     required this.approvingMembers,
@@ -3605,6 +3618,7 @@ class _HouseholdSidebar extends StatelessWidget {
   final _HouseholdRecord household;
   final int guardians;
   final int students;
+  final int pendingApplications;
   final bool hasPendingMembers;
   final bool canDeleteHousehold;
   final bool approvingMembers;
@@ -3644,7 +3658,9 @@ class _HouseholdSidebar extends StatelessWidget {
               _SummaryRow(label: 'Students', value: '$students'),
               _SummaryRow(
                 label: 'Applications',
-                value: students == 0 ? '0' : '$students pending',
+                value: pendingApplications == 0
+                    ? '0 pending'
+                    : '$pendingApplications pending',
               ),
             ],
           ),

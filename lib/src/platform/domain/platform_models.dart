@@ -87,6 +87,10 @@ extension PlatformRoleDetails on PlatformRole {
       this == PlatformRole.superAccountManager ||
       this == PlatformRole.superAdmin;
 
+  bool get canManageSchoolLifecycle =>
+      this == PlatformRole.superAccountManager ||
+      this == PlatformRole.superAdmin;
+
   String get label => switch (this) {
     PlatformRole.accountManager => 'Account Manager',
     PlatformRole.superAccountManager => 'Super Account Manager',

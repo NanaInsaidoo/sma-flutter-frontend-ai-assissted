@@ -1065,7 +1065,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
       name: row.studentName,
       id: row.customStudentId,
       className: row.className.trim().isEmpty ? 'Not assigned' : row.className,
-      totalFees: row.totalFees,
+      totalFees: row.totalFees + row.totalAdjustments,
       paid: row.paid,
       balance: row.balance,
       status: _paymentStatusLabel(row.paymentStatus),
@@ -3612,11 +3612,12 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
                       });
                     },
                   ),
-                  _StudentSuggestions(
-                    query: _studentController.text,
-                    students: widget.students,
-                    onSelected: _selectStudent,
-                  ),
+                  if (student == null)
+                    _StudentSuggestions(
+                      query: _studentController.text,
+                      students: widget.students,
+                      onSelected: _selectStudent,
+                    ),
                   if (student != null) ...[
                     const SizedBox(height: 12),
                     _PaymentStudentSummary(

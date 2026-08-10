@@ -17,6 +17,7 @@ class TermReviewScreen extends StatefulWidget {
     this.bursarClosureRepository,
     this.headmasterClosureRepository,
     this.reviewerUserId,
+    this.onTermTransitioned,
   });
   final String schoolId;
   final StaffReviewRepository repository;
@@ -24,6 +25,7 @@ class TermReviewScreen extends StatefulWidget {
   final BursarTermClosureRepository? bursarClosureRepository;
   final HeadmasterTermClosureRepository? headmasterClosureRepository;
   final int? reviewerUserId;
+  final VoidCallback? onTermTransitioned;
   @override
   State<TermReviewScreen> createState() => _TermReviewScreenState();
 }
@@ -76,6 +78,7 @@ class _TermReviewScreenState extends State<TermReviewScreen> {
                     schoolId: widget.schoolId,
                     actorUserId: widget.reviewerUserId,
                     repository: widget.headmasterClosureRepository!,
+                    onTermTransitioned: widget.onTermTransitioned,
                   ),
                 ),
                 const SizedBox(height: 24),
@@ -90,7 +93,11 @@ class _TermReviewScreenState extends State<TermReviewScreen> {
               ],
               if (widget.bursarClosureRepository != null) ...[
                 SizedBox(
-                  height: 510,
+                  // The management view includes the approval actions and the
+                  // submitted reconciliation details. 510px clipped the action
+                  // buttons, which made a submitted closure impossible to
+                  // approve from the administrator UI.
+                  height: 760,
                   child: BursarTermClosingScreen(
                     schoolId: widget.schoolId,
                     actorUserId: widget.reviewerUserId,

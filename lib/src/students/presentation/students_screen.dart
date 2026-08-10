@@ -3008,7 +3008,11 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
     final actionLabel = reversing
         ? 'Record reversal'
         : editing
-        ? 'Save changes'
+        ? _status == StudentFeeAdjustmentStatus.pending &&
+                  widget.initialAdjustment?.status ==
+                      StudentFeeAdjustmentStatus.draft
+              ? 'Submit for approval'
+              : 'Save changes'
         : switch (_status) {
             StudentFeeAdjustmentStatus.pending => 'Submit for approval',
             _ => 'Save adjustment',
@@ -3246,7 +3250,8 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
                               : null,
                         ),
                         if (editing &&
-                            _status == StudentFeeAdjustmentStatus.pending) ...[
+                            widget.initialAdjustment?.status ==
+                                StudentFeeAdjustmentStatus.pending) ...[
                           const SizedBox(height: 18),
                           TextFormField(
                             key: const Key('adjustment-change-reason'),
@@ -3263,7 +3268,10 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
                           ),
                         ],
                         const SizedBox(height: 18),
-                        if (!reversing && !editing)
+                        if (!reversing &&
+                            (!editing ||
+                                widget.initialAdjustment?.status ==
+                                    StudentFeeAdjustmentStatus.draft))
                           DropdownButtonFormField<StudentFeeAdjustmentStatus>(
                             key: const Key('adjustment-processing'),
                             value: _status,

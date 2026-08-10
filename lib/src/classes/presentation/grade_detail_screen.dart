@@ -573,8 +573,10 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
                 const SizedBox(height: 10),
                 TextField(
                   controller: reason,
-                  decoration: const InputDecoration(
-                    labelText: 'Reason for change',
+                  decoration: InputDecoration(
+                    labelText: current.isEmpty
+                        ? 'Assignment note (optional)'
+                        : 'Reason for change',
                   ),
                 ),
               ],
@@ -598,7 +600,9 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
     final hasChanges =
         selected.difference(existingIds).isNotEmpty ||
         existingIds.difference(selected).isNotEmpty;
-    if (hasChanges && reason.text.trim().isEmpty) {
+    // The first teacher allocation is normal class setup. A reason becomes
+    // mandatory only when changing an existing, auditable allocation.
+    if (current.isNotEmpty && hasChanges && reason.text.trim().isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(

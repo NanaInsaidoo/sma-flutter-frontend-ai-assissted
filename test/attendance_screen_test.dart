@@ -74,6 +74,7 @@ class _FakeAttendanceRepository implements AttendanceRepository {
   Future<AttendanceDashboardOverview> getOverview(String customSchoolId) async {
     return AttendanceDashboardOverview(
       currentDate: DateTime(2026, 7, 18),
+      schoolDay: true,
       today: const AttendancePeriodSummary(
         attendanceRate: 0,
         present: 0,
