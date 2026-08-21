@@ -60,6 +60,9 @@ class _StaffScreenState extends State<StaffScreen> {
       return _StaffProfilePage(
         staff: _selectedStaff!,
         onBack: () => setState(() => _selectedStaff = null),
+        onManageRoles: _selectedStaff!.userRoles.isEmpty
+            ? null
+            : () => _manageRoles(_selectedStaff!),
       );
     }
 
@@ -111,6 +114,38 @@ class _StaffScreenState extends State<StaffScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _manageRoles(_StaffMember staff) async {
+    final schoolId = widget.customSchoolId?.trim() ?? '';
+    if (schoolId.isEmpty) return;
+    final result = await showDialog<_RoleSelectionResult>(
+      context: context,
+      builder: (context) => _ManageRolesDialog(
+        primaryRole: staff.primaryRole,
+        roles: staff.userRoles,
+      ),
+    );
+    if (result == null || !mounted) return;
+    try {
+      await StaffApiClient(
+        accessToken: widget.accessToken,
+        onRefreshAccessToken: widget.onRefreshAccessToken,
+      ).updateSchoolUserRoles(
+        customSchoolId: schoolId,
+        userId: staff.id,
+        primaryRole: result.primaryRole,
+        roles: result.roles,
+      );
+      await _loadStaff();
+      if (mounted) {
+        _showMessage(
+          'Roles updated. New access applies at the next sign-in or token refresh.',
+        );
+      }
+    } on StaffApiException catch (error) {
+      if (mounted) _showMessage(error.message);
+    }
   }
 
   List<_StaffMember> get _filteredStaff {
@@ -295,9 +330,7 @@ class _StaffScreenState extends State<StaffScreen> {
         ? _fallbackFirstName(user)
         : _clean(user.firstName);
     final lastName = _clean(user.lastName);
-    final role = _clean(profile?.position ?? '').isNotEmpty
-        ? _clean(profile!.position)
-        : _formatRole(user.role);
+    final role = user.roles.map(_formatRole).join(' · ');
     final status = _statusFromAccountStatus(user.accountStatus);
     final category = _categoryForRole(user.role);
     return _StaffMember(
@@ -305,6 +338,8 @@ class _StaffScreenState extends State<StaffScreen> {
       firstName: firstName,
       lastName: lastName.isEmpty ? '' : lastName,
       role: role,
+      primaryRole: user.role,
+      userRoles: user.roles,
       department: _clean(profile?.departmentName ?? '').isEmpty
           ? 'Not configured'
           : _clean(profile!.departmentName),
@@ -1045,10 +1080,15 @@ class _StaffRow extends StatelessWidget {
 }
 
 class _StaffProfilePage extends StatefulWidget {
-  const _StaffProfilePage({required this.staff, required this.onBack});
+  const _StaffProfilePage({
+    required this.staff,
+    required this.onBack,
+    this.onManageRoles,
+  });
 
   final _StaffMember staff;
   final VoidCallback onBack;
+  final VoidCallback? onManageRoles;
 
   @override
   State<_StaffProfilePage> createState() => _StaffProfilePageState();
@@ -1114,9 +1154,9 @@ class _StaffProfilePageState extends State<_StaffProfilePage> {
                     ),
                   ),
                   OutlinedButton.icon(
-                    onPressed: () {},
+                    onPressed: widget.onManageRoles,
                     icon: const Icon(Icons.edit_rounded, size: 18),
-                    label: const Text('Edit profile'),
+                    label: const Text('Manage roles'),
                   ),
                   const SizedBox(width: 10),
                   FilledButton.icon(
@@ -1158,6 +1198,131 @@ class _StaffProfilePageState extends State<_StaffProfilePage> {
       case _StaffProfileTab.activity:
         return _ActivityTab(staff: staff);
     }
+  }
+}
+
+class _RoleSelectionResult {
+  const _RoleSelectionResult({required this.primaryRole, required this.roles});
+
+  final String primaryRole;
+  final List<String> roles;
+}
+
+class _ManageRolesDialog extends StatefulWidget {
+  const _ManageRolesDialog({required this.primaryRole, required this.roles});
+
+  final String primaryRole;
+  final List<String> roles;
+
+  @override
+  State<_ManageRolesDialog> createState() => _ManageRolesDialogState();
+}
+
+class _ManageRolesDialogState extends State<_ManageRolesDialog> {
+  static const _options = [
+    ('ADMINISTRATOR', 'Administrator'),
+    ('HEADMASTER', 'Headmaster'),
+    ('HEAD_TEACHER', 'Head teacher'),
+    ('ASSISTANT_HEAD_TEACHER', 'Assistant head teacher'),
+    ('CLASS_TEACHER', 'Class teacher'),
+    ('SUBJECT_TEACHER', 'Subject teacher'),
+    ('BURSAR', 'Bursar'),
+    ('SECRETARY', 'Secretary'),
+  ];
+
+  late String _primaryRole;
+  late Set<String> _roles;
+
+  @override
+  void initState() {
+    super.initState();
+    _primaryRole = widget.primaryRole.trim().toUpperCase();
+    if (!_options.any((option) => option.$1 == _primaryRole)) {
+      _primaryRole = widget.roles.isEmpty
+          ? 'CLASS_TEACHER'
+          : widget.roles.first.trim().toUpperCase();
+    }
+    _roles = widget.roles.map((role) => role.trim().toUpperCase()).toSet();
+    _roles.add(_primaryRole);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Manage staff roles'),
+      content: SizedBox(
+        width: 480,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'The primary role is the workspace shown immediately after sign-in. Additional roles are available through the workspace switcher.',
+                style: TextStyle(color: AppColors.muted, height: 1.4),
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                value: _primaryRole,
+                decoration: const InputDecoration(labelText: 'Primary role'),
+                items: _options
+                    .map(
+                      (option) => DropdownMenuItem(
+                        value: option.$1,
+                        child: Text(option.$2),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) => setState(() {
+                  if (value == null) return;
+                  _primaryRole = value;
+                  _roles.add(value);
+                }),
+              ),
+              const SizedBox(height: 12),
+              ..._options.map((option) {
+                final isPrimary = option.$1 == _primaryRole;
+                return CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  title: Text(option.$2),
+                  subtitle: isPrimary ? const Text('Primary workspace') : null,
+                  value: _roles.contains(option.$1),
+                  onChanged: isPrimary
+                      ? null
+                      : (selected) => setState(() {
+                          if (selected == true) {
+                            _roles.add(option.$1);
+                          } else {
+                            _roles.remove(option.$1);
+                          }
+                        }),
+                );
+              }),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(
+            context,
+            _RoleSelectionResult(
+              primaryRole: _primaryRole,
+              roles: [
+                _primaryRole,
+                ..._roles.where((role) => role != _primaryRole),
+              ],
+            ),
+          ),
+          child: const Text('Save roles'),
+        ),
+      ],
+    );
   }
 }
 
@@ -1754,6 +1919,8 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
   final _dateOfBirth = TextEditingController();
   final _email = TextEditingController();
   final _phone = TextEditingController();
+  final _existingIdentifier = TextEditingController();
+  final _verificationCode = TextEditingController();
   final _position = TextEditingController();
   final _startDate = TextEditingController();
   final _basicPay = TextEditingController();
@@ -1767,10 +1934,14 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
 
   int _step = 0;
   String _role = 'CLASS_TEACHER';
+  final Set<String> _selectedRoles = {'CLASS_TEACHER'};
   String _employmentType = 'FULL_TIME';
   StaffLookupOption? _department;
   StaffLookupOption? _employmentStatus;
   CreatedSchoolUser? _createdUser;
+  VerifiedIdentityProfile? _verifiedIdentity;
+  IdentityLinkStartResult? _linkRequest;
+  bool _linkExistingAccount = false;
   String? _staffId;
   bool _loadingLookups = true;
   bool _saving = false;
@@ -1799,6 +1970,8 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
     _dateOfBirth.dispose();
     _email.dispose();
     _phone.dispose();
+    _existingIdentifier.dispose();
+    _verificationCode.dispose();
     _position.dispose();
     _startDate.dispose();
     _basicPay.dispose();
@@ -1890,6 +2063,91 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const _DrawerSectionTitle('Staff login identity'),
+        SegmentedButton<bool>(
+          segments: const [
+            ButtonSegment(
+              value: false,
+              icon: Icon(Icons.person_add_alt_1_outlined),
+              label: Text('Create new account'),
+            ),
+            ButtonSegment(
+              value: true,
+              icon: Icon(Icons.link_rounded),
+              label: Text('Link existing SMA account'),
+            ),
+          ],
+          selected: {_linkExistingAccount},
+          onSelectionChanged: (selection) => setState(() {
+            _linkExistingAccount = selection.first;
+            _error = null;
+          }),
+        ),
+        const SizedBox(height: 14),
+        if (_linkExistingAccount) ...[
+          const Text(
+            'Use the person’s existing username, verified email, or verified phone number. We will send a code to the account owner before any records are linked.',
+            style: TextStyle(color: AppColors.muted, height: 1.35),
+          ),
+          const SizedBox(height: 12),
+          _DrawerField(
+            controller: _existingIdentifier,
+            label: 'Existing account *',
+            hint: 'Username, email, or verified phone',
+          ),
+          if (_linkRequest == null)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: _saving ? null : _startIdentityVerification,
+                icon: const Icon(Icons.mark_email_read_outlined),
+                label: const Text('Send verification code'),
+              ),
+            )
+          else if (_verifiedIdentity == null) ...[
+            Text(
+              'Code sent to ${_linkRequest!.verificationDestination}.',
+              style: const TextStyle(
+                color: AppColors.green,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 8),
+            _DrawerField(
+              controller: _verificationCode,
+              label: '6-digit verification code *',
+              hint: '000000',
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton.icon(
+                onPressed: _saving ? null : _verifyExistingIdentity,
+                icon: const Icon(Icons.verified_user_outlined),
+                label: const Text('Verify account owner'),
+              ),
+            ),
+          ] else
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE8F7F4),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.verified_rounded, color: AppColors.green),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Account owner verified. Personal details were pre-filled from the existing SMA identity.',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          const SizedBox(height: 14),
+        ],
         Row(
           children: [
             Expanded(
@@ -1947,7 +2205,40 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
                     DropdownMenuItem(value: role.$1, child: Text(role.$2)),
               )
               .toList(),
-          onChanged: (value) => setState(() => _role = value ?? _role),
+          onChanged: (value) => setState(() {
+            final next = value ?? _role;
+            _role = next;
+            _selectedRoles.add(next);
+          }),
+        ),
+        const SizedBox(height: 12),
+        const Text(
+          'Additional workspaces',
+          style: TextStyle(fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'Select every responsibility this person performs. They will sign in once and switch workspaces.',
+          style: TextStyle(color: AppColors.muted, height: 1.35),
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: _roles.where((role) => role.$1 != _role).map((role) {
+            final selected = _selectedRoles.contains(role.$1);
+            return FilterChip(
+              label: Text(role.$2),
+              selected: selected,
+              onSelected: (value) => setState(() {
+                if (value) {
+                  _selectedRoles.add(role.$1);
+                } else {
+                  _selectedRoles.remove(role.$1);
+                }
+              }),
+            );
+          }).toList(),
         ),
         const SizedBox(height: 12),
         const Text(
@@ -2267,6 +2558,9 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
 
   String? _validateStep() {
     if (_step == 0) {
+      if (_linkExistingAccount && _verifiedIdentity == null) {
+        return 'Verify the existing account owner before continuing.';
+      }
       if (_firstName.text.trim().isEmpty ||
           _lastName.text.trim().isEmpty ||
           _dateOfBirth.text.trim().isEmpty ||
@@ -2281,7 +2575,9 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
       }
     }
     if (_step == 1) {
-      if (_createdUser == null) return 'Create the staff login first.';
+      if (_createdUser == null && _verifiedIdentity == null) {
+        return 'Create or verify the staff login first.';
+      }
       if (_position.text.trim().isEmpty ||
           _department == null ||
           _startDate.text.trim().isEmpty) {
@@ -2308,6 +2604,7 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
   }
 
   Future<void> _createUserIfNeeded() async {
+    if (_verifiedIdentity != null) return;
     if (_createdUser != null) return;
     _createdUser = await widget.apiClient.createSchoolUser(
       customSchoolId: widget.customSchoolId,
@@ -2321,6 +2618,7 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
         'phoneNumber': _normalisePhone(_phone.text),
         'userType': _userTypeForRole,
         'role': _role,
+        'roles': [_role, ..._selectedRoles.where((role) => role != _role)],
         'emailDelivery': true,
         'smsDelivery': true,
         'printSlipDelivery': false,
@@ -2337,7 +2635,12 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
     if (_staffId != null && _staffId!.isNotEmpty) return;
     final result = await widget.apiClient.initiateOnboarding(
       body: {
-        'userId': _createdUser!.userId,
+        if (_createdUser != null) 'userId': _createdUser!.userId,
+        if (_verifiedIdentity != null)
+          'identityLinkChallengeId': _verifiedIdentity!.challengeId,
+        'customSchoolId': widget.customSchoolId,
+        'primaryRole': _role,
+        'roles': [_role, ..._selectedRoles.where((role) => role != _role)],
         'position': _position.text.trim(),
         'departmentId': _department!.id,
         'employmentType': _employmentType,
@@ -2350,6 +2653,75 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
       );
     }
     _staffId = result.staffId;
+  }
+
+  Future<void> _startIdentityVerification() async {
+    final identifier = _existingIdentifier.text.trim();
+    if (identifier.isEmpty) {
+      setState(() => _error = 'Enter the existing username, email, or phone number.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final result = await widget.apiClient.startIdentityLink(
+        customSchoolId: widget.customSchoolId,
+        identifier: identifier,
+        purpose: 'STAFF',
+      );
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        if (result.accountFound && result.challengeId.isNotEmpty) {
+          _linkRequest = result;
+        } else {
+          _error = result.message;
+        }
+      });
+    } on StaffApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = error.message;
+      });
+    }
+  }
+
+  Future<void> _verifyExistingIdentity() async {
+    if (_verificationCode.text.trim().length != 6) {
+      setState(() => _error = 'Enter the 6-digit verification code.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final profile = await widget.apiClient.verifyIdentityLink(
+        customSchoolId: widget.customSchoolId,
+        challengeId: _linkRequest!.challengeId,
+        code: _verificationCode.text,
+      );
+      _firstName.text = profile.firstName;
+      _middleName.text = profile.middleName;
+      _lastName.text = profile.lastName;
+      _dateOfBirth.text = profile.dateOfBirth;
+      _email.text = profile.email;
+      _phone.text = profile.phoneNumber;
+      if (!mounted) return;
+      setState(() {
+        _verifiedIdentity = profile;
+        _saving = false;
+      });
+    } on StaffApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = error.message;
+      });
+    }
   }
 
   Future<void> _saveFinance() async {
@@ -3306,6 +3678,8 @@ class _StaffMember {
     required this.firstName,
     required this.lastName,
     required this.role,
+    this.primaryRole = '',
+    this.userRoles = const [],
     required this.department,
     required this.category,
     required this.employmentType,
@@ -3332,6 +3706,8 @@ class _StaffMember {
   final String firstName;
   final String lastName;
   final String role;
+  final String primaryRole;
+  final List<String> userRoles;
   final String department;
   final String category;
   final String employmentType;
@@ -3361,6 +3737,8 @@ class _StaffMember {
       firstName: firstName,
       lastName: lastName,
       role: role,
+      primaryRole: primaryRole,
+      userRoles: userRoles,
       department: department,
       category: category,
       employmentType: employmentType,

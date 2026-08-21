@@ -89,6 +89,53 @@ class AdmissionsApiClient {
     return AdmissionGuardian.fromJson(_decodeMap(response));
   }
 
+  Future<GuardianPortalAccessResult> enableGuardianPortalAccess({
+    required String customSchoolId,
+    required String customGuardianId,
+    required String email,
+    required String phoneNumber,
+    required String dateOfBirth,
+    String? identityLinkChallengeId,
+  }) async {
+    final response = await _send(
+      'POST',
+      '/api/v1/guardian-portal-access/schools/$customSchoolId/guardians/$customGuardianId',
+      body: {
+        if (identityLinkChallengeId != null)
+          'identityLinkChallengeId': identityLinkChallengeId,
+        'email': email.trim(),
+        'phoneNumber': phoneNumber.trim(),
+        'dateOfBirth': dateOfBirth.trim(),
+      },
+    );
+    return GuardianPortalAccessResult.fromJson(_decodeMap(response));
+  }
+
+  Future<AdmissionIdentityLinkStart> startIdentityLink({
+    required String customSchoolId,
+    required String identifier,
+  }) async {
+    final response = await _send(
+      'POST',
+      '/api/v1/identity-links/schools/$customSchoolId/start',
+      body: {'identifier': identifier.trim(), 'purpose': 'GUARDIAN'},
+    );
+    return AdmissionIdentityLinkStart.fromJson(_decodeMap(response));
+  }
+
+  Future<AdmissionVerifiedIdentity> verifyIdentityLink({
+    required String customSchoolId,
+    required String challengeId,
+    required String code,
+  }) async {
+    final response = await _send(
+      'POST',
+      '/api/v1/identity-links/schools/$customSchoolId/verify',
+      body: {'challengeId': challengeId, 'code': code.trim()},
+    );
+    return AdmissionVerifiedIdentity.fromJson(_decodeMap(response));
+  }
+
   Future<void> deleteGuardian({
     required String customSchoolId,
     required String customGuardianId,
@@ -957,6 +1004,84 @@ class AdmissionGuardian {
   final bool isPrimary;
   final String createdAt;
   final Map<String, dynamic> rawJson;
+}
+
+class AdmissionIdentityLinkStart {
+  const AdmissionIdentityLinkStart({
+    required this.accountFound,
+    required this.challengeId,
+    required this.verificationDestination,
+    required this.message,
+  });
+
+  factory AdmissionIdentityLinkStart.fromJson(Map<String, dynamic> json) =>
+      AdmissionIdentityLinkStart(
+        accountFound: json['accountFound'] == true,
+        challengeId: _text(json['challengeId']),
+        verificationDestination: _text(json['verificationDestination']),
+        message: _text(json['message']),
+      );
+
+  final bool accountFound;
+  final String challengeId;
+  final String verificationDestination;
+  final String message;
+}
+
+class AdmissionVerifiedIdentity {
+  const AdmissionVerifiedIdentity({
+    required this.challengeId,
+    required this.firstName,
+    required this.middleName,
+    required this.lastName,
+    required this.dateOfBirth,
+    required this.email,
+    required this.phoneNumber,
+  });
+
+  factory AdmissionVerifiedIdentity.fromJson(Map<String, dynamic> json) =>
+      AdmissionVerifiedIdentity(
+        challengeId: _text(json['challengeId']),
+        firstName: _text(json['firstName']),
+        middleName: _text(json['middleName']),
+        lastName: _text(json['lastName']),
+        dateOfBirth: _text(json['dateOfBirth']),
+        email: _text(json['email']),
+        phoneNumber: _text(json['phoneNumber']),
+      );
+
+  final String challengeId;
+  final String firstName;
+  final String middleName;
+  final String lastName;
+  final String dateOfBirth;
+  final String email;
+  final String phoneNumber;
+}
+
+class GuardianPortalAccessResult {
+  const GuardianPortalAccessResult({
+    required this.username,
+    required this.email,
+    required this.temporaryPassword,
+    required this.newlyCreated,
+    required this.message,
+  });
+
+  factory GuardianPortalAccessResult.fromJson(Map<String, dynamic> json) =>
+      GuardianPortalAccessResult(
+        username: _text(json['username']),
+        email: _text(json['email']),
+        temporaryPassword: _text(json['temporaryPassword']),
+        newlyCreated: json['newlyCreated'] == true,
+        message: _text(json['message']),
+      );
+
+  final String username;
+  final String email;
+  final String temporaryPassword;
+  final bool newlyCreated;
+  final String message;
 }
 
 class AdmissionStudent {

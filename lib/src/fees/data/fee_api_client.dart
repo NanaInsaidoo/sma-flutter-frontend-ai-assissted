@@ -744,7 +744,14 @@ class FeeApiClient {
           'receivedBy': request.receivedBy,
           'description': request.description,
           'termId': '${request.termId}',
-          'receipts[0].receiptNumber': request.physicalReceiptNumber,
+          if (request.physicalReceiptNumber.trim().isNotEmpty)
+            'receipts[0].receiptNumber': request.physicalReceiptNumber,
+          if (request.chequeNumber?.trim().isNotEmpty == true)
+            'chequeNumber': request.chequeNumber!.trim(),
+          if (request.chequeBank?.trim().isNotEmpty == true)
+            'chequeBank': request.chequeBank!.trim(),
+          if (request.chequeDate != null)
+            'chequeDate': _dateOnlyValue(request.chequeDate!),
         },
         fileBytes: includeReceiptPhoto ? request.receiptPhotoBytes : null,
         fileName: includeReceiptPhoto ? request.receiptPhotoFileName : null,
@@ -766,6 +773,28 @@ class FeeApiClient {
       }
       rethrow;
     }
+  }
+
+  Future<FeeStudentPayment> clearPendingPayment({
+    required int paymentId,
+    required String notes,
+  }) async {
+    final response = await _send(
+      'POST',
+      '/api/payments/$paymentId/verify?verificationNotes=${Uri.encodeQueryComponent(notes.trim())}',
+    );
+    return FeeStudentPayment.fromJson(_decodeMap(response));
+  }
+
+  Future<FeeStudentPayment> rejectPendingPayment({
+    required int paymentId,
+    required String reason,
+  }) async {
+    final response = await _send(
+      'PUT',
+      '/api/payments/$paymentId/status?status=FAILED&statusReason=${Uri.encodeQueryComponent(reason.trim())}',
+    );
+    return FeeStudentPayment.fromJson(_decodeMap(response));
   }
 
   Future<List<FeeStudentPayment>> getStudentPayments({

@@ -815,7 +815,7 @@ class _Header extends StatelessWidget {
       _AuthMode.firstLoginDob =>
         'This is required the first time you activate your staff account.',
       _AuthMode.firstLoginPassword =>
-        'Set a private password before your account is sent for approval.',
+        'Set a private password before entering your account.',
       _AuthMode.firstLoginPasswordDone =>
         'Your account is ready. Sign in again with the new password.',
       _AuthMode.accountPendingApproval =>

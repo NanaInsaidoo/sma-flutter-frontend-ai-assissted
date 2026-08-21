@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -6,6 +9,8 @@ import 'auth/data/session_store.dart';
 import 'auth/presentation/auth_screen.dart';
 import 'dashboard/data/api_dashboard_repository.dart';
 import 'dashboard/presentation/administrator_dashboard.dart';
+import 'guardian/data/guardian_portal_api_client.dart';
+import 'guardian/presentation/guardian_portal_screen.dart';
 import 'platform/data/live_platform_repository.dart';
 import 'platform/data/platform_repository.dart';
 import 'platform/domain/platform_models.dart';
@@ -34,12 +39,19 @@ class _PlatformRouteConfig {
   final String? schoolCode;
 }
 
-class _SchoolManagementAppState extends State<SchoolManagementApp> {
+class _SchoolManagementAppState extends State<SchoolManagementApp>
+    with WidgetsBindingObserver {
+  static const _roleRefreshInterval = Duration(minutes: 5);
+
   bool _showSchoolAdministrator = false;
   AuthSession? _session;
   final AuthApiClient _authApi = AuthApiClient();
   final SessionStore _sessionStore = SessionStore();
+  final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey =
+      GlobalKey<ScaffoldMessengerState>();
   late final GoRouter _router;
+  Future<String?>? _refreshInFlight;
+  Timer? _roleRefreshTimer;
   PlatformRepository? _platformRepository;
   Future<AccountManagerSnapshot>? _platformSnapshot;
   AccountManagerSnapshot? _platformSnapshotData;
@@ -47,6 +59,7 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _session = _sessionStore.load();
     if (_session?.isBlockedFromLogin ?? false) {
       _sessionStore.clear();
@@ -70,6 +83,11 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
             final suffix = state.uri.path.substring(currentBase.length);
             return '$expectedBase$suffix';
           }
+        }
+        if (signedIn && _session != null && _session!.isGuardianRole) {
+          if (state.matchedLocation != '/guardian') return '/guardian';
+        } else if (signedIn && state.matchedLocation == '/guardian') {
+          return _routeForSession(_session);
         }
         return null;
       },
@@ -96,6 +114,7 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
                 _platformSnapshot = null;
                 _platformSnapshotData = null;
               });
+              _restartRoleRefreshTimer();
               _router.go(_routeForSession(session));
             },
           ),
@@ -103,6 +122,10 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
         GoRoute(
           path: '/school-admin',
           builder: (context, state) => _schoolStaffDashboard(),
+        ),
+        GoRoute(
+          path: '/guardian',
+          builder: (context, state) => _guardianPortal(),
         ),
         ShellRoute(
           builder: (context, state, child) {
@@ -129,10 +152,34 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
         _router.go(_session == null ? '/login' : _routeForSession(_session));
       }
     });
+    _restartRoleRefreshTimer();
+  }
+
+  @override
+  void dispose() {
+    _roleRefreshTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _session != null) {
+      unawaited(_refreshAccessToken());
+    }
+  }
+
+  void _restartRoleRefreshTimer() {
+    _roleRefreshTimer?.cancel();
+    if (_session == null) return;
+    _roleRefreshTimer = Timer.periodic(_roleRefreshInterval, (_) {
+      if (_session != null) unawaited(_refreshAccessToken());
+    });
   }
 
   String _routeForSession(AuthSession? session) {
     if (session == null) return '/login';
+    if (session.isGuardianRole) return '/guardian';
     return _isPlatformRole(session)
         ? _platformBasePathForSession(session)
         : '/school-admin';
@@ -293,6 +340,7 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
       schoolName: session?.schoolName,
       userDisplayName: session?.displayName,
       role: session?.role,
+      roles: session?.effectiveRoles ?? const [],
       userId: session?.userId,
       accessToken: session?.accessToken,
       onRefreshAccessToken: _refreshAccessToken,
@@ -304,7 +352,19 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
     );
   }
 
+  Widget _guardianPortal() {
+    final session = _session;
+    return GuardianPortalScreen(
+      api: GuardianPortalApiClient(
+        accessToken: session?.accessToken,
+        onRefreshAccessToken: _refreshAccessToken,
+      ),
+      onLogout: _logout,
+    );
+  }
+
   void _logout() {
+    _roleRefreshTimer?.cancel();
     _sessionStore.clear();
     setState(() {
       _session = null;
@@ -350,7 +410,18 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
     });
   }
 
-  Future<String?> _refreshAccessToken() async {
+  Future<String?> _refreshAccessToken() {
+    final current = _refreshInFlight;
+    if (current != null) return current;
+    final refresh = _refreshAccessTokenInternal();
+    _refreshInFlight = refresh;
+    refresh.whenComplete(() {
+      if (identical(_refreshInFlight, refresh)) _refreshInFlight = null;
+    });
+    return refresh;
+  }
+
+  Future<String?> _refreshAccessTokenInternal() async {
     final refreshToken = _session?.refreshToken;
     if (refreshToken == null ||
         refreshToken.isEmpty ||
@@ -358,12 +429,14 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
       return _session?.accessToken;
     }
     try {
+      final previousSession = _session!;
       final refreshed = await _authApi.refreshSession(
         refreshToken: refreshToken,
       );
       if (!mounted) return refreshed.accessToken;
-      final nextSession = _session!.mergeRefresh(refreshed);
+      final nextSession = previousSession.mergeRefresh(refreshed);
       if (nextSession.isBlockedFromLogin) {
+        _roleRefreshTimer?.cancel();
         _sessionStore.clear();
         setState(() {
           _session = null;
@@ -376,8 +449,10 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
       }
       _sessionStore.save(nextSession);
       setState(() => _session = nextSession);
+      _notifyIfRolesChanged(previousSession, nextSession);
       return nextSession.accessToken;
     } on AuthException {
+      _roleRefreshTimer?.cancel();
       _sessionStore.clear();
       if (mounted) {
         setState(() {
@@ -392,12 +467,42 @@ class _SchoolManagementAppState extends State<SchoolManagementApp> {
     }
   }
 
+  void _notifyIfRolesChanged(AuthSession previous, AuthSession next) {
+    final previousRoles = previous.effectiveRoles.toSet();
+    final nextRoles = next.effectiveRoles.toSet();
+    final primaryChanged =
+        previous.role.trim().toUpperCase() != next.role.trim().toUpperCase();
+    if (setEquals(previousRoles, nextRoles) && !primaryChanged) return;
+
+    final removed = previousRoles.difference(nextRoles);
+    final added = nextRoles.difference(previousRoles);
+    final detail = removed.isNotEmpty
+        ? 'A workspace is no longer available.'
+        : added.isNotEmpty
+        ? 'A new workspace is now available.'
+        : 'Your primary workspace was changed.';
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final messenger = _scaffoldMessengerKey.currentState;
+      if (messenger == null) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              'Your access roles were changed by an administrator. $detail',
+            ),
+          ),
+        );
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp.router(
       title: 'SMA Ghana',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
+      scaffoldMessengerKey: _scaffoldMessengerKey,
       routerConfig: _router,
     );
   }

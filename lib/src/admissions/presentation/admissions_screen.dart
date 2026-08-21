@@ -1147,6 +1147,209 @@ class _GuardianDetailScreenState extends State<_GuardianDetailScreen> {
     );
   }
 
+  Future<void> _enableParentAccess(AdmissionGuardian guardian) async {
+    final raw = guardian.rawJson;
+    final emailController = TextEditingController(text: guardian.email);
+    final phoneController = TextEditingController(text: guardian.phone);
+    final dobController = TextEditingController(
+      text: _admissionText(raw['dob'] ?? raw['dateOfBirth']),
+    );
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Enable parent login'),
+        content: SizedBox(
+          width: 440,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'The guardian will use this login to see only the children in this household, their fees, attendance and published report cards.',
+              ),
+              const SizedBox(height: 18),
+              TextField(
+                key: const Key('guardian-access-email'),
+                controller: emailController,
+                keyboardType: TextInputType.emailAddress,
+                decoration: const InputDecoration(labelText: 'Email address'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: phoneController,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(
+                  labelText: 'Phone number (optional)',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('guardian-access-dob'),
+                controller: dobController,
+                decoration: const InputDecoration(
+                  labelText: 'Date of birth',
+                  hintText: 'YYYY-MM-DD',
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('enable-guardian-login-confirm'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Enable login'),
+          ),
+        ],
+      ),
+    );
+    if (submitted != true || !mounted) {
+      emailController.dispose();
+      phoneController.dispose();
+      dobController.dispose();
+      return;
+    }
+    try {
+      final identityChallengeId = await _verifyExistingGuardianAccount(
+        emailController.text,
+      );
+      if (identityChallengeId == '') return;
+      final result = await widget.admissionsApi.enableGuardianPortalAccess(
+        customSchoolId: widget.customSchoolId,
+        customGuardianId: guardian.customGuardianId,
+        email: emailController.text,
+        phoneNumber: phoneController.text,
+        dateOfBirth: dobController.text,
+        identityLinkChallengeId: identityChallengeId,
+      );
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(
+            result.newlyCreated
+                ? 'Parent login ready'
+                : 'Parent login already enabled',
+          ),
+          content: SizedBox(
+            width: 440,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(result.message),
+                const SizedBox(height: 16),
+                const Text(
+                  'Username',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+                SelectableText(
+                  result.username,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                if (result.temporaryPassword.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Temporary password',
+                    style: TextStyle(color: AppColors.muted),
+                  ),
+                  SelectableText(
+                    result.temporaryPassword,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'The parent will be asked to change this password after signing in.',
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      );
+      _reload();
+    } on AdmissionsApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    } finally {
+      emailController.dispose();
+      phoneController.dispose();
+      dobController.dispose();
+    }
+  }
+
+  Future<String?> _verifyExistingGuardianAccount(String email) async {
+    final link = await widget.admissionsApi.startIdentityLink(
+      customSchoolId: widget.customSchoolId,
+      identifier: email,
+    );
+    if (!link.accountFound || link.challengeId.isEmpty) return null;
+    if (!mounted) return '';
+    final code = TextEditingController();
+    final submitted = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Verify existing SMA account'),
+        content: SizedBox(
+          width: 430,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'This email already belongs to an SMA account. Ask the owner for the 6-digit code sent to ${link.verificationDestination}.',
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                key: const Key('guardian-identity-verification-code'),
+                controller: code,
+                keyboardType: TextInputType.number,
+                maxLength: 6,
+                decoration: const InputDecoration(
+                  labelText: 'Verification code',
+                  hintText: '000000',
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Verify and link'),
+          ),
+        ],
+      ),
+    );
+    if (submitted != true) {
+      code.dispose();
+      return '';
+    }
+    await widget.admissionsApi.verifyIdentityLink(
+      customSchoolId: widget.customSchoolId,
+      challengeId: link.challengeId,
+      code: code.text,
+    );
+    code.dispose();
+    return link.challengeId;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1183,6 +1386,8 @@ class _GuardianDetailScreenState extends State<_GuardianDetailScreen> {
                     data: data,
                     onOpenStudent: (student) =>
                         _openStudent(student, data.guardian),
+                    onEnableParentAccess: () =>
+                        _enableParentAccess(data.guardian),
                   );
                 },
               ),
@@ -1210,10 +1415,12 @@ class _GuardianDetailOverview extends StatelessWidget {
   const _GuardianDetailOverview({
     required this.data,
     required this.onOpenStudent,
+    required this.onEnableParentAccess,
   });
 
   final _GuardianDetailData data;
   final ValueChanged<AdmissionStudent> onOpenStudent;
+  final VoidCallback onEnableParentAccess;
 
   @override
   Widget build(BuildContext context) {
@@ -1234,6 +1441,12 @@ class _GuardianDetailOverview extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _GuardianProfileHeader(guardian: guardian),
+              const SizedBox(height: 16),
+              _GuardianPortalAccessCard(
+                enabled:
+                    raw['portalAccessEnabled'] == true || raw['userId'] != null,
+                onEnable: onEnableParentAccess,
+              ),
               const SizedBox(height: 16),
               _GuardianDetailSection(
                 title: 'Personal information',
@@ -1329,6 +1542,70 @@ class _GuardianDetailOverview extends StatelessWidget {
       ),
     );
   }
+}
+
+class _GuardianPortalAccessCard extends StatelessWidget {
+  const _GuardianPortalAccessCard({
+    required this.enabled,
+    required this.onEnable,
+  });
+  final bool enabled;
+  final VoidCallback onEnable;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(20),
+      child: Row(
+        children: [
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: AppColors.greenSoft,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(
+              enabled
+                  ? Icons.verified_user_outlined
+                  : Icons.phone_android_outlined,
+              color: AppColors.green,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  enabled
+                      ? 'Parent portal access is enabled'
+                      : 'Give this guardian parent portal access',
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  enabled
+                      ? 'They can see household children, fees, attendance and published report cards.'
+                      : 'Create a protected login for this household.',
+                  style: const TextStyle(color: AppColors.muted),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          OutlinedButton.icon(
+            key: const Key('enable-guardian-login'),
+            onPressed: onEnable,
+            icon: Icon(
+              enabled ? Icons.manage_accounts_outlined : Icons.add_rounded,
+            ),
+            label: Text(enabled ? 'View login' : 'Enable login'),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _GuardianProfileHeader extends StatelessWidget {
@@ -3937,6 +4214,8 @@ class _GuardianAdmissionDraft {
   String? customGuardianId;
   int? householdId;
   String? admissionId;
+  String? identityLinkChallengeId;
+  bool identityVerified = false;
   int? genderId;
   int? nationalityId;
   int? religionId;
@@ -5172,6 +5451,18 @@ class _AdmissionSideDrawerState extends State<_AdmissionSideDrawer> {
           customSchoolId: widget.customSchoolId,
           customGuardianId: guardianId,
         );
+        if (_guardianDraft.identityVerified &&
+            _guardianDraft.identityLinkChallengeId != null) {
+          await widget.api.enableGuardianPortalAccess(
+            customSchoolId: widget.customSchoolId,
+            customGuardianId: guardianId,
+            email: _guardianDraft.emailAddresses.first.text,
+            phoneNumber: _guardianDraft.phoneNumbers.first.number.text,
+            dateOfBirth: _guardianDraft.dob.text,
+            identityLinkChallengeId:
+                _guardianDraft.identityLinkChallengeId,
+          );
+        }
     }
   }
 
@@ -5389,6 +5680,7 @@ class _AdmissionSideDrawerState extends State<_AdmissionSideDrawer> {
     return switch (title) {
       'Guardian info' => _GuardianBasicInfoForm(
         api: widget.api,
+        customSchoolId: widget.customSchoolId,
         draft: _guardianDraft,
         errors: _fieldErrors,
       ),
@@ -6053,6 +6345,7 @@ class _AdmissionFlowScreenState extends State<_AdmissionFlowScreen> {
     return switch (title) {
       'Guardian info' => _GuardianBasicInfoForm(
         api: widget.api,
+        customSchoolId: widget.customSchoolId,
         draft: _guardianDraft,
       ),
       'Guardian contact' => _GuardianContactForm(
@@ -6489,11 +6782,13 @@ class _HouseholdSearchResult extends StatelessWidget {
 class _GuardianBasicInfoForm extends StatefulWidget {
   const _GuardianBasicInfoForm({
     required this.api,
+    required this.customSchoolId,
     required this.draft,
     this.errors = const {},
   });
 
   final AdmissionsApiClient api;
+  final String customSchoolId;
   final _GuardianAdmissionDraft draft;
   final Map<String, String> errors;
 
@@ -6506,6 +6801,12 @@ class _GuardianBasicInfoFormState extends State<_GuardianBasicInfoForm> {
   late final Future<List<AdmissionLookupOption>> _nationalitiesFuture;
   late final Future<List<AdmissionLookupOption>> _religionsFuture;
   late final Future<List<AdmissionLookupOption>> _languagesFuture;
+  final _existingIdentifier = TextEditingController();
+  final _verificationCode = TextEditingController();
+  AdmissionIdentityLinkStart? _linkRequest;
+  bool _linkExisting = false;
+  bool _linking = false;
+  String? _linkError;
 
   static const _titles = ['Select title', 'Mr.', 'Mrs.', 'Ms.', 'Dr.'];
   static const _relationships = [
@@ -6528,10 +6829,85 @@ class _GuardianBasicInfoFormState extends State<_GuardianBasicInfoForm> {
   }
 
   @override
+  void dispose() {
+    _existingIdentifier.dispose();
+    _verificationCode.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final draft = widget.draft;
     return Column(
       children: [
+        _DrawerFormSection(
+          title: 'SMA account',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('This guardian already has an SMA account'),
+                subtitle: const Text(
+                  'Verify the account owner and reuse their identity instead of creating a duplicate login.',
+                ),
+                value: _linkExisting,
+                onChanged: _linking
+                    ? null
+                    : (value) => setState(() {
+                        _linkExisting = value;
+                        _linkError = null;
+                      }),
+              ),
+              if (_linkExisting && !draft.identityVerified) ...[
+                const SizedBox(height: 8),
+                _Field(
+                  label: 'Existing username, email, or verified phone',
+                  hint: 'Enter the guardian’s existing account',
+                  controller: _existingIdentifier,
+                ),
+                if (_linkRequest == null)
+                  OutlinedButton.icon(
+                    onPressed: _linking ? null : _startLink,
+                    icon: const Icon(Icons.mark_email_read_outlined),
+                    label: const Text('Send verification code'),
+                  )
+                else ...[
+                  Text(
+                    'Code sent to ${_linkRequest!.verificationDestination}',
+                    style: const TextStyle(
+                      color: AppColors.green,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _Field(
+                    label: '6-digit verification code',
+                    hint: '000000',
+                    controller: _verificationCode,
+                  ),
+                  FilledButton.icon(
+                    onPressed: _linking ? null : _verifyLink,
+                    icon: const Icon(Icons.verified_user_outlined),
+                    label: const Text('Verify account owner'),
+                  ),
+                ],
+              ],
+              if (draft.identityVerified)
+                const ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.verified_rounded, color: AppColors.green),
+                  title: Text('Existing SMA identity verified'),
+                  subtitle: Text(
+                    'Personal details below were pre-filled from the verified account.',
+                  ),
+                ),
+              if (_linkError != null)
+                Text(_linkError!, style: const TextStyle(color: Colors.red)),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
         _DrawerFormSection(
           title: 'Personal Information',
           child: _ResponsiveFormGrid(
@@ -6640,6 +7016,74 @@ class _GuardianBasicInfoFormState extends State<_GuardianBasicInfoForm> {
         ),
       ],
     );
+  }
+
+  Future<void> _startLink() async {
+    if (_existingIdentifier.text.trim().isEmpty) {
+      setState(() => _linkError = 'Enter the existing account first.');
+      return;
+    }
+    setState(() {
+      _linking = true;
+      _linkError = null;
+    });
+    try {
+      final result = await widget.api.startIdentityLink(
+        customSchoolId: widget.customSchoolId,
+        identifier: _existingIdentifier.text,
+      );
+      if (!mounted) return;
+      setState(() {
+        _linking = false;
+        if (result.accountFound && result.challengeId.isNotEmpty) {
+          _linkRequest = result;
+        } else {
+          _linkError = result.message;
+        }
+      });
+    } on AdmissionsApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _linking = false;
+        _linkError = error.message;
+      });
+    }
+  }
+
+  Future<void> _verifyLink() async {
+    if (_verificationCode.text.trim().length != 6) {
+      setState(() => _linkError = 'Enter the 6-digit code.');
+      return;
+    }
+    setState(() {
+      _linking = true;
+      _linkError = null;
+    });
+    try {
+      final profile = await widget.api.verifyIdentityLink(
+        customSchoolId: widget.customSchoolId,
+        challengeId: _linkRequest!.challengeId,
+        code: _verificationCode.text,
+      );
+      final draft = widget.draft;
+      draft.firstName.text = profile.firstName;
+      draft.lastName.text = profile.lastName;
+      draft.dob.text = profile.dateOfBirth;
+      if (profile.email.isNotEmpty) draft.emailAddresses.first.text = profile.email;
+      if (profile.phoneNumber.isNotEmpty) {
+        draft.phoneNumbers.first.number.text = profile.phoneNumber;
+      }
+      draft.identityLinkChallengeId = profile.challengeId;
+      draft.identityVerified = true;
+      if (!mounted) return;
+      setState(() => _linking = false);
+    } on AdmissionsApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _linking = false;
+        _linkError = error.message;
+      });
+    }
   }
 }
 

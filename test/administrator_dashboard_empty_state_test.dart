@@ -70,6 +70,83 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('teacher and bursar can switch between their workspaces', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: AdministratorDashboard(
+          repository: _EmptyDashboardRepository(),
+          schoolId: 'SCH-001',
+          schoolName: 'Test School',
+          userDisplayName: 'Adwoa Dual Role',
+          role: 'CLASS_TEACHER',
+          roles: const ['CLASS_TEACHER', 'BURSAR'],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Workspace'), findsOneWidget);
+    expect(find.text('Open assessments'), findsOneWidget);
+    expect(find.text('Fees & Requirements'), findsNothing);
+
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Bursar').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Fees & Requirements'), findsOneWidget);
+    expect(find.text('Expenses & Petty Cash'), findsOneWidget);
+    expect(find.text('Students'), findsNothing);
+    expect(find.text('Open assessments'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('revoked active role returns user to an available workspace', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    Widget app(List<String> roles) => MaterialApp(
+      theme: AppTheme.light,
+      home: AdministratorDashboard(
+        key: const ValueKey('role-aware-dashboard'),
+        repository: _EmptyDashboardRepository(),
+        schoolId: 'SCH-001',
+        schoolName: 'Test School',
+        userDisplayName: 'Adwoa Dual Role',
+        role: 'CLASS_TEACHER',
+        roles: roles,
+      ),
+    );
+
+    await tester.pumpWidget(app(const ['CLASS_TEACHER', 'BURSAR']));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Bursar').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Expenses & Petty Cash'), findsOneWidget);
+
+    await tester.pumpWidget(app(const ['CLASS_TEACHER']));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Workspace'), findsNothing);
+    expect(find.text('Open assessments'), findsOneWidget);
+    expect(find.text('Expenses & Petty Cash'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 class _ForbiddenDashboardRepository extends _EmptyDashboardRepository {

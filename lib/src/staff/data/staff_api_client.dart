@@ -68,6 +68,46 @@ class StaffApiClient {
     return CreatedSchoolUser.fromJson(_decodeMap(response));
   }
 
+  Future<IdentityLinkStartResult> startIdentityLink({
+    required String customSchoolId,
+    required String identifier,
+    required String purpose,
+  }) async {
+    final response = await _send(
+      'POST',
+      '/api/v1/identity-links/schools/$customSchoolId/start',
+      body: {'identifier': identifier.trim(), 'purpose': purpose},
+    );
+    return IdentityLinkStartResult.fromJson(_decodeMap(response));
+  }
+
+  Future<VerifiedIdentityProfile> verifyIdentityLink({
+    required String customSchoolId,
+    required String challengeId,
+    required String code,
+  }) async {
+    final response = await _send(
+      'POST',
+      '/api/v1/identity-links/schools/$customSchoolId/verify',
+      body: {'challengeId': challengeId, 'code': code.trim()},
+    );
+    return VerifiedIdentityProfile.fromJson(_decodeMap(response));
+  }
+
+  Future<StaffUserRecord> updateSchoolUserRoles({
+    required String customSchoolId,
+    required String userId,
+    required String primaryRole,
+    required List<String> roles,
+  }) async {
+    final response = await _send(
+      'PUT',
+      '/api/user-management/schools/$customSchoolId/users/$userId',
+      body: {'role': primaryRole, 'roles': roles},
+    );
+    return StaffUserRecord.fromJson(_decodeMap(response));
+  }
+
   Future<StaffOnboardingResult> initiateOnboarding({
     required Map<String, dynamic> body,
   }) async {
@@ -324,6 +364,7 @@ class StaffUserRecord {
     required this.dateOfBirth,
     required this.userType,
     required this.role,
+    this.roles = const [],
     required this.accountStatus,
     required this.mustChangePassword,
     required this.lastLoginAt,
@@ -341,6 +382,7 @@ class StaffUserRecord {
   final String dateOfBirth;
   final String userType;
   final String role;
+  final List<String> roles;
   final String accountStatus;
   final bool mustChangePassword;
   final String lastLoginAt;
@@ -360,6 +402,7 @@ class StaffUserRecord {
       dateOfBirth: (json['dateOfBirth'] ?? '').toString(),
       userType: (json['userType'] ?? '').toString(),
       role: (json['role'] ?? '').toString(),
+      roles: _roleList(json['roles'], fallback: json['role']),
       accountStatus: (json['accountStatus'] ?? json['status'] ?? '').toString(),
       mustChangePassword: json['mustChangePassword'] == true,
       lastLoginAt: (json['lastLoginAt'] ?? json['lastActive'] ?? '').toString(),
@@ -367,6 +410,21 @@ class StaffUserRecord {
       updatedAt: (json['updatedAt'] ?? '').toString(),
     );
   }
+}
+
+List<String> _roleList(dynamic value, {dynamic fallback}) {
+  final roles = <String>{};
+  if (fallback != null && fallback.toString().trim().isNotEmpty) {
+    roles.add(fallback.toString().trim().toUpperCase());
+  }
+  if (value is List) {
+    roles.addAll(
+      value
+          .map((item) => item.toString().trim().toUpperCase())
+          .where((item) => item.isNotEmpty),
+    );
+  }
+  return roles.toList(growable: false);
 }
 
 class StaffLookupOption {
@@ -493,6 +551,60 @@ class StaffOnboardingResult {
               .toString(),
     );
   }
+}
+
+class IdentityLinkStartResult {
+  const IdentityLinkStartResult({
+    required this.accountFound,
+    required this.challengeId,
+    required this.verificationDestination,
+    required this.message,
+  });
+
+  final bool accountFound;
+  final String challengeId;
+  final String verificationDestination;
+  final String message;
+
+  factory IdentityLinkStartResult.fromJson(Map<String, dynamic> json) =>
+      IdentityLinkStartResult(
+        accountFound: json['accountFound'] == true,
+        challengeId: (json['challengeId'] ?? '').toString(),
+        verificationDestination:
+            (json['verificationDestination'] ?? '').toString(),
+        message: (json['message'] ?? '').toString(),
+      );
+}
+
+class VerifiedIdentityProfile {
+  const VerifiedIdentityProfile({
+    required this.challengeId,
+    required this.firstName,
+    required this.middleName,
+    required this.lastName,
+    required this.dateOfBirth,
+    required this.email,
+    required this.phoneNumber,
+  });
+
+  final String challengeId;
+  final String firstName;
+  final String middleName;
+  final String lastName;
+  final String dateOfBirth;
+  final String email;
+  final String phoneNumber;
+
+  factory VerifiedIdentityProfile.fromJson(Map<String, dynamic> json) =>
+      VerifiedIdentityProfile(
+        challengeId: (json['challengeId'] ?? '').toString(),
+        firstName: (json['firstName'] ?? '').toString(),
+        middleName: (json['middleName'] ?? '').toString(),
+        lastName: (json['lastName'] ?? '').toString(),
+        dateOfBirth: (json['dateOfBirth'] ?? '').toString(),
+        email: (json['email'] ?? '').toString(),
+        phoneNumber: (json['phoneNumber'] ?? '').toString(),
+      );
 }
 
 class StaffApiException implements Exception {

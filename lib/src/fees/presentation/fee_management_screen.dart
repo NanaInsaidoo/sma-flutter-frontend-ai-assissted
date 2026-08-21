@@ -3504,16 +3504,21 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
   late final TextEditingController _amountController;
   late final TextEditingController _momoReferenceController;
   late final TextEditingController _receiptController;
+  late final TextEditingController _chequeNumberController;
+  late final TextEditingController _chequeBankController;
   late final TextEditingController _notesController;
   _StudentFeeRow? _student;
   FeePaymentMethod? _method;
   DateTime _paymentDate = DateTime.now();
+  DateTime _chequeDate = DateTime.now();
   bool _saving = false;
   bool _success = false;
   _PaymentReceipt? _receipt;
   PlatformFile? _receiptPhoto;
 
   bool get _isScopedToStudent => widget.selectedStudent != null;
+  bool get _isCheque =>
+      (_method?.method.trim().toLowerCase() ?? '') == 'cheque';
 
   @override
   void initState() {
@@ -3529,6 +3534,8 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
     );
     _momoReferenceController = TextEditingController();
     _receiptController = TextEditingController();
+    _chequeNumberController = TextEditingController();
+    _chequeBankController = TextEditingController();
     _notesController = TextEditingController();
   }
 
@@ -3538,6 +3545,8 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
     _amountController.dispose();
     _momoReferenceController.dispose();
     _receiptController.dispose();
+    _chequeNumberController.dispose();
+    _chequeBankController.dispose();
     _notesController.dispose();
     super.dispose();
   }
@@ -3668,6 +3677,7 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
                     currentBalance: student.balance,
                     amount: amount,
                     money: widget.money,
+                    pending: _isCheque,
                   ),
                 ],
                 const SizedBox(height: 14),
@@ -3703,24 +3713,71 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
                     ),
                   ),
                 ],
-                _PaymentSectionTitle('Receipt'),
-                TextFormField(
-                  controller: _receiptController,
-                  decoration: const InputDecoration(
-                    labelText: 'Physical Receipt Number *',
-                    hintText: 'e.g. REC-00421',
-                    helperText: 'Enter the number from the paper receipt book',
+                if (_isCheque) ...[
+                  _PaymentSectionTitle('Cheque details'),
+                  TextFormField(
+                    controller: _chequeNumberController,
+                    decoration: const InputDecoration(
+                      labelText: 'Cheque number *',
+                      hintText: 'Enter the number printed on the cheque',
+                    ),
+                    validator: (value) => value == null || value.trim().isEmpty
+                        ? 'Please enter the cheque number.'
+                        : null,
                   ),
-                  validator: (value) => value == null || value.trim().isEmpty
-                      ? 'Please enter the physical receipt number.'
-                      : null,
-                ),
-                const SizedBox(height: 14),
-                _ReceiptPhotoField(
-                  file: _receiptPhoto,
-                  onChoose: _pickReceiptPhoto,
-                  onRemove: () => setState(() => _receiptPhoto = null),
-                ),
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _chequeBankController,
+                    decoration: const InputDecoration(
+                      labelText: 'Bank *',
+                      hintText: 'Bank that issued the cheque',
+                    ),
+                    validator: (value) => value == null || value.trim().isEmpty
+                        ? 'Please enter the bank.'
+                        : null,
+                  ),
+                  const SizedBox(height: 14),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: _pickChequeDate,
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: 'Cheque date *',
+                        suffixIcon: Icon(Icons.calendar_month_rounded),
+                      ),
+                      child: Text(_formatDate(_chequeDate)),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'The student balance will not change until this cheque is marked as cleared.',
+                    style: TextStyle(
+                      color: AppColors.amber,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ] else ...[
+                  _PaymentSectionTitle('Receipt'),
+                  TextFormField(
+                    controller: _receiptController,
+                    decoration: const InputDecoration(
+                      labelText: 'Physical Receipt Number *',
+                      hintText: 'e.g. REC-00421',
+                      helperText:
+                          'Enter the number from the paper receipt book',
+                    ),
+                    validator: (value) => value == null || value.trim().isEmpty
+                        ? 'Please enter the physical receipt number.'
+                        : null,
+                  ),
+                  const SizedBox(height: 14),
+                  _ReceiptPhotoField(
+                    file: _receiptPhoto,
+                    onChoose: _pickReceiptPhoto,
+                    onRemove: () => setState(() => _receiptPhoto = null),
+                  ),
+                ],
                 const SizedBox(height: 14),
                 TextFormField(
                   controller: _notesController,
@@ -3765,6 +3822,16 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
       lastDate: DateTime.now().add(const Duration(days: 1)),
     );
     if (picked != null) setState(() => _paymentDate = picked);
+  }
+
+  Future<void> _pickChequeDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _chequeDate,
+      firstDate: DateTime(2000),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+    if (picked != null) setState(() => _chequeDate = picked);
   }
 
   Future<void> _pickReceiptPhoto() async {
@@ -3824,6 +3891,9 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
           physicalReceiptNumber: physicalReceipt,
           receiptPhotoBytes: _receiptPhoto?.bytes,
           receiptPhotoFileName: _receiptPhoto?.name,
+          chequeNumber: _isCheque ? _chequeNumberController.text.trim() : null,
+          chequeBank: _isCheque ? _chequeBankController.text.trim() : null,
+          chequeDate: _isCheque ? _chequeDate : null,
         ),
       );
       if (!mounted) return;
@@ -3844,9 +3914,10 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
               ? method.method
               : receipt.paymentMethod,
           paymentDate: receipt.paymentDate ?? _paymentDate,
-          remainingBalance: (student.balance - amount)
-              .clamp(0, double.infinity)
-              .toDouble(),
+          remainingBalance: receipt.status == 'PENDING'
+              ? student.balance
+              : (student.balance - amount).clamp(0, double.infinity).toDouble(),
+          pending: receipt.status == 'PENDING',
         );
       });
     } catch (error) {
@@ -3895,9 +3966,12 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
       _method = null;
       _momoReferenceController.clear();
       _receiptController.clear();
+      _chequeNumberController.clear();
+      _chequeBankController.clear();
       _receiptPhoto = null;
       _notesController.clear();
       _paymentDate = DateTime.now();
+      _chequeDate = DateTime.now();
     });
   }
 
@@ -3930,6 +4004,7 @@ class _PaymentReceipt {
     required this.paymentMethod,
     required this.paymentDate,
     required this.remainingBalance,
+    required this.pending,
   });
 
   final String receiptNumber;
@@ -3940,6 +4015,7 @@ class _PaymentReceipt {
   final String paymentMethod;
   final DateTime paymentDate;
   final double? remainingBalance;
+  final bool pending;
 }
 
 class _PaymentSectionTitle extends StatelessWidget {
@@ -4146,15 +4222,19 @@ class _BalanceAfterPaymentPreview extends StatelessWidget {
     required this.currentBalance,
     required this.amount,
     required this.money,
+    required this.pending,
   });
 
   final double currentBalance;
   final double amount;
   final String Function(double amount) money;
+  final bool pending;
 
   @override
   Widget build(BuildContext context) {
-    final remaining = (currentBalance - amount).clamp(0, double.infinity);
+    final remaining = pending
+        ? currentBalance
+        : (currentBalance - amount).clamp(0, double.infinity);
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -4168,8 +4248,10 @@ class _BalanceAfterPaymentPreview extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Balance after this payment',
+                Text(
+                  pending
+                      ? 'Balance while cheque is pending'
+                      : 'Balance after this payment',
                   style: TextStyle(
                     color: AppColors.muted,
                     fontWeight: FontWeight.w900,
@@ -4248,13 +4330,15 @@ class _PaymentSuccessView extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          const Text(
-            'Payment Receipt Created',
+          Text(
+            receipt.pending ? 'Cheque Recorded' : 'Payment Receipt Created',
             style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
           ),
           const SizedBox(height: 8),
           Text(
-            'Receipt ${receipt.receiptNumber}',
+            receipt.pending
+                ? 'Pending reference ${receipt.receiptNumber}'
+                : 'Receipt ${receipt.receiptNumber}',
             textAlign: TextAlign.center,
             style: const TextStyle(
               color: AppColors.green,
@@ -4262,6 +4346,24 @@ class _PaymentSuccessView extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 18),
+          if (receipt.pending) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.amber.withValues(alpha: .10),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Text(
+                'Awaiting bank clearance. This is not an official payment receipt and the student balance has not changed.',
+                style: TextStyle(
+                  color: AppColors.amber,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+          ],
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -4274,7 +4376,7 @@ class _PaymentSuccessView extends StatelessWidget {
                 _ReceiptLine(label: 'Student', value: receipt.studentName),
                 _ReceiptLine(label: 'Class', value: receipt.className),
                 _ReceiptLine(
-                  label: 'Amount paid',
+                  label: receipt.pending ? 'Amount presented' : 'Amount paid',
                   value: _money(receipt.amount),
                   highlight: true,
                 ),
@@ -4283,55 +4385,60 @@ class _PaymentSuccessView extends StatelessWidget {
                   label: 'Payment date',
                   value: formatDate(receipt.paymentDate),
                 ),
-                _ReceiptLine(
-                  label: 'Physical receipt',
-                  value: receipt.physicalReceiptNumber,
-                ),
+                if (receipt.physicalReceiptNumber.trim().isNotEmpty)
+                  _ReceiptLine(
+                    label: 'Physical receipt',
+                    value: receipt.physicalReceiptNumber,
+                  ),
                 if (receipt.remainingBalance != null)
                   _ReceiptLine(
-                    label: 'Balance after payment',
+                    label: receipt.pending
+                        ? 'Balance while pending'
+                        : 'Balance after payment',
                     value: _money(receipt.remainingBalance!),
                   ),
               ],
             ),
           ),
           const SizedBox(height: 22),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Receipt preview and print will be connected to the receipt API.',
+          if (!receipt.pending) ...[
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Receipt preview and print will be connected to the receipt API.',
+                          ),
                         ),
-                      ),
-                    );
-                  },
-                  icon: const Icon(Icons.print_rounded, size: 18),
-                  label: const Text('Print receipt'),
+                      );
+                    },
+                    icon: const Icon(Icons.print_rounded, size: 18),
+                    label: const Text('Print receipt'),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Receipt sharing will be connected to SMS/email later.',
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Receipt sharing will be connected to SMS/email later.',
+                          ),
                         ),
-                      ),
-                    );
-                  },
-                  icon: const Icon(Icons.ios_share_rounded, size: 18),
-                  label: const Text('Share'),
+                      );
+                    },
+                    icon: const Icon(Icons.ios_share_rounded, size: 18),
+                    label: const Text('Share'),
+                  ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
+              ],
+            ),
+            const SizedBox(height: 10),
+          ],
           Row(
             children: [
               Expanded(
@@ -4648,6 +4755,10 @@ class _StudentFeeDetailPanel extends StatelessWidget {
       recordedBy: payment.receivedBy.trim().isEmpty
           ? 'School staff'
           : payment.receivedBy,
+      statusReason: payment.statusReason,
+      chequeNumber: payment.chequeNumber,
+      chequeBank: payment.chequeBank,
+      chequeDate: payment.chequeDate,
     );
   }
 }
@@ -5042,11 +5153,124 @@ class _PaymentHistoryTile extends StatefulWidget {
 
 class _PaymentHistoryTileState extends State<_PaymentHistoryTile> {
   late Future<List<PaymentReversal>> _reversals;
+  late String _status;
+  late String _statusReason;
+  late String _referenceNumber;
+  bool _updating = false;
 
   @override
   void initState() {
     super.initState();
+    _status = widget.payment.status.toUpperCase();
+    _statusReason = widget.payment.statusReason;
+    _referenceNumber = widget.payment.receiptNumber;
     _reload();
+  }
+
+  Future<void> _changeChequeStatus({required bool clear}) async {
+    final reason = TextEditingController();
+    String? validationError;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(clear ? 'Mark cheque as cleared' : 'Reject cheque'),
+          content: SizedBox(
+            width: 430,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  clear
+                      ? 'Confirm that the bank has cleared cheque ${widget.payment.chequeNumber}.'
+                      : 'The balance will remain unchanged and this cheque will stay in the audit history.',
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: reason,
+                  maxLines: 2,
+                  decoration: InputDecoration(
+                    labelText: clear
+                        ? 'Clearance note *'
+                        : 'Rejection reason *',
+                    hintText: clear
+                        ? 'e.g. Cleared on bank statement'
+                        : 'e.g. Returned unpaid by bank',
+                    errorText: validationError,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (reason.text.trim().length < 5) {
+                  setDialogState(
+                    () => validationError = 'Enter at least 5 characters.',
+                  );
+                  return;
+                }
+                Navigator.pop(dialogContext, true);
+              },
+              style: clear
+                  ? null
+                  : FilledButton.styleFrom(backgroundColor: AppColors.red),
+              child: Text(clear ? 'Confirm clearance' : 'Reject cheque'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      reason.dispose();
+      return;
+    }
+    setState(() => _updating = true);
+    try {
+      final updated = clear
+          ? await widget.api.clearPendingPayment(
+              paymentId: widget.payment.id,
+              notes: reason.text,
+            )
+          : await widget.api.rejectPendingPayment(
+              paymentId: widget.payment.id,
+              reason: reason.text,
+            );
+      if (!mounted) return;
+      setState(() {
+        _updating = false;
+        _status = updated.status.toUpperCase();
+        _statusReason = updated.statusReason;
+        if (updated.referenceNumber.trim().isNotEmpty) {
+          _referenceNumber = updated.referenceNumber;
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            clear
+                ? 'Cheque cleared. The balance and official receipt are now available.'
+                : 'Cheque rejected. The student balance was not changed.',
+          ),
+          backgroundColor: clear ? AppColors.green : AppColors.red,
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        setState(() => _updating = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('$error'), backgroundColor: AppColors.red),
+        );
+      }
+    } finally {
+      reason.dispose();
+    }
   }
 
   void _reload() {
@@ -5075,7 +5299,8 @@ class _PaymentHistoryTileState extends State<_PaymentHistoryTile> {
   Widget build(BuildContext context) {
     final payment = widget.payment;
     final money = widget.money;
-    final reversed = payment.status.toUpperCase() == 'REVERSED';
+    final reversed = _status == 'REVERSED';
+    final pendingCheque = _status == 'PENDING' && payment.isCheque;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -5111,7 +5336,7 @@ class _PaymentHistoryTileState extends State<_PaymentHistoryTile> {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      '${payment.receiptNumber} · ${payment.term} · ${payment.recordedBy}',
+                      '$_referenceNumber · ${payment.term} · ${payment.recordedBy}',
                       style: const TextStyle(
                         color: AppColors.muted,
                         fontSize: 12,
@@ -5140,7 +5365,7 @@ class _PaymentHistoryTileState extends State<_PaymentHistoryTile> {
                   ),
                 ],
               ),
-              if (!reversed)
+              if (!reversed && !pendingCheque && _status == 'COMPLETED')
                 IconButton(
                   key: Key('reverse-payment-${payment.id}'),
                   tooltip: 'Request reversal',
@@ -5149,6 +5374,61 @@ class _PaymentHistoryTileState extends State<_PaymentHistoryTile> {
                 ),
             ],
           ),
+          if (payment.isCheque) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '${payment.chequeBank} · Cheque ${payment.chequeNumber}${payment.chequeDate == null ? '' : ' · ${_formatDateLabel(payment.chequeDate)}'}',
+                style: const TextStyle(color: AppColors.muted, fontSize: 11),
+              ),
+            ),
+          ],
+          if (pendingCheque) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'PENDING CLEARANCE · Balance unchanged',
+                    style: TextStyle(
+                      color: AppColors.amber,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                OutlinedButton(
+                  onPressed: _updating
+                      ? null
+                      : () => _changeChequeStatus(clear: false),
+                  child: const Text('Reject'),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: _updating
+                      ? null
+                      : () => _changeChequeStatus(clear: true),
+                  child: const Text('Mark cleared'),
+                ),
+              ],
+            ),
+          ],
+          if (_status == 'FAILED')
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'REJECTED · ${_statusReason.isEmpty ? 'Cheque did not clear.' : _statusReason}',
+                  style: const TextStyle(
+                    color: AppColors.red,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
           if (reversed)
             const Align(
               alignment: Alignment.centerLeft,
@@ -5552,6 +5832,10 @@ class _StudentPaymentHistory {
     required this.date,
     required this.term,
     required this.recordedBy,
+    required this.statusReason,
+    required this.chequeNumber,
+    required this.chequeBank,
+    required this.chequeDate,
   });
 
   final int id;
@@ -5562,6 +5846,12 @@ class _StudentPaymentHistory {
   final String date;
   final String term;
   final String recordedBy;
+  final String statusReason;
+  final String chequeNumber;
+  final String chequeBank;
+  final DateTime? chequeDate;
+
+  bool get isCheque => method.trim().toLowerCase() == 'cheque';
 }
 
 class _StudentFeeRow {

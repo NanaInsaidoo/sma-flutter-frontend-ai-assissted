@@ -59,6 +59,7 @@ class AdministratorDashboard extends StatefulWidget {
     this.schoolName,
     this.userDisplayName,
     this.role,
+    this.roles = const [],
     this.userId,
     this.accessToken,
     this.onRefreshAccessToken,
@@ -71,6 +72,7 @@ class AdministratorDashboard extends StatefulWidget {
   final String? schoolName;
   final String? userDisplayName;
   final String? role;
+  final List<String> roles;
   final int? userId;
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
@@ -91,13 +93,52 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   bool _openRecordPaymentOnNextFees = false;
   bool _openAddEventOnNextCalendar = false;
   bool _openAddStaffOnNextStaff = false;
+  late String _activeRole;
 
   @override
   void initState() {
     super.initState();
+    _activeRole = _initialRole();
     _readiness = widget.readinessRepository == null
         ? Future.value(SchoolReadiness.readySchool)
         : widget.readinessRepository!.getReadiness(_schoolId);
+  }
+
+  @override
+  void didUpdateWidget(covariant AdministratorDashboard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_availableRoles.contains(_activeRole)) {
+      _activeRole = _initialRole();
+      _selectedPage = _SchoolAdminPage.dashboard;
+      _dashboard = _loadDashboard();
+    }
+  }
+
+  List<String> get _availableRoles {
+    final values = <String>{};
+    final primary = widget.role?.trim().toUpperCase() ?? '';
+    if (primary.isNotEmpty) values.add(primary);
+    values.addAll(
+      widget.roles
+          .map((role) => role.trim().toUpperCase())
+          .where((role) => role.isNotEmpty),
+    );
+    return values.toList(growable: false);
+  }
+
+  String _initialRole() {
+    final primary = widget.role?.trim().toUpperCase() ?? '';
+    if (primary.isNotEmpty) return primary;
+    return _availableRoles.isEmpty ? 'STAFF' : _availableRoles.first;
+  }
+
+  void _changeWorkspace(String role) {
+    if (role == _activeRole) return;
+    setState(() {
+      _activeRole = role;
+      _selectedPage = _SchoolAdminPage.dashboard;
+      _dashboard = _loadDashboard();
+    });
   }
 
   void _refresh() {
@@ -189,7 +230,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
     return FutureBuilder<DashboardSnapshot>(
       future: _dashboard,
       builder: (context, snapshot) {
-        final teachingRole = _isTeachingRole(widget.role);
+        final teachingRole = _isTeachingRole(_activeRole);
         if (snapshot.hasError && !teachingRole) {
           return _ErrorView(onRetry: _refresh);
         }
@@ -211,7 +252,9 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                       data: data,
                       collapsed: _sidebarCollapsed,
                       schoolName: widget.schoolName,
-                      role: widget.role,
+                      role: _activeRole,
+                      roles: _availableRoles,
+                      onRoleChanged: _changeWorkspace,
                       selectedPage: _selectedPage,
                       onSelectPage: _selectPage,
                       onLogout: widget.onLogout,
@@ -224,7 +267,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                         data: data,
                         onRefresh: _refresh,
                         userDisplayName: widget.userDisplayName,
-                        role: widget.role,
+                        role: _activeRole,
                         userId: widget.userId,
                         selectedPage: _selectedPage,
                         onSelectPage: _selectPage,
@@ -265,7 +308,9 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                   data: data,
                   isDrawer: true,
                   schoolName: widget.schoolName,
-                  role: widget.role,
+                  role: _activeRole,
+                  roles: _availableRoles,
+                  onRoleChanged: _changeWorkspace,
                   selectedPage: _selectedPage,
                   onSelectPage: (page) {
                     _selectPage(page);
@@ -278,7 +323,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                 data: data,
                 onRefresh: _refresh,
                 userDisplayName: widget.userDisplayName,
-                role: widget.role,
+                role: _activeRole,
                 userId: widget.userId,
                 showMenu: true,
                 selectedPage: _selectedPage,
@@ -358,7 +403,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
           schoolName: widget.schoolName ?? _schoolId,
           accessToken: widget.accessToken,
           onRefreshAccessToken: widget.onRefreshAccessToken,
-          role: widget.role,
+          role: _activeRole,
           userId: widget.userId,
         ),
       );
@@ -3911,6 +3956,8 @@ class _Sidebar extends StatelessWidget {
     this.isDrawer = false,
     this.schoolName,
     this.role,
+    this.roles = const [],
+    this.onRoleChanged,
     required this.selectedPage,
     required this.onSelectPage,
     this.onLogout,
@@ -3921,6 +3968,8 @@ class _Sidebar extends StatelessWidget {
   final bool isDrawer;
   final String? schoolName;
   final String? role;
+  final List<String> roles;
+  final ValueChanged<String>? onRoleChanged;
   final _SchoolAdminPage selectedPage;
   final ValueChanged<_SchoolAdminPage> onSelectPage;
   final VoidCallback? onLogout;
@@ -3992,6 +4041,71 @@ class _Sidebar extends StatelessWidget {
                 ],
               ),
             ),
+            if (roles.length > 1 && !collapsed)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                child: DropdownButtonFormField<String>(
+                  value: role?.trim().toUpperCase(),
+                  isExpanded: true,
+                  dropdownColor: AppColors.navyDark,
+                  iconEnabledColor: Colors.white,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                  ),
+                  decoration: InputDecoration(
+                    labelText: 'Workspace',
+                    labelStyle: const TextStyle(color: Color(0xFF9DA8B8)),
+                    prefixIcon: const Icon(
+                      Icons.swap_horiz_rounded,
+                      color: AppColors.green,
+                    ),
+                    filled: true,
+                    fillColor: const Color(0xFF202C3C),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                  items: roles
+                      .map(
+                        (value) => DropdownMenuItem(
+                          value: value,
+                          child: Text(_displayRole(value)),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) {
+                    if (value != null) onRoleChanged?.call(value);
+                  },
+                ),
+              ),
+            if (roles.length > 1 && collapsed)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                child: PopupMenuButton<String>(
+                  tooltip: 'Switch workspace',
+                  onSelected: (value) => onRoleChanged?.call(value),
+                  itemBuilder: (context) => roles
+                      .map(
+                        (value) => PopupMenuItem(
+                          value: value,
+                          child: Text(_displayRole(value)),
+                        ),
+                      )
+                      .toList(),
+                  child: const SizedBox(
+                    height: 44,
+                    child: Center(
+                      child: Icon(
+                        Icons.swap_horiz_rounded,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             if (!isDrawer)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 14),

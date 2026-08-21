@@ -605,7 +605,9 @@ class AssessmentApiClient {
       if (response.statusCode >= 200 && response.statusCode < 300) {
         return response;
       }
-      if (response.statusCode == 401 && retry && onRefreshAccessToken != null) {
+      if ((response.statusCode == 401 || response.statusCode == 403) &&
+          retry &&
+          onRefreshAccessToken != null) {
         final refreshed = await onRefreshAccessToken!();
         if (refreshed != null && refreshed.isNotEmpty) {
           accessToken = refreshed;

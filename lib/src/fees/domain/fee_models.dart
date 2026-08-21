@@ -60,7 +60,7 @@ class SchoolFee {
       customSchoolId: '${json['customSchoolId'] ?? ''}',
       termId: _intValue(json['termId']),
       feeName: '${json['feeName'] ?? ''}',
-      amount: _doubleValue(json['amount']),
+      amount: _doubleValue(json['amountPaid'] ?? json['amount']),
       category: '${json['category'] ?? ''}',
       description: '${json['description'] ?? ''}',
       status: '${json['status'] ?? ''}',
@@ -959,6 +959,9 @@ class FeePaymentRequest {
     required this.physicalReceiptNumber,
     this.receiptPhotoBytes,
     this.receiptPhotoFileName,
+    this.chequeNumber,
+    this.chequeBank,
+    this.chequeDate,
   });
 
   final String customStudentId;
@@ -974,31 +977,40 @@ class FeePaymentRequest {
   final String physicalReceiptNumber;
   final List<int>? receiptPhotoBytes;
   final String? receiptPhotoFileName;
+  final String? chequeNumber;
+  final String? chequeBank;
+  final DateTime? chequeDate;
 }
 
 class FeePaymentReceipt {
   const FeePaymentReceipt({
+    required this.paymentId,
     required this.receiptNumber,
     required this.studentName,
     required this.amount,
     required this.paymentMethod,
     required this.paymentDate,
+    required this.status,
   });
 
+  final int paymentId;
   final String receiptNumber;
   final String studentName;
   final double amount;
   final String paymentMethod;
   final DateTime? paymentDate;
+  final String status;
 
   factory FeePaymentReceipt.fromJson(Map<String, dynamic> json) {
     return FeePaymentReceipt(
+      paymentId: _intValue(json['paymentId']),
       receiptNumber:
           '${json['receiptNumber'] ?? json['paymentReference'] ?? ''}',
       studentName: '${json['studentName'] ?? ''}',
       amount: _doubleValue(json['amount']),
       paymentMethod: '${json['paymentMethod'] ?? ''}',
       paymentDate: _dateValue(json['paymentDate']),
+      status: '${json['status'] ?? ''}'.toUpperCase(),
     );
   }
 }
@@ -1148,6 +1160,10 @@ class FeeStudentPayment {
     required this.receivedBy,
     required this.termId,
     required this.status,
+    required this.statusReason,
+    required this.chequeNumber,
+    required this.chequeBank,
+    required this.chequeDate,
   });
 
   final int id;
@@ -1159,6 +1175,10 @@ class FeeStudentPayment {
   final String receivedBy;
   final int termId;
   final String status;
+  final String statusReason;
+  final String chequeNumber;
+  final String chequeBank;
+  final DateTime? chequeDate;
 
   factory FeeStudentPayment.fromJson(Map<String, dynamic> json) {
     return FeeStudentPayment(
@@ -1172,6 +1192,10 @@ class FeeStudentPayment {
       receivedBy: '${json['receivedBy'] ?? ''}',
       termId: _intValue(json['termId']),
       status: '${json['status'] ?? ''}',
+      statusReason: '${json['statusReason'] ?? ''}',
+      chequeNumber: '${json['chequeNumber'] ?? ''}',
+      chequeBank: '${json['chequeBank'] ?? ''}',
+      chequeDate: _dateValue(json['chequeDate']),
     );
   }
 }

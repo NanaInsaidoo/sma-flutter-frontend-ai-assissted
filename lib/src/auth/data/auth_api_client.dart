@@ -192,6 +192,7 @@ class AuthSession {
     required this.requiresDateOfBirth,
     required this.isAccountManager,
     required this.role,
+    this.roles = const [],
     required this.accountStatus,
     required this.userStatus,
     required this.customSchoolId,
@@ -208,6 +209,7 @@ class AuthSession {
   final bool requiresDateOfBirth;
   final bool isAccountManager;
   final String role;
+  final List<String> roles;
   final String accountStatus;
   final String userStatus;
   final String customSchoolId;
@@ -221,6 +223,23 @@ class AuthSession {
         value == 'SUPER_ACCOUNT_MANAGER' ||
         value == 'ACCOUNT_MANAGER_UNVERIFIED' ||
         value == 'ACCOUNT_MANAGER_VERIFIED_STAFF';
+  }
+
+  List<String> get effectiveRoles {
+    final values = <String>{};
+    if (role.trim().isNotEmpty) values.add(role.trim().toUpperCase());
+    for (final value in roles) {
+      if (value.trim().isNotEmpty) values.add(value.trim().toUpperCase());
+    }
+    return values.toList(growable: false);
+  }
+
+  bool hasRole(String value) =>
+      effectiveRoles.contains(value.trim().toUpperCase());
+
+  bool get isGuardianRole {
+    final value = role.trim().toUpperCase();
+    return value == 'GUARDIAN_ROLE' || value == 'GUARDIAN' || value == 'PARENT';
   }
 
   bool get isPendingAccountManagerApproval {
@@ -279,9 +298,10 @@ class AuthSession {
           tokenClaims['role'] as String? ??
           tokenClaims['authorities'] as String? ??
           '',
-      accountStatus:
-          json['accountStatus'] as String? ?? '',
-      userStatus: json['status'] as String? ?? json['userStatus'] as String? ?? '',
+      roles: _stringList(json['roles'] ?? tokenClaims['roles']),
+      accountStatus: json['accountStatus'] as String? ?? '',
+      userStatus:
+          json['status'] as String? ?? json['userStatus'] as String? ?? '',
       customSchoolId:
           json['customSchoolId'] as String? ??
           json['tenantId'] as String? ??
@@ -306,6 +326,7 @@ class AuthSession {
     'requiresDateOfBirth': requiresDateOfBirth,
     'isAccountManager': isAccountManager,
     'role': role,
+    'roles': effectiveRoles,
     'accountStatus': accountStatus,
     'userStatus': userStatus,
     'customSchoolId': customSchoolId,
@@ -323,6 +344,7 @@ class AuthSession {
     bool? requiresDateOfBirth,
     bool? isAccountManager,
     String? role,
+    List<String>? roles,
     String? accountStatus,
     String? userStatus,
     String? customSchoolId,
@@ -339,6 +361,7 @@ class AuthSession {
       requiresDateOfBirth: requiresDateOfBirth ?? this.requiresDateOfBirth,
       isAccountManager: isAccountManager ?? this.isAccountManager,
       role: role ?? this.role,
+      roles: roles ?? this.roles,
       accountStatus: accountStatus ?? this.accountStatus,
       userStatus: userStatus ?? this.userStatus,
       customSchoolId: customSchoolId ?? this.customSchoolId,
@@ -362,10 +385,15 @@ class AuthSession {
       requiresDateOfBirth: refreshed.requiresDateOfBirth,
       isAccountManager: refreshed.isAccountManager || isAccountManager,
       role: refreshed.role.isEmpty ? role : refreshed.role,
+      roles: refreshed.effectiveRoles.isEmpty
+          ? roles
+          : refreshed.effectiveRoles,
       accountStatus: refreshed.accountStatus.isEmpty
           ? accountStatus
           : refreshed.accountStatus,
-      userStatus: refreshed.userStatus.isEmpty ? userStatus : refreshed.userStatus,
+      userStatus: refreshed.userStatus.isEmpty
+          ? userStatus
+          : refreshed.userStatus,
       customSchoolId: refreshed.customSchoolId.isEmpty
           ? customSchoolId
           : refreshed.customSchoolId,
@@ -375,6 +403,15 @@ class AuthSession {
       userId: refreshed.userId == 0 ? userId : refreshed.userId,
     );
   }
+}
+
+List<String> _stringList(dynamic value) {
+  if (value is! List) return const [];
+  return value
+      .map((item) => item.toString().trim().toUpperCase())
+      .where((item) => item.isNotEmpty)
+      .toSet()
+      .toList(growable: false);
 }
 
 Map<String, dynamic> _decodeJwtClaims(String token) {
