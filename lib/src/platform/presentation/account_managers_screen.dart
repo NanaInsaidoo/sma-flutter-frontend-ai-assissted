@@ -282,7 +282,10 @@ List<String> _statusesFor(AccountManagerStatus? status) {
   return switch (status) {
     null => const [],
     AccountManagerStatus.active => const ['ACTIVE'],
-    AccountManagerStatus.pendingApproval => const ['PENDING', 'PENDING_APPROVAL'],
+    AccountManagerStatus.pendingApproval => const [
+      'PENDING',
+      'PENDING_APPROVAL',
+    ],
     AccountManagerStatus.invited => const ['INVITED'],
     AccountManagerStatus.suspended => const ['SUSPENDED'],
   };
@@ -855,13 +858,8 @@ class _CreateAccountManagerDialogState
   @override
   Widget build(BuildContext context) {
     final accountTypes = widget.role == PlatformRole.superAdmin
-        ? const [
-            PlatformRole.accountManager,
-            PlatformRole.superAccountManager,
-          ]
-        : const [
-            PlatformRole.accountManager,
-          ];
+        ? const [PlatformRole.accountManager, PlatformRole.superAccountManager]
+        : const [PlatformRole.accountManager];
 
     return AlertDialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),

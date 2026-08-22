@@ -32,6 +32,7 @@ class TermReviewScreen extends StatefulWidget {
 
 class _TermReviewScreenState extends State<TermReviewScreen> {
   late Future<StaffReviewDashboardData> _future;
+  int _termGeneration = 0;
   String _filter = 'ALL';
   String _query = '';
   @override
@@ -44,6 +45,14 @@ class _TermReviewScreenState extends State<TermReviewScreen> {
   Future<void> _refresh() async {
     setState(_load);
     await _future;
+  }
+
+  void _handleTermTransitioned() {
+    setState(() {
+      _termGeneration++;
+      _load();
+    });
+    widget.onTermTransitioned?.call();
   }
 
   @override
@@ -75,16 +84,18 @@ class _TermReviewScreenState extends State<TermReviewScreen> {
                 SizedBox(
                   height: 1500,
                   child: HeadmasterTermClosureScreen(
+                    key: ValueKey('headmaster-closure-$_termGeneration'),
                     schoolId: widget.schoolId,
                     actorUserId: widget.reviewerUserId,
                     repository: widget.headmasterClosureRepository!,
-                    onTermTransitioned: widget.onTermTransitioned,
+                    onTermTransitioned: _handleTermTransitioned,
                   ),
                 ),
                 const SizedBox(height: 24),
               ],
               if (widget.teacherReviewRepository != null) ...[
                 TeacherReviewManagementPanel(
+                  key: ValueKey('teacher-reviews-$_termGeneration'),
                   schoolId: widget.schoolId,
                   actorUserId: widget.reviewerUserId,
                   repository: widget.teacherReviewRepository!,
@@ -99,6 +110,7 @@ class _TermReviewScreenState extends State<TermReviewScreen> {
                   // approve from the administrator UI.
                   height: 760,
                   child: BursarTermClosingScreen(
+                    key: ValueKey('bursar-closure-$_termGeneration'),
                     schoolId: widget.schoolId,
                     actorUserId: widget.reviewerUserId,
                     repository: widget.bursarClosureRepository!,

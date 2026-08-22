@@ -17,9 +17,16 @@ enum _AuthMode {
 }
 
 class AuthScreen extends StatefulWidget {
-  const AuthScreen({super.key, required this.onAuthenticated});
+  const AuthScreen({
+    super.key,
+    required this.onAuthenticated,
+    this.onForgotUsername,
+    this.onForgotPassword,
+  });
 
   final ValueChanged<AuthSession> onAuthenticated;
+  final VoidCallback? onForgotUsername;
+  final VoidCallback? onForgotPassword;
 
   @override
   State<AuthScreen> createState() => _AuthScreenState();
@@ -349,15 +356,15 @@ class _AuthScreenState extends State<AuthScreen> {
       case _AuthMode.login:
         return [
           _TextFieldBlock(
-            label: 'USERNAME, PHONE, OR EMAIL',
+            label: 'GLOBAL USERNAME',
             child: TextFormField(
               controller: _identifier,
               textInputAction: TextInputAction.next,
               decoration: const InputDecoration(
-                hintText: 'e.g. admin@school.com or +233...',
+                hintText: 'e.g. ama.mensah27',
                 prefixIcon: Icon(Icons.person_outline_rounded),
               ),
-              validator: _required('Enter your username, phone, or email'),
+              validator: _required('Enter your global username'),
             ),
           ),
           const SizedBox(height: 16),
@@ -385,12 +392,23 @@ class _AuthScreenState extends State<AuthScreen> {
             ),
           ),
           const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
-              onPressed: _loading ? null : _startForgotPassword,
-              child: const Text('Forgot password?'),
-            ),
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            runAlignment: WrapAlignment.center,
+            spacing: 12,
+            runSpacing: 0,
+            children: [
+              TextButton(
+                onPressed: _loading ? null : widget.onForgotUsername,
+                child: const Text('Forgot username?'),
+              ),
+              TextButton(
+                onPressed: _loading
+                    ? null
+                    : (widget.onForgotPassword ?? _startForgotPassword),
+                child: const Text('Forgot password?'),
+              ),
+            ],
           ),
         ];
       case _AuthMode.forgot:

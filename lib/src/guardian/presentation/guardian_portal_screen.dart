@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../platform/presentation/document_opener.dart';
+import '../../auth/data/auth_api_client.dart';
 import '../data/guardian_portal_api_client.dart';
 import '../domain/guardian_portal_models.dart';
 
@@ -11,10 +12,12 @@ class GuardianPortalScreen extends StatefulWidget {
     super.key,
     required this.api,
     required this.onLogout,
+    this.schoolMemberships = const [],
   });
 
   final GuardianPortalApiClient api;
   final VoidCallback onLogout;
+  final List<AuthSchoolMembership> schoolMemberships;
 
   @override
   State<GuardianPortalScreen> createState() => _GuardianPortalScreenState();
@@ -30,7 +33,24 @@ class _GuardianPortalScreenState extends State<GuardianPortalScreen> {
   @override
   void initState() {
     super.initState();
+    final guardianMemberships = widget.schoolMemberships
+        .where((membership) => membership.membershipType == 'GUARDIAN')
+        .toList(growable: false);
+    if (guardianMemberships.isNotEmpty) {
+      widget.api.schoolId = guardianMemberships.first.schoolId;
+    }
     _snapshot = widget.api.dashboard();
+  }
+
+  void _selectSchool(String schoolId) {
+    if (schoolId == widget.api.schoolId) return;
+    setState(() {
+      widget.api.schoolId = schoolId;
+      _selectedChildId = null;
+      _selectedFeeChildId = null;
+      _showCalendar = false;
+      _snapshot = widget.api.dashboard();
+    });
   }
 
   void _refresh() => setState(() => _snapshot = widget.api.dashboard());
@@ -60,6 +80,11 @@ class _GuardianPortalScreenState extends State<GuardianPortalScreen> {
                 ? () {}
                 : () => _showMobileMoneyComingSoon(context),
             onRefresh: _refresh,
+            schoolMemberships: widget.schoolMemberships
+                .where((membership) => membership.membershipType == 'GUARDIAN')
+                .toList(growable: false),
+            selectedSchoolId: widget.api.schoolId,
+            onSchoolSelected: _selectSchool,
           ),
           body:
               result.connectionState == ConnectionState.waiting && data == null
@@ -175,12 +200,18 @@ class _ParentAppBar extends StatelessWidget implements PreferredSizeWidget {
     required this.guardianName,
     required this.onPayFees,
     required this.onRefresh,
+    required this.schoolMemberships,
+    required this.selectedSchoolId,
+    required this.onSchoolSelected,
   });
   final String schoolName;
   final String term;
   final String guardianName;
   final VoidCallback onPayFees;
   final VoidCallback onRefresh;
+  final List<AuthSchoolMembership> schoolMemberships;
+  final String? selectedSchoolId;
+  final ValueChanged<String> onSchoolSelected;
   @override
   Size get preferredSize => const Size.fromHeight(82);
   @override
@@ -228,6 +259,33 @@ class _ParentAppBar extends StatelessWidget implements PreferredSizeWidget {
         ],
       ),
       actions: [
+        if (schoolMemberships.length > 1)
+          PopupMenuButton<String>(
+            tooltip: 'Switch school',
+            initialValue: selectedSchoolId,
+            onSelected: onSchoolSelected,
+            itemBuilder: (context) => schoolMemberships
+                .map(
+                  (membership) => PopupMenuItem<String>(
+                    value: membership.schoolId,
+                    child: Row(
+                      children: [
+                        Icon(
+                          membership.schoolId == selectedSchoolId
+                              ? Icons.check_circle
+                              : Icons.school_outlined,
+                          size: 18,
+                          color: const Color(0xFF087F72),
+                        ),
+                        const SizedBox(width: 10),
+                        Text(membership.schoolName),
+                      ],
+                    ),
+                  ),
+                )
+                .toList(growable: false),
+            icon: const Icon(Icons.swap_horiz_rounded),
+          ),
         if (!compact && term.isNotEmpty)
           Container(
             margin: const EdgeInsets.symmetric(vertical: 20),
@@ -6176,11 +6234,28 @@ class _ParentMore extends StatelessWidget {
               style: TextStyle(color: Color(0xFF68778C)),
             ),
             const SizedBox(height: 16),
-            OutlinedButton.icon(
-              onPressed: onLogout,
-              icon: const Icon(Icons.logout_rounded),
-              label: const Text('Sign out'),
-              style: OutlinedButton.styleFrom(minimumSize: const Size(150, 46)),
+            Wrap(
+              spacing: 12,
+              runSpacing: 10,
+              children: [
+                FilledButton.icon(
+                  onPressed: () => _showGuardianMergeDialog(
+                    context,
+                    api,
+                    onMerged: onLogout,
+                  ),
+                  icon: const Icon(Icons.account_tree_outlined),
+                  label: const Text('Connect another guardian account'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: onLogout,
+                  icon: const Icon(Icons.logout_rounded),
+                  label: const Text('Sign out'),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(150, 46),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -6188,6 +6263,147 @@ class _ParentMore extends StatelessWidget {
     ],
   );
 }
+
+Future<void> _showGuardianMergeDialog(
+  BuildContext context,
+  GuardianPortalApiClient api, {
+  required VoidCallback onMerged,
+}) async {
+  final formKey = GlobalKey<FormState>();
+  final otherUsername = TextEditingController();
+  final otherPassword = TextEditingController();
+  final canonicalUsername = TextEditingController();
+  final canonicalPassword = TextEditingController();
+  var submitting = false;
+  String? error;
+  try {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: !submitting,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Connect guardian accounts'),
+          content: SizedBox(
+            width: 520,
+            child: SingleChildScrollView(
+              child: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Use this only when both guardian accounts belong to you. '
+                      'Enter both logins, then choose which username you want to keep.',
+                      style: TextStyle(color: Color(0xFF68778C)),
+                    ),
+                    if (error != null) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        error!,
+                        style: const TextStyle(color: Color(0xFFD64545)),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: otherUsername,
+                      decoration: const InputDecoration(
+                        labelText: 'Other guardian username',
+                      ),
+                      validator: _requiredDialogValue,
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: otherPassword,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Other account password',
+                      ),
+                      validator: _requiredDialogValue,
+                    ),
+                    const SizedBox(height: 18),
+                    TextFormField(
+                      controller: canonicalUsername,
+                      decoration: const InputDecoration(
+                        labelText: 'Username to keep',
+                      ),
+                      validator: _requiredDialogValue,
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: canonicalPassword,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Password for username to keep',
+                      ),
+                      validator: _requiredDialogValue,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: submitting ? null : () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: submitting
+                  ? null
+                  : () async {
+                      if (!formKey.currentState!.validate()) return;
+                      setDialogState(() {
+                        submitting = true;
+                        error = null;
+                      });
+                      try {
+                        await api.mergeGuardianAccounts(
+                          otherUsername: otherUsername.text.trim(),
+                          otherPassword: otherPassword.text,
+                          canonicalUsername: canonicalUsername.text.trim(),
+                          canonicalPassword: canonicalPassword.text,
+                        );
+                        if (!dialogContext.mounted) return;
+                        Navigator.pop(dialogContext);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Accounts connected. Sign in with the username you chose to keep.',
+                            ),
+                          ),
+                        );
+                        onMerged();
+                      } catch (exception) {
+                        if (!dialogContext.mounted) return;
+                        setDialogState(() {
+                          submitting = false;
+                          error = _errorText(exception);
+                        });
+                      }
+                    },
+              child: submitting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Connect accounts'),
+            ),
+          ],
+        ),
+      ),
+    );
+  } finally {
+    otherUsername.dispose();
+    otherPassword.dispose();
+    canonicalUsername.dispose();
+    canonicalPassword.dispose();
+  }
+}
+
+String? _requiredDialogValue(String? value) =>
+    value == null || value.trim().isEmpty ? 'Required' : null;
 
 class _GuardianStoredDetailsCard extends StatelessWidget {
   const _GuardianStoredDetailsCard({required this.api});

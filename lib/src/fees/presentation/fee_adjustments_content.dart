@@ -809,12 +809,33 @@ class _AdjustmentReviewPanel extends StatelessWidget {
                         ...adjustment.history.map(
                           (item) => Padding(
                             padding: const EdgeInsets.only(bottom: 7),
-                            child: Text(
-                              '${item.action.replaceAll('_', ' ')} · ${item.actorRole.replaceAll('_', ' ')} · ${item.reason}',
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: AppColors.muted,
-                              ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '${_readableCode(item.action)} · ${_actionActor(item)}',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                if (item.reason.trim().isNotEmpty)
+                                  Text(
+                                    item.reason.trim(),
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: AppColors.muted,
+                                    ),
+                                  ),
+                                if (_approverChange(item).isNotEmpty)
+                                  Text(
+                                    _approverChange(item),
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: AppColors.muted,
+                                    ),
+                                  ),
+                              ],
                             ),
                           ),
                         ),
@@ -1123,16 +1144,56 @@ String _date(DateTime? date) {
 }
 
 String _createdBy(FeeAdjustment item) {
-  final type = item.createdByType.trim().replaceAll('_', ' ');
-  if (type.isEmpty) return 'Creator unavailable';
-  return item.createdById > 0 ? '$type #${item.createdById}' : type;
+  final name = item.createdByName.trim();
+  final role = item.createdByRole.trim().isNotEmpty
+      ? item.createdByRole.trim()
+      : _readableCode(item.createdByType);
+  if (name.isNotEmpty && role.isNotEmpty) return '$name · $role';
+  if (name.isNotEmpty) return name;
+  if (role.isNotEmpty) return role;
+  return 'Creator unavailable';
 }
 
 String _updatedBy(FeeAdjustment item) {
-  final type = item.updatedByType.trim().replaceAll('_', ' ');
-  if (type.isEmpty) return 'Updater unavailable';
-  return item.updatedById > 0 ? '$type #${item.updatedById}' : type;
+  final name = item.updatedByName.trim();
+  final role = item.updatedByRole.trim().isNotEmpty
+      ? item.updatedByRole.trim()
+      : _readableCode(item.updatedByType);
+  if (name.isNotEmpty && role.isNotEmpty) return '$name · $role';
+  if (name.isNotEmpty) return name;
+  if (role.isNotEmpty) return role;
+  return 'Updater unavailable';
 }
+
+String _actionActor(FeeAdjustmentAction item) {
+  final name = item.actorName.trim().isEmpty
+      ? 'Former user'
+      : item.actorName.trim();
+  final role = item.actorRoleDisplay.trim().isNotEmpty
+      ? item.actorRoleDisplay.trim()
+      : _readableCode(item.actorRole);
+  return role.isEmpty ? name : '$name · $role';
+}
+
+String _approverChange(FeeAdjustmentAction item) {
+  final previous = item.previousApproverName.trim();
+  final next = item.newApproverName.trim();
+  if (previous.isEmpty && next.isEmpty) return '';
+  if (previous == next && next.isNotEmpty) return 'Approver: $next';
+  return 'Approver: ${previous.isEmpty ? 'Unassigned' : previous} → '
+      '${next.isEmpty ? 'Unassigned' : next}';
+}
+
+String _readableCode(String value) => value
+    .trim()
+    .split('_')
+    .where((part) => part.isNotEmpty)
+    .map(
+      (part) =>
+          '${part.substring(0, 1).toUpperCase()}'
+          '${part.substring(1).toLowerCase()}',
+    )
+    .join(' ');
 
 String _provided(String value, String otherwise) =>
     value.trim().isEmpty ? otherwise : value.trim();

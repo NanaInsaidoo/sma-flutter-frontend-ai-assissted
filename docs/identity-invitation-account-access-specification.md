@@ -1,6 +1,6 @@
 # SMA Identity, Invitation, Account Access, and Recovery Specification
 
-**Status:** Product and implementation source of truth  
+**Status:** Implemented and locally verified; product and implementation source of truth
 **Audience:** Product owners, designers, backend engineers, frontend engineers, QA engineers, school administrators, and support staff  
 **Last updated:** 21 August 2026  
 **Scope:** Staff and guardian account creation, invitation verification, existing-account discovery, usernames, passwords, account separation, guardian-account merging, and account recovery
@@ -28,7 +28,22 @@ This document defines the business logic and the technical boundaries needed to:
 6. recover forgotten usernames without exposing private information; and
 7. preserve all school-specific records when identities or accounts are connected.
 
-This is a specification. An item appearing in this document must not be assumed to exist in the application until its implementation and tests are complete.
+The workflow in this document is implemented in the new Flutter frontend and the Spring backend. The implementation status, endpoint inventory, automated coverage, live-browser scenarios, and remaining external-integration limits are recorded in `identity-access-implementation-and-test-report.md`.
+
+### 1.1 Implementation boundary
+
+- The implementation deliberately replaces the former school-driven identity-link workflow; backward compatibility with that unfinished workflow is not retained.
+- Existing operational school records remain intact, but account ownership, invitation, recovery, and guardian portability now follow this document.
+- This release uses a fresh-schema installation model. Hibernate creates the schema from the current entities, after which the backend applies the canonical reference-data seed at `src/main/resources/db/seed/lookup.sql`.
+- The seed contains lookup/reference rows only. It contains no schema DDL, no hard-coded database selection, and is safe to run repeatedly without creating duplicate lookup values.
+- A verified phone is evidence that the recipient controls that phone at that moment. It is never sufficient by itself to connect or merge another account.
+- Connecting an existing account always requires its exact global username and password, or completion of that account's recovery flow.
+
+### 1.2 Pre-production delivery decision
+
+The product currently uses the existing email notification path to deliver invitation and recovery codes during development and internal testing. The API returns the actual delivery channel and a masked destination so the UI never claims that an email-delivered code was sent by SMS.
+
+This is a temporary implementation boundary, not a change to the production identity rule. Before production, the delivery channel must change to SMS and be tested with Ghanaian/international numbers, delivery delays, duplicate callbacks, rejected messages, provider outages, retries, and testing-code exposure disabled. Until that change, the email-code bridge must not be described as definitive proof that the recipient controls the supplied phone number.
 
 ---
 
@@ -1278,4 +1293,3 @@ Ama verifies her phone
 14. Forgot-username matching evaluates every account independently.
 15. Password reset affects one exact username only.
 16. Every security-sensitive action is tenant-safe and audited.
-

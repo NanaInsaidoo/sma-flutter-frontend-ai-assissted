@@ -53,6 +53,42 @@ void main() {
     expect(captured.url.queryParameters['academicTermId'], '44');
   });
 
+  test('loads current and prepared academic terms for fee setup', () async {
+    late http.Request captured;
+    final api = FeeApiClient(
+      accessToken: 'token',
+      client: MockClient((request) async {
+        captured = request;
+        return http.Response(
+          jsonEncode([
+            {
+              'id': 44,
+              'academicYear': {'name': '2026-2027'},
+              'termType': {'name': 'First Term'},
+              'lifecycleStatus': 'ACTIVE',
+              'isCurrentTerm': true,
+            },
+            {
+              'id': 45,
+              'academicYear': {'name': '2026-2027'},
+              'termType': {'name': 'Second Term'},
+              'lifecycleStatus': 'PREPARED',
+              'isCurrentTerm': false,
+            },
+          ]),
+          200,
+        );
+      }),
+    );
+
+    final terms = await api.getAcademicTerms('SCH-001');
+
+    expect(captured.url.path, endsWith('/api/academic-terms'));
+    expect(captured.url.queryParameters['customSchoolId'], 'SCH-001');
+    expect(terms.map((term) => term.id), [44, 45]);
+    expect(terms.last.isPrepared, isTrue);
+  });
+
   test('creates a draft with ordered fee items', () async {
     late http.Request captured;
     final api = FeeApiClient(

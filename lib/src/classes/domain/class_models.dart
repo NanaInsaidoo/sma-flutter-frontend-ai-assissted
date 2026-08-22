@@ -95,6 +95,12 @@ abstract class ClassesRepository {
 
   Future<List<SchoolStaffOption>> getSchoolStaff(String customSchoolId);
 
+  Future<void> grantStaffRole({
+    required String customSchoolId,
+    required SchoolStaffOption staff,
+    required String role,
+  });
+
   Future<List<SubjectTeacherAssignment>> getSubjectTeacherAssignments({
     required String customSchoolId,
     required int streamId,
@@ -215,19 +221,27 @@ class ClassTeacherAssignment {
 class SchoolStaffOption {
   const SchoolStaffOption({
     required this.id,
+    required this.userId,
     required this.name,
     required this.email,
     required this.role,
+    required this.roles,
     required this.status,
   });
 
   final String id;
+  final String userId;
   final String name;
   final String email;
   final String role;
+  final List<String> roles;
   final String status;
 
   bool get active => status.trim().toUpperCase() == 'ACTIVE';
+
+  bool hasRole(String requiredRole) => roles.any(
+    (role) => role.trim().toUpperCase() == requiredRole.trim().toUpperCase(),
+  );
 }
 
 class SubjectTeacherAssignment {

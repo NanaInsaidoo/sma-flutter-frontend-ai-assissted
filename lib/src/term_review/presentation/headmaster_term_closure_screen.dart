@@ -60,6 +60,22 @@ class _State extends State<HeadmasterTermClosureScreen> {
     actions.text = '${x.facilities['requiredActions'] ?? ''}';
   }
 
+  Future<void> _reloadCurrentTerm() async {
+    final refreshed = await widget.repository.get(widget.schoolId);
+    if (!mounted) return;
+    final previousWarningControllers = warningControllers.values.toList();
+    warningControllers.clear();
+    setState(() {
+      data = null;
+      future = Future.value(refreshed);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      for (final controller in previousWarningControllers) {
+        controller.dispose();
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) => FutureBuilder<HeadmasterTermClosure>(
     future: future,
@@ -411,7 +427,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
         ],
       ),
     );
-    c.dispose();
+    WidgetsBinding.instance.addPostFrameCallback((_) => c.dispose());
     if (confirmed == true) {
       await run(
         () => widget.repository.close(
@@ -422,6 +438,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
       );
       if (mounted && data?.transition.isNotEmpty == true) {
         await _showTransitionComplete();
+        await _reloadCurrentTerm();
         widget.onTermTransitioned?.call();
       }
     }

@@ -25,6 +25,7 @@ class GradeDetailScreen extends StatefulWidget {
     this.onOpenAssessments,
     this.onOpenIncidents,
     this.onOpenCalendar,
+    this.attendanceRepository,
     required this.repository,
     this.onClassTeachersChanged,
     required this.onBack,
@@ -46,6 +47,7 @@ class GradeDetailScreen extends StatefulWidget {
   final VoidCallback? onOpenAssessments;
   final VoidCallback? onOpenIncidents;
   final VoidCallback? onOpenCalendar;
+  final AttendanceRepository? attendanceRepository;
   final ClassesRepository repository;
   final Future<void> Function()? onClassTeachersChanged;
   final VoidCallback onBack;
@@ -134,10 +136,12 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
   bool _loadingSubjects = true;
   bool _subjectActionBusy = false;
   String? _subjectError;
-  late final AttendanceRepository _attendanceRepository = AttendanceApiClient(
-    accessToken: widget.accessToken,
-    onRefreshAccessToken: widget.onRefreshAccessToken,
-  );
+  late final AttendanceRepository _attendanceRepository =
+      widget.attendanceRepository ??
+      AttendanceApiClient(
+        accessToken: widget.accessToken,
+        onRefreshAccessToken: widget.onRefreshAccessToken,
+      );
   late Future<AttendanceRoster> _rosterFuture;
   late Future<AttendanceTermHistory> _attendanceHistoryFuture;
   bool _attendanceRegisterOpen = false;
@@ -612,9 +616,31 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
       }
       return;
     }
+    final newlyAssigned = selected.difference(existingIds);
+    final missingRole = <SchoolStaffOption>[
+      for (final staffId in newlyAssigned)
+        ..._staff.where(
+          (member) =>
+              member.id == staffId && !member.hasRole('SUBJECT_TEACHER'),
+        ),
+    ];
+    for (final member in missingRole) {
+      final confirmed = await _confirmTeacherRole(
+        member,
+        roleLabel: 'Subject Teacher',
+      );
+      if (!confirmed) return;
+    }
     setState(() => _subjectActionBusy = true);
     try {
-      for (final staffId in selected.difference(existingIds)) {
+      for (final member in missingRole) {
+        await widget.repository.grantStaffRole(
+          customSchoolId: widget.customSchoolId,
+          staff: member,
+          role: 'SUBJECT_TEACHER',
+        );
+      }
+      for (final staffId in newlyAssigned) {
         await widget.repository.addSubjectTeacherAssignment(
           customSchoolId: widget.customSchoolId,
           streamId: widget.streamId,
@@ -650,6 +676,32 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
       }
     }
     if (mounted) setState(() => _subjectActionBusy = false);
+  }
+
+  Future<bool> _confirmTeacherRole(
+    SchoolStaffOption staff, {
+    required String roleLabel,
+  }) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Teacher access required'),
+            content: Text(
+              '${staff.name} does not currently have $roleLabel access. Assign this role now?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel assignment'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Assign role'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
   }
 
   void _closeDrawer() {
@@ -740,14 +792,32 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
     );
     if (selection == null) return;
 
+    final selectedStaff = staff.firstWhere(
+      (member) => member.id == selection.staffId,
+    );
+    final needsRole = !selectedStaff.hasRole('CLASS_TEACHER');
+    if (needsRole &&
+        !await _confirmTeacherRole(selectedStaff, roleLabel: 'Class Teacher')) {
+      return;
+    }
+
     await _performTeacherAction(
       successMessage: 'Class teacher assigned.',
-      action: () => widget.repository.addClassTeacher(
-        customSchoolId: widget.customSchoolId,
-        streamId: widget.streamId,
-        staffId: selection.staffId,
-        isPrimary: selection.isPrimary,
-      ),
+      action: () async {
+        if (needsRole) {
+          await widget.repository.grantStaffRole(
+            customSchoolId: widget.customSchoolId,
+            staff: selectedStaff,
+            role: 'CLASS_TEACHER',
+          );
+        }
+        await widget.repository.addClassTeacher(
+          customSchoolId: widget.customSchoolId,
+          streamId: widget.streamId,
+          staffId: selection.staffId,
+          isPrimary: selection.isPrimary,
+        );
+      },
     );
   }
 

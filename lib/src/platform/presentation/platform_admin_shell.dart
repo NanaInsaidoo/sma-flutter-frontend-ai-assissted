@@ -260,9 +260,10 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
                     existingSchool: widget.resumeOnboarding
                         ? routeSchool
                         : null,
-                    initialStep: widget.resumeOnboarding && routeSchool != null
-                        ? _onboardingStepIndex(routeSchool)
-                        : null,
+                    // The detailed onboarding record is authoritative for the
+                    // current step. School-list summaries may omit
+                    // `completedSteps`, so deriving the wizard step from the
+                    // summary progress can incorrectly reopen an earlier page.
                     onBack: () => widget.onNavigatePath(
                       widget.resumeOnboarding
                           ? '${widget.basePath}/onboarding'
@@ -3378,14 +3379,6 @@ String _stageForProgress(double progress) {
   if (progress < .5) return 'School profile';
   if (progress < .75) return 'Academic setup';
   return 'Administrator invitation';
-}
-
-int _onboardingStepIndex(ManagedSchool school) {
-  final normalized = school.progress.isNaN
-      ? 0.0
-      : school.progress.clamp(0.0, 1.0);
-  final step = (normalized * 9).floor();
-  return step.clamp(0, 8);
 }
 
 String _initialsForName(String value) {

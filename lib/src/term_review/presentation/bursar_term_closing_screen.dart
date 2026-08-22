@@ -380,10 +380,7 @@ class _State extends State<BursarTermClosingScreen> {
               title: Text(
                 '${item['name'] ?? 'Item'} · ${item['category'] ?? 'Uncategorised'}',
               ),
-              subtitle: Text(
-                '${item['description'] ?? ''}\nQty ${item['quantity'] ?? 1} · ${_gh(double.tryParse('${item['unitPrice']}') ?? 0)} each · ${item['reason'] ?? ''}',
-              ),
-              isThreeLine: true,
+              subtitle: _recommendationDetails(item),
               trailing: locked
                   ? null
                   : IconButton(
@@ -410,10 +407,7 @@ class _State extends State<BursarTermClosingScreen> {
               title: Text(
                 '${item['name'] ?? 'Item'} · ${item['category'] ?? 'Uncategorised'}',
               ),
-              subtitle: Text(
-                '${item['description'] ?? ''}\nQty ${item['quantity'] ?? 1} · ${_gh(double.tryParse('${item['unitPrice']}') ?? 0)} each · ${item['reason'] ?? ''}',
-              ),
-              isThreeLine: true,
+              subtitle: _recommendationDetails(item),
               trailing: locked
                   ? null
                   : Wrap(
@@ -435,6 +429,52 @@ class _State extends State<BursarTermClosingScreen> {
             );
           }),
       ],
+    ),
+  );
+
+  Widget _recommendationDetails(Map<String, dynamic> item) {
+    final description = '${item['description'] ?? ''}'.trim();
+    final reason = '${item['reason'] ?? ''}'.trim();
+    final unitPrice = _gh(double.tryParse('${item['unitPrice']}') ?? 0);
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (description.isNotEmpty) ...[
+            Text(description),
+            const SizedBox(height: 7),
+          ],
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              _recommendationFact('Quantity', '${item['quantity'] ?? 1}'),
+              _recommendationFact('Unit price', unitPrice),
+            ],
+          ),
+          if (reason.isNotEmpty) ...[
+            const SizedBox(height: 7),
+            Text(
+              'Reason: $reason',
+              style: const TextStyle(color: AppColors.muted),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _recommendationFact(String label, String value) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+    decoration: BoxDecoration(
+      color: AppColors.background,
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: AppColors.border),
+    ),
+    child: Text(
+      '$label: $value',
+      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
     ),
   );
 

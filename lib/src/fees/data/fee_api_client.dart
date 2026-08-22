@@ -67,6 +67,31 @@ class FeeApiClient {
     return CurrentAcademicTerm.fromJson(_decodeMap(response));
   }
 
+  Future<List<FeeAcademicTermOption>> getAcademicTerms(
+    String customSchoolId,
+  ) async {
+    final response = await _send(
+      'GET',
+      '/api/academic-terms?customSchoolId=${Uri.encodeQueryComponent(customSchoolId)}',
+    );
+    final terms = _decodeList(response)
+        .whereType<Map<String, dynamic>>()
+        .map(FeeAcademicTermOption.fromJson)
+        .where((term) => term.id > 0)
+        .toList();
+    terms.sort((left, right) {
+      int priority(FeeAcademicTermOption term) {
+        if (term.isCurrent) return 0;
+        if (term.isPrepared) return 1;
+        return 2;
+      }
+
+      final byPriority = priority(left).compareTo(priority(right));
+      return byPriority != 0 ? byPriority : right.id.compareTo(left.id);
+    });
+    return terms;
+  }
+
   Future<List<FeeStudent>> getStudents(String customSchoolId) async {
     final response = await _send(
       'GET',

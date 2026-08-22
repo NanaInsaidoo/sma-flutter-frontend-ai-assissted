@@ -614,7 +614,9 @@ class _CompleteAssessmentWorkflowState
         _open(_Route.assessments);
       case 'Generate Report Cards':
         if (!_evaluationManager) {
-          _notice('Only authorized academic managers can generate report cards.');
+          _notice(
+            'Only authorized academic managers can generate report cards.',
+          );
           return;
         }
         if (widget.customSchoolId.trim().isNotEmpty) {
@@ -637,7 +639,9 @@ class _CompleteAssessmentWorkflowState
 
   Future<void> _openFinalReportManagement() async {
     if (!_evaluationManager) {
-      _notice('Final Report Management is available to authorized academic managers only.');
+      _notice(
+        'Final Report Management is available to authorized academic managers only.',
+      );
       return;
     }
     _open(_Route.finalReports);
@@ -6524,7 +6528,7 @@ class _CompleteAssessmentWorkflowState
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text('Publish ${stream.name}?'),
+        title: Text('Publish ${stream.displayName}?'),
         content: Text(
           '${stream.pendingPublication > 0 ? stream.pendingPublication : stream.published} report(s) will be published and visible to parents.',
         ),
@@ -6542,13 +6546,55 @@ class _CompleteAssessmentWorkflowState
     );
     if (confirmed != true || !mounted) return;
     setState(() => stream.publishing = true);
-    await Future<void>.delayed(const Duration(milliseconds: 650));
-    if (!mounted) return;
-    setState(() {
-      stream.published = stream.ready;
+    try {
+      final published = await _publishGeneratedReportsForStream(stream);
+      if (!mounted) return;
       stream.publishing = false;
-    });
-    _notice('${stream.name} reports published.');
+      await _loadFinalReportOverview();
+      if (!mounted) return;
+      _notice(
+        published == 0
+            ? 'No generated reports remain to publish for ${stream.displayName}.'
+            : '$published ${published == 1 ? 'report' : 'reports'} published for ${stream.displayName}.',
+      );
+    } on AssessmentApiException catch (error) {
+      if (!mounted) return;
+      setState(() => stream.publishing = false);
+      _notice(error.message);
+    }
+  }
+
+  Future<int> _publishGeneratedReportsForStream(
+    _FinalReportStream stream,
+  ) async {
+    if (widget.customSchoolId.trim().isEmpty) {
+      throw const AssessmentApiException(
+        'A live school session is required to publish report cards.',
+      );
+    }
+    final setup = await _assessmentFormSetup;
+    final loaded = await _loadLiveReportReadiness(setup, stream.name);
+    if (!loaded || !mounted) return 0;
+    final generated = _reportCardStudents
+        .where(
+          (student) =>
+              normalizeReportStatus(_reportStatusFor(student)) == 'Generated',
+        )
+        .toList();
+    if (generated.isEmpty) return 0;
+    await Future.wait(
+      generated.map(
+        (student) => _assessmentApi.publishStudentReportCard(
+          customSchoolId: widget.customSchoolId,
+          customStudentId: student.id,
+          termId: setup.termId,
+          term: setup.termSequence,
+          academicYearId: setup.academicYearId,
+          publishedBy: widget.viewerName,
+        ),
+      ),
+    );
+    return generated.length;
   }
 
   Widget _finalReports() {
@@ -6623,16 +6669,42 @@ class _CompleteAssessmentWorkflowState
         _notice('There are no report cards ready to publish.');
         return;
       }
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Publish all ready reports?'),
+          content: Text(
+            '$pendingPublication report(s) across ${publishable.length} stream(s) will be published and visible to parents.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Publish all'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
       setState(() => _isPublishingAllReports = true);
-      await Future<void>.delayed(const Duration(milliseconds: 700));
-      if (!mounted) return;
-      setState(() {
+      try {
+        var publishedReports = 0;
         for (final stream in publishable) {
-          stream.published = stream.ready;
+          publishedReports += await _publishGeneratedReportsForStream(stream);
         }
-        _isPublishingAllReports = false;
-      });
-      _notice('${publishable.length} stream(s) published.');
+        if (!mounted) return;
+        setState(() => _isPublishingAllReports = false);
+        await _loadFinalReportOverview();
+        if (!mounted) return;
+        _notice('$publishedReports report card(s) published.');
+      } on AssessmentApiException catch (error) {
+        if (!mounted) return;
+        setState(() => _isPublishingAllReports = false);
+        _notice(error.message);
+      }
     }
 
     return SingleChildScrollView(
@@ -7360,7 +7432,7 @@ class _CompleteAssessmentWorkflowState
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                stream.name,
+                stream.displayName,
                 style: const TextStyle(fontWeight: FontWeight.w800),
               ),
               Text(
@@ -11509,6 +11581,18 @@ class _FinalReportStream {
   final int ratedEvaluationCriteria;
   final int requiredEvaluationCriteria;
   bool publishing = false;
+
+  String get displayName {
+    final parts = name
+        .split(' - ')
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .toList();
+    if (parts.length >= 3 && parts[0] == parts[1]) {
+      return <String>[parts.first, ...parts.skip(2)].join(' - ');
+    }
+    return name;
+  }
 
   int get evaluationPercent => requiredEvaluationCriteria == 0
       ? 0

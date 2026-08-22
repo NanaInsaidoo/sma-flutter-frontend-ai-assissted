@@ -28,6 +28,7 @@ void main() {
               'requesterName': 'Eric GoM',
               'approverId': 8,
               'approverName': 'Head Teacher',
+              'decidedByName': 'Nana Boateng',
             },
           ]),
           200,
@@ -43,6 +44,7 @@ void main() {
     );
     expect(rows.single.studentName, 'Ama Mensah');
     expect(rows.single.requesterName, 'Eric GoM');
+    expect(rows.single.decidedByName, 'Nana Boateng');
     expect(rows.single.termId, 9);
   });
 

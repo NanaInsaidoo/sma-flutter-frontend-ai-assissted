@@ -14,6 +14,7 @@ class GuardianPortalApiClient {
   }) : _client = client ?? http.Client();
 
   String? accessToken;
+  String? schoolId;
   final Future<String?> Function()? onRefreshAccessToken;
   final http.Client _client;
 
@@ -131,6 +132,26 @@ class GuardianPortalApiClient {
     ),
   );
 
+  Future<Map<String, dynamic>> mergeGuardianAccounts({
+    required String otherUsername,
+    required String otherPassword,
+    required String canonicalUsername,
+    required String canonicalPassword,
+  }) async => _map(
+    _decode(
+      await _send(
+        '/api/account-access/guardian/merge',
+        method: 'POST',
+        body: {
+          'otherUsername': otherUsername,
+          'otherPassword': otherPassword,
+          'canonicalUsername': canonicalUsername,
+          'canonicalPassword': canonicalPassword,
+        },
+      ),
+    ),
+  );
+
   Future<List<HouseholdGuardian>> householdGuardians() async =>
       _list(_decode(await _send('/api/v1/guardian-portal/household/guardians')))
           .map((item) => HouseholdGuardian.fromJson(_map(item)))
@@ -220,6 +241,8 @@ class GuardianPortalApiClient {
               if (body != null) 'Content-Type': 'application/json',
               if (accessToken != null && accessToken!.isNotEmpty)
                 'Authorization': 'Bearer $accessToken',
+              if (schoolId != null && schoolId!.isNotEmpty)
+                'X-School-ID': schoolId!,
             });
       if (body != null) request.body = jsonEncode(body);
       final response = await http.Response.fromStream(

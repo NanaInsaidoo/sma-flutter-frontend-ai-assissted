@@ -1472,7 +1472,10 @@ class _IncidentDetailViewState extends State<IncidentDetailView> {
                   Expanded(
                     child: Text(
                       _incident.followUpRequired
-                          ? 'Follow-up required'
+                          ? (_incident.status == 'RESOLVED' ||
+                                    _incident.status == 'CLOSED'
+                                ? 'Post-resolution follow-up scheduled'
+                                : 'Follow-up required')
                           : 'No follow-up required',
                     ),
                   ),
@@ -2416,7 +2419,7 @@ class _StatusProgressCard extends StatelessWidget {
       'OPEN' => .3,
       'IN_PROGRESS' => .55,
       'ESCALATED' => .75,
-      'RESOLVED' => .9,
+      'RESOLVED' => 1.0,
       'CLOSED' => 1.0,
       _ => .35,
     };

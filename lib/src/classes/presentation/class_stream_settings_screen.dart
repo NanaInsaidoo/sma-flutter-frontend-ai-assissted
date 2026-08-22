@@ -400,8 +400,38 @@ class _ClassTeacherSettingsScreenState
       ),
     );
 
-    if (result != true) return;
+    if (result != true || !mounted) return;
+    final needsRole = !selectedStaff.hasRole('CLASS_TEACHER');
+    if (needsRole) {
+      final grantRole = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Teacher access required'),
+          content: Text(
+            '${selectedStaff.name} does not currently have Class Teacher access. Assign this role now?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel assignment'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Assign role'),
+            ),
+          ],
+        ),
+      );
+      if (grantRole != true) return;
+    }
     try {
+      if (needsRole) {
+        await _repository.grantStaffRole(
+          customSchoolId: widget.customSchoolId,
+          staff: selectedStaff,
+          role: 'CLASS_TEACHER',
+        );
+      }
       await _repository.addClassTeacher(
         customSchoolId: widget.customSchoolId,
         streamId: stream.id,

@@ -469,7 +469,8 @@ class _ReversalQueueDialogState extends State<_ReversalQueueDialog> {
 
   bool get _requester =>
       widget.reversal.requestedBy == '${widget.currentUserId}';
-  bool get _approver => widget.reversal.approverId == widget.currentUserId;
+  bool get _approver =>
+      !_requester && widget.reversal.approverId == widget.currentUserId;
 
   Future<void> _action(String action) async {
     if (const {'REJECT', 'CANCEL', 'REASSIGN'}.contains(action) &&
@@ -578,13 +579,15 @@ class _ReversalQueueDialogState extends State<_ReversalQueueDialog> {
               _Line('Original receipt', r.paymentReference),
               _Line(
                 'Requested by',
-                r.requesterName.isEmpty ? r.requestedBy : r.requesterName,
+                r.requesterName.isEmpty ? 'Former user' : r.requesterName,
               ),
               _Line(
                 'Assigned approver',
                 r.approverName.isEmpty ? 'Not assigned' : r.approverName,
               ),
               _Line('Reason', r.reason),
+              if (r.decidedByName.isNotEmpty)
+                _Line('Decision made by', r.decidedByName),
               if (r.reversalReference.isNotEmpty)
                 _Line('Reversal reference', r.reversalReference),
               if (r.isActive) ...[
@@ -594,7 +597,11 @@ class _ReversalQueueDialogState extends State<_ReversalQueueDialog> {
                   builder: (context, snapshot) {
                     final rows =
                         (snapshot.data ?? const <FeeAdjustmentApprover>[])
-                            .where((item) => item.id != widget.currentUserId)
+                            .where(
+                              (item) =>
+                                  !_requester ||
+                                  item.id != widget.currentUserId,
+                            )
                             .toList();
                     return DropdownButtonFormField<int>(
                       value: rows.any((item) => item.id == _approverId)
@@ -749,9 +756,19 @@ class _Filter extends StatelessWidget {
     width: 175,
     child: DropdownButtonFormField<String>(
       value: value,
+      isExpanded: true,
       decoration: InputDecoration(labelText: label),
       items: values.entries
-          .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
+          .map(
+            (e) => DropdownMenuItem(
+              value: e.key,
+              child: Text(
+                e.value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          )
           .toList(),
       onChanged: (value) {
         if (value != null) onChanged(value);

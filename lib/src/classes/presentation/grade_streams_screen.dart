@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/classes_api_client.dart';
 import '../domain/class_models.dart';
+import '../../attendance/domain/attendance_models.dart';
 import '../../theme/app_theme.dart';
 import 'grade_detail_screen.dart';
 import 'class_subject_configuration_screen.dart';
@@ -16,6 +17,7 @@ class GradeStreamsScreen extends StatefulWidget {
     this.onOpenAssessments,
     this.onOpenIncidents,
     this.onOpenCalendar,
+    this.attendanceRepository,
     ClassesRepository? repository,
   }) : _repository = repository;
 
@@ -26,6 +28,7 @@ class GradeStreamsScreen extends StatefulWidget {
   final VoidCallback? onOpenAssessments;
   final VoidCallback? onOpenIncidents;
   final VoidCallback? onOpenCalendar;
+  final AttendanceRepository? attendanceRepository;
   final ClassesRepository? _repository;
 
   @override
@@ -189,6 +192,7 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
         onOpenAssessments: widget.onOpenAssessments,
         onOpenIncidents: widget.onOpenIncidents,
         onOpenCalendar: widget.onOpenCalendar,
+        attendanceRepository: widget.attendanceRepository,
         onBack: () => setState(() => _selectedStream = null),
       );
     }
@@ -528,7 +532,7 @@ class _Toolbar extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           SizedBox(
-            width: 136,
+            width: 220,
             child: DropdownButtonFormField<_StreamStatusFilter>(
               value: status,
               decoration: const InputDecoration(
@@ -691,9 +695,14 @@ class _GradeLevelSection extends StatelessWidget {
                 rows: level.streams
                     .map(
                       (stream) => DataRow(
-                        onSelectChanged: (_) => onOpenStream(level, stream),
+                        key: ValueKey('stream-row-${stream.id}'),
                         cells: [
-                          DataCell(_StreamNameCell(stream: stream)),
+                          DataCell(
+                            _OpenStreamButton(
+                              stream: stream,
+                              onOpen: () => onOpenStream(level, stream),
+                            ),
+                          ),
                           DataCell(_TeacherCell(name: stream.teacherName)),
                           DataCell(_EnrollmentText(stream: stream)),
                           DataCell(_FillCell(stream: stream)),
@@ -713,6 +722,28 @@ class _GradeLevelSection extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _OpenStreamButton extends StatelessWidget {
+  const _OpenStreamButton({required this.stream, required this.onOpen});
+
+  final _StreamSummary stream;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton(
+      onPressed: onOpen,
+      style: TextButton.styleFrom(
+        foregroundColor: AppColors.text,
+        padding: EdgeInsets.zero,
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        alignment: Alignment.centerLeft,
+      ),
+      child: _StreamNameCell(stream: stream),
     );
   }
 }

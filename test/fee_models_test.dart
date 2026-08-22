@@ -32,6 +32,28 @@ void main() {
     expect(term.name, 'Second Term · 2026/2027');
   });
 
+  test('fee term option distinguishes current and prepared terms', () {
+    final current = FeeAcademicTermOption.fromJson({
+      'id': 44,
+      'academicYear': {'name': '2026-2027'},
+      'termType': {'name': 'First Term'},
+      'lifecycleStatus': 'ACTIVE',
+      'isCurrentTerm': true,
+    });
+    final prepared = FeeAcademicTermOption.fromJson({
+      'id': 45,
+      'academicYear': {'name': '2026-2027'},
+      'termType': {'name': 'Second Term'},
+      'lifecycleStatus': 'PREPARED',
+      'isCurrentTerm': false,
+    });
+
+    expect(current.label, 'First Term · 2026-2027');
+    expect(current.isCurrent, isTrue);
+    expect(prepared.label, 'Second Term · 2026-2027');
+    expect(prepared.isPrepared, isTrue);
+  });
+
   test('fee structure parses the versioned backend contract', () {
     final structure = FeeClassStructure.fromJson({
       'structureId': 91,

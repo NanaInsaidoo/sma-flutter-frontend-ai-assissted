@@ -39,6 +39,7 @@ void main() {
       'middleName': 'Efua',
       'lastName': 'Mensah',
       'status': 'PENDING_APPROVAL',
+      'admissionTermId': 2,
       'gender': {'id': 2, 'name': 'Female'},
       'dateOfBirth': [2018, 3, 12],
       'gradeName': 'Basic 2',
@@ -48,6 +49,7 @@ void main() {
     expect(student.gender, 'Female');
     expect(student.dateOfBirth, '2018-03-12');
     expect(student.gradeLevel, 'Basic 2');
+    expect(student.admissionTermId, 2);
   });
 
   test('maps the compact class field returned by student filters', () {

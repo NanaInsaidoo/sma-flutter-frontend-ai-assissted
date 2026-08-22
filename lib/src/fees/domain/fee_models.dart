@@ -149,6 +149,50 @@ class CurrentAcademicTerm {
   }
 }
 
+class FeeAcademicTermOption {
+  const FeeAcademicTermOption({
+    required this.id,
+    required this.termName,
+    required this.academicYear,
+    required this.status,
+    required this.isCurrent,
+  });
+
+  final int id;
+  final String termName;
+  final String academicYear;
+  final String status;
+  final bool isCurrent;
+
+  String get label => [
+    if (termName.trim().isNotEmpty) termName.trim(),
+    if (academicYear.trim().isNotEmpty) academicYear.trim(),
+  ].join(' · ');
+
+  bool get isPrepared => status.trim().toUpperCase() == 'PREPARED';
+
+  factory FeeAcademicTermOption.fromJson(Map<String, dynamic> json) {
+    String nestedName(Object? value) {
+      if (value is Map) {
+        return '${value['name'] ?? value['year'] ?? value['termName'] ?? ''}'
+            .trim();
+      }
+      return '${value ?? ''}'.trim();
+    }
+
+    final closed = json['isClosed'] == true;
+    return FeeAcademicTermOption(
+      id: _intValue(json['id'] ?? json['termId']),
+      termName: nestedName(json['termType'] ?? json['termName']),
+      academicYear: nestedName(json['academicYear']),
+      status: '${json['lifecycleStatus'] ?? (closed ? 'CLOSED' : 'ACTIVE')}'
+          .trim()
+          .toUpperCase(),
+      isCurrent: json['isCurrentTerm'] == true,
+    );
+  }
+}
+
 class FeeStudent {
   const FeeStudent({
     required this.customStudentId,
@@ -204,9 +248,13 @@ class FeeAdjustment {
     required this.status,
     required this.createdByType,
     required this.createdById,
+    required this.createdByName,
+    required this.createdByRole,
     required this.createdDate,
     required this.updatedByType,
     required this.updatedById,
+    required this.updatedByName,
+    required this.updatedByRole,
     required this.updatedDate,
     required this.assignedApproverId,
     required this.assignedApproverName,
@@ -228,9 +276,13 @@ class FeeAdjustment {
   final String status;
   final String createdByType;
   final int createdById;
+  final String createdByName;
+  final String createdByRole;
   final DateTime? createdDate;
   final String updatedByType;
   final int updatedById;
+  final String updatedByName;
+  final String updatedByRole;
   final DateTime? updatedDate;
   final int assignedApproverId;
   final String assignedApproverName;
@@ -259,9 +311,13 @@ class FeeAdjustment {
       status: '${json['status'] ?? ''}',
       createdByType: '${json['createdByType'] ?? ''}',
       createdById: _intValue(json['createdById']),
+      createdByName: '${json['createdByName'] ?? ''}',
+      createdByRole: '${json['createdByRole'] ?? ''}',
       createdDate: _dateValue(json['createdDate'] ?? json['createdAt']),
       updatedByType: '${json['updatedByType'] ?? ''}',
       updatedById: _intValue(json['updatedById']),
+      updatedByName: '${json['updatedByName'] ?? ''}',
+      updatedByRole: '${json['updatedByRole'] ?? ''}',
       updatedDate: _dateValue(json['updatedDate'] ?? json['updatedAt']),
       assignedApproverId: _intValue(json['assignedApproverId']),
       assignedApproverName: '${json['assignedApproverName'] ?? ''}',
@@ -296,16 +352,24 @@ class FeeAdjustmentAction {
     required this.previousStatus,
     required this.newStatus,
     required this.actorId,
+    required this.actorName,
     required this.actorRole,
+    required this.actorRoleDisplay,
     required this.reason,
+    required this.previousApproverName,
+    required this.newApproverName,
     required this.createdAt,
   });
   final String action;
   final String previousStatus;
   final String newStatus;
   final int actorId;
+  final String actorName;
   final String actorRole;
+  final String actorRoleDisplay;
   final String reason;
+  final String previousApproverName;
+  final String newApproverName;
   final DateTime? createdAt;
   factory FeeAdjustmentAction.fromJson(Map<String, dynamic> json) =>
       FeeAdjustmentAction(
@@ -313,8 +377,12 @@ class FeeAdjustmentAction {
         previousStatus: '${json['previousStatus'] ?? ''}',
         newStatus: '${json['newStatus'] ?? ''}',
         actorId: _intValue(json['actorId']),
+        actorName: '${json['actorName'] ?? ''}',
         actorRole: '${json['actorRole'] ?? ''}',
+        actorRoleDisplay: '${json['actorRoleDisplay'] ?? ''}',
         reason: '${json['reason'] ?? ''}',
+        previousApproverName: '${json['previousApproverName'] ?? ''}',
+        newApproverName: '${json['newApproverName'] ?? ''}',
         createdAt: _dateValue(json['createdAt']),
       );
 }
@@ -1216,6 +1284,7 @@ class PaymentReversal {
     required this.approverId,
     required this.approverName,
     required this.decisionReason,
+    required this.decidedByName,
     required this.reversalReference,
     required this.createdAt,
     required this.decidedAt,
@@ -1235,6 +1304,7 @@ class PaymentReversal {
   final int approverId;
   final String approverName;
   final String decisionReason;
+  final String decidedByName;
   final String reversalReference;
   final DateTime? createdAt;
   final DateTime? decidedAt;
@@ -1257,6 +1327,7 @@ class PaymentReversal {
         approverId: _intValue(json['approverId']),
         approverName: '${json['approverName'] ?? ''}',
         decisionReason: '${json['decisionReason'] ?? ''}',
+        decidedByName: '${json['decidedByName'] ?? ''}',
         reversalReference: '${json['reversalReference'] ?? ''}',
         createdAt: _dateValue(json['createdAt']),
         decidedAt: _dateValue(json['decidedAt']),

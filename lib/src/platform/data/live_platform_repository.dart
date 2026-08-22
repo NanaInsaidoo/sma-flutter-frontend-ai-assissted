@@ -90,7 +90,8 @@ class LivePlatformRepository implements PlatformRepository {
       activeSchoolsValue: _statValue(stats, 'activeSchools').$1,
       accountManagers:
           roleScopedManagerTotals?.total ??
-          _statValue(stats, 'accountManagers').$1 ?? accountManagers.length,
+          _statValue(stats, 'accountManagers').$1 ??
+          accountManagers.length,
       pendingApprovals:
           roleScopedManagerTotals?.pending ??
           _statValue(stats, 'pendingApprovals').$1 ??
@@ -718,7 +719,8 @@ class LivePlatformRepository implements PlatformRepository {
     final response = await _get(
       '/api/user-management/schools/$encoded/users?page=0&size=100',
     );
-    final usersJson = response is Map<String, dynamic> && response['users'] != null
+    final usersJson =
+        response is Map<String, dynamic> && response['users'] != null
         ? response['users']
         : _unwrap(response);
     return _asList(usersJson).map((item) {
@@ -1704,7 +1706,8 @@ class LivePlatformRepository implements PlatformRepository {
         active: active.totalElements,
         invited: invited.totalElements,
         pending: pending.totalElements,
-        caption: '${active.totalElements} active · ${invited.totalElements} invited',
+        caption:
+            '${active.totalElements} active · ${invited.totalElements} invited',
         pendingCaption: '${pending.totalElements} pending approval',
       );
     } catch (_) {

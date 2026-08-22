@@ -58,6 +58,8 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
   FeeManagementOverview? _overview;
   FeeStudentFeesPage? _studentFeesPage;
   CurrentAcademicTerm? _currentTerm;
+  List<FeeAcademicTermOption> _feeTerms = const [];
+  int? _selectedFeeStructureTermId;
   List<FeeClassCollectionSummary> _classCollections = const [];
   List<FeeStudentFeeRow> _arrears = const [];
   List<FeeClassStructure> _feeStructures = const [];
@@ -123,6 +125,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
 
   Future<void> _loadInitial() async {
     final currentTerm = await _api.getCurrentTerm(widget.customSchoolId);
+    final feeTerms = await _api.getAcademicTerms(widget.customSchoolId);
     final overview = await _api.getFeeManagementOverview(
       customSchoolId: widget.customSchoolId,
       termId: currentTerm.id,
@@ -131,6 +134,14 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
     setState(() {
       _overview = overview;
       _currentTerm = currentTerm;
+      _feeTerms = feeTerms;
+      for (final term in feeTerms) {
+        if (term.isCurrent) {
+          _selectedFeeStructureTermId = term.id;
+          break;
+        }
+      }
+      _selectedFeeStructureTermId ??= currentTerm.id;
       _classCollections = overview.collectionByClass;
       _arrears = overview.outstandingArrears;
     });
@@ -302,6 +313,24 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
 
   int get _activeTermId => _overview?.termId ?? _currentTerm?.id ?? 0;
 
+  int get _feeStructureTermId =>
+      _selectedFeeStructureTermId ?? _currentTerm?.id ?? _activeTermId;
+
+  FeeAcademicTermOption? get _selectedFeeStructureTerm {
+    for (final term in _feeTerms) {
+      if (term.id == _feeStructureTermId) return term;
+    }
+    return null;
+  }
+
+  String get _feeStructureTermName {
+    final selected = _selectedFeeStructureTerm;
+    if (selected != null && selected.label.trim().isNotEmpty) {
+      return selected.label;
+    }
+    return _termName;
+  }
+
   void _selectTab(_FeeTab tab) {
     setState(() {
       _selectedTab = tab;
@@ -416,7 +445,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
 
   Future<void> _loadFeeStructures({bool force = false}) async {
     if (_feeStructuresLoading || (_feeStructuresLoaded && !force)) return;
-    final termId = _activeTermId;
+    final termId = _feeStructureTermId;
     if (termId <= 0) return;
     setState(() {
       _feeStructuresLoading = true;
@@ -849,14 +878,28 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
       );
     }
     return _FeeStructureContent(
-      termName: _termName,
+      termName: _feeStructureTermName,
+      terms: _feeTerms,
+      selectedTermId: _feeStructureTermId,
       classFees: _classFees(),
       money: _money,
+      onTermChanged: _changeFeeStructureTerm,
       onAddClassLevel: _openClassLevelSheet,
       onEditClassLevel: _openClassLevelSheet,
       onPublishClassLevel: _canApproveFinance ? _publishFeeStructure : null,
       onDeleteClassLevel: _deleteFeeStructure,
     );
+  }
+
+  void _changeFeeStructureTerm(int termId) {
+    if (termId <= 0 || termId == _feeStructureTermId) return;
+    setState(() {
+      _selectedFeeStructureTermId = termId;
+      _feeStructures = const [];
+      _feeStructuresLoaded = false;
+      _feeStructuresError = null;
+    });
+    unawaited(_loadFeeStructures(force: true));
   }
 
   Future<void> _openClassLevelSheet([_ClassFee? classFee]) async {
@@ -913,7 +956,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
             selectedGradeLevel: selectedGradeLevel,
             money: _money,
             customSchoolId: widget.customSchoolId,
-            termId: _activeTermId,
+            termId: _feeStructureTermId,
             api: _api,
           ),
         );
@@ -949,7 +992,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Publish fee structure?'),
         content: Text(
-          'Publish ${classFee.title} fees for $_termName? The published version will become the active structure for this class.',
+          'Publish ${classFee.title} fees for $_feeStructureTermName? The published version will become the active structure for this class.',
         ),
         actions: [
           TextButton(
@@ -2249,8 +2292,11 @@ class _RateBar extends StatelessWidget {
 class _FeeStructureContent extends StatelessWidget {
   const _FeeStructureContent({
     required this.termName,
+    required this.terms,
+    required this.selectedTermId,
     required this.classFees,
     required this.money,
+    required this.onTermChanged,
     required this.onAddClassLevel,
     required this.onEditClassLevel,
     required this.onPublishClassLevel,
@@ -2258,8 +2304,11 @@ class _FeeStructureContent extends StatelessWidget {
   });
 
   final String termName;
+  final List<FeeAcademicTermOption> terms;
+  final int selectedTermId;
   final List<_ClassFee> classFees;
   final String Function(double amount) money;
+  final ValueChanged<int> onTermChanged;
   final VoidCallback? onAddClassLevel;
   final ValueChanged<_ClassFee>? onEditClassLevel;
   final ValueChanged<_ClassFee>? onPublishClassLevel;
@@ -2322,6 +2371,72 @@ class _FeeStructureContent extends StatelessWidget {
             ),
           ],
         ),
+        if (terms.isNotEmpty) ...[
+          const SizedBox(height: 18),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.calendar_month_outlined,
+                  color: AppColors.green,
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Fee term',
+                        style: TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'Choose the current or prepared term whose fees you want to configure.',
+                        style: TextStyle(color: AppColors.muted, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 16),
+                SizedBox(
+                  width: 300,
+                  child: DropdownButtonFormField<int>(
+                    key: const ValueKey('fee-structure-term-selector'),
+                    value: selectedTermId,
+                    decoration: const InputDecoration(
+                      labelText: 'Academic term',
+                      isDense: true,
+                    ),
+                    items: terms
+                        .map(
+                          (term) => DropdownMenuItem<int>(
+                            value: term.id,
+                            child: Text(
+                              '${term.label}${term.isCurrent
+                                  ? ' · Current'
+                                  : term.isPrepared
+                                  ? ' · Prepared'
+                                  : ''}',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value != null) onTermChanged(value);
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: 24),
         LayoutBuilder(
           builder: (context, constraints) {
@@ -5515,6 +5630,12 @@ class _PaymentReversalDialogState extends State<_PaymentReversalDialog> {
   bool _saving = false;
   String? _error;
 
+  bool get _requester =>
+      widget.existing?.requestedBy == '${widget.currentUserId}';
+  bool get _approver =>
+      !_requester && widget.existing?.approverId == widget.currentUserId;
+  bool get _canSelectApprover => widget.existing == null || _requester;
+
   @override
   void initState() {
     super.initState();
@@ -5714,7 +5835,11 @@ class _PaymentReversalDialogState extends State<_PaymentReversalDialog> {
                   builder: (context, snapshot) {
                     final approvers =
                         (snapshot.data ?? const <FeeAdjustmentApprover>[])
-                            .where((item) => item.id != widget.currentUserId)
+                            .where(
+                              (item) =>
+                                  !_canSelectApprover ||
+                                  item.id != widget.currentUserId,
+                            )
                             .toList();
                     return DropdownButtonFormField<int>(
                       key: const Key('payment-reversal-approver'),
@@ -5730,7 +5855,7 @@ class _PaymentReversalDialogState extends State<_PaymentReversalDialog> {
                             ),
                           )
                           .toList(),
-                      onChanged: _saving
+                      onChanged: _saving || !_canSelectApprover
                           ? null
                           : (value) => setState(() => _approverId = value),
                     );
@@ -5778,7 +5903,7 @@ class _PaymentReversalDialogState extends State<_PaymentReversalDialog> {
             onPressed: _saving ? null : () => _create(true),
             child: const Text('Submit for approval'),
           ),
-        ] else if (existing.status == 'DRAFT') ...[
+        ] else if (existing.status == 'DRAFT' && _requester) ...[
           OutlinedButton(
             onPressed: _saving ? null : () => _action('CANCEL'),
             child: const Text('Cancel request'),
@@ -5788,23 +5913,27 @@ class _PaymentReversalDialogState extends State<_PaymentReversalDialog> {
             child: const Text('Submit for approval'),
           ),
         ] else if (existing.status == 'PENDING_APPROVAL') ...[
-          OutlinedButton(
-            onPressed: _saving ? null : () => _action('CANCEL'),
-            child: const Text('Cancel request'),
-          ),
-          OutlinedButton(
-            onPressed: _saving ? null : () => _action('REASSIGN'),
-            child: const Text('Change approver'),
-          ),
-          OutlinedButton(
-            onPressed: _saving ? null : () => _action('REJECT'),
-            child: const Text('Reject'),
-          ),
-          FilledButton(
-            key: const Key('approve-reversal'),
-            onPressed: _saving ? null : () => _action('APPROVE'),
-            child: const Text('Approve reversal'),
-          ),
+          if (_requester) ...[
+            OutlinedButton(
+              onPressed: _saving ? null : () => _action('CANCEL'),
+              child: const Text('Cancel request'),
+            ),
+            OutlinedButton(
+              onPressed: _saving ? null : () => _action('REASSIGN'),
+              child: const Text('Change approver'),
+            ),
+          ],
+          if (_approver) ...[
+            OutlinedButton(
+              onPressed: _saving ? null : () => _action('REJECT'),
+              child: const Text('Reject'),
+            ),
+            FilledButton(
+              key: const Key('approve-reversal'),
+              onPressed: _saving ? null : () => _action('APPROVE'),
+              child: const Text('Approve reversal'),
+            ),
+          ],
         ] else if (existing.status == 'APPROVED') ...[
           FilledButton.icon(
             key: const Key('download-reversal-confirmation'),

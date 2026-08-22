@@ -17,7 +17,7 @@ class AuthApiClient {
     required String password,
   }) async {
     final response = await _post('/api/auth/login', {
-      ..._identifierPayload(identifier),
+      'userName': identifier.trim(),
       'password': password,
     });
 
@@ -198,6 +198,7 @@ class AuthSession {
     required this.customSchoolId,
     required this.schoolName,
     required this.userId,
+    this.schoolMemberships = const [],
   });
 
   final String accessToken;
@@ -215,6 +216,7 @@ class AuthSession {
   final String customSchoolId;
   final String schoolName;
   final int userId;
+  final List<AuthSchoolMembership> schoolMemberships;
 
   bool get isAccountManagerRole {
     final value = role.trim().toUpperCase();
@@ -313,6 +315,13 @@ class AuthSession {
           '',
       userId:
           _intValue(json['userId']) ?? _intValue(tokenClaims['userId']) ?? 0,
+      schoolMemberships: (json['schoolMemberships'] as List? ?? const [])
+          .whereType<Map>()
+          .map(
+            (value) =>
+                AuthSchoolMembership.fromJson(Map<String, dynamic>.from(value)),
+          )
+          .toList(growable: false),
     );
   }
 
@@ -332,6 +341,9 @@ class AuthSession {
     'customSchoolId': customSchoolId,
     'schoolName': schoolName,
     'userId': userId,
+    'schoolMemberships': schoolMemberships
+        .map((membership) => membership.toJson())
+        .toList(growable: false),
   };
 
   AuthSession copyWith({
@@ -403,6 +415,35 @@ class AuthSession {
       userId: refreshed.userId == 0 ? userId : refreshed.userId,
     );
   }
+}
+
+class AuthSchoolMembership {
+  const AuthSchoolMembership({
+    required this.schoolId,
+    required this.schoolName,
+    required this.membershipType,
+    this.roles = const [],
+  });
+
+  final String schoolId;
+  final String schoolName;
+  final String membershipType;
+  final List<String> roles;
+
+  factory AuthSchoolMembership.fromJson(Map<String, dynamic> json) =>
+      AuthSchoolMembership(
+        schoolId: json['schoolId']?.toString() ?? '',
+        schoolName: json['schoolName']?.toString() ?? '',
+        membershipType: json['membershipType']?.toString() ?? '',
+        roles: _stringList(json['roles']),
+      );
+
+  Map<String, dynamic> toJson() => {
+    'schoolId': schoolId,
+    'schoolName': schoolName,
+    'membershipType': membershipType,
+    'roles': roles,
+  };
 }
 
 List<String> _stringList(dynamic value) {

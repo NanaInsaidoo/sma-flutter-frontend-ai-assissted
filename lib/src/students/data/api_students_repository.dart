@@ -512,6 +512,11 @@ class ApiStudentsRepository implements StudentsRepository {
     final feeBalance = feeAccount?.balance ?? feeRow?.balance ?? 0;
     final enrolledOn = _date(json['enrolledOn'] ?? json['createdAt']);
     final termStart = _date(term.startDate);
+    final newThisTerm = detail.admissionTermId != null && term.id != null
+        ? detail.admissionTermId == term.id
+        : enrolledOn != null &&
+              termStart != null &&
+              !enrolledOn.isBefore(termStart);
 
     final householdMembers = <StudentHouseholdMember>[
       ...guardians.map(
@@ -551,10 +556,7 @@ class ApiStudentsRepository implements StudentsRepository {
           : 'Household ${detail.householdId}',
       status: _studentStatus(detail.status),
       enrolledOn: enrolledOn,
-      newThisTerm:
-          enrolledOn != null &&
-          termStart != null &&
-          !enrolledOn.isBefore(termStart),
+      newThisTerm: newThisTerm,
       attendanceRate: attendance.rate,
       feeBalance: feeBalance,
       requirementsCompleted: requirements

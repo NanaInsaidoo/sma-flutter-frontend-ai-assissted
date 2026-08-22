@@ -1919,8 +1919,6 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
   final _dateOfBirth = TextEditingController();
   final _email = TextEditingController();
   final _phone = TextEditingController();
-  final _existingIdentifier = TextEditingController();
-  final _verificationCode = TextEditingController();
   final _position = TextEditingController();
   final _startDate = TextEditingController();
   final _basicPay = TextEditingController();
@@ -1938,23 +1936,15 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
   String _employmentType = 'FULL_TIME';
   StaffLookupOption? _department;
   StaffLookupOption? _employmentStatus;
-  CreatedSchoolUser? _createdUser;
-  VerifiedIdentityProfile? _verifiedIdentity;
-  IdentityLinkStartResult? _linkRequest;
-  bool _linkExistingAccount = false;
   String? _staffId;
+  String? _invitationToken;
+  String? _invitationMaskedPhone;
   bool _loadingLookups = true;
   bool _saving = false;
   String? _error;
   List<StaffLookupOption> _departments = const [];
   List<StaffLookupOption> _employmentStatuses = const [];
   PlatformFile? _resume;
-
-  String get _userTypeForRole => switch (_role) {
-    'ADMINISTRATOR' => 'ADMIN',
-    'HEADMASTER' => 'HEADMASTER',
-    _ => 'STAFF',
-  };
 
   @override
   void initState() {
@@ -1970,8 +1960,6 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
     _dateOfBirth.dispose();
     _email.dispose();
     _phone.dispose();
-    _existingIdentifier.dispose();
-    _verificationCode.dispose();
     _position.dispose();
     _startDate.dispose();
     _basicPay.dispose();
@@ -2062,92 +2050,12 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const _DrawerSectionTitle('Staff login identity'),
-        SegmentedButton<bool>(
-          segments: const [
-            ButtonSegment(
-              value: false,
-              icon: Icon(Icons.person_add_alt_1_outlined),
-              label: Text('Create new account'),
-            ),
-            ButtonSegment(
-              value: true,
-              icon: Icon(Icons.link_rounded),
-              label: Text('Link existing SMA account'),
-            ),
-          ],
-          selected: {_linkExistingAccount},
-          onSelectionChanged: (selection) => setState(() {
-            _linkExistingAccount = selection.first;
-            _error = null;
-          }),
+        const _DrawerSectionTitle('Invitation identity'),
+        const Text(
+          'The school records the staff details and sends a restricted SMS invitation. The staff member verifies their own information, chooses their permanent password, and decides whether to connect any possible existing account.',
+          style: TextStyle(color: AppColors.muted, height: 1.35),
         ),
         const SizedBox(height: 14),
-        if (_linkExistingAccount) ...[
-          const Text(
-            'Use the person’s existing username, verified email, or verified phone number. We will send a code to the account owner before any records are linked.',
-            style: TextStyle(color: AppColors.muted, height: 1.35),
-          ),
-          const SizedBox(height: 12),
-          _DrawerField(
-            controller: _existingIdentifier,
-            label: 'Existing account *',
-            hint: 'Username, email, or verified phone',
-          ),
-          if (_linkRequest == null)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: OutlinedButton.icon(
-                onPressed: _saving ? null : _startIdentityVerification,
-                icon: const Icon(Icons.mark_email_read_outlined),
-                label: const Text('Send verification code'),
-              ),
-            )
-          else if (_verifiedIdentity == null) ...[
-            Text(
-              'Code sent to ${_linkRequest!.verificationDestination}.',
-              style: const TextStyle(
-                color: AppColors.green,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 8),
-            _DrawerField(
-              controller: _verificationCode,
-              label: '6-digit verification code *',
-              hint: '000000',
-            ),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: FilledButton.icon(
-                onPressed: _saving ? null : _verifyExistingIdentity,
-                icon: const Icon(Icons.verified_user_outlined),
-                label: const Text('Verify account owner'),
-              ),
-            ),
-          ] else
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFE8F7F4),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.verified_rounded, color: AppColors.green),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Account owner verified. Personal details were pre-filled from the existing SMA identity.',
-                      style: TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          const SizedBox(height: 14),
-        ],
         Row(
           children: [
             Expanded(
@@ -2174,7 +2082,7 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
         ),
         _DateDrawerField(
           controller: _dateOfBirth,
-          label: 'Date of birth *',
+          label: 'Date of birth (optional)',
           onPick: () => _pickDate(_dateOfBirth, lastDate: DateTime.now()),
         ),
         Row(
@@ -2182,7 +2090,7 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
             Expanded(
               child: _DrawerField(
                 controller: _email,
-                label: 'Email *',
+                label: 'Email (optional)',
                 hint: 'name@school.edu.gh',
               ),
             ),
@@ -2242,7 +2150,7 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
         ),
         const SizedBox(height: 12),
         const Text(
-          'The backend will send invitation credentials and require this staff member to change password on first login.',
+          'The staff member will receive an SMS code and create their own global username and permanent password.',
           style: TextStyle(color: AppColors.muted, height: 1.35),
         ),
       ],
@@ -2253,10 +2161,6 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (_createdUser != null) ...[
-          _CreatedUserBanner(user: _createdUser!),
-          const SizedBox(height: 16),
-        ],
         const _DrawerSectionTitle('Employment details'),
         _DrawerField(
           controller: _position,
@@ -2558,26 +2462,20 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
 
   String? _validateStep() {
     if (_step == 0) {
-      if (_linkExistingAccount && _verifiedIdentity == null) {
-        return 'Verify the existing account owner before continuing.';
-      }
       if (_firstName.text.trim().isEmpty ||
           _lastName.text.trim().isEmpty ||
-          _dateOfBirth.text.trim().isEmpty ||
-          _email.text.trim().isEmpty ||
           _phone.text.trim().isEmpty) {
         return 'Complete the required staff identity fields.';
       }
-      if (!_email.text.contains('@')) return 'Enter a valid email address.';
+      if (_email.text.trim().isNotEmpty && !_email.text.contains('@')) {
+        return 'Enter a valid email address.';
+      }
       final digits = _phone.text.replaceAll(RegExp(r'[^0-9]'), '');
       if (digits.length < 10 || digits.length > 15) {
         return 'Enter a valid phone number with 10 to 15 digits.';
       }
     }
     if (_step == 1) {
-      if (_createdUser == null && _verifiedIdentity == null) {
-        return 'Create or verify the staff login first.';
-      }
       if (_position.text.trim().isEmpty ||
           _department == null ||
           _startDate.text.trim().isEmpty) {
@@ -2604,41 +2502,23 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
   }
 
   Future<void> _createUserIfNeeded() async {
-    if (_verifiedIdentity != null) return;
-    if (_createdUser != null) return;
-    _createdUser = await widget.apiClient.createSchoolUser(
-      customSchoolId: widget.customSchoolId,
-      body: {
-        'firstName': _firstName.text.trim(),
-        if (_middleName.text.trim().isNotEmpty)
-          'middleName': _middleName.text.trim(),
-        'lastName': _lastName.text.trim(),
-        'dateOfBirth': _dateOfBirth.text.trim(),
-        'email': _email.text.trim(),
-        'phoneNumber': _normalisePhone(_phone.text),
-        'userType': _userTypeForRole,
-        'role': _role,
-        'roles': [_role, ..._selectedRoles.where((role) => role != _role)],
-        'emailDelivery': true,
-        'smsDelivery': true,
-        'printSlipDelivery': false,
-      },
-    );
-    if (_createdUser!.userId.isEmpty) {
-      throw const StaffApiException(
-        'The staff user was created but the backend did not return a user ID.',
-      );
-    }
+    // Access accounts are created by the invitee after SMS verification.
+    // Step 1 only validates the school-supplied identity data.
   }
 
   Future<void> _initiateStaffIfNeeded() async {
     if (_staffId != null && _staffId!.isNotEmpty) return;
     final result = await widget.apiClient.initiateOnboarding(
       body: {
-        if (_createdUser != null) 'userId': _createdUser!.userId,
-        if (_verifiedIdentity != null)
-          'identityLinkChallengeId': _verifiedIdentity!.challengeId,
         'customSchoolId': widget.customSchoolId,
+        'firstName': _firstName.text.trim(),
+        if (_middleName.text.trim().isNotEmpty)
+          'middleName': _middleName.text.trim(),
+        'lastName': _lastName.text.trim(),
+        if (_dateOfBirth.text.trim().isNotEmpty)
+          'dateOfBirth': _dateOfBirth.text.trim(),
+        if (_email.text.trim().isNotEmpty) 'email': _email.text.trim(),
+        'phoneNumber': _normalisePhone(_phone.text),
         'primaryRole': _role,
         'roles': [_role, ..._selectedRoles.where((role) => role != _role)],
         'position': _position.text.trim(),
@@ -2653,75 +2533,8 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
       );
     }
     _staffId = result.staffId;
-  }
-
-  Future<void> _startIdentityVerification() async {
-    final identifier = _existingIdentifier.text.trim();
-    if (identifier.isEmpty) {
-      setState(() => _error = 'Enter the existing username, email, or phone number.');
-      return;
-    }
-    setState(() {
-      _saving = true;
-      _error = null;
-    });
-    try {
-      final result = await widget.apiClient.startIdentityLink(
-        customSchoolId: widget.customSchoolId,
-        identifier: identifier,
-        purpose: 'STAFF',
-      );
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        if (result.accountFound && result.challengeId.isNotEmpty) {
-          _linkRequest = result;
-        } else {
-          _error = result.message;
-        }
-      });
-    } on StaffApiException catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _error = error.message;
-      });
-    }
-  }
-
-  Future<void> _verifyExistingIdentity() async {
-    if (_verificationCode.text.trim().length != 6) {
-      setState(() => _error = 'Enter the 6-digit verification code.');
-      return;
-    }
-    setState(() {
-      _saving = true;
-      _error = null;
-    });
-    try {
-      final profile = await widget.apiClient.verifyIdentityLink(
-        customSchoolId: widget.customSchoolId,
-        challengeId: _linkRequest!.challengeId,
-        code: _verificationCode.text,
-      );
-      _firstName.text = profile.firstName;
-      _middleName.text = profile.middleName;
-      _lastName.text = profile.lastName;
-      _dateOfBirth.text = profile.dateOfBirth;
-      _email.text = profile.email;
-      _phone.text = profile.phoneNumber;
-      if (!mounted) return;
-      setState(() {
-        _verifiedIdentity = profile;
-        _saving = false;
-      });
-    } on StaffApiException catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _error = error.message;
-      });
-    }
+    _invitationToken = result.invitationToken;
+    _invitationMaskedPhone = result.invitationMaskedPhone;
   }
 
   Future<void> _saveFinance() async {
@@ -2791,12 +2604,12 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
         startDate: _startDate.text.trim(),
         status: _StaffStatus.draft,
         sourceLabel: 'Manual',
-        sourceReference: _createdUser?.username.isNotEmpty == true
-            ? _createdUser!.username
-            : 'Manual staff user',
+        sourceReference: _invitationToken?.isNotEmpty == true
+            ? 'Invitation sent to ${_invitationMaskedPhone ?? 'staff phone'}'
+            : 'Manual staff invitation',
         color: AppColors.green,
         checks: const [
-          'Login credentials sent',
+          'Restricted activation invitation sent',
           'Employment onboarding created',
           'Finance information captured',
           'Resume uploaded',
@@ -2999,58 +2812,6 @@ class _DateDrawerField extends StatelessWidget {
             icon: const Icon(Icons.calendar_today_rounded),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _CreatedUserBanner extends StatelessWidget {
-  const _CreatedUserBanner({required this.user});
-
-  final CreatedSchoolUser user;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.greenSoft,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.green.withValues(alpha: .22)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            children: [
-              Icon(Icons.check_circle_rounded, color: AppColors.green),
-              SizedBox(width: 8),
-              Text(
-                'Staff login created',
-                style: TextStyle(fontWeight: FontWeight.w900),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          if (user.username.isNotEmpty)
-            Text(
-              'Username: ${user.username}',
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-          if (user.temporaryPassword?.isNotEmpty == true) ...[
-            const SizedBox(height: 4),
-            Text(
-              'Temporary password: ${user.temporaryPassword}',
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-          ],
-          const SizedBox(height: 6),
-          const Text(
-            'Continue to attach employment, finance, resume, and references to the staff record.',
-            style: TextStyle(color: AppColors.muted, height: 1.35),
-          ),
-        ],
       ),
     );
   }

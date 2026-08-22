@@ -486,6 +486,33 @@ class ClassesApiClient implements ClassesRepository {
         .toList();
   }
 
+  @override
+  Future<void> grantStaffRole({
+    required String customSchoolId,
+    required SchoolStaffOption staff,
+    required String role,
+  }) async {
+    if (staff.userId.trim().isEmpty) {
+      throw const ClassesApiException(
+        'This staff profile is not connected to a login account. Connect the account before assigning teacher access.',
+      );
+    }
+    final roles = <String>{
+      ...staff.roles.map((value) => value.trim().toUpperCase()),
+      staff.role.trim().toUpperCase(),
+      role.trim().toUpperCase(),
+    }..removeWhere((value) => value.isEmpty || value == 'STAFF');
+    final primaryRole =
+        staff.role.trim().isEmpty || staff.role.trim().toUpperCase() == 'STAFF'
+        ? role.trim().toUpperCase()
+        : staff.role.trim().toUpperCase();
+    await _send(
+      'PUT',
+      '/api/user-management/schools/${Uri.encodeComponent(customSchoolId)}/users/${Uri.encodeComponent(staff.userId)}',
+      body: {'role': primaryRole, 'roles': roles.toList()},
+    );
+  }
+
   ClassGradeLevel _gradeFromJson(Map<String, dynamic> json) {
     final nested = _map(json['gradeLevel']);
     final id = _integer(json['id']);
@@ -696,7 +723,8 @@ class ClassesApiClient implements ClassesRepository {
     final role = json['role'];
     final status = json['accountStatus'] ?? json['status'];
     return SchoolStaffOption(
-      id: _string(json['userId'] ?? json['staffId'] ?? json['id']),
+      id: _string(json['staffId'] ?? json['id']),
+      userId: _string(json['userId']),
       name: _string(
         json['fullName'] ??
             json['name'] ??
@@ -709,10 +737,23 @@ class ClassesApiClient implements ClassesRepository {
       role: role is Map<String, dynamic>
           ? _string(role['name'] ?? role['roleName'] ?? role['code'])
           : _string(role),
+      roles: _stringList(json['roles']),
       status: status is Map<String, dynamic>
           ? _string(status['name'] ?? status['status'] ?? status['code'])
           : _string(status),
     );
+  }
+
+  List<String> _stringList(dynamic value) {
+    if (value is! List) return const [];
+    return value
+        .map(
+          (item) => item is Map<String, dynamic>
+              ? _string(item['name'] ?? item['roleName'] ?? item['code'])
+              : _string(item),
+        )
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
   }
 
   Future<http.Response> _send(

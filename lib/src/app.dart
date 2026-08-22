@@ -7,6 +7,8 @@ import 'package:go_router/go_router.dart';
 import 'auth/data/auth_api_client.dart';
 import 'auth/data/session_store.dart';
 import 'auth/presentation/auth_screen.dart';
+import 'account_access/presentation/account_activation_screen.dart';
+import 'account_access/presentation/account_recovery_screen.dart';
 import 'dashboard/data/api_dashboard_repository.dart';
 import 'dashboard/presentation/administrator_dashboard.dart';
 import 'guardian/data/guardian_portal_api_client.dart';
@@ -71,7 +73,12 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
       redirect: (context, state) {
         final signedIn = _session != null;
         final onLogin = state.matchedLocation == '/login';
-        if (!signedIn && !onLogin) return '/login';
+        final publicAccountFlow =
+            state.matchedLocation.startsWith('/activate/') ||
+            state.matchedLocation == '/recover-username' ||
+            state.matchedLocation == '/reset-password';
+        if (!signedIn && !onLogin && !publicAccountFlow) return '/login';
+        if (publicAccountFlow) return null;
         if (signedIn && onLogin) return _routeForSession(_session);
         if (state.matchedLocation == '/') {
           return signedIn ? _routeForSession(_session) : '/login';
@@ -100,6 +107,8 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
         GoRoute(
           path: '/login',
           builder: (context, state) => AuthScreen(
+            onForgotUsername: () => _router.go('/recover-username'),
+            onForgotPassword: () => _router.go('/reset-password'),
             onAuthenticated: (session) {
               if (session.isBlockedFromLogin) {
                 _sessionStore.clear();
@@ -117,6 +126,31 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
               _restartRoleRefreshTimer();
               _router.go(_routeForSession(session));
             },
+          ),
+        ),
+        GoRoute(
+          path: '/activate/:token',
+          builder: (context, state) {
+            final token = state.pathParameters['token'] ?? '';
+            return AccountActivationScreen(
+              key: ValueKey(token),
+              token: token,
+              onGoToLogin: () => _router.go('/login'),
+            );
+          },
+        ),
+        GoRoute(
+          path: '/recover-username',
+          builder: (context, state) => AccountRecoveryScreen(
+            kind: AccountRecoveryKind.username,
+            onBackToLogin: () => _router.go('/login'),
+          ),
+        ),
+        GoRoute(
+          path: '/reset-password',
+          builder: (context, state) => AccountRecoveryScreen(
+            kind: AccountRecoveryKind.password,
+            onBackToLogin: () => _router.go('/login'),
           ),
         ),
         GoRoute(
@@ -359,6 +393,7 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
         accessToken: session?.accessToken,
         onRefreshAccessToken: _refreshAccessToken,
       ),
+      schoolMemberships: session?.schoolMemberships ?? const [],
       onLogout: _logout,
     );
   }

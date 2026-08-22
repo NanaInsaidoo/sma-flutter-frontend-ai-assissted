@@ -789,7 +789,9 @@ void main() {
 
       expect(find.byKey(const ValueKey('evaluation-insights')), findsOneWidget);
       expect(
-        find.textContaining('Preliminary analysis: 7 of 14 assigned evaluations'),
+        find.textContaining(
+          'Preliminary analysis: 7 of 14 assigned evaluations',
+        ),
         findsOneWidget,
       );
       expect(find.text('Students analyzed'), findsOneWidget);

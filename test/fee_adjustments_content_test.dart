@@ -52,6 +52,8 @@ void main() {
     expect(find.text('Kwame Yaw Asante'), findsOneWidget);
     expect(find.text('Showing 1-1 of 1 adjustments'), findsOneWidget);
     expect(find.text('Prototype data'), findsNothing);
+    expect(find.text('Nana Boateng · Administrator'), findsOneWidget);
+    expect(find.textContaining('ADMINISTRATOR #7'), findsNothing);
 
     await tester.enterText(
       find.byKey(const Key('adjustments-search')),
@@ -116,6 +118,26 @@ void main() {
     );
   });
 
+  testWidgets('historical audit records use people names and readable roles', (
+    tester,
+  ) async {
+    final api = FeeApiClient(
+      accessToken: 'token',
+      client: MockClient(
+        (request) async => http.Response(_pageJson(status: 'PENDING'), 200),
+      ),
+    );
+    await pumpAdjustments(tester, api: api);
+
+    await tester.tap(find.text('Kwame Yaw Asante'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Nana Boateng · Administrator'), findsWidgets);
+    expect(find.text('Submit · Nana Boateng · Administrator'), findsOneWidget);
+    expect(find.text('Approver: Unassigned → Efua Nyarko'), findsOneWidget);
+    expect(find.textContaining('ADMINISTRATOR #7'), findsNothing);
+  });
+
   testWidgets('shows a useful empty state without fallback records', (
     tester,
   ) async {
@@ -156,11 +178,28 @@ String _adjustmentJson({required String status}) =>
   "status": "$status",
   "createdByType": "ADMINISTRATOR",
   "createdById": 7,
+  "createdByName": "Nana Boateng",
+  "createdByRole": "Administrator",
   "assignedApproverId": 12,
   "assignedApproverName": "Efua Nyarko",
   "createdDate": "2026-07-18T10:30:00",
   "updatedByType": "",
   "updatedById": null,
-  "updatedDate": null
+  "updatedDate": null,
+  "history": [
+    {
+      "action": "SUBMIT",
+      "previousStatus": "DRAFT",
+      "newStatus": "PENDING_APPROVAL",
+      "actorId": 7,
+      "actorName": "Nana Boateng",
+      "actorRole": "ADMINISTRATOR",
+      "actorRoleDisplay": "Administrator",
+      "reason": "Submitted for review",
+      "previousApproverName": "",
+      "newApproverName": "Efua Nyarko",
+      "createdAt": "2026-07-18T10:31:00"
+    }
+  ]
 }
 ''';

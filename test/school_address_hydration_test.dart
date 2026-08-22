@@ -68,7 +68,7 @@ void main() {
     expectFieldValue('Ghana Post address', 'GA-123-4567');
   });
 
-  testWidgets('hydrates saved stream counts into the class structure', (
+  testWidgets('detailed onboarding step overrides stale school-list progress', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -79,7 +79,6 @@ void main() {
             onRefreshAccessToken: () async => null,
             repository: _GradeRepository(),
             existingSchool: _school,
-            initialStep: 6,
             onBack: () {},
             onCreated: () {},
           ),
