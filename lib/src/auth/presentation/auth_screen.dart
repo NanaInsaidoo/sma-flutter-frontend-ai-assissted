@@ -144,12 +144,14 @@ class _AuthScreenState extends State<AuthScreen> {
             currentPassword: _password.text,
             newPassword: _newPassword.text,
           );
+          final requiresApproval =
+              session.requiresApprovalAfterInitialPasswordChange;
           setState(() {
             _pendingSession = null;
-            _mode = session.isAccountManagerRole
+            _mode = requiresApproval
                 ? _AuthMode.accountPendingApproval
                 : _AuthMode.firstLoginPasswordDone;
-            _message = session.isAccountManagerRole
+            _message = requiresApproval
                 ? 'Password updated. Your account is now waiting for approval.'
                 : 'Password updated. Sign in again with your new password.';
             _password.clear();
@@ -195,7 +197,7 @@ class _AuthScreenState extends State<AuthScreen> {
       setState(() {
         _pendingSession = session;
         _mode = _AuthMode.firstLoginPassword;
-        _message = 'Create your own password before entering the dashboard.';
+        _message = null;
         _newPassword.clear();
         _confirmPassword.clear();
       });
@@ -206,7 +208,7 @@ class _AuthScreenState extends State<AuthScreen> {
       setState(() {
         _pendingSession = session;
         _mode = _AuthMode.firstLoginPassword;
-        _message = 'Create your own password before entering the dashboard.';
+        _message = null;
         _newPassword.clear();
         _confirmPassword.clear();
       });
@@ -306,7 +308,10 @@ class _AuthScreenState extends State<AuthScreen> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                _Header(mode: _mode),
+                                _Header(
+                                  mode: _mode,
+                                  displayName: _pendingSession?.firstName,
+                                ),
                                 const SizedBox(height: 24),
                                 if (_message != null) ...[
                                   _MessageBanner(
@@ -804,8 +809,9 @@ class _BrandFeature extends StatelessWidget {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.mode});
+  const _Header({required this.mode, this.displayName});
   final _AuthMode mode;
+  final String? displayName;
 
   @override
   Widget build(BuildContext context) {
@@ -817,7 +823,10 @@ class _Header extends StatelessWidget {
       _AuthMode.reset => 'Create new password',
       _AuthMode.done => 'Password updated',
       _AuthMode.firstLoginDob => 'Confirm identity',
-      _AuthMode.firstLoginPassword => 'Create your password',
+      _AuthMode.firstLoginPassword =>
+        displayName == null || displayName!.trim().isEmpty
+            ? 'Hello'
+            : 'Hello, ${displayName!.trim()}',
       _AuthMode.firstLoginPasswordDone => 'Password updated',
       _AuthMode.accountPendingApproval => 'Waiting for approval',
     };
@@ -832,8 +841,7 @@ class _Header extends StatelessWidget {
       _AuthMode.done => 'Your account is ready for sign in.',
       _AuthMode.firstLoginDob =>
         'This is required the first time you activate your staff account.',
-      _AuthMode.firstLoginPassword =>
-        'Set a private password before entering your account.',
+      _AuthMode.firstLoginPassword => 'Change your password before continuing.',
       _AuthMode.firstLoginPasswordDone =>
         'Your account is ready. Sign in again with the new password.',
       _AuthMode.accountPendingApproval =>

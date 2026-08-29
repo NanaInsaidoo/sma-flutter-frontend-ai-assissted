@@ -431,6 +431,18 @@ class FakePlatformRepository implements PlatformRepository {
   ) async => const [];
 
   @override
+  Future<SchoolGradeLevelInfo> createCustomGradeLevel({
+    required String customSchoolId,
+    required String gradeLevelName,
+    required int numberOfStreams,
+  }) async => SchoolGradeLevelInfo(
+    gradeLevelId: 100000 + gradeLevelName.hashCode.abs() % 899999,
+    gradeLevelName: gradeLevelName,
+    numberOfStreams: numberOfStreams,
+    isCustom: true,
+  );
+
+  @override
   Future<SchoolAdministratorInviteResult> inviteSchoolAdministrator({
     required String customSchoolId,
     required SchoolAdministratorInvite invite,
@@ -530,10 +542,23 @@ class FakePlatformRepository implements PlatformRepository {
   }) async {
     await Future<void>.delayed(const Duration(milliseconds: 400));
     return const SchoolAdministratorInviteResult(
-      message: 'Password reset successfully.',
-      temporaryPassword: 'Temp@12345',
+      message: 'Password change will be required at the next login.',
     );
   }
+
+  @override
+  Future<void> cancelSchoolUserInvitation({
+    required String customSchoolId,
+    required String userId,
+    required String reason,
+  }) async {}
+
+  @override
+  Future<void> deleteSchoolUserInvitation({
+    required String customSchoolId,
+    required String userId,
+    required String reason,
+  }) async {}
 
   @override
   Future<UserAuditLogPage> getUserAuditLogs({
@@ -713,13 +738,18 @@ class FakePlatformRepository implements PlatformRepository {
   }
 
   @override
+  Future<void> cancelAccountManagerInvitation({
+    required String accountManagerId,
+    required String reason,
+  }) async {}
+
+  @override
   Future<SchoolAdministratorInviteResult> forceResetAccountManagerPassword({
     required AccountManagerProfile manager,
   }) async {
     await Future<void>.delayed(const Duration(milliseconds: 350));
     return SchoolAdministratorInviteResult(
-      message: 'Password reset successfully for ${manager.email}.',
-      temporaryPassword: 'Temp123!',
+      message: 'Password change will be required for ${manager.email}.',
     );
   }
 

@@ -16,6 +16,9 @@ class ExpensesScreen extends StatefulWidget {
     this.onRefreshAccessToken,
     this.recordedBy,
     this.role,
+    this.openNewRequisitionOnLoad = false,
+    this.onNewRequisitionRequestConsumed,
+    this.financeApi,
   });
 
   final String customSchoolId;
@@ -23,6 +26,9 @@ class ExpensesScreen extends StatefulWidget {
   final Future<String?> Function()? onRefreshAccessToken;
   final String? recordedBy;
   final String? role;
+  final bool openNewRequisitionOnLoad;
+  final VoidCallback? onNewRequisitionRequestConsumed;
+  final FinanceApiClient? financeApi;
 
   @override
   State<ExpensesScreen> createState() => _ExpensesScreenState();
@@ -46,6 +52,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   bool _requiresCycleSetup = false;
   String? _financeLoadError;
   int? _academicTermId;
+  bool _newRequisitionRequestHandled = false;
 
   _ExpenseTab _tab = _ExpenseTab.overview;
   _FinanceLedgerPage? _financeLedgerPage;
@@ -77,11 +84,23 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     _pocketTransfers = [];
     _reconciliations = [];
     _financialFollowUps = [];
-    _financeApi = FinanceApiClient(
-      accessToken: widget.accessToken,
-      onRefreshAccessToken: widget.onRefreshAccessToken,
-    );
+    _financeApi =
+        widget.financeApi ??
+        FinanceApiClient(
+          accessToken: widget.accessToken,
+          onRefreshAccessToken: widget.onRefreshAccessToken,
+        );
     unawaited(_loadFinanceWorkspace());
+  }
+
+  @override
+  void didUpdateWidget(covariant ExpensesScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.openNewRequisitionOnLoad &&
+        !oldWidget.openNewRequisitionOnLoad) {
+      _newRequisitionRequestHandled = false;
+      _maybeOpenRequestedRequisition();
+    }
   }
 
   double get _cashBalance => _float.cashBalance;
@@ -295,6 +314,25 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             'Unable to load expenses and petty cash data from the server.';
       });
     }
+    _maybeOpenRequestedRequisition();
+  }
+
+  void _maybeOpenRequestedRequisition() {
+    if (!mounted ||
+        !widget.openNewRequisitionOnLoad ||
+        _newRequisitionRequestHandled ||
+        _isLoadingFinance ||
+        _financeLoadError != null ||
+        _requiresCycleSetup ||
+        _academicTermId == null) {
+      return;
+    }
+    _newRequisitionRequestHandled = true;
+    widget.onNewRequisitionRequestConsumed?.call();
+    setState(() => _tab = _ExpenseTab.requisitions);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _openCreateRequisitionDialog();
+    });
   }
 
   Widget _buildCycleSetupState() {
@@ -5951,6 +5989,7 @@ class _Dropdown<T> extends StatelessWidget {
       width: width,
       child: DropdownButtonFormField<T>(
         value: value,
+        isExpanded: true,
         decoration: const InputDecoration(
           contentPadding: EdgeInsets.symmetric(horizontal: 14),
         ),

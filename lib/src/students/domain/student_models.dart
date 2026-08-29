@@ -4,6 +4,17 @@ enum EnrolledStudentStatus { active, inactive, transferred }
 
 enum StudentTransferType { sameGradeDifferentStream, differentGrade }
 
+class StudentTransferApprover {
+  const StudentTransferApprover({
+    required this.id,
+    required this.name,
+    required this.role,
+  });
+  final int id;
+  final String name, role;
+  String get label => '$name · $role';
+}
+
 class StudentPlacement {
   const StudentPlacement({
     required this.placementId,
@@ -32,9 +43,11 @@ class StudentTransferDestination {
     required this.gradeName,
     required this.streamId,
     required this.streamName,
+    this.feeReady = true,
   });
   final int gradeLevelId, streamId;
   final String gradeName, streamName;
+  final bool feeReady;
   String get label => '$gradeName — $streamName';
 }
 
@@ -47,6 +60,7 @@ class StudentTransferInput {
     required this.reason,
     this.previewToken,
     this.actorUserId,
+    this.approverId,
   });
   final StudentTransferType type;
   final int destinationGradeLevelId, destinationStreamId;
@@ -54,6 +68,18 @@ class StudentTransferInput {
   final String reason;
   final String? previewToken;
   final int? actorUserId;
+  final int? approverId;
+}
+
+class StudentTransferOutcome {
+  const StudentTransferOutcome({
+    required this.placement,
+    required this.pendingApproval,
+    this.message = '',
+  });
+  final StudentPlacement placement;
+  final bool pendingApproval;
+  final String message;
 }
 
 class StudentTransferPreview {
@@ -106,6 +132,7 @@ class EnrolledStudent {
     required this.fees,
     required this.feeAdjustments,
     required this.payments,
+    this.paymentReversals = const [],
     required this.requirements,
     required this.documents,
     required this.activity,
@@ -142,13 +169,25 @@ class EnrolledStudent {
   final List<StudentFeeItem> fees;
   final List<StudentFeeAdjustment> feeAdjustments;
   final List<StudentPayment> payments;
+  final List<StudentPaymentReversal> paymentReversals;
   final List<StudentRequirement> requirements;
   final List<StudentDocument> documents;
   final List<StudentActivity> activity;
   final int feeTermId;
 
-  int get requirementsOutstanding =>
-      (requirementsTotal - requirementsCompleted).clamp(0, requirementsTotal);
+  int get requirementsOutstanding => requirements
+      .where(
+        (item) =>
+            item.status == StudentRequirementStatus.outstanding ||
+            item.status == StudentRequirementStatus.partial,
+      )
+      .length;
+
+  int get requirementsAwaitingPublication => requirements
+      .where(
+        (item) => item.status == StudentRequirementStatus.awaitingPublication,
+      )
+      .length;
 }
 
 class StudentMedicalCondition {
@@ -316,19 +355,81 @@ class StudentFeeAdjustment {
 
 class StudentPayment {
   const StudentPayment({
+    this.id = 0,
     required this.date,
     required this.amount,
     required this.method,
     required this.receiptNumber,
+    this.recordedAmount = 0,
+    this.refundedAmount = 0,
+    this.status = '',
+    this.statusReason = '',
+    this.receivedBy = '',
+    this.overpaymentAmount = 0,
+    this.overpaymentReason = '',
   });
 
+  final int id;
   final DateTime date;
+
+  /// Amount currently applied to the student's balance.
   final double amount;
   final String method;
   final String receiptNumber;
+
+  /// Amount originally collected before any reversal.
+  final double recordedAmount;
+  final double refundedAmount;
+  final String status;
+  final String statusReason;
+  final String receivedBy;
+  final double overpaymentAmount;
+  final String overpaymentReason;
+
+  bool get isReversed => status.toUpperCase() == 'REVERSED';
+  bool get isPending => status.toUpperCase() == 'PENDING';
 }
 
-enum StudentRequirementStatus { complete, partial, outstanding, waived }
+class StudentPaymentReversal {
+  const StudentPaymentReversal({
+    required this.id,
+    required this.paymentId,
+    required this.paymentReference,
+    required this.amount,
+    required this.status,
+    required this.reason,
+    required this.requesterName,
+    required this.approverName,
+    required this.decisionReason,
+    required this.decidedByName,
+    required this.reversalReference,
+    required this.createdAt,
+    required this.decidedAt,
+  });
+
+  final int id;
+  final int paymentId;
+  final String paymentReference;
+  final double amount;
+  final String status;
+  final String reason;
+  final String requesterName;
+  final String approverName;
+  final String decisionReason;
+  final String decidedByName;
+  final String reversalReference;
+  final DateTime? createdAt;
+  final DateTime? decidedAt;
+}
+
+enum StudentRequirementStatus {
+  complete,
+  partial,
+  outstanding,
+  waived,
+  awaitingPublication,
+  inactive,
+}
 
 class StudentRequirement {
   const StudentRequirement({
@@ -340,6 +441,7 @@ class StudentRequirement {
     this.note = '',
     this.isFromPreviousTerm = false,
     this.sourceTerm = '',
+    this.studentSpecific = false,
   });
 
   final String name;
@@ -350,6 +452,7 @@ class StudentRequirement {
   final String note;
   final bool isFromPreviousTerm;
   final String sourceTerm;
+  final bool studentSpecific;
 }
 
 class StudentDocument {
@@ -415,11 +518,12 @@ abstract interface class StudentsRepository {
   Future<List<StudentTransferDestination>> getTransferDestinations(
     String studentId,
   );
+  Future<List<StudentTransferApprover>> getTransferApprovers(String studentId);
   Future<StudentTransferPreview> previewTransfer(
     String studentId,
     StudentTransferInput input,
   );
-  Future<StudentPlacement> confirmTransfer(
+  Future<StudentTransferOutcome> confirmTransfer(
     String studentId,
     StudentTransferInput input,
   );

@@ -67,6 +67,13 @@ abstract interface class PlatformRepository {
     String customSchoolId,
   );
 
+  /// Create a school-specific early-years class and its initial streams.
+  Future<SchoolGradeLevelInfo> createCustomGradeLevel({
+    required String customSchoolId,
+    required String gradeLevelName,
+    required int numberOfStreams,
+  });
+
   /// Invite the first or an additional administrator for a school.
   Future<SchoolAdministratorInviteResult> inviteSchoolAdministrator({
     required String customSchoolId,
@@ -115,10 +122,22 @@ abstract interface class PlatformRepository {
     required String userId,
   });
 
-  /// Reset a user's password to a new temporary password.
+  /// Keep the current password and require the user to change it after login.
   Future<SchoolAdministratorInviteResult> resetSchoolUserPassword({
     required String customSchoolId,
     required String userId,
+  });
+
+  Future<void> cancelSchoolUserInvitation({
+    required String customSchoolId,
+    required String userId,
+    required String reason,
+  });
+
+  Future<void> deleteSchoolUserInvitation({
+    required String customSchoolId,
+    required String userId,
+    required String reason,
   });
 
   /// Load audit log entries for a user.
@@ -161,6 +180,11 @@ abstract interface class PlatformRepository {
   Future<void> deleteAccountManager({
     required String accountManagerId,
     String? reason,
+  });
+
+  Future<void> cancelAccountManagerInvitation({
+    required String accountManagerId,
+    required String reason,
   });
 
   /// Backend route: POST /api/account-managers/{id}/reset-password

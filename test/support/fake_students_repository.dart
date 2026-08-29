@@ -301,6 +301,13 @@ class FakeStudentsRepository implements StudentsRepository {
       streamName: 'B',
     ),
     StudentTransferDestination(
+      gradeLevelId: 1,
+      gradeName: 'JHS 1',
+      streamId: 13,
+      streamName: 'C',
+      feeReady: false,
+    ),
+    StudentTransferDestination(
       gradeLevelId: 2,
       gradeName: 'JHS 2',
       streamId: 21,
@@ -322,25 +329,50 @@ class FakeStudentsRepository implements StudentsRepository {
     reason: input.reason,
     gradeChanged: input.destinationGradeLevelId != 1,
     feeMessage: input.destinationGradeLevelId != 1
-        ? 'Fees will be recalculated using the destination grade fee structure.'
+        ? 'Fees will be recalculated only after approval. Existing discounts and waivers will then be cancelled and must be reapplied manually. Payments and receipts remain recorded.'
         : 'No grade-level fee change is expected.',
     attendanceMessage:
         'Attendance before the effective date remains with the previous class.',
   );
 
   @override
-  Future<StudentPlacement> confirmTransfer(
+  Future<List<StudentTransferApprover>> getTransferApprovers(
+    String studentId,
+  ) async => const [
+    StudentTransferApprover(
+      id: 41,
+      name: 'Adjoa Mensah',
+      role: 'Administrator',
+    ),
+  ];
+
+  @override
+  Future<StudentTransferOutcome> confirmTransfer(
     String studentId,
     StudentTransferInput input,
-  ) async => StudentPlacement(
-    placementId: 2,
-    gradeLevelId: input.destinationGradeLevelId,
-    gradeName: input.destinationGradeLevelId == 1 ? 'JHS 1' : 'JHS 2',
-    streamId: input.destinationStreamId,
-    streamName: input.destinationStreamId == 12 ? 'B' : 'A',
-    effectiveFrom: input.effectiveDate,
-    active: true,
-    reason: input.reason,
+  ) async => StudentTransferOutcome(
+    pendingApproval: input.type == StudentTransferType.differentGrade,
+    message: input.type == StudentTransferType.differentGrade
+        ? 'Grade-change request submitted for approval.'
+        : '',
+    placement: StudentPlacement(
+      placementId: 2,
+      gradeLevelId: input.type == StudentTransferType.differentGrade
+          ? 1
+          : input.destinationGradeLevelId,
+      gradeName: input.type == StudentTransferType.differentGrade
+          ? 'JHS 1'
+          : (input.destinationGradeLevelId == 1 ? 'JHS 1' : 'JHS 2'),
+      streamId: input.type == StudentTransferType.differentGrade
+          ? 11
+          : input.destinationStreamId,
+      streamName: input.type == StudentTransferType.differentGrade
+          ? 'A'
+          : (input.destinationStreamId == 12 ? 'B' : 'A'),
+      effectiveFrom: input.effectiveDate,
+      active: true,
+      reason: input.reason,
+    ),
   );
 }
 
@@ -478,10 +510,43 @@ EnrolledStudent _student({
     feeAdjustments: feeAdjustments,
     payments: [
       StudentPayment(
+        id: 70,
         date: DateTime(2026, 7, 10),
         amount: paid,
+        recordedAmount: paid,
         method: 'Mobile Money',
         receiptNumber: 'REC-0070',
+        receivedBy: 'School cashier',
+        status: 'COMPLETED',
+      ),
+      StudentPayment(
+        id: 71,
+        date: DateTime(2026, 7, 8),
+        amount: 0,
+        recordedAmount: 300,
+        refundedAmount: 300,
+        method: 'Cash',
+        receiptNumber: 'REC-0071',
+        receivedBy: 'School cashier',
+        status: 'REVERSED',
+        statusReason: 'Reversed under REV-0071',
+      ),
+    ],
+    paymentReversals: [
+      StudentPaymentReversal(
+        id: 91,
+        paymentId: 71,
+        paymentReference: 'REC-0071',
+        amount: 300,
+        status: 'APPROVED',
+        reason: 'Payment was recorded against the wrong student.',
+        requesterName: 'School cashier',
+        approverName: 'Efua Nyarko',
+        decisionReason: 'Approved',
+        decidedByName: 'Efua Nyarko',
+        reversalReference: 'REV-0071',
+        createdAt: DateTime(2026, 7, 9, 9),
+        decidedAt: DateTime(2026, 7, 9, 10),
       ),
     ],
     requirements: [

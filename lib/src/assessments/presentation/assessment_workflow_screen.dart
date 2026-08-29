@@ -9792,7 +9792,8 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
     return widget.setup.subjects
         .where(
           (subject) =>
-              gradeLevelId == null || subject.gradeLevelId == gradeLevelId,
+              (gradeLevelId == null || subject.gradeLevelId == gradeLevelId) &&
+              subject.isAvailableIn(_selectedStream?.id),
         )
         .map((subject) => subject.name)
         .toSet()
@@ -9809,7 +9810,8 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
         _selectedStream?.gradeLevelId ?? widget.source?.gradeLevelId;
     for (final subject in widget.setup.subjects) {
       if (subject.name == _subject &&
-          (gradeLevelId == null || subject.gradeLevelId == gradeLevelId)) {
+          (gradeLevelId == null || subject.gradeLevelId == gradeLevelId) &&
+          subject.isAvailableIn(_selectedStream?.id)) {
         return subject;
       }
     }

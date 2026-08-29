@@ -31,6 +31,18 @@
 
   <title>school_management_app</title>
   <link rel="manifest" href="manifest.json">
+  <style>
+    /*
+      Flutter's hidden web text-input host can become the pointer-event target
+      during a mouse drag. That prevents SelectionArea from receiving stable
+      coordinates, so words can be selected with a double-click but not by
+      dragging. Flutter focuses the actual input programmatically, so the host
+      does not need to receive pointer events.
+    */
+    flt-text-editing-host {
+      pointer-events: none !important;
+    }
+  </style>
 </head>
 <body>
   <script src="flutter_bootstrap.js" async></script>

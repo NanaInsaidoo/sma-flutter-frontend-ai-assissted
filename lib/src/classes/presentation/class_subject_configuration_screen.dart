@@ -4,18 +4,27 @@ import '../../theme/app_theme.dart';
 import '../data/classes_api_client.dart';
 import '../domain/class_models.dart';
 
+bool _isSeniorSecondaryGrade(String value) {
+  final normalized = value.trim().toUpperCase();
+  return normalized.startsWith('SHS') ||
+      normalized.startsWith('SENIOR HIGH') ||
+      normalized.startsWith('SENIOR SECONDARY');
+}
+
 class ClassSubjectConfigurationScreen extends StatefulWidget {
   const ClassSubjectConfigurationScreen({
     super.key,
     required this.customSchoolId,
     this.accessToken,
     this.onRefreshAccessToken,
+    this.startWithAddCustomClass = false,
     ClassesRepository? repository,
   }) : _repository = repository;
 
   final String customSchoolId;
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
+  final bool startWithAddCustomClass;
   final ClassesRepository? _repository;
 
   @override
@@ -34,6 +43,7 @@ class _ClassSubjectConfigurationScreenState
   List<ClassGradeLevel> _grades = const [];
   bool _loading = true;
   String? _error;
+  bool _initialAddClassOpened = false;
 
   @override
   void initState() {
@@ -53,6 +63,12 @@ class _ClassSubjectConfigurationScreenState
         _grades = grades;
         _loading = false;
       });
+      if (widget.startWithAddCustomClass && !_initialAddClassOpened) {
+        _initialAddClassOpened = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _addCustomClass();
+        });
+      }
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -63,6 +79,29 @@ class _ClassSubjectConfigurationScreenState
   }
 
   Future<void> _toggle(ClassGradeLevel grade, bool active) async {
+    if (active && grade.streams.isEmpty) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Activate ${grade.name}?'),
+          content: Text(
+            '${grade.name} does not have a section yet. Section 1 will be created because every active class must have at least one section.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Create section and activate'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+    if (!mounted) return;
     if (!active && grade.studentCount > 0) {
       final confirmed = await showDialog<bool>(
         context: context,
@@ -131,12 +170,12 @@ class _ClassSubjectConfigurationScreenState
                 const SizedBox(height: 16),
                 DropdownButtonFormField<int>(
                   value: streams,
-                  decoration: const InputDecoration(labelText: 'Streams'),
-                  items: [1, 2, 3, 4]
+                  decoration: const InputDecoration(labelText: 'Sections'),
+                  items: List.generate(10, (index) => index + 1)
                       .map(
                         (value) => DropdownMenuItem(
                           value: value,
-                          child: Text('$value stream${value == 1 ? '' : 's'}'),
+                          child: Text('$value section${value == 1 ? '' : 's'}'),
                         ),
                       )
                       .toList(),
@@ -305,8 +344,15 @@ class _ClassSubjectConfigurationScreenState
         ),
       );
     }
-    final ges = _grades.where((grade) => !grade.custom).toList();
-    final custom = _grades.where((grade) => grade.custom).toList();
+    final ges =
+        _grades
+            .where(
+              (grade) => !grade.custom && !_isSeniorSecondaryGrade(grade.name),
+            )
+            .toList()
+          ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
+    final custom = _grades.where((grade) => grade.custom).toList()
+      ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Center(
@@ -345,25 +391,9 @@ class _ClassSubjectConfigurationScreenState
               ),
               const SizedBox(height: 28),
               _SectionTitle(
-                title: 'GES grade levels',
-                subtitle:
-                    'Permanent levels — they can be active or inactive, but never deleted.',
-                count: ges.length,
-              ),
-              const SizedBox(height: 12),
-              ...ges.map(
-                (grade) => _GradeCard(
-                  grade: grade,
-                  onActiveChanged: (value) => _toggle(grade, value),
-                  onSubjects: () => _manageSubjects(grade),
-                  onEdit: null,
-                ),
-              ),
-              const SizedBox(height: 28),
-              _SectionTitle(
                 title: 'Custom early-years classes',
                 subtitle:
-                    'Creche and nursery levels are ordered below KG1 and start with editable KG subject suggestions.',
+                    'Creche and nursery levels appear before KG1 and start with editable KG subject suggestions.',
                 count: custom.length,
               ),
               const SizedBox(height: 12),
@@ -378,6 +408,22 @@ class _ClassSubjectConfigurationScreenState
                     onEdit: () => _editCustomClass(grade),
                   ),
                 ),
+              const SizedBox(height: 28),
+              _SectionTitle(
+                title: 'GES grade levels',
+                subtitle:
+                    'Permanent levels — they can be active or inactive, but never deleted.',
+                count: ges.length,
+              ),
+              const SizedBox(height: 12),
+              ...ges.map(
+                (grade) => _GradeCard(
+                  grade: grade,
+                  onActiveChanged: (value) => _toggle(grade, value),
+                  onSubjects: () => _manageSubjects(grade),
+                  onEdit: null,
+                ),
+              ),
             ],
           ),
         ),
@@ -470,7 +516,7 @@ class _GradeCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${grade.streams.length} stream${grade.streams.length == 1 ? '' : 's'} · ${grade.studentCount} students',
+                  '${grade.streams.length} section${grade.streams.length == 1 ? '' : 's'} · ${grade.studentCount} students',
                   style: const TextStyle(color: AppColors.muted),
                 ),
                 if (grade.custom) ...[
@@ -554,6 +600,9 @@ class _SubjectManager extends StatefulWidget {
 
 class _SubjectManagerState extends State<_SubjectManager> {
   List<ClassSubject>? _subjects;
+  List<SubjectAcademicTerm> _terms = const [];
+  int? _selectedTermId;
+  final Map<int, SubjectTermAvailability> _availability = {};
   String? _error;
   @override
   void initState() {
@@ -563,13 +612,47 @@ class _SubjectManagerState extends State<_SubjectManager> {
 
   Future<void> _load() async {
     try {
-      final value = await widget.repository.getGradeSubjects(
-        customSchoolId: widget.customSchoolId,
-        gradeLevelId: widget.grade.gradeLevelId,
-      );
+      final results = await Future.wait([
+        widget.repository.getGradeSubjects(
+          customSchoolId: widget.customSchoolId,
+          gradeLevelId: widget.grade.gradeLevelId,
+        ),
+        widget.repository.getSubjectAcademicTerms(widget.customSchoolId),
+      ]);
+      final value = results[0] as List<ClassSubject>;
+      final terms = results[1] as List<SubjectAcademicTerm>;
+      var selectedTermId = _selectedTermId;
+      if (selectedTermId == null ||
+          !terms.any((term) => term.id == selectedTermId)) {
+        selectedTermId = terms
+            .where((term) => term.current)
+            .map((term) => term.id)
+            .firstOrNull;
+        selectedTermId ??= terms.firstOrNull?.id;
+      }
+      final availability = <int, SubjectTermAvailability>{};
+      if (selectedTermId != null) {
+        await Future.wait(
+          value.where((subject) => subject.custom).map((subject) async {
+            final schoolSubjectId = subject.schoolSubjectId;
+            if (schoolSubjectId == null || schoolSubjectId <= 0) return;
+            availability[schoolSubjectId] = await widget.repository
+                .getSubjectTermAvailability(
+                  customSchoolId: widget.customSchoolId,
+                  schoolSubjectId: schoolSubjectId,
+                  academicTermId: selectedTermId!,
+                );
+          }),
+        );
+      }
       if (mounted) {
         setState(() {
           _subjects = value;
+          _terms = terms;
+          _selectedTermId = selectedTermId;
+          _availability
+            ..clear()
+            ..addAll(availability);
           _error = null;
         });
       }
@@ -634,7 +717,7 @@ class _SubjectManagerState extends State<_SubjectManager> {
       ),
     );
     if (ok != true) return;
-    await widget.repository.createCustomSubject(
+    final created = await widget.repository.createCustomSubject(
       customSchoolId: widget.customSchoolId,
       gradeLevelId: widget.grade.gradeLevelId,
       name: name.text.trim(),
@@ -642,6 +725,7 @@ class _SubjectManagerState extends State<_SubjectManager> {
       examinable: examinable,
     );
     await _load();
+    if (mounted) await _editAvailability(created);
   }
 
   Future<void> _edit(ClassSubject subject) async {
@@ -703,9 +787,221 @@ class _SubjectManagerState extends State<_SubjectManager> {
         custom: true,
         active: subject.active,
         examinable: examinable,
+        schoolSubjectId: subject.schoolSubjectId,
+        definitionId: subject.definitionId,
       ),
     );
     await _load();
+  }
+
+  SubjectAcademicTerm? get _selectedTerm {
+    for (final term in _terms) {
+      if (term.id == _selectedTermId) return term;
+    }
+    return null;
+  }
+
+  Future<void> _changeTerm(int? termId) async {
+    if (termId == null || termId == _selectedTermId) return;
+    setState(() {
+      _selectedTermId = termId;
+      _subjects = null;
+    });
+    await _load();
+  }
+
+  Future<void> _editAvailability(ClassSubject subject) async {
+    final term = _selectedTerm;
+    final schoolSubjectId = subject.schoolSubjectId;
+    if (term == null || schoolSubjectId == null || schoolSubjectId <= 0) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('The subject term could not be resolved.'),
+          ),
+        );
+      }
+      return;
+    }
+    SubjectTermAvailability configuration;
+    try {
+      configuration =
+          _availability[schoolSubjectId] ??
+          await widget.repository.getSubjectTermAvailability(
+            customSchoolId: widget.customSchoolId,
+            schoolSubjectId: schoolSubjectId,
+            academicTermId: term.id,
+          );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+      }
+      return;
+    }
+    if (!mounted) return;
+    final selected = configuration.streamIds.toSet();
+    String? action;
+    action = await showDialog<String>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final readOnly = !term.editable;
+          return AlertDialog(
+            title: Text('${subject.name} sections'),
+            content: SizedBox(
+              width: 520,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: AppColors.green.withValues(alpha: .07),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.calendar_month_outlined,
+                          color: AppColors.green,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                term.label,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              Text(
+                                configuration.copiedFromTermId != null &&
+                                        configuration.status.toUpperCase() ==
+                                            'DRAFT'
+                                    ? 'Copied from the previous term · Review before activating'
+                                    : readOnly
+                                    ? 'Historical setup · Read-only'
+                                    : 'Choose the sections that study this subject',
+                                style: const TextStyle(color: AppColors.muted),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  if (!readOnly && configuration.availableSections.isNotEmpty)
+                    Row(
+                      children: [
+                        TextButton(
+                          onPressed: () => setDialogState(() {
+                            selected
+                              ..clear()
+                              ..addAll(
+                                configuration.availableSections
+                                    .where((section) => section.active)
+                                    .map((section) => section.id),
+                              );
+                          }),
+                          child: const Text('Select all'),
+                        ),
+                        TextButton(
+                          onPressed: () => setDialogState(selected.clear),
+                          child: const Text('Clear'),
+                        ),
+                      ],
+                    ),
+                  Flexible(
+                    child: configuration.availableSections.isEmpty
+                        ? const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 24),
+                            child: Text(
+                              'This class has no sections yet. Add a section first, then return here.',
+                              style: TextStyle(color: AppColors.muted),
+                            ),
+                          )
+                        : ListView(
+                            shrinkWrap: true,
+                            children: configuration.availableSections.map((
+                              section,
+                            ) {
+                              return CheckboxListTile(
+                                value: selected.contains(section.id),
+                                onChanged: readOnly || !section.active
+                                    ? null
+                                    : (checked) => setDialogState(() {
+                                        checked == true
+                                            ? selected.add(section.id)
+                                            : selected.remove(section.id);
+                                      }),
+                                title: Text(section.name),
+                                subtitle: section.active
+                                    ? null
+                                    : const Text('Inactive section'),
+                                controlAffinity:
+                                    ListTileControlAffinity.leading,
+                                contentPadding: EdgeInsets.zero,
+                              );
+                            }).toList(),
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(readOnly ? 'Close' : 'Cancel'),
+              ),
+              if (!readOnly) ...[
+                OutlinedButton(
+                  onPressed: () => Navigator.pop(context, 'DRAFT'),
+                  child: const Text('Save as draft'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, 'ACTIVE'),
+                  child: const Text('Make available'),
+                ),
+              ],
+            ],
+          );
+        },
+      ),
+    );
+    if (action == null) return;
+    try {
+      final saved = await widget.repository.saveSubjectTermAvailability(
+        customSchoolId: widget.customSchoolId,
+        schoolSubjectId: schoolSubjectId,
+        academicTermId: term.id,
+        streamIds: selected.toList(),
+        status: action,
+      );
+      if (!mounted) return;
+      setState(() => _availability[schoolSubjectId] = saved);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            action == 'ACTIVE'
+                ? '${subject.name} is available in ${selected.length} section${selected.length == 1 ? '' : 's'} for ${term.name}.'
+                : '${subject.name} section choices were saved as draft.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+      }
+    }
   }
 
   Future<void> _delete(ClassSubject subject) async {
@@ -777,6 +1073,31 @@ class _SubjectManagerState extends State<_SubjectManager> {
             ],
           ),
           const SizedBox(height: 20),
+          if (_terms.isNotEmpty) ...[
+            SizedBox(
+              width: 340,
+              child: DropdownButtonFormField<int>(
+                value: _selectedTermId,
+                decoration: const InputDecoration(
+                  labelText: 'Academic term',
+                  prefixIcon: Icon(Icons.calendar_month_outlined),
+                ),
+                items: _terms
+                    .map(
+                      (term) => DropdownMenuItem<int>(
+                        value: term.id,
+                        child: Text(
+                          '${term.label}${term.current ? ' · Current' : ''}',
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    )
+                    .toList(),
+                onChanged: _changeTerm,
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
           if (_error != null)
             Text(_error!, style: const TextStyle(color: AppColors.red))
           else if (_subjects == null)
@@ -798,13 +1119,23 @@ class _SubjectManagerState extends State<_SubjectManager> {
                 separatorBuilder: (_, __) => const Divider(height: 1),
                 itemBuilder: (_, index) {
                   final subject = _subjects![index];
+                  final subjectAvailability = subject.schoolSubjectId == null
+                      ? null
+                      : _availability[subject.schoolSubjectId!];
                   return ListTile(
                     leading: CircleAvatar(
                       child: Text(subject.name.characters.first),
                     ),
                     title: Text(subject.name),
                     subtitle: Text(
-                      '${subject.code.isEmpty ? 'No code' : subject.code} · ${subject.custom ? 'Custom' : 'GES'}',
+                      subject.custom
+                          ? '${subject.code.isEmpty ? 'No code' : subject.code} · Custom · '
+                                '${subjectAvailability == null
+                                    ? 'Section setup unavailable'
+                                    : subjectAvailability.streamIds.isEmpty
+                                    ? 'No sections'
+                                    : '${subjectAvailability.streamIds.length} section${subjectAvailability.streamIds.length == 1 ? '' : 's'}'}'
+                          : '${subject.code.isEmpty ? 'No code' : subject.code} · GES · All sections',
                     ),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -817,6 +1148,19 @@ class _SubjectManagerState extends State<_SubjectManager> {
                           ),
                         ),
                         if (subject.custom) ...[
+                          TextButton.icon(
+                            onPressed: () => _editAvailability(subject),
+                            icon: const Icon(
+                              Icons.view_week_outlined,
+                              size: 18,
+                            ),
+                            label: Text(
+                              subjectAvailability?.status.toUpperCase() ==
+                                      'DRAFT'
+                                  ? 'Sections · Draft'
+                                  : 'Sections',
+                            ),
+                          ),
                           IconButton(
                             tooltip: 'Edit subject',
                             onPressed: () => _edit(subject),

@@ -252,6 +252,12 @@ class AuthSession {
         value == 'PENDING';
   }
 
+  bool get requiresApprovalAfterInitialPasswordChange {
+    if (!isAccountManagerRole) return false;
+    final value = accountStatus.trim().toUpperCase();
+    return value == 'INVITED' || value == 'PENDING';
+  }
+
   bool get isBlockedFromLogin {
     const blockedStatuses = {
       'SUSPENDED',

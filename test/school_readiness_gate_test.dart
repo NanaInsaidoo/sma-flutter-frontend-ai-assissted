@@ -12,7 +12,7 @@ void main() {
     TestWidgetsFlutterBinding.ensureInitialized();
   });
 
-  testWidgets('blocks dashboard and shows only incomplete setup work', (
+  testWidgets('does not duplicate the global tuition fee warning', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1600, 1200);
@@ -34,11 +34,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Finish setting up your school'), findsOneWidget);
-    expect(find.text('Class structure'), findsOneWidget);
-    expect(find.text('Completed'), findsOneWidget);
-    expect(find.text('Missing: Primary 1'), findsOneWidget);
-    expect(dashboard.called, isFalse);
+    expect(find.text('Finish setting up your school'), findsNothing);
+    expect(find.text('Tuition fee setup is incomplete'), findsNothing);
+    expect(find.text('Publish tuition fees for Primary 1.'), findsNothing);
+    expect(find.text('Views are available offline'), findsNothing);
+    expect(dashboard.called, isTrue);
   });
 
   testWidgets('loads normal dashboard when existing setup is ready', (
@@ -67,6 +67,41 @@ void main() {
 
     expect(dashboard.called, isTrue);
     expect(find.text('Finish setting up your school'), findsNothing);
+    expect(find.text('Tuition fee setup is incomplete'), findsNothing);
+  });
+
+  testWidgets('keeps the dashboard accessible when its summary is unavailable', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: AdministratorDashboard(
+          repository: _FailingDashboardRepository(),
+          readinessRepository: _FakeReadinessRepository(_incomplete),
+          schoolId: 'SCH-001',
+          schoolName: 'Test School',
+          role: 'ADMINISTRATOR',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Tuition fee setup is incomplete'), findsNothing);
+    expect(find.text('Views are available offline'), findsNothing);
+    expect(
+      find.text(
+        'The dashboard summary is temporarily unavailable. You can still use all school features.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Dashboard data is not available yet.'), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 }
 
@@ -161,4 +196,11 @@ class _TrackingDashboardRepository implements DashboardRepository {
     required String schoolId,
     required String eventId,
   }) => throw UnimplementedError();
+}
+
+class _FailingDashboardRepository extends _TrackingDashboardRepository {
+  @override
+  Future<DashboardSnapshot> getAdministratorDashboard(String schoolId) {
+    throw Exception('Dashboard summary is not ready');
+  }
 }

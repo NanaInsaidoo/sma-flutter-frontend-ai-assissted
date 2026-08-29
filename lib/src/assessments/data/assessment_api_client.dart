@@ -45,7 +45,7 @@ class AssessmentApiClient {
         .where((item) => item.id > 0 && item.label.isNotEmpty)
         .toList();
 
-    final subjects = _list(_decodeBody(responses[1]))
+    final baseSubjects = _list(_decodeBody(responses[1]))
         .map(_map)
         .map(
           (item) => AssessmentSubjectOption(
@@ -119,6 +119,38 @@ class AssessmentApiClient {
     final term = _map(context['academicTerm']);
     final termId = _int(term['id']) ?? 0;
     final termName = _string(term['name']);
+    final availableStreamsBySubject = <int, Set<int>>{};
+    if (termId > 0) {
+      final availabilityResponses = await Future.wait(
+        streams.map(
+          (stream) => _send(
+            '/api/schools/$schoolPath/streams/${stream.id}/term-subject-ids?academicTermId=$termId',
+          ),
+        ),
+      );
+      for (var index = 0; index < streams.length; index++) {
+        final streamId = streams[index].id;
+        for (final value in _list(_decodeBody(availabilityResponses[index]))) {
+          final subjectId = _int(value);
+          if (subjectId != null && subjectId > 0) {
+            availableStreamsBySubject
+                .putIfAbsent(subjectId, () => <int>{})
+                .add(streamId);
+          }
+        }
+      }
+    }
+    final subjects = baseSubjects
+        .map(
+          (subject) => AssessmentSubjectOption(
+            id: subject.id,
+            gradeLevelId: subject.gradeLevelId,
+            name: subject.name,
+            availableStreamIds:
+                availableStreamsBySubject[subject.id] ?? const <int>{},
+          ),
+        )
+        .toList();
     return AssessmentFormSetup(
       streams: streams,
       gradeLevels: gradeLevels,
@@ -1083,11 +1115,16 @@ class AssessmentSubjectOption {
     required this.id,
     required this.gradeLevelId,
     required this.name,
+    this.availableStreamIds = const <int>{},
   });
 
   final int id;
   final int gradeLevelId;
   final String name;
+  final Set<int> availableStreamIds;
+
+  bool isAvailableIn(int? streamId) =>
+      streamId == null || availableStreamIds.contains(streamId);
 }
 
 class CurriculumIndicatorData {

@@ -15,12 +15,16 @@ class StudentsScreen extends StatefulWidget {
     required this.academicYear,
     required this.repository,
     this.onOpenHousehold,
+    this.onCollectPayment,
+    this.focusSearchOnLoad = false,
   });
 
   final String term;
   final String academicYear;
   final StudentsRepository repository;
   final VoidCallback? onOpenHousehold;
+  final ValueChanged<EnrolledStudent>? onCollectPayment;
+  final bool focusSearchOnLoad;
 
   @override
   State<StudentsScreen> createState() => _StudentsScreenState();
@@ -119,6 +123,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
             onOpenStudent: _openStudent,
             onStudentTransferred: _refreshAfterTransfer,
             onOpenHousehold: widget.onOpenHousehold,
+            onCollectPayment: widget.onCollectPayment,
             repository: widget.repository,
           );
         },
@@ -133,6 +138,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         onOpenStudent: _openStudent,
         onStudentTransferred: _refreshAfterTransfer,
         onOpenHousehold: widget.onOpenHousehold,
+        onCollectPayment: widget.onCollectPayment,
         repository: widget.repository,
       );
     }
@@ -168,6 +174,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                     selectedClass: _selectedClass,
                     selectedStatus: _selectedStatus,
                     newThisTermOnly: _newThisTermOnly,
+                    autofocusSearch: widget.focusSearchOnLoad,
                     onSearchChanged: (value) => setState(() => _query = value),
                     onClassChanged: (value) =>
                         setState(() => _selectedClass = value),
@@ -385,6 +392,7 @@ class _StudentFilters extends StatelessWidget {
     required this.selectedClass,
     required this.selectedStatus,
     required this.newThisTermOnly,
+    required this.autofocusSearch,
     required this.onSearchChanged,
     required this.onClassChanged,
     required this.onStatusChanged,
@@ -396,6 +404,7 @@ class _StudentFilters extends StatelessWidget {
   final String selectedClass;
   final String selectedStatus;
   final bool newThisTermOnly;
+  final bool autofocusSearch;
   final ValueChanged<String> onSearchChanged;
   final ValueChanged<String> onClassChanged;
   final ValueChanged<String> onStatusChanged;
@@ -412,6 +421,7 @@ class _StudentFilters extends StatelessWidget {
             final stacked = constraints.maxWidth < 850;
             final search = TextField(
               key: const Key('students-search'),
+              autofocus: autofocusSearch,
               onChanged: onSearchChanged,
               decoration: const InputDecoration(
                 hintText: 'Search by student, ID, guardian or household',
@@ -666,11 +676,11 @@ class _StudentTableRow extends StatelessWidget {
               child: Text(
                 student.feeBalance == 0
                     ? 'Paid'
-                    : 'GH\u20b5 ${student.feeBalance.toStringAsFixed(0)}',
+                    : _projectedMoney(student.feeBalance),
                 style: TextStyle(
-                  color: student.feeBalance == 0
-                      ? AppColors.green
-                      : AppColors.red,
+                  color: student.feeBalance > 0
+                      ? AppColors.red
+                      : AppColors.green,
                   fontWeight: FontWeight.w800,
                 ),
               ),
@@ -867,9 +877,16 @@ class _RequirementValue extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final complete = student.requirementsOutstanding == 0;
+    final empty = student.requirementsTotal == 0;
+    final awaiting = student.requirementsAwaitingPublication;
+    final complete =
+        !empty && student.requirementsOutstanding == 0 && awaiting == 0;
     return Text(
-      complete
+      empty
+          ? 'Not configured'
+          : awaiting == student.requirementsTotal
+          ? '$awaiting awaiting publication'
+          : complete
           ? 'Complete'
           : '${student.requirementsCompleted}/${student.requirementsTotal} received',
       style: TextStyle(
@@ -979,6 +996,7 @@ class StudentProfileView extends StatefulWidget {
     required this.onOpenStudent,
     this.onStudentTransferred,
     this.onOpenHousehold,
+    this.onCollectPayment,
     this.repository,
   });
 
@@ -989,6 +1007,7 @@ class StudentProfileView extends StatefulWidget {
   final ValueChanged<String> onOpenStudent;
   final ValueChanged<String>? onStudentTransferred;
   final VoidCallback? onOpenHousehold;
+  final ValueChanged<EnrolledStudent>? onCollectPayment;
   final StudentsRepository? repository;
 
   @override
@@ -1020,6 +1039,9 @@ class _StudentProfileViewState extends State<StudentProfileView> {
               const SizedBox(height: 8),
               _StudentProfileHeader(
                 student: widget.student,
+                onCollectPayment: widget.onCollectPayment == null
+                    ? null
+                    : () => widget.onCollectPayment!(widget.student),
                 onTransfer: widget.repository == null ? null : _transfer,
               ),
               if (_placementHistory != null) ...[
@@ -1066,7 +1088,7 @@ class _StudentProfileViewState extends State<StudentProfileView> {
   }
 
   Future<void> _transfer() async {
-    final changed = await showDialog<bool>(
+    final outcome = await showDialog<StudentTransferOutcome>(
       context: context,
       barrierDismissible: false,
       builder: (_) => StudentTransferDialog(
@@ -1074,13 +1096,23 @@ class _StudentProfileViewState extends State<StudentProfileView> {
         repository: widget.repository!,
       ),
     );
-    if (changed == true && mounted) {
+    if (outcome != null && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Student class/grade changed successfully.'),
+        SnackBar(
+          content: Text(
+            outcome.pendingApproval
+                ? (outcome.message.isEmpty
+                      ? 'Grade-change request submitted for approval.'
+                      : outcome.message)
+                : 'Student class changed successfully.',
+          ),
         ),
       );
-      (widget.onStudentTransferred ?? widget.onOpenStudent)(widget.student.id);
+      if (!outcome.pendingApproval) {
+        (widget.onStudentTransferred ?? widget.onOpenStudent)(
+          widget.student.id,
+        );
+      }
     }
   }
 }
@@ -1129,9 +1161,14 @@ class _PlacementHistoryPanel extends StatelessWidget {
 String _shortDate(DateTime d) => '${d.day}/${d.month}/${d.year}';
 
 class _StudentProfileHeader extends StatelessWidget {
-  const _StudentProfileHeader({required this.student, this.onTransfer});
+  const _StudentProfileHeader({
+    required this.student,
+    this.onCollectPayment,
+    this.onTransfer,
+  });
 
   final EnrolledStudent student;
+  final VoidCallback? onCollectPayment;
   final VoidCallback? onTransfer;
 
   @override
@@ -1169,9 +1206,18 @@ class _StudentProfileHeader extends StatelessWidget {
                 ),
               ],
             );
-            final contextBadge = Row(
-              mainAxisSize: MainAxisSize.min,
+            final contextBadge = Wrap(
+              spacing: 12,
+              runSpacing: 10,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
+                if (onCollectPayment != null)
+                  FilledButton.icon(
+                    key: const Key('collect-student-payment'),
+                    onPressed: onCollectPayment,
+                    icon: const Icon(Icons.payments_rounded),
+                    label: const Text('Collect payment'),
+                  ),
                 if (onTransfer != null) ...[
                   OutlinedButton.icon(
                     key: const Key('change-class-grade'),
@@ -1179,7 +1225,6 @@ class _StudentProfileHeader extends StatelessWidget {
                     icon: const Icon(Icons.swap_horiz),
                     label: const Text('Change class/grade'),
                   ),
-                  const SizedBox(width: 12),
                 ],
                 _StatusBadge(status: student.status),
               ],
@@ -1318,16 +1363,18 @@ class _OverviewTab extends StatelessWidget {
                 label: 'Fee balance',
                 value: student.feeBalance == 0
                     ? 'Paid'
-                    : 'GH\u20b5 ${student.feeBalance.toStringAsFixed(0)} due',
-                color: student.feeBalance == 0
-                    ? AppColors.green
-                    : AppColors.red,
+                    : student.feeBalance > 0
+                    ? '${_money(student.feeBalance)} due'
+                    : _projectedMoney(student.feeBalance),
+                color: student.feeBalance > 0 ? AppColors.red : AppColors.green,
               ),
               _SnapshotRow(
                 label: 'Items & supplies',
-                value:
-                    '${student.requirementsCompleted}/${student.requirementsTotal} complete',
-                color: student.requirementsOutstanding == 0
+                value: _requirementsSummary(student),
+                color:
+                    student.requirementsTotal > 0 &&
+                        student.requirementsOutstanding == 0 &&
+                        student.requirementsAwaitingPublication == 0
                     ? AppColors.green
                     : AppColors.amber,
               ),
@@ -1820,7 +1867,7 @@ class _FeesTabState extends State<_FeesTab> {
   double get _adjustedFees =>
       _originalFees - _approvedDiscounts + _approvedSurcharges;
 
-  double get _balance => (_adjustedFees - _paid).clamp(0, double.infinity);
+  double get _balance => _adjustedFees - _paid;
 
   Future<void> _openAdjustmentForm([StudentFeeAdjustment? existing]) async {
     if (widget.repository == null) {
@@ -2025,6 +2072,33 @@ class _FeesTabState extends State<_FeesTab> {
     }
   }
 
+  Future<void> _showFeeBreakdown() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => Dialog(
+        insetPadding: const EdgeInsets.all(20),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 760, maxHeight: 760),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(2),
+            child: _FeeStatementCard(
+              student: student,
+              adjustments: _adjustments,
+              onAdjust: () {
+                Navigator.pop(context);
+                _openAdjustmentForm();
+              },
+              onPendingTap: () {
+                Navigator.pop(context);
+                _showPendingAdjustments();
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final pending = _adjustments
@@ -2075,19 +2149,12 @@ class _FeesTabState extends State<_FeesTab> {
                 _FeeMetric(
                   width: width,
                   label: 'Balance',
-                  value: _money(_balance),
-                  color: _balance == 0 ? AppColors.green : AppColors.red,
+                  value: _projectedMoney(_balance),
+                  color: _balance > 0 ? AppColors.red : AppColors.green,
                 ),
               ],
             );
           },
-        ),
-        const SizedBox(height: 14),
-        _FeeStatementCard(
-          student: student,
-          adjustments: _adjustments,
-          onAdjust: _openAdjustmentForm,
-          onPendingTap: _showPendingAdjustments,
         ),
         const SizedBox(height: 14),
         AnimatedContainer(
@@ -2105,41 +2172,15 @@ class _FeesTabState extends State<_FeesTab> {
                   ]
                 : const [],
           ),
-          child: _SectionCard(
-            title:
-                'Adjustment history${pending == 0 ? '' : ' · $pending pending'}',
-            icon: Icons.tune_rounded,
-            child: _adjustments.isEmpty
-                ? const _EmptyFeeState(
-                    title: 'No fee adjustments',
-                    description:
-                        'Discounts and surcharges for this student will appear here.',
-                  )
-                : Column(
-                    children: _adjustments
-                        .map(
-                          (item) => _AdjustmentHistoryRow(
-                            adjustment: item,
-                            onOpen:
-                                item.status ==
-                                        StudentFeeAdjustmentStatus.draft ||
-                                    item.status ==
-                                        StudentFeeAdjustmentStatus.pending
-                                ? () => _openAdjustmentForm(item)
-                                : null,
-                            onAction: (action) =>
-                                _handleAdjustmentAction(item, action),
-                          ),
-                        )
-                        .toList(),
-                  ),
+          child: _FinancialLedger(
+            student: student,
+            adjustments: _adjustments,
+            pendingCount: pending,
+            onViewBreakdown: _showFeeBreakdown,
+            onCreateAdjustment: _openAdjustmentForm,
+            onOpenAdjustment: _openAdjustmentForm,
+            onAdjustmentAction: _handleAdjustmentAction,
           ),
-        ),
-        const SizedBox(height: 14),
-        _SectionCard(
-          title: 'Financial activity',
-          icon: Icons.account_balance_wallet_outlined,
-          child: _FinancialLedger(student: student, adjustments: _adjustments),
         ),
       ],
     );
@@ -2252,7 +2293,7 @@ class _FeeStatementCard extends StatelessWidget {
   double get _paid =>
       student.payments.fold(0, (sum, payment) => sum + payment.amount);
 
-  double get _balance => (_totalFees - _paid).clamp(0, double.infinity);
+  double get _balance => _totalFees - _paid;
 
   @override
   Widget build(BuildContext context) {
@@ -2289,7 +2330,7 @@ class _FeeStatementCard extends StatelessWidget {
                   ),
                 ),
                 FilledButton.icon(
-                  key: const Key('create-fee-adjustment'),
+                  key: const Key('create-fee-adjustment-from-breakdown'),
                   onPressed: onAdjust,
                   icon: const Icon(Icons.add_rounded, size: 18),
                   label: const Text('Create adjustment'),
@@ -2364,10 +2405,25 @@ class _FeeStatementCard extends StatelessWidget {
                 ),
                 _StatementTotalLine(
                   label: 'Balance due',
-                  value: _money(_balance),
-                  valueColor: _balance == 0 ? AppColors.green : AppColors.red,
+                  value: _projectedMoney(_balance),
+                  valueColor: _balance > 0 ? AppColors.red : AppColors.green,
                   emphasized: true,
                 ),
+                if (_balance < 0)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        'Payments exceed adjusted fees by ${_money(_balance)}.',
+                        style: const TextStyle(
+                          color: AppColors.green,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -2539,120 +2595,1025 @@ enum _StudentAdjustmentAction {
   duplicate,
 }
 
-class _AdjustmentHistoryRow extends StatelessWidget {
-  const _AdjustmentHistoryRow({
-    required this.adjustment,
-    required this.onAction,
-    this.onOpen,
+enum _FinancialSortColumn { date, type, activity, reference, status, amount }
+
+class _FinancialActivityEntry {
+  const _FinancialActivityEntry({
+    required this.date,
+    required this.type,
+    required this.activity,
+    required this.reference,
+    required this.status,
+    required this.amount,
+    required this.description,
+    this.adjustment,
   });
 
-  final StudentFeeAdjustment adjustment;
-  final ValueChanged<_StudentAdjustmentAction> onAction;
-  final VoidCallback? onOpen;
+  final DateTime? date;
+  final String type;
+  final String activity;
+  final String reference;
+  final String status;
 
-  List<_StudentAdjustmentAction> get _actions => switch (adjustment.status) {
-    StudentFeeAdjustmentStatus.draft ||
-    StudentFeeAdjustmentStatus.pending => const [_StudentAdjustmentAction.edit],
-    _ => const [],
-  };
+  /// Positive values increase the balance; negative values reduce it.
+  final double amount;
+  final String description;
+  final StudentFeeAdjustment? adjustment;
+}
+
+class _FinancialLedger extends StatefulWidget {
+  const _FinancialLedger({
+    required this.student,
+    required this.adjustments,
+    required this.pendingCount,
+    required this.onViewBreakdown,
+    required this.onCreateAdjustment,
+    required this.onOpenAdjustment,
+    required this.onAdjustmentAction,
+  });
+
+  final EnrolledStudent student;
+  final List<StudentFeeAdjustment> adjustments;
+  final int pendingCount;
+  final VoidCallback onViewBreakdown;
+  final VoidCallback onCreateAdjustment;
+  final ValueChanged<StudentFeeAdjustment> onOpenAdjustment;
+  final void Function(StudentFeeAdjustment, _StudentAdjustmentAction)
+  onAdjustmentAction;
+
+  @override
+  State<_FinancialLedger> createState() => _FinancialLedgerState();
+}
+
+class _FinancialLedgerState extends State<_FinancialLedger> {
+  _FinancialSortColumn _sortColumn = _FinancialSortColumn.date;
+  bool _ascending = false;
+  String _typeFilter = 'All types';
+  String _statusFilter = 'All statuses';
+  String? _expandedReference;
+
+  List<_FinancialActivityEntry> get _entries {
+    final entries = <_FinancialActivityEntry>[
+      ...widget.student.fees.map(
+        (fee) => _FinancialActivityEntry(
+          date: null,
+          type: 'Charge',
+          activity: fee.name,
+          reference: fee.id > 0 ? 'FEE-${fee.id}' : 'Term fee',
+          status: 'Active',
+          amount: fee.amount,
+          description: 'Assigned for the current academic term.',
+        ),
+      ),
+      ...widget.adjustments.map((item) {
+        final discount = item.type == StudentFeeAdjustmentType.discount;
+        return _FinancialActivityEntry(
+          date: item.createdOn,
+          type: discount ? 'Discount' : 'Surcharge',
+          activity: item.description,
+          reference: item.id,
+          status: _adjustmentStatusLabel(item.status),
+          amount: discount ? -item.amount.abs() : item.amount.abs(),
+          description: [
+            '${item.feeName} ${discount ? 'discount' : 'surcharge'}',
+            if (item.createdBy.isNotEmpty) 'Requested by ${item.createdBy}',
+            if (item.assignedApproverName.isNotEmpty)
+              'Approver ${item.assignedApproverName}',
+          ].join(' · '),
+          adjustment: item,
+        );
+      }),
+      ...widget.student.payments.map(
+        (payment) => _FinancialActivityEntry(
+          date: payment.date,
+          type: 'Payment',
+          activity: '${payment.method} payment',
+          reference: payment.receiptNumber.isEmpty
+              ? 'Payment ${payment.id}'
+              : payment.receiptNumber,
+          status: _paymentStatusLabel(payment.status),
+          amount: -(payment.recordedAmount > 0
+              ? payment.recordedAmount
+              : payment.amount),
+          description: [
+            if (payment.receivedBy.isNotEmpty)
+              'Received by ${payment.receivedBy}',
+            if (payment.overpaymentAmount > 0)
+              '${_money(payment.overpaymentAmount)} overpayment credit',
+            if (payment.overpaymentReason.isNotEmpty) payment.overpaymentReason,
+            if (payment.statusReason.isNotEmpty) payment.statusReason,
+          ].join(' · '),
+        ),
+      ),
+      ...widget.student.paymentReversals.map(
+        (reversal) => _FinancialActivityEntry(
+          date: reversal.decidedAt ?? reversal.createdAt,
+          type: 'Reversal',
+          activity: 'Payment reversal',
+          reference: reversal.reversalReference.isNotEmpty
+              ? reversal.reversalReference
+              : reversal.paymentReference,
+          status: _reversalStatusLabel(reversal.status),
+          amount: reversal.amount.abs(),
+          description: [
+            if (reversal.paymentReference.isNotEmpty)
+              'Receipt ${reversal.paymentReference}',
+            if (reversal.reason.isNotEmpty) reversal.reason,
+            if (reversal.requesterName.isNotEmpty)
+              'Requested by ${reversal.requesterName}',
+            if (reversal.decidedByName.isNotEmpty)
+              'Decided by ${reversal.decidedByName}'
+            else if (reversal.approverName.isNotEmpty)
+              'Approver ${reversal.approverName}',
+            if (reversal.decisionReason.isNotEmpty &&
+                reversal.decisionReason.toLowerCase() != 'approved')
+              reversal.decisionReason,
+          ].join(' · '),
+        ),
+      ),
+    ];
+
+    final reversalPaymentIds = widget.student.paymentReversals
+        .map((item) => item.paymentId)
+        .toSet();
+    for (final payment in widget.student.payments) {
+      if (payment.refundedAmount <= 0 ||
+          reversalPaymentIds.contains(payment.id)) {
+        continue;
+      }
+      entries.add(
+        _FinancialActivityEntry(
+          date: payment.date,
+          type: 'Reversal',
+          activity: 'Payment reversal',
+          reference: payment.receiptNumber,
+          status: 'Reversed',
+          amount: payment.refundedAmount.abs(),
+          description: payment.statusReason,
+        ),
+      );
+    }
+    return entries;
+  }
+
+  List<_FinancialActivityEntry> get _visibleEntries {
+    final result = _entries.where((entry) {
+      final matchesType =
+          _typeFilter == 'All types' || entry.type == _typeFilter;
+      final matchesStatus =
+          _statusFilter == 'All statuses' || entry.status == _statusFilter;
+      return matchesType && matchesStatus;
+    }).toList();
+    result.sort((a, b) {
+      final comparison = switch (_sortColumn) {
+        _FinancialSortColumn.date => _compareDates(a.date, b.date),
+        _FinancialSortColumn.type => _compareText(a.type, b.type),
+        _FinancialSortColumn.activity => _compareText(a.activity, b.activity),
+        _FinancialSortColumn.reference => _compareText(
+          a.reference,
+          b.reference,
+        ),
+        _FinancialSortColumn.status => _compareText(a.status, b.status),
+        _FinancialSortColumn.amount => a.amount.abs().compareTo(b.amount.abs()),
+      };
+      return _ascending ? comparison : -comparison;
+    });
+    return result;
+  }
+
+  int _compareDates(DateTime? a, DateTime? b) {
+    if (a == null && b == null) return 0;
+    if (a == null) return -1;
+    if (b == null) return 1;
+    return a.compareTo(b);
+  }
+
+  int _compareText(String a, String b) =>
+      a.toLowerCase().compareTo(b.toLowerCase());
+
+  List<String> get _types {
+    final values = _entries.map((entry) => entry.type).toSet().toList()..sort();
+    return ['All types', ...values];
+  }
+
+  List<String> get _statuses {
+    final values = _entries.map((entry) => entry.status).toSet().toList()
+      ..sort();
+    return ['All statuses', ...values];
+  }
+
+  void _sortBy(_FinancialSortColumn column) {
+    setState(() {
+      if (_sortColumn == column) {
+        _ascending = !_ascending;
+      } else {
+        _sortColumn = column;
+        _ascending = column != _FinancialSortColumn.date;
+      }
+    });
+  }
+
+  void _toggleExpanded(_FinancialActivityEntry entry) {
+    final adjustment = entry.adjustment;
+    if (adjustment != null &&
+        (adjustment.status == StudentFeeAdjustmentStatus.draft ||
+            adjustment.status == StudentFeeAdjustmentStatus.pending)) {
+      widget.onOpenAdjustment(adjustment);
+      return;
+    }
+    setState(() {
+      _expandedReference = _expandedReference == entry.reference
+          ? null
+          : entry.reference;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    final color = _adjustmentStatusColor(adjustment.status);
-    final discount = adjustment.type == StudentFeeAdjustmentType.discount;
-    return InkWell(
-      key: Key('adjustment-row-${adjustment.id}'),
-      onTap: onOpen,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: AppColors.border)),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: (discount ? AppColors.green : AppColors.red).withValues(
-                  alpha: .1,
-                ),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(
-                discount ? Icons.remove_rounded : Icons.add_rounded,
-                color: discount ? AppColors.green : AppColors.red,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${adjustment.feeName} · ${discount ? 'Discount' : 'Surcharge'}',
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    adjustment.description,
-                    style: const TextStyle(color: AppColors.muted),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${_formatDate(adjustment.createdOn)} · ${adjustment.createdBy} · ${adjustment.id}',
-                    style: const TextStyle(
-                      color: AppColors.muted,
-                      fontSize: 11,
+    final entries = _visibleEntries;
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(18),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final heading = Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.account_balance_wallet_outlined,
+                          size: 20,
+                          color: AppColors.green,
+                        ),
+                        const SizedBox(width: 9),
+                        const Text(
+                          'Financial activity',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        if (widget.pendingCount > 0) ...[
+                          const SizedBox(width: 9),
+                          _SmallPill(
+                            label:
+                                '${widget.pendingCount} pending ${widget.pendingCount == 1 ? 'adjustment' : 'adjustments'}',
+                            color: AppColors.amber,
+                          ),
+                        ],
+                      ],
                     ),
-                  ),
-                ],
-              ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'All charges, adjustments, payments and reversals in one place.',
+                      style: TextStyle(color: AppColors.muted, fontSize: 12),
+                    ),
+                  ],
+                );
+                final actions = Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      key: const Key('view-fee-breakdown'),
+                      onPressed: widget.onViewBreakdown,
+                      icon: const Icon(Icons.receipt_long_outlined, size: 17),
+                      label: const Text('Fee breakdown'),
+                    ),
+                    FilledButton.icon(
+                      key: const Key('create-fee-adjustment'),
+                      onPressed: widget.onCreateAdjustment,
+                      icon: const Icon(Icons.add_rounded, size: 17),
+                      label: const Text('Create adjustment'),
+                    ),
+                  ],
+                );
+                if (constraints.maxWidth < 690) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [heading, const SizedBox(height: 14), actions],
+                  );
+                }
+                return Row(
+                  children: [
+                    Expanded(child: heading),
+                    const SizedBox(width: 16),
+                    actions,
+                  ],
+                );
+              },
             ),
-            const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
+          ),
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 12, 18, 12),
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 10,
               children: [
-                Text(
-                  _signedMoney(adjustment.signedAmount),
-                  style: TextStyle(
-                    color: discount ? AppColors.green : AppColors.red,
-                    fontWeight: FontWeight.w800,
+                _FinancialFilter(
+                  key: const Key('financial-type-filter'),
+                  icon: Icons.filter_list_rounded,
+                  value: _typeFilter,
+                  values: _types,
+                  onChanged: (value) => setState(() => _typeFilter = value),
+                ),
+                _FinancialFilter(
+                  key: const Key('financial-status-filter'),
+                  icon: Icons.check_circle_outline_rounded,
+                  value: _statusFilter,
+                  values: _statuses,
+                  onChanged: (value) => setState(() => _statusFilter = value),
+                ),
+                if (_typeFilter != 'All types' ||
+                    _statusFilter != 'All statuses')
+                  TextButton.icon(
+                    onPressed: () => setState(() {
+                      _typeFilter = 'All types';
+                      _statusFilter = 'All statuses';
+                    }),
+                    icon: const Icon(Icons.close_rounded, size: 17),
+                    label: const Text('Clear'),
                   ),
-                ),
-                const SizedBox(height: 6),
-                _SmallPill(
-                  label: _adjustmentStatusLabel(adjustment.status),
-                  color: color,
-                ),
               ],
             ),
-            if (_actions.isNotEmpty) ...[
-              const SizedBox(width: 5),
-              PopupMenuButton<_StudentAdjustmentAction>(
-                key: Key('adjustment-menu-${adjustment.id}'),
-                tooltip: 'Adjustment actions',
-                onSelected: onAction,
-                itemBuilder: (context) => _actions
-                    .map(
-                      (action) => PopupMenuItem(
-                        value: action,
-                        child: Text(_studentAdjustmentActionLabel(action)),
-                      ),
+          ),
+          const Divider(height: 1),
+          if (entries.isEmpty)
+            const _EmptyFeeState(
+              title: 'No matching activity',
+              description: 'Change or clear the filters to see more records.',
+            )
+          else
+            LayoutBuilder(
+              builder: (context, constraints) => constraints.maxWidth >= 920
+                  ? _FinancialActivityTable(
+                      entries: entries,
+                      sortColumn: _sortColumn,
+                      ascending: _ascending,
+                      expandedReference: _expandedReference,
+                      onSort: _sortBy,
+                      onOpen: _toggleExpanded,
+                      onAdjustmentAction: widget.onAdjustmentAction,
                     )
-                    .toList(),
-              ),
-            ],
-          ],
+                  : _FinancialActivityList(
+                      entries: entries,
+                      sortColumn: _sortColumn,
+                      ascending: _ascending,
+                      expandedReference: _expandedReference,
+                      onSort: _sortBy,
+                      onOpen: _toggleExpanded,
+                      onAdjustmentAction: widget.onAdjustmentAction,
+                    ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FinancialFilter extends StatelessWidget {
+  const _FinancialFilter({
+    super.key,
+    required this.icon,
+    required this.value,
+    required this.values,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String value;
+  final List<String> values;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 40,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: AppColors.background,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: value,
+          borderRadius: BorderRadius.circular(12),
+          icon: const Icon(Icons.expand_more_rounded, size: 18),
+          items: values
+              .map(
+                (item) => DropdownMenuItem(
+                  value: item,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(icon, size: 16, color: AppColors.muted),
+                      const SizedBox(width: 8),
+                      Text(item),
+                    ],
+                  ),
+                ),
+              )
+              .toList(),
+          onChanged: (value) {
+            if (value != null) onChanged(value);
+          },
         ),
       ),
     );
   }
 }
 
-class _FinancialLedger extends StatelessWidget {
-  const _FinancialLedger({required this.student, required this.adjustments});
+class _FinancialActivityTable extends StatelessWidget {
+  const _FinancialActivityTable({
+    required this.entries,
+    required this.sortColumn,
+    required this.ascending,
+    required this.expandedReference,
+    required this.onSort,
+    required this.onOpen,
+    required this.onAdjustmentAction,
+  });
+
+  final List<_FinancialActivityEntry> entries;
+  final _FinancialSortColumn sortColumn;
+  final bool ascending;
+  final String? expandedReference;
+  final ValueChanged<_FinancialSortColumn> onSort;
+  final ValueChanged<_FinancialActivityEntry> onOpen;
+  final void Function(StudentFeeAdjustment, _StudentAdjustmentAction)
+  onAdjustmentAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Container(
+          color: AppColors.background,
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+          child: Row(
+            children: [
+              _SortableLedgerHeader(
+                width: 104,
+                label: 'Date',
+                column: _FinancialSortColumn.date,
+                activeColumn: sortColumn,
+                ascending: ascending,
+                onSort: onSort,
+              ),
+              _SortableLedgerHeader(
+                width: 112,
+                label: 'Type',
+                column: _FinancialSortColumn.type,
+                activeColumn: sortColumn,
+                ascending: ascending,
+                onSort: onSort,
+              ),
+              Expanded(
+                flex: 3,
+                child: _SortableLedgerHeader(
+                  label: 'Activity',
+                  column: _FinancialSortColumn.activity,
+                  activeColumn: sortColumn,
+                  ascending: ascending,
+                  onSort: onSort,
+                ),
+              ),
+              Expanded(
+                flex: 2,
+                child: _SortableLedgerHeader(
+                  label: 'Reference',
+                  column: _FinancialSortColumn.reference,
+                  activeColumn: sortColumn,
+                  ascending: ascending,
+                  onSort: onSort,
+                ),
+              ),
+              _SortableLedgerHeader(
+                width: 112,
+                label: 'Status',
+                column: _FinancialSortColumn.status,
+                activeColumn: sortColumn,
+                ascending: ascending,
+                onSort: onSort,
+              ),
+              _SortableLedgerHeader(
+                width: 124,
+                label: 'Amount',
+                column: _FinancialSortColumn.amount,
+                activeColumn: sortColumn,
+                ascending: ascending,
+                alignment: Alignment.centerRight,
+                onSort: onSort,
+              ),
+              const SizedBox(width: 34),
+            ],
+          ),
+        ),
+        ...entries.map(
+          (entry) => _FinancialActivityTableRow(
+            entry: entry,
+            expanded: expandedReference == entry.reference,
+            onOpen: () => onOpen(entry),
+            onAdjustmentAction: onAdjustmentAction,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SortableLedgerHeader extends StatelessWidget {
+  const _SortableLedgerHeader({
+    this.width,
+    required this.label,
+    required this.column,
+    required this.activeColumn,
+    required this.ascending,
+    required this.onSort,
+    this.alignment = Alignment.centerLeft,
+  });
+
+  final double? width;
+  final String label;
+  final _FinancialSortColumn column;
+  final _FinancialSortColumn activeColumn;
+  final bool ascending;
+  final ValueChanged<_FinancialSortColumn> onSort;
+  final Alignment alignment;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = column == activeColumn;
+    final child = InkWell(
+      key: Key('financial-sort-${column.name}'),
+      onTap: () => onSort(column),
+      borderRadius: BorderRadius.circular(7),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+        child: Align(
+          alignment: alignment,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label.toUpperCase(),
+                style: TextStyle(
+                  color: active ? AppColors.green : AppColors.muted,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: .5,
+                ),
+              ),
+              const SizedBox(width: 3),
+              Icon(
+                active
+                    ? (ascending
+                          ? Icons.arrow_upward_rounded
+                          : Icons.arrow_downward_rounded)
+                    : Icons.unfold_more_rounded,
+                size: 13,
+                color: active ? AppColors.green : AppColors.muted,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    return width == null ? child : SizedBox(width: width, child: child);
+  }
+}
+
+class _FinancialActivityTableRow extends StatelessWidget {
+  const _FinancialActivityTableRow({
+    required this.entry,
+    required this.expanded,
+    required this.onOpen,
+    required this.onAdjustmentAction,
+  });
+
+  final _FinancialActivityEntry entry;
+  final bool expanded;
+  final VoidCallback onOpen;
+  final void Function(StudentFeeAdjustment, _StudentAdjustmentAction)
+  onAdjustmentAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final adjustment = entry.adjustment;
+    return Column(
+      children: [
+        InkWell(
+          key: adjustment == null
+              ? Key('financial-row-${entry.reference}')
+              : Key('adjustment-row-${adjustment.id}'),
+          onTap: onOpen,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 104,
+                  child: Text(
+                    entry.date == null
+                        ? 'Term start'
+                        : _formatDate(entry.date!),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+                SizedBox(
+                  width: 112,
+                  child: _ActivityTypePill(type: entry.type),
+                ),
+                Expanded(
+                  flex: 3,
+                  child: Text(
+                    entry.activity,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+                Expanded(
+                  flex: 2,
+                  child: Text(
+                    entry.reference,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 112,
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: _SmallPill(
+                      label: entry.status,
+                      color: adjustment == null
+                          ? _financialStatusColor(entry.status)
+                          : _adjustmentStatusColor(adjustment.status),
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 124,
+                  child: Text(
+                    _financialAmount(entry.amount),
+                    textAlign: TextAlign.right,
+                    style: TextStyle(
+                      color: entry.amount > 0 ? AppColors.red : AppColors.green,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 34,
+                  child:
+                      adjustment != null &&
+                          (adjustment.status ==
+                                  StudentFeeAdjustmentStatus.draft ||
+                              adjustment.status ==
+                                  StudentFeeAdjustmentStatus.pending)
+                      ? PopupMenuButton<_StudentAdjustmentAction>(
+                          key: Key('adjustment-menu-${adjustment.id}'),
+                          tooltip: 'Adjustment actions',
+                          padding: EdgeInsets.zero,
+                          onSelected: (action) =>
+                              onAdjustmentAction(adjustment, action),
+                          itemBuilder: (context) => [
+                            PopupMenuItem(
+                              value: _StudentAdjustmentAction.edit,
+                              child: Text(
+                                _studentAdjustmentActionLabel(
+                                  _StudentAdjustmentAction.edit,
+                                ),
+                              ),
+                            ),
+                          ],
+                        )
+                      : Icon(
+                          expanded
+                              ? Icons.expand_less_rounded
+                              : Icons.expand_more_rounded,
+                          color: AppColors.muted,
+                        ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (expanded) _FinancialActivityDescription(entry: entry),
+        const Divider(height: 1),
+      ],
+    );
+  }
+}
+
+class _FinancialActivityList extends StatelessWidget {
+  const _FinancialActivityList({
+    required this.entries,
+    required this.sortColumn,
+    required this.ascending,
+    required this.expandedReference,
+    required this.onSort,
+    required this.onOpen,
+    required this.onAdjustmentAction,
+  });
+
+  final List<_FinancialActivityEntry> entries;
+  final _FinancialSortColumn sortColumn;
+  final bool ascending;
+  final String? expandedReference;
+  final ValueChanged<_FinancialSortColumn> onSort;
+  final ValueChanged<_FinancialActivityEntry> onOpen;
+  final void Function(StudentFeeAdjustment, _StudentAdjustmentAction)
+  onAdjustmentAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 10, 18, 8),
+          child: Row(
+            children: [
+              const Text(
+                'Sort by',
+                style: TextStyle(color: AppColors.muted, fontSize: 12),
+              ),
+              const SizedBox(width: 8),
+              DropdownButtonHideUnderline(
+                child: DropdownButton<_FinancialSortColumn>(
+                  key: const Key('financial-mobile-sort'),
+                  value: sortColumn,
+                  items: _FinancialSortColumn.values
+                      .map(
+                        (column) => DropdownMenuItem(
+                          value: column,
+                          child: Text(_financialSortLabel(column)),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) {
+                    if (value != null) onSort(value);
+                  },
+                ),
+              ),
+              IconButton(
+                tooltip: ascending ? 'Ascending' : 'Descending',
+                onPressed: () => onSort(sortColumn),
+                icon: Icon(
+                  ascending
+                      ? Icons.arrow_upward_rounded
+                      : Icons.arrow_downward_rounded,
+                  size: 18,
+                ),
+              ),
+            ],
+          ),
+        ),
+        ...entries.map((entry) {
+          final adjustment = entry.adjustment;
+          return Column(
+            children: [
+              InkWell(
+                key: adjustment == null
+                    ? Key('financial-row-${entry.reference}')
+                    : Key('adjustment-row-${adjustment.id}'),
+                onTap: () => onOpen(entry),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 14,
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _ActivityTypeIcon(type: entry.type),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    entry.activity,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                ),
+                                Text(
+                                  _financialAmount(entry.amount),
+                                  style: TextStyle(
+                                    color: entry.amount > 0
+                                        ? AppColors.red
+                                        : AppColors.green,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 5),
+                            Text(
+                              '${entry.date == null ? 'Term start' : _formatDate(entry.date!)} · ${entry.reference}',
+                              style: const TextStyle(
+                                color: AppColors.muted,
+                                fontSize: 12,
+                              ),
+                            ),
+                            const SizedBox(height: 7),
+                            Wrap(
+                              spacing: 7,
+                              runSpacing: 5,
+                              children: [
+                                _ActivityTypePill(type: entry.type),
+                                _SmallPill(
+                                  label: entry.status,
+                                  color: adjustment == null
+                                      ? _financialStatusColor(entry.status)
+                                      : _adjustmentStatusColor(
+                                          adjustment.status,
+                                        ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      if (adjustment != null &&
+                          (adjustment.status ==
+                                  StudentFeeAdjustmentStatus.draft ||
+                              adjustment.status ==
+                                  StudentFeeAdjustmentStatus.pending))
+                        PopupMenuButton<_StudentAdjustmentAction>(
+                          key: Key('adjustment-menu-${adjustment.id}'),
+                          tooltip: 'Adjustment actions',
+                          onSelected: (action) =>
+                              onAdjustmentAction(adjustment, action),
+                          itemBuilder: (context) => [
+                            PopupMenuItem(
+                              value: _StudentAdjustmentAction.edit,
+                              child: Text(
+                                _studentAdjustmentActionLabel(
+                                  _StudentAdjustmentAction.edit,
+                                ),
+                              ),
+                            ),
+                          ],
+                        )
+                      else
+                        Icon(
+                          expandedReference == entry.reference
+                              ? Icons.expand_less_rounded
+                              : Icons.expand_more_rounded,
+                          color: AppColors.muted,
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              if (expandedReference == entry.reference)
+                _FinancialActivityDescription(entry: entry),
+              const Divider(height: 1),
+            ],
+          );
+        }),
+      ],
+    );
+  }
+}
+
+class _FinancialActivityDescription extends StatelessWidget {
+  const _FinancialActivityDescription({required this.entry});
+
+  final _FinancialActivityEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: AppColors.background,
+      padding: const EdgeInsets.fromLTRB(22, 12, 22, 14),
+      child: Text(
+        entry.description.isEmpty
+            ? 'No additional information for this activity.'
+            : entry.description,
+        style: const TextStyle(
+          color: AppColors.muted,
+          fontSize: 12,
+          height: 1.45,
+        ),
+      ),
+    );
+  }
+}
+
+class _ActivityTypePill extends StatelessWidget {
+  const _ActivityTypePill({required this.type});
+
+  final String type;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _financialTypeColor(type);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .09),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        type,
+        style: TextStyle(
+          color: color,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+class _ActivityTypeIcon extends StatelessWidget {
+  const _ActivityTypeIcon({required this.type});
+
+  final String type;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _financialTypeColor(type);
+    final icon = switch (type) {
+      'Payment' => Icons.payments_outlined,
+      'Reversal' => Icons.undo_rounded,
+      'Discount' => Icons.remove_rounded,
+      'Surcharge' => Icons.add_rounded,
+      _ => Icons.receipt_long_outlined,
+    };
+    return Container(
+      width: 38,
+      height: 38,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .09),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Icon(icon, color: color, size: 19),
+    );
+  }
+}
+
+Color _financialTypeColor(String type) => switch (type) {
+  'Payment' || 'Discount' => AppColors.green,
+  'Reversal' => AppColors.purple,
+  'Surcharge' || 'Charge' => AppColors.red,
+  _ => AppColors.blue,
+};
+
+Color _financialStatusColor(String status) {
+  final normalized = status.toLowerCase();
+  if (normalized.contains('pending') || normalized.contains('draft')) {
+    return AppColors.amber;
+  }
+  if (normalized.contains('reversed') ||
+      normalized.contains('rejected') ||
+      normalized.contains('cancelled')) {
+    return AppColors.red;
+  }
+  return AppColors.green;
+}
+
+String _financialAmount(double amount) =>
+    '${amount > 0 ? '+' : '−'} ${_money(amount.abs())}';
+
+String _financialSortLabel(_FinancialSortColumn column) => switch (column) {
+  _FinancialSortColumn.date => 'Date',
+  _FinancialSortColumn.type => 'Type',
+  _FinancialSortColumn.activity => 'Activity',
+  _FinancialSortColumn.reference => 'Reference',
+  _FinancialSortColumn.status => 'Status',
+  _FinancialSortColumn.amount => 'Amount',
+};
+
+// Kept temporarily while older fee-screen golden fixtures are retired.
+// ignore: unused_element
+class _LegacyFinancialLedger extends StatelessWidget {
+  const _LegacyFinancialLedger({
+    required this.student,
+    required this.adjustments,
+  });
 
   final EnrolledStudent student;
   final List<StudentFeeAdjustment> adjustments;
@@ -2686,15 +3647,277 @@ class _FinancialLedger extends StatelessWidget {
             muted: !item.affectsBalance,
           ),
         ),
-        ...student.payments.map(
-          (payment) => _LedgerRow(
-            title: '${payment.method} payment',
-            subtitle: '${_formatDate(payment.date)} · ${payment.receiptNumber}',
-            type: 'Payment',
-            credit: payment.amount,
-          ),
+        ...student.payments.expand(
+          (payment) => [
+            _LedgerRow(
+              title: '${payment.method} payment',
+              subtitle:
+                  '${_formatDate(payment.date)} · ${payment.receiptNumber} · ${_paymentStatusLabel(payment.status)}',
+              type: 'Payment',
+              credit: payment.recordedAmount > 0
+                  ? payment.recordedAmount
+                  : payment.amount,
+              muted: payment.isPending,
+            ),
+            if (payment.refundedAmount > 0)
+              _LedgerRow(
+                title: 'Payment reversal',
+                subtitle: payment.statusReason.isEmpty
+                    ? payment.receiptNumber
+                    : '${payment.receiptNumber} · ${payment.statusReason}',
+                type: 'Reversal',
+                debit: payment.refundedAmount,
+              ),
+          ],
         ),
       ],
+    );
+  }
+}
+
+// Kept temporarily while older fee-screen golden fixtures are retired.
+// ignore: unused_element
+class _StudentPaymentHistory extends StatelessWidget {
+  const _StudentPaymentHistory({
+    required this.payments,
+    required this.reversals,
+  });
+
+  final List<StudentPayment> payments;
+  final List<StudentPaymentReversal> reversals;
+
+  @override
+  Widget build(BuildContext context) {
+    if (payments.isEmpty && reversals.isEmpty) {
+      return const _EmptyFeeState(
+        title: 'No payments recorded',
+        description:
+            'Payments and any reversal requests for this student will appear here.',
+      );
+    }
+    final paymentIds = payments.map((item) => item.id).toSet();
+    return Column(
+      children: [
+        ...payments.map(
+          (payment) => _StudentPaymentHistoryRow(
+            payment: payment,
+            reversals: reversals
+                .where((item) => item.paymentId == payment.id)
+                .toList(growable: false),
+          ),
+        ),
+        ...reversals
+            .where((item) => !paymentIds.contains(item.paymentId))
+            .map((item) => _StandalonePaymentReversalRow(reversal: item)),
+      ],
+    );
+  }
+}
+
+class _StudentPaymentHistoryRow extends StatelessWidget {
+  const _StudentPaymentHistoryRow({
+    required this.payment,
+    required this.reversals,
+  });
+
+  final StudentPayment payment;
+  final List<StudentPaymentReversal> reversals;
+
+  @override
+  Widget build(BuildContext context) {
+    final recordedAmount = payment.recordedAmount > 0
+        ? payment.recordedAmount
+        : payment.amount;
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppColors.border)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: AppColors.greenSoft,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.receipt_long_outlined,
+                  size: 20,
+                  color: AppColors.green,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      payment.receiptNumber.isEmpty
+                          ? 'Payment receipt'
+                          : payment.receiptNumber,
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      [
+                        _formatDate(payment.date),
+                        if (payment.method.isNotEmpty) payment.method,
+                        if (payment.receivedBy.isNotEmpty)
+                          'Received by ${payment.receivedBy}',
+                      ].join(' · '),
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    _money(recordedAmount),
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  _SmallPill(
+                    label: _paymentStatusLabel(payment.status),
+                    color: _paymentStatusColor(payment.status),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          if (payment.overpaymentAmount > 0) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.greenSoft,
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Text(
+                'Included ${_money(payment.overpaymentAmount)} overpayment credit'
+                '${payment.overpaymentReason.isEmpty ? '' : ' · ${payment.overpaymentReason}'}',
+                style: const TextStyle(
+                  color: AppColors.green,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+          ...reversals.map(
+            (item) => Padding(
+              padding: const EdgeInsets.only(top: 12, left: 50),
+              child: _PaymentReversalDetails(reversal: item),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StandalonePaymentReversalRow extends StatelessWidget {
+  const _StandalonePaymentReversalRow({required this.reversal});
+
+  final StudentPaymentReversal reversal;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 14),
+    child: _PaymentReversalDetails(reversal: reversal),
+  );
+}
+
+class _PaymentReversalDetails extends StatelessWidget {
+  const _PaymentReversalDetails({required this.reversal});
+
+  final StudentPaymentReversal reversal;
+
+  @override
+  Widget build(BuildContext context) {
+    final effectiveDate = reversal.decidedAt ?? reversal.createdAt;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.red.withValues(alpha: .055),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.red.withValues(alpha: .18)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.undo_rounded, size: 18, color: AppColors.red),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  reversal.reversalReference.isEmpty
+                      ? 'Payment reversal request'
+                      : reversal.reversalReference,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+              Text(
+                _money(reversal.amount),
+                style: const TextStyle(
+                  color: AppColors.red,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(width: 8),
+              _SmallPill(
+                label: _reversalStatusLabel(reversal.status),
+                color: _reversalStatusColor(reversal.status),
+              ),
+            ],
+          ),
+          if (reversal.reason.isNotEmpty) ...[
+            const SizedBox(height: 7),
+            Text(
+              reversal.reason,
+              style: const TextStyle(fontSize: 12, height: 1.35),
+            ),
+          ],
+          const SizedBox(height: 7),
+          Text(
+            [
+              if (effectiveDate != null) _formatDate(effectiveDate),
+              if (reversal.requesterName.isNotEmpty)
+                'Requested by ${reversal.requesterName}',
+              if (reversal.decidedByName.isNotEmpty)
+                'Decided by ${reversal.decidedByName}'
+              else if (reversal.approverName.isNotEmpty)
+                'Approver ${reversal.approverName}',
+            ].join(' · '),
+            style: const TextStyle(color: AppColors.muted, fontSize: 11),
+          ),
+          if (reversal.decisionReason.isNotEmpty &&
+              reversal.decisionReason.toLowerCase() != 'approved') ...[
+            const SizedBox(height: 4),
+            Text(
+              'Decision note: ${reversal.decisionReason}',
+              style: const TextStyle(color: AppColors.muted, fontSize: 11),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -2888,20 +4111,36 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
     super.dispose();
   }
 
-  double? get _projectedFee {
+  double? get _currentAdjustedFee {
     final feeName = _feeName;
-    final amount = double.tryParse(_amountController.text.trim());
-    if (feeName == null || amount == null || amount <= 0) return null;
+    if (feeName == null) return null;
     final original = widget.student.fees
         .where((fee) => fee.name == feeName)
         .fold<double>(0, (sum, fee) => sum + fee.amount);
     final approved = widget.currentAdjustments
-        .where((item) => item.affectsBalance && item.feeName == feeName)
+        .where(
+          (item) =>
+              item.affectsBalance &&
+              item.feeName == feeName &&
+              item.id != widget.initialAdjustment?.id,
+        )
         .fold<double>(0, (sum, item) => sum + item.signedAmount);
-    final proposed = _type == StudentFeeAdjustmentType.discount
+    return original + approved;
+  }
+
+  double? get _proposedEffect {
+    final amount = double.tryParse(_amountController.text.trim());
+    if (amount == null || amount <= 0) return null;
+    return _type == StudentFeeAdjustmentType.discount
         ? -amount.abs()
         : amount.abs();
-    return original + approved + proposed;
+  }
+
+  double? get _projectedFee {
+    final current = _currentAdjustedFee;
+    final proposed = _proposedEffect;
+    if (current == null || proposed == null) return null;
+    return current + proposed;
   }
 
   Future<void> _save() async {
@@ -3199,25 +4438,24 @@ class _FeeAdjustmentSheetState extends State<_FeeAdjustmentSheet> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        '${_feeName!} if approved',
-                                        style: const TextStyle(
-                                          color: AppColors.text,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ),
-                                    Text(
-                                      _projectedMoney(projected),
-                                      style: const TextStyle(
-                                        color: AppColors.text,
-                                        fontWeight: FontWeight.w900,
-                                      ),
-                                    ),
-                                  ],
+                                _AdjustmentPreviewLine(
+                                  label: 'Current adjusted fee',
+                                  value: _projectedMoney(
+                                    _currentAdjustedFee ?? 0,
+                                  ),
+                                ),
+                                const SizedBox(height: 7),
+                                _AdjustmentPreviewLine(
+                                  label: 'This request',
+                                  value:
+                                      '${(_proposedEffect ?? 0) >= 0 ? '+' : '−'}${_money((_proposedEffect ?? 0).abs())}',
+                                  emphasize: true,
+                                ),
+                                const Divider(height: 18),
+                                _AdjustmentPreviewLine(
+                                  label: 'Projected fee if approved',
+                                  value: _projectedMoney(projected),
+                                  emphasize: true,
                                 ),
                                 if (projected < 0) ...[
                                   const SizedBox(height: 6),
@@ -3440,6 +4678,32 @@ class _ReadOnlyAdjustmentContext extends StatelessWidget {
   }
 }
 
+class _AdjustmentPreviewLine extends StatelessWidget {
+  const _AdjustmentPreviewLine({
+    required this.label,
+    required this.value,
+    this.emphasize = false,
+  });
+
+  final String label;
+  final String value;
+  final bool emphasize;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TextStyle(
+      color: AppColors.text,
+      fontWeight: emphasize ? FontWeight.w900 : FontWeight.w600,
+    );
+    return Row(
+      children: [
+        Expanded(child: Text(label, style: style)),
+        Text(value, style: style),
+      ],
+    );
+  }
+}
+
 class _AdjustmentTypeButton extends StatelessWidget {
   const _AdjustmentTypeButton({
     required this.label,
@@ -3509,58 +4773,155 @@ class _RequirementsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final progress = student.requirementsTotal == 0
+    final awaiting = student.requirementsAwaitingPublication;
+    final activeTotal = student.requirementsTotal - awaiting;
+    final progress = activeTotal == 0
         ? 0.0
-        : student.requirementsCompleted / student.requirementsTotal;
+        : student.requirementsCompleted / activeTotal;
     return _SectionCard(
       title: 'Items & supplies progress',
       icon: Icons.inventory_2_outlined,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(999),
-                  child: LinearProgressIndicator(
-                    value: progress,
-                    minHeight: 9,
-                    backgroundColor: AppColors.border,
-                    color: AppColors.green,
+          if (student.requirements.isEmpty)
+            const _ProfileEmptyState(
+              icon: Icons.inventory_2_outlined,
+              title: 'No items configured for this student',
+              message:
+                  'Published or approved class items will appear here for the current term.',
+            )
+          else ...[
+            if (awaiting > 0) ...[
+              _RequirementPublicationNotice(itemCount: awaiting),
+              const SizedBox(height: 16),
+            ],
+            Row(
+              children: [
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(999),
+                    child: LinearProgressIndicator(
+                      value: progress,
+                      minHeight: 9,
+                      backgroundColor: AppColors.border,
+                      color: AppColors.green,
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Text(
-                '${student.requirementsCompleted}/${student.requirementsTotal} complete',
-                style: const TextStyle(fontWeight: FontWeight.w800),
-              ),
-            ],
+                const SizedBox(width: 12),
+                Text(
+                  activeTotal == 0
+                      ? '$awaiting awaiting publication'
+                      : '${student.requirementsCompleted}/$activeTotal complete',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            ...student.requirements.map((item) {
+              final color = switch (item.status) {
+                StudentRequirementStatus.complete => AppColors.green,
+                StudentRequirementStatus.partial => AppColors.amber,
+                StudentRequirementStatus.outstanding => AppColors.red,
+                StudentRequirementStatus.waived => AppColors.blue,
+                StudentRequirementStatus.awaitingPublication => AppColors.amber,
+                StudentRequirementStatus.inactive => AppColors.muted,
+              };
+              final quantity =
+                  item.status == StudentRequirementStatus.awaitingPublication
+                  ? '${item.requiredQuantity} ${item.unit} required'
+                  : '${item.receivedQuantity} of ${item.requiredQuantity} ${item.unit} received';
+              final source =
+                  item.isFromPreviousTerm && item.sourceTerm.isNotEmpty
+                  ? 'From ${item.sourceTerm} · '
+                  : '';
+              return _DetailListRow(
+                title: item.name,
+                subtitle:
+                    '$source$quantity${item.note.isEmpty ? '' : ' · ${item.note}'}',
+                trailing: _requirementStatusLabel(item.status),
+                color: color,
+                badge: item.isFromPreviousTerm
+                    ? 'Previous term'
+                    : item.studentSpecific
+                    ? 'Student-specific'
+                    : null,
+                badgeColor: item.isFromPreviousTerm
+                    ? AppColors.amber
+                    : AppColors.green,
+              );
+            }),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _RequirementPublicationNotice extends StatelessWidget {
+  const _RequirementPublicationNotice({required this.itemCount});
+
+  final int itemCount;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.amber.withValues(alpha: .10),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.amber.withValues(alpha: .35)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.schedule_send_outlined, color: AppColors.amber),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '$itemCount approved ${itemCount == 1 ? 'item is' : 'items are'} waiting to be published. They are not yet active for the student or guardian.',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
           ),
-          const SizedBox(height: 18),
-          ...student.requirements.map((item) {
-            final color = switch (item.status) {
-              StudentRequirementStatus.complete => AppColors.green,
-              StudentRequirementStatus.partial => AppColors.amber,
-              StudentRequirementStatus.outstanding => AppColors.red,
-              StudentRequirementStatus.waived => AppColors.blue,
-            };
-            final quantity =
-                '${item.receivedQuantity} of ${item.requiredQuantity} ${item.unit} received';
-            final source = item.isFromPreviousTerm && item.sourceTerm.isNotEmpty
-                ? 'From ${item.sourceTerm} · '
-                : '';
-            return _DetailListRow(
-              title: item.name,
-              subtitle:
-                  '$source$quantity${item.note.isEmpty ? '' : ' · ${item.note}'}',
-              trailing: _requirementStatusLabel(item.status),
-              color: color,
-              badge: item.isFromPreviousTerm ? 'Previous term' : null,
-              badgeColor: AppColors.amber,
-            );
-          }),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProfileEmptyState extends StatelessWidget {
+  const _ProfileEmptyState({
+    required this.icon,
+    required this.title,
+    required this.message,
+  });
+
+  final IconData icon;
+  final String title;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 26),
+      decoration: BoxDecoration(
+        color: AppColors.background,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: AppColors.muted, size: 32),
+          const SizedBox(height: 10),
+          Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+          const SizedBox(height: 4),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: AppColors.muted),
+          ),
         ],
       ),
     );
@@ -3988,7 +5349,19 @@ String _requirementStatusLabel(StudentRequirementStatus status) =>
       StudentRequirementStatus.partial => 'Partial',
       StudentRequirementStatus.outstanding => 'Outstanding',
       StudentRequirementStatus.waived => 'Waived',
+      StudentRequirementStatus.awaitingPublication => 'Awaiting publication',
+      StudentRequirementStatus.inactive => 'Inactive',
     };
+
+String _requirementsSummary(EnrolledStudent student) {
+  if (student.requirementsTotal == 0) return 'Not configured';
+  final awaiting = student.requirementsAwaitingPublication;
+  if (awaiting == student.requirementsTotal) {
+    return '$awaiting awaiting publication';
+  }
+  final activeTotal = student.requirementsTotal - awaiting;
+  return '${student.requirementsCompleted}/$activeTotal complete';
+}
 
 String _formatDate(DateTime? value) {
   if (value == null) return 'Not provided';
@@ -4053,6 +5426,37 @@ Color _adjustmentStatusColor(StudentFeeAdjustmentStatus status) =>
       StudentFeeAdjustmentStatus.reversed => AppColors.red,
       StudentFeeAdjustmentStatus.cancelled => AppColors.muted,
     };
+
+String _paymentStatusLabel(String status) => switch (status.toUpperCase()) {
+  'COMPLETED' => 'Completed',
+  'PENDING' => 'Pending clearance',
+  'FAILED' => 'Failed',
+  'REVERSED' => 'Reversed',
+  _ => status.trim().isEmpty ? 'Recorded' : status,
+};
+
+Color _paymentStatusColor(String status) => switch (status.toUpperCase()) {
+  'COMPLETED' => AppColors.green,
+  'PENDING' => AppColors.amber,
+  'FAILED' || 'REVERSED' => AppColors.red,
+  _ => AppColors.muted,
+};
+
+String _reversalStatusLabel(String status) => switch (status.toUpperCase()) {
+  'DRAFT' => 'Draft',
+  'PENDING' || 'PENDING_APPROVAL' => 'Pending approval',
+  'APPROVED' => 'Reversed',
+  'REJECTED' => 'Rejected',
+  'WITHDRAWN' || 'CANCELLED' => 'Withdrawn',
+  _ => status.trim().isEmpty ? 'Recorded' : status,
+};
+
+Color _reversalStatusColor(String status) => switch (status.toUpperCase()) {
+  'APPROVED' => AppColors.red,
+  'PENDING' || 'PENDING_APPROVAL' => AppColors.amber,
+  'REJECTED' => AppColors.red,
+  _ => AppColors.muted,
+};
 
 String _studentAdjustmentActionLabel(_StudentAdjustmentAction action) =>
     switch (action) {

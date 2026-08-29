@@ -944,7 +944,7 @@ class _CreateAccountManagerDialogState
                 ),
                 const SizedBox(height: 14),
                 _LabeledControl(
-                  label: 'Date of birth',
+                  label: 'Date of birth *',
                   child: InkWell(
                     onTap: () async {
                       final selected = await showDatePicker(

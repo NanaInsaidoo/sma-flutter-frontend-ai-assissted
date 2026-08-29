@@ -25,6 +25,24 @@ abstract class ClassesRepository {
     required int gradeLevelId,
   });
 
+  Future<List<SubjectAcademicTerm>> getSubjectAcademicTerms(
+    String customSchoolId,
+  );
+
+  Future<SubjectTermAvailability> getSubjectTermAvailability({
+    required String customSchoolId,
+    required int schoolSubjectId,
+    required int academicTermId,
+  });
+
+  Future<SubjectTermAvailability> saveSubjectTermAvailability({
+    required String customSchoolId,
+    required int schoolSubjectId,
+    required int academicTermId,
+    required List<int> streamIds,
+    required String status,
+  });
+
   Future<ClassSubject> createCustomSubject({
     required String customSchoolId,
     required int gradeLevelId,
@@ -168,6 +186,8 @@ class ClassSubject {
     required this.custom,
     required this.active,
     required this.examinable,
+    this.schoolSubjectId,
+    this.definitionId,
   });
 
   final int id;
@@ -176,6 +196,61 @@ class ClassSubject {
   final bool custom;
   final bool active;
   final bool examinable;
+  final int? schoolSubjectId;
+  final int? definitionId;
+}
+
+class SubjectAcademicTerm {
+  const SubjectAcademicTerm({
+    required this.id,
+    required this.name,
+    required this.academicYear,
+    required this.status,
+    required this.current,
+    required this.closed,
+  });
+
+  final int id;
+  final String name;
+  final String academicYear;
+  final String status;
+  final bool current;
+  final bool closed;
+
+  String get label => [
+    if (name.trim().isNotEmpty) name.trim(),
+    if (academicYear.trim().isNotEmpty) academicYear.trim(),
+  ].join(' · ');
+
+  bool get editable => !closed && status.toUpperCase() != 'CLOSED';
+}
+
+class SubjectSectionOption {
+  const SubjectSectionOption({
+    required this.id,
+    required this.name,
+    required this.active,
+  });
+  final int id;
+  final String name;
+  final bool active;
+}
+
+class SubjectTermAvailability {
+  const SubjectTermAvailability({
+    required this.schoolSubjectId,
+    required this.academicTermId,
+    required this.status,
+    required this.streamIds,
+    required this.availableSections,
+    this.copiedFromTermId,
+  });
+  final int schoolSubjectId;
+  final int academicTermId;
+  final String status;
+  final List<int> streamIds;
+  final List<SubjectSectionOption> availableSections;
+  final int? copiedFromTermId;
 }
 
 class ClassStreamSummary {

@@ -132,10 +132,91 @@ class ClassesApiClient implements ClassesRepository {
             custom: json['isCustom'] == true,
             active: json['isActive'] != false,
             examinable: json['isExaminable'] ?? json['isCore'] ?? true,
+            schoolSubjectId: _nullableInteger(json['schoolSubjectId']),
+            definitionId: _nullableInteger(json['customSubjectId']),
           ),
         )
         .where((subject) => subject.name.isNotEmpty)
         .toList();
+  }
+
+  @override
+  Future<List<SubjectAcademicTerm>> getSubjectAcademicTerms(
+    String customSchoolId,
+  ) async {
+    final response = await _send(
+      'GET',
+      '/api/academic-terms?customSchoolId=${Uri.encodeQueryComponent(customSchoolId)}',
+    );
+    final terms = _extractList(_decode(response))
+        .whereType<Map<String, dynamic>>()
+        .map((json) {
+          String nestedName(Object? value) {
+            if (value is Map) {
+              return _string(
+                value['name'] ?? value['termName'] ?? value['year'],
+              );
+            }
+            return _string(value);
+          }
+
+          final closed = json['isClosed'] == true;
+          return SubjectAcademicTerm(
+            id: _integer(json['id'] ?? json['termId']),
+            name: nestedName(json['termType'] ?? json['termName']),
+            academicYear: nestedName(json['academicYear']),
+            status: _string(
+              json['lifecycleStatus'],
+              fallback: closed ? 'CLOSED' : 'ACTIVE',
+            ),
+            current: json['isCurrent'] == true || json['isCurrentTerm'] == true,
+            closed: closed,
+          );
+        })
+        .where((term) => term.id > 0)
+        .toList();
+    terms.sort((a, b) {
+      if (a.current != b.current) return a.current ? -1 : 1;
+      return b.id.compareTo(a.id);
+    });
+    return terms;
+  }
+
+  @override
+  Future<SubjectTermAvailability> getSubjectTermAvailability({
+    required String customSchoolId,
+    required int schoolSubjectId,
+    required int academicTermId,
+  }) async {
+    final response = await _send(
+      'GET',
+      '/api/schools/$customSchoolId/subjects/$schoolSubjectId/term-availability?academicTermId=$academicTermId',
+    );
+    return _subjectAvailabilityFromJson(
+      _decode(response) as Map<String, dynamic>,
+    );
+  }
+
+  @override
+  Future<SubjectTermAvailability> saveSubjectTermAvailability({
+    required String customSchoolId,
+    required int schoolSubjectId,
+    required int academicTermId,
+    required List<int> streamIds,
+    required String status,
+  }) async {
+    final response = await _send(
+      'PUT',
+      '/api/schools/$customSchoolId/subjects/$schoolSubjectId/term-availability',
+      body: {
+        'academicTermId': academicTermId,
+        'streamIds': streamIds,
+        'status': status,
+      },
+    );
+    return _subjectAvailabilityFromJson(
+      _decode(response) as Map<String, dynamic>,
+    );
   }
 
   @override
@@ -165,6 +246,42 @@ class ClassesApiClient implements ClassesRepository {
       custom: true,
       active: json['isActive'] != false,
       examinable: json['isExaminable'] ?? json['isCore'] ?? examinable,
+      schoolSubjectId: _nullableInteger(json['schoolSubjectId'] ?? json['id']),
+      definitionId: _nullableInteger(json['customSubjectId']),
+    );
+  }
+
+  SubjectTermAvailability _subjectAvailabilityFromJson(
+    Map<String, dynamic> json,
+  ) {
+    final streamIds =
+        (json['streamIds'] is List
+                ? json['streamIds'] as List
+                : const <dynamic>[])
+            .map(_integer)
+            .where((id) => id > 0)
+            .toList();
+    final available =
+        (json['availableSections'] is List
+                ? json['availableSections'] as List
+                : const <dynamic>[])
+            .whereType<Map<String, dynamic>>()
+            .map(
+              (item) => SubjectSectionOption(
+                id: _integer(item['id']),
+                name: _string(item['name']),
+                active: item['active'] != false,
+              ),
+            )
+            .where((item) => item.id > 0 && item.name.isNotEmpty)
+            .toList();
+    return SubjectTermAvailability(
+      schoolSubjectId: _integer(json['schoolSubjectId']),
+      academicTermId: _integer(json['academicTermId']),
+      status: _string(json['status'], fallback: 'ACTIVE'),
+      streamIds: streamIds,
+      availableSections: available,
+      copiedFromTermId: _nullableInteger(json['copiedFromTermId']),
     );
   }
 
@@ -211,7 +328,9 @@ class ClassesApiClient implements ClassesRepository {
     final missingStreamGrades = grades
         .where((grade) => grade.streams.isEmpty)
         .toList();
-    if (missingStreamGrades.isEmpty) return grades;
+    if (missingStreamGrades.isEmpty) {
+      return grades..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
+    }
 
     final hydrated = await Future.wait(
       grades.map((grade) async {
@@ -234,10 +353,15 @@ class ClassesApiClient implements ClassesRepository {
           name: grade.name,
           status: grade.status,
           streams: streams,
+          custom: grade.custom,
+          studentCount: grade.studentCount,
+          displayOrder: grade.displayOrder,
+          nextGradeLevelId: grade.nextGradeLevelId,
+          nextGradeLevelName: grade.nextGradeLevelName,
         );
       }),
     );
-    return hydrated;
+    return hydrated..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
   }
 
   @override
@@ -284,7 +408,7 @@ class ClassesApiClient implements ClassesRepository {
       '/api/schools/$customSchoolId/streams/$streamId/subject-teachers',
       body: {
         'gradeLevelId': gradeLevelId,
-        'subjectId': subject.id,
+        'subjectId': subject.definitionId ?? subject.id,
         'subjectType': subject.custom ? 'CUSTOM' : 'GES',
         'staffId': staffId,
         if (effectiveFrom != null)
@@ -536,18 +660,26 @@ class ClassesApiClient implements ClassesRepository {
         )
         .where((stream) => stream.id > 0 && stream.name.isNotEmpty)
         .toList();
+    final custom =
+        json['isCustom'] == true ||
+        json['custom'] == true ||
+        gradeLevelId >= 100000;
+    final rawDisplayOrder = _integer(json['displayOrder']);
     return ClassGradeLevel(
       id: id > 0 ? id : gradeLevelId,
       gradeLevelId: gradeLevelId,
       name: name,
       status: _string(json['status']),
       streams: streams,
-      custom: json['isCustom'] == true || json['custom'] == true,
+      custom: custom,
       studentCount: _integer(json['gradeLevelStudentCount']),
-      displayOrder: _integer(
-        json['displayOrder'],
-        fallback: json['isCustom'] == true ? 900 : 1000 + gradeLevelId * 100,
-      ),
+      displayOrder: custom
+          ? rawDisplayOrder > 0 && rawDisplayOrder < 1000
+                ? rawDisplayOrder
+                : 100 + id
+          : rawDisplayOrder > 0
+          ? rawDisplayOrder
+          : 1000 + gradeLevelId * 100,
       nextGradeLevelId: _nullableInteger(json['nextGradeLevelId']),
       nextGradeLevelName: _string(json['nextGradeLevelName']).isEmpty
           ? null

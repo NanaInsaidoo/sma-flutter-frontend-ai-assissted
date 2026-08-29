@@ -312,17 +312,119 @@ class FeeApiClient {
         .toList();
   }
 
+  Future<List<FeeStreamOption>> getFeeStreams(String customSchoolId) async {
+    final response = await _send(
+      'GET',
+      '/api/grade-levels/school/${Uri.encodeComponent(customSchoolId)}/all-streams',
+    );
+    return _extractList(_decode(response))
+        .whereType<Map<String, dynamic>>()
+        .map(
+          (json) => FeeStreamOption(
+            id: _number(json['streamId'] ?? json['id']).toInt(),
+            name:
+                '${json['streamName'] ?? json['name'] ?? json['section'] ?? ''}',
+            gradeLevelId: _number(
+              json['gradeLevelId'] ?? json['schoolGradeLevelId'],
+            ).toInt(),
+            gradeName:
+                '${json['gradeLevelName'] ?? json['gradeName'] ?? 'Class'}',
+            active:
+                json['isActive'] != false &&
+                '${json['status'] ?? ''}'.toUpperCase() != 'INACTIVE',
+            studentCount: _number(
+              json['enrolled'] ?? json['studentCount'] ?? json['totalStudents'],
+            ).toInt(),
+          ),
+        )
+        .where((stream) => stream.id > 0 && stream.name.trim().isNotEmpty)
+        .toList();
+  }
+
+  Future<List<FeeMasterItem>> getFeeMasterItems(String customSchoolId) async {
+    final response = await _send(
+      'GET',
+      '/api/schools/$customSchoolId/fee-master',
+    );
+    return _decodeList(
+      response,
+    ).whereType<Map<String, dynamic>>().map(FeeMasterItem.fromJson).toList();
+  }
+
+  Future<FeeMasterItem> saveFeeMasterItem({
+    required String customSchoolId,
+    required int itemId,
+    required String code,
+    required String itemName,
+    required String category,
+    required String description,
+    required bool active,
+    String? changeReason,
+  }) async {
+    final response = await _send(
+      itemId > 0 ? 'PUT' : 'POST',
+      itemId > 0
+          ? '/api/schools/$customSchoolId/fee-master/$itemId'
+          : '/api/schools/$customSchoolId/fee-master',
+      body: {
+        'code': code.trim(),
+        'itemName': itemName.trim(),
+        'category': category.trim(),
+        'description': description.trim(),
+        'active': active,
+        if (changeReason != null && changeReason.trim().isNotEmpty)
+          'changeReason': changeReason.trim(),
+      },
+    );
+    return FeeMasterItem.fromJson(_decodeMap(response));
+  }
+
+  Future<List<FeeApprover>> getFeeApprovers(String customSchoolId) async {
+    final response = await _send(
+      'GET',
+      '/api/schools/$customSchoolId/fee-structures/approvers',
+    );
+    return _decodeList(response)
+        .whereType<Map<String, dynamic>>()
+        .map(FeeApprover.fromJson)
+        .where((approver) => approver.id > 0)
+        .toList();
+  }
+
+  Future<FeeWorkflowSummary> getFeeWorkflowSummary({
+    required String customSchoolId,
+    required int academicTermId,
+  }) async {
+    final response = await _send(
+      'GET',
+      _withQuery(
+        '/api/schools/$customSchoolId/fee-structures/workflow-summary',
+        {
+          'academicTermId': '$academicTermId',
+          // Workflow counts must reflect the action that just completed. A
+          // unique query value prevents browsers and proxies from reusing a
+          // stale GET response after approve, reject, withdraw or publish.
+          '_refresh': '${DateTime.now().microsecondsSinceEpoch}',
+        },
+      ),
+    );
+    return FeeWorkflowSummary.fromJson(_decodeMap(response));
+  }
+
   Future<FeeClassStructure> saveFeeStructure({
     required String customSchoolId,
     required int structureId,
     required int gradeLevelId,
+    required int streamId,
     required int termId,
     required List<FeeStructureItem> feeItems,
+    String? revisionReason,
   }) async {
     final items = feeItems.indexed.map((entry) {
       final item = entry.$2;
       return {
         if (item.feeId > 0) 'itemId': item.feeId,
+        'feeMasterItemId': item.feeMasterItemId,
         'feeName': item.feeName.trim(),
         if (item.category.trim().isNotEmpty) 'category': item.category.trim(),
         'amount': item.amount,
@@ -331,6 +433,9 @@ class FeeApiClient {
         if (item.dueDate != null) 'dueDate': _dateOnlyValue(item.dueDate!),
         'displayOrder': entry.$1,
         'active': item.status.trim().toUpperCase() != 'INACTIVE',
+        'mandatory': item.mandatory,
+        if (item.instructions.trim().isNotEmpty)
+          'instructions': item.instructions.trim(),
       };
     }).toList();
     final response = await _send(
@@ -339,15 +444,154 @@ class FeeApiClient {
           ? '/api/schools/$customSchoolId/fee-structures/$structureId'
           : '/api/schools/$customSchoolId/fee-structures',
       body: structureId > 0
-          ? {'feeItems': items}
+          ? {
+              'feeItems': items,
+              if (revisionReason != null && revisionReason.trim().isNotEmpty)
+                'revisionReason': revisionReason.trim(),
+            }
           : {
               'academicTermId': termId,
               'gradeLevelId': gradeLevelId,
+              'streamId': streamId,
+              if (revisionReason != null && revisionReason.trim().isNotEmpty)
+                'revisionReason': revisionReason.trim(),
               'feeItems': items,
             },
     );
     return FeeClassStructure.fromJson(_decodeMap(response));
   }
+
+  Future<FeeClassStructure> submitFeeStructure({
+    required String customSchoolId,
+    required int structureId,
+    required int approverId,
+    String note = '',
+  }) async => FeeClassStructure.fromJson(
+    _decodeMap(
+      await _send(
+        'POST',
+        '/api/schools/$customSchoolId/fee-structures/$structureId/submit',
+        body: {
+          'approverId': approverId,
+          if (note.trim().isNotEmpty) 'note': note.trim(),
+        },
+      ),
+    ),
+  );
+
+  Future<FeeClassStructure> withdrawFeeStructure({
+    required String customSchoolId,
+    required int structureId,
+  }) async => FeeClassStructure.fromJson(
+    _decodeMap(
+      await _send(
+        'POST',
+        '/api/schools/$customSchoolId/fee-structures/$structureId/withdraw',
+      ),
+    ),
+  );
+
+  Future<FeeClassStructure> approveFeeStructure({
+    required String customSchoolId,
+    required int structureId,
+  }) async => FeeClassStructure.fromJson(
+    _decodeMap(
+      await _send(
+        'POST',
+        '/api/schools/$customSchoolId/fee-structures/$structureId/approve',
+      ),
+    ),
+  );
+
+  Future<FeeClassStructure> rejectFeeStructure({
+    required String customSchoolId,
+    required int structureId,
+    required String reason,
+  }) async => FeeClassStructure.fromJson(
+    _decodeMap(
+      await _send(
+        'POST',
+        '/api/schools/$customSchoolId/fee-structures/$structureId/reject',
+        body: {'reason': reason.trim()},
+      ),
+    ),
+  );
+
+  Future<FeeCopyResult> copyFeeStructureItems({
+    required String customSchoolId,
+    required int structureId,
+    required List<int> itemIds,
+    required List<int> targetStreamIds,
+    required bool overwrite,
+    required bool preview,
+    String? reason,
+  }) async => FeeCopyResult.fromJson(
+    _decodeMap(
+      await _send(
+        'POST',
+        '/api/schools/$customSchoolId/fee-structures/$structureId/copy${preview ? '/preview' : ''}',
+        body: {
+          'itemIds': itemIds,
+          'targetStreamIds': targetStreamIds,
+          'overwrite': overwrite,
+          if (reason != null && reason.trim().isNotEmpty)
+            'reason': reason.trim(),
+        },
+      ),
+    ),
+  );
+
+  Future<FeeMasterItem> submitFeeMasterItem({
+    required String customSchoolId,
+    required int itemId,
+    required int approverId,
+  }) async => FeeMasterItem.fromJson(
+    _decodeMap(
+      await _send(
+        'POST',
+        '/api/schools/$customSchoolId/fee-master/$itemId/submit',
+        body: {'approverId': approverId},
+      ),
+    ),
+  );
+
+  Future<FeeMasterItem> withdrawFeeMasterItem({
+    required String customSchoolId,
+    required int itemId,
+  }) async => FeeMasterItem.fromJson(
+    _decodeMap(
+      await _send(
+        'POST',
+        '/api/schools/$customSchoolId/fee-master/$itemId/withdraw',
+      ),
+    ),
+  );
+
+  Future<FeeMasterItem> approveFeeMasterItem({
+    required String customSchoolId,
+    required int itemId,
+  }) async => FeeMasterItem.fromJson(
+    _decodeMap(
+      await _send(
+        'POST',
+        '/api/schools/$customSchoolId/fee-master/$itemId/approve',
+      ),
+    ),
+  );
+
+  Future<FeeMasterItem> rejectFeeMasterItem({
+    required String customSchoolId,
+    required int itemId,
+    required String reason,
+  }) async => FeeMasterItem.fromJson(
+    _decodeMap(
+      await _send(
+        'POST',
+        '/api/schools/$customSchoolId/fee-master/$itemId/reject',
+        body: {'reason': reason.trim()},
+      ),
+    ),
+  );
 
   Future<FeeClassStructure> publishFeeStructure({
     required String customSchoolId,
@@ -410,6 +654,7 @@ class FeeApiClient {
     required String customSchoolId,
     required int requirementId,
     required List<ClassRequirementItem> items,
+    String? revisionReason,
   }) async {
     final response = await _send(
       'PUT',
@@ -418,10 +663,80 @@ class FeeApiClient {
         'items': items.indexed
             .map((entry) => entry.$2.toRequestJson(entry.$1))
             .toList(),
+        if (revisionReason != null && revisionReason.trim().isNotEmpty)
+          'revisionReason': revisionReason.trim(),
       },
     );
     return ClassRequirementGroup.fromJson(_decodeMap(response));
   }
+
+  Future<List<FeeApprover>> getClassRequirementApprovers(
+    String customSchoolId,
+  ) async {
+    final response = await _send(
+      'GET',
+      '/api/schools/$customSchoolId/class-requirements/approvers',
+    );
+    return _decodeList(
+      response,
+    ).whereType<Map<String, dynamic>>().map(FeeApprover.fromJson).toList();
+  }
+
+  Future<ClassRequirementGroup> submitClassRequirement({
+    required String customSchoolId,
+    required int requirementId,
+    required int approverId,
+    String note = '',
+  }) async => ClassRequirementGroup.fromJson(
+    _decodeMap(
+      await _send(
+        'POST',
+        '/api/schools/$customSchoolId/class-requirements/$requirementId/submit',
+        body: {
+          'approverId': approverId,
+          if (note.trim().isNotEmpty) 'note': note.trim(),
+        },
+      ),
+    ),
+  );
+
+  Future<ClassRequirementGroup> withdrawClassRequirement({
+    required String customSchoolId,
+    required int requirementId,
+  }) async => ClassRequirementGroup.fromJson(
+    _decodeMap(
+      await _send(
+        'POST',
+        '/api/schools/$customSchoolId/class-requirements/$requirementId/withdraw',
+      ),
+    ),
+  );
+
+  Future<ClassRequirementGroup> approveClassRequirement({
+    required String customSchoolId,
+    required int requirementId,
+  }) async => ClassRequirementGroup.fromJson(
+    _decodeMap(
+      await _send(
+        'POST',
+        '/api/schools/$customSchoolId/class-requirements/$requirementId/approve',
+      ),
+    ),
+  );
+
+  Future<ClassRequirementGroup> rejectClassRequirement({
+    required String customSchoolId,
+    required int requirementId,
+    required String reason,
+  }) async => ClassRequirementGroup.fromJson(
+    _decodeMap(
+      await _send(
+        'POST',
+        '/api/schools/$customSchoolId/class-requirements/$requirementId/reject',
+        body: {'reason': reason.trim()},
+      ),
+    ),
+  );
 
   Future<ClassRequirementGroup> publishClassRequirement({
     required String customSchoolId,
@@ -513,6 +828,139 @@ class FeeApiClient {
       body: requirement.toRequestJson(academicTermId),
     );
     return StudentRequirementProgress.fromJson(_decodeMap(response));
+  }
+
+  Future<List<StudentCustomRequirement>> getStudentCustomRequirements({
+    required String customSchoolId,
+    required int academicTermId,
+  }) async {
+    final response = await _send(
+      'GET',
+      _withQuery('/api/schools/$customSchoolId/student-requirements', {
+        'academicTermId': '$academicTermId',
+      }),
+    );
+    return _decodeList(response)
+        .whereType<Map<String, dynamic>>()
+        .map(StudentCustomRequirement.fromJson)
+        .toList();
+  }
+
+  Future<List<StudentRequirementCandidate>> getStudentRequirementCandidates({
+    required String customSchoolId,
+  }) async {
+    final response = await _send(
+      'GET',
+      '/api/schools/$customSchoolId/student-requirements/students',
+    );
+    return _decodeList(response)
+        .whereType<Map<String, dynamic>>()
+        .map(StudentRequirementCandidate.fromJson)
+        .toList();
+  }
+
+  Future<StudentCustomRequirement> updateStudentCustomRequirement({
+    required String customSchoolId,
+    required int requirementId,
+    required int academicTermId,
+    required StudentCustomRequirement requirement,
+  }) async {
+    final response = await _send(
+      'PUT',
+      '/api/schools/$customSchoolId/student-requirements/$requirementId',
+      body: requirement.toRequestJson(academicTermId),
+    );
+    return StudentCustomRequirement.fromJson(_decodeMap(response));
+  }
+
+  Future<void> deleteStudentCustomRequirement({
+    required String customSchoolId,
+    required int requirementId,
+  }) async {
+    await _send(
+      'DELETE',
+      '/api/schools/$customSchoolId/student-requirements/$requirementId',
+    );
+  }
+
+  Future<List<FeeApprover>> getStudentRequirementApprovers(
+    String customSchoolId,
+  ) async {
+    final response = await _send(
+      'GET',
+      '/api/schools/$customSchoolId/student-requirements/approvers',
+    );
+    return _decodeList(
+      response,
+    ).whereType<Map<String, dynamic>>().map(FeeApprover.fromJson).toList();
+  }
+
+  Future<StudentCustomRequirement> submitStudentCustomRequirement({
+    required String customSchoolId,
+    required int requirementId,
+    required int approverId,
+    String note = '',
+  }) => _studentRequirementAction(
+    customSchoolId: customSchoolId,
+    requirementId: requirementId,
+    action: 'submit',
+    body: {'approverId': approverId, 'note': note.trim()},
+  );
+
+  Future<StudentCustomRequirement> withdrawStudentCustomRequirement({
+    required String customSchoolId,
+    required int requirementId,
+  }) => _studentRequirementAction(
+    customSchoolId: customSchoolId,
+    requirementId: requirementId,
+    action: 'withdraw',
+  );
+
+  Future<StudentCustomRequirement> approveStudentCustomRequirement({
+    required String customSchoolId,
+    required int requirementId,
+  }) => _studentRequirementAction(
+    customSchoolId: customSchoolId,
+    requirementId: requirementId,
+    action: 'approve',
+  );
+
+  Future<StudentCustomRequirement> rejectStudentCustomRequirement({
+    required String customSchoolId,
+    required int requirementId,
+    required String reason,
+  }) => _studentRequirementAction(
+    customSchoolId: customSchoolId,
+    requirementId: requirementId,
+    action: 'reject',
+    body: {'reason': reason.trim()},
+  );
+
+  Future<StudentCustomRequirement> recordStudentCustomRequirementReceived({
+    required String customSchoolId,
+    required int requirementId,
+    required int receivedQuantity,
+  }) async {
+    final response = await _send(
+      'PUT',
+      '/api/schools/$customSchoolId/student-requirements/$requirementId/received',
+      body: {'receivedQuantity': receivedQuantity},
+    );
+    return StudentCustomRequirement.fromJson(_decodeMap(response));
+  }
+
+  Future<StudentCustomRequirement> _studentRequirementAction({
+    required String customSchoolId,
+    required int requirementId,
+    required String action,
+    Map<String, dynamic>? body,
+  }) async {
+    final response = await _send(
+      'POST',
+      '/api/schools/$customSchoolId/student-requirements/$requirementId/$action',
+      body: body,
+    );
+    return StudentCustomRequirement.fromJson(_decodeMap(response));
   }
 
   Future<List<PriorTermRequirement>> getPriorTermRequirements({
@@ -769,6 +1217,10 @@ class FeeApiClient {
           'receivedBy': request.receivedBy,
           'description': request.description,
           'termId': '${request.termId}',
+          'idempotencyKey': request.idempotencyKey,
+          'overpaymentConfirmed': '${request.overpaymentConfirmed}',
+          if (request.overpaymentReason?.trim().isNotEmpty == true)
+            'overpaymentReason': request.overpaymentReason!.trim(),
           if (request.physicalReceiptNumber.trim().isNotEmpty)
             'receipts[0].receiptNumber': request.physicalReceiptNumber,
           if (request.chequeNumber?.trim().isNotEmpty == true)
@@ -1090,7 +1542,18 @@ class FeeApiClient {
     return const [];
   }
 
+  num _number(dynamic value) {
+    if (value is num) return value;
+    return num.tryParse('$value') ?? 0;
+  }
+
   String _messageFromResponse(http.Response response) {
+    // Authentication failures may contain low-level JWT diagnostics from the
+    // server. Never surface those details in the user interface.
+    if (response.statusCode == 401 || response.statusCode == 403) {
+      return 'Your session has expired. Please sign in again.';
+    }
+
     try {
       final decoded = jsonDecode(response.body);
       if (decoded is Map<String, dynamic>) {
@@ -1104,7 +1567,6 @@ class FeeApiClient {
     }
 
     return switch (response.statusCode) {
-      401 || 403 => 'Your session has expired. Please sign in again.',
       404 => 'The requested fee information could not be found.',
       >= 500 => 'The fee service is having trouble. Please try again later.',
       _ => 'Could not complete the fee request. Please try again.',

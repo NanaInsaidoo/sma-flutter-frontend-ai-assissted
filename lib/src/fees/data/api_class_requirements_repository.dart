@@ -1,4 +1,5 @@
 import '../domain/class_requirement_models.dart';
+import '../domain/fee_models.dart';
 import 'class_requirements_repository.dart';
 import 'fee_api_client.dart';
 
@@ -19,6 +20,8 @@ class ApiClassRequirementsRepository extends ClassRequirementsRepository {
   String? _errorMessage;
   RequirementNotificationPlan? _lastNotificationPlan;
   List<PriorTermRequirement> _priorTermRequirements = const [];
+  List<StudentCustomRequirement> _studentSpecificRequirements = const [];
+  List<StudentRequirementCandidate> _studentCandidates = const [];
 
   @override
   List<ClassRequirementGroup> get groups => List.unmodifiable(_groups);
@@ -44,6 +47,23 @@ class ApiClassRequirementsRepository extends ClassRequirementsRepository {
   @override
   List<PriorTermRequirement> get priorTermRequirements =>
       List.unmodifiable(_priorTermRequirements);
+
+  @override
+  List<StudentCustomRequirement> get studentSpecificRequirements =>
+      List.unmodifiable(_studentSpecificRequirements);
+
+  @override
+  List<StudentRequirementCandidate> get studentCandidates =>
+      List.unmodifiable(_studentCandidates);
+
+  @override
+  int get unpublishedClassRequirementCount => _groups
+      .where((group) => group.status != RequirementStatus.published)
+      .length;
+
+  @override
+  int get unpublishedStudentRequirementCount =>
+      _studentSpecificRequirements.where((item) => !item.isPublished).length;
 
   @override
   List<StudentRequirementProgress> studentsForClass(String classGroupId) =>
@@ -84,6 +104,13 @@ class ApiClassRequirementsRepository extends ClassRequirementsRepository {
         academicTermId: academicTermId,
       );
       _priorTermRequirements = await _api.getPriorTermRequirements(
+        customSchoolId: customSchoolId,
+      );
+      _studentSpecificRequirements = await _api.getStudentCustomRequirements(
+        customSchoolId: customSchoolId,
+        academicTermId: academicTermId,
+      );
+      _studentCandidates = await _api.getStudentRequirementCandidates(
         customSchoolId: customSchoolId,
       );
     } catch (error) {
@@ -132,35 +159,43 @@ class ApiClassRequirementsRepository extends ClassRequirementsRepository {
   @override
   Future<ClassRequirementGroup> addRequirement(
     String classGroupId,
-    ClassRequirementItem item,
-  ) {
+    ClassRequirementItem item, {
+    String? revisionReason,
+  }) {
     final group = _findGroup(classGroupId);
-    return _saveItems(group, [...group.items, item]);
+    return _saveItems(group, [
+      ...group.items,
+      item,
+    ], revisionReason: revisionReason);
   }
 
   @override
   Future<ClassRequirementGroup> updateRequirement(
     String classGroupId,
-    ClassRequirementItem item,
-  ) {
+    ClassRequirementItem item, {
+    String? revisionReason,
+  }) {
     final group = _findGroup(classGroupId);
     return _saveItems(
       group,
       group.items
           .map((current) => current.id == item.id ? item : current)
           .toList(),
+      revisionReason: revisionReason,
     );
   }
 
   @override
   Future<ClassRequirementGroup> deleteRequirement(
     String classGroupId,
-    String requirementId,
-  ) {
+    String requirementId, {
+    String? revisionReason,
+  }) {
     final group = _findGroup(classGroupId);
     return _saveItems(
       group,
       group.items.where((item) => item.id != requirementId).toList(),
+      revisionReason: revisionReason,
     );
   }
 
@@ -196,10 +231,79 @@ class ApiClassRequirementsRepository extends ClassRequirementsRepository {
     });
   }
 
+  @override
+  Future<List<FeeApprover>> getApprovers() =>
+      _api.getClassRequirementApprovers(customSchoolId);
+
+  @override
+  Future<ClassRequirementGroup> submitClass(
+    String classGroupId,
+    int approverId, {
+    String note = '',
+  }) => _workflowMutation(
+    classGroupId,
+    (requirementId) => _api.submitClassRequirement(
+      customSchoolId: customSchoolId,
+      requirementId: requirementId,
+      approverId: approverId,
+      note: note,
+    ),
+  );
+
+  @override
+  Future<ClassRequirementGroup> withdrawClass(String classGroupId) =>
+      _workflowMutation(
+        classGroupId,
+        (requirementId) => _api.withdrawClassRequirement(
+          customSchoolId: customSchoolId,
+          requirementId: requirementId,
+        ),
+      );
+
+  @override
+  Future<ClassRequirementGroup> approveClass(String classGroupId) =>
+      _workflowMutation(
+        classGroupId,
+        (requirementId) => _api.approveClassRequirement(
+          customSchoolId: customSchoolId,
+          requirementId: requirementId,
+        ),
+      );
+
+  @override
+  Future<ClassRequirementGroup> rejectClass(
+    String classGroupId,
+    String reason,
+  ) => _workflowMutation(
+    classGroupId,
+    (requirementId) => _api.rejectClassRequirement(
+      customSchoolId: customSchoolId,
+      requirementId: requirementId,
+      reason: reason,
+    ),
+  );
+
+  Future<ClassRequirementGroup> _workflowMutation(
+    String classGroupId,
+    Future<ClassRequirementGroup> Function(int requirementId) action,
+  ) {
+    final group = _findGroup(classGroupId);
+    final requirementId = int.tryParse(group.id);
+    if (requirementId == null) {
+      throw StateError('The class checklist has not been saved');
+    }
+    return _runMutation(() async {
+      final saved = await action(requirementId);
+      _replaceGroup(saved, previousId: group.id);
+      return saved;
+    });
+  }
+
   Future<ClassRequirementGroup> _saveItems(
     ClassRequirementGroup group,
-    List<ClassRequirementItem> items,
-  ) async {
+    List<ClassRequirementItem> items, {
+    String? revisionReason,
+  }) async {
     final requirementId = int.tryParse(group.id);
     if (requirementId == null) {
       throw StateError('The class checklist has not been saved');
@@ -209,6 +313,7 @@ class ApiClassRequirementsRepository extends ClassRequirementsRepository {
         customSchoolId: customSchoolId,
         requirementId: requirementId,
         items: items,
+        revisionReason: revisionReason,
       );
       _replaceGroup(saved, previousId: group.id);
       return saved;
@@ -406,7 +511,118 @@ class ApiClassRequirementsRepository extends ClassRequirementsRepository {
         requirement: requirement,
       );
       _replaceStudentProgress(updated);
+      await _reloadStudentSpecificData();
     });
+  }
+
+  @override
+  Future<void> loadStudentSpecificRequirements() =>
+      _runStudentMutation(_reloadStudentSpecificData);
+
+  @override
+  Future<StudentCustomRequirement> updateStudentRequirement(
+    StudentCustomRequirement requirement,
+  ) => _studentRequirementMutation(
+    () => _api.updateStudentCustomRequirement(
+      customSchoolId: customSchoolId,
+      requirementId: int.parse(requirement.id),
+      academicTermId: academicTermId,
+      requirement: requirement,
+    ),
+  );
+
+  @override
+  Future<void> deleteStudentRequirement(String requirementId) async {
+    await _runStudentMutation(() async {
+      await _api.deleteStudentCustomRequirement(
+        customSchoolId: customSchoolId,
+        requirementId: int.parse(requirementId),
+      );
+      await _reloadStudentSpecificData();
+    });
+  }
+
+  @override
+  Future<List<FeeApprover>> getStudentRequirementApprovers() =>
+      _api.getStudentRequirementApprovers(customSchoolId);
+
+  @override
+  Future<StudentCustomRequirement> submitStudentRequirement(
+    String requirementId,
+    int approverId, {
+    String note = '',
+  }) => _studentRequirementMutation(
+    () => _api.submitStudentCustomRequirement(
+      customSchoolId: customSchoolId,
+      requirementId: int.parse(requirementId),
+      approverId: approverId,
+      note: note,
+    ),
+  );
+
+  @override
+  Future<StudentCustomRequirement> withdrawStudentRequirement(
+    String requirementId,
+  ) => _studentRequirementMutation(
+    () => _api.withdrawStudentCustomRequirement(
+      customSchoolId: customSchoolId,
+      requirementId: int.parse(requirementId),
+    ),
+  );
+
+  @override
+  Future<StudentCustomRequirement> approveStudentRequirement(
+    String requirementId,
+  ) => _studentRequirementMutation(
+    () => _api.approveStudentCustomRequirement(
+      customSchoolId: customSchoolId,
+      requirementId: int.parse(requirementId),
+    ),
+  );
+
+  @override
+  Future<StudentCustomRequirement> rejectStudentRequirement(
+    String requirementId,
+    String reason,
+  ) => _studentRequirementMutation(
+    () => _api.rejectStudentCustomRequirement(
+      customSchoolId: customSchoolId,
+      requirementId: int.parse(requirementId),
+      reason: reason,
+    ),
+  );
+
+  @override
+  Future<StudentCustomRequirement> recordStudentRequirementReceived(
+    String requirementId,
+    int receivedQuantity,
+  ) => _studentRequirementMutation(
+    () => _api.recordStudentCustomRequirementReceived(
+      customSchoolId: customSchoolId,
+      requirementId: int.parse(requirementId),
+      receivedQuantity: receivedQuantity,
+    ),
+  );
+
+  Future<StudentCustomRequirement> _studentRequirementMutation(
+    Future<StudentCustomRequirement> Function() action,
+  ) async {
+    StudentCustomRequirement? result;
+    await _runStudentMutation(() async {
+      result = await action();
+      await _reloadStudentSpecificData();
+    });
+    return result!;
+  }
+
+  Future<void> _reloadStudentSpecificData() async {
+    _studentSpecificRequirements = await _api.getStudentCustomRequirements(
+      customSchoolId: customSchoolId,
+      academicTermId: academicTermId,
+    );
+    _studentCandidates = await _api.getStudentRequirementCandidates(
+      customSchoolId: customSchoolId,
+    );
   }
 
   Future<void> _runStudentMutation(Future<void> Function() action) async {

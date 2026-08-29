@@ -1,4 +1,4 @@
-enum RequirementStatus { published, draft }
+enum RequirementStatus { published, approved, pendingApproval, draft }
 
 enum PriorTermRequirementStatus {
   pending,
@@ -113,6 +113,12 @@ class ClassRequirementGroup {
     this.draftChangeCount = 0,
     this.hasPublishedVersion = false,
     this.gradeLevelId = 0,
+    this.assignedApproverId = 0,
+    this.assignedApproverName = '',
+    this.rejectionReason = '',
+    this.revisionReason = '',
+    this.createdBy = '',
+    this.creatorOwned = false,
   });
 
   final String id;
@@ -123,6 +129,12 @@ class ClassRequirementGroup {
   final int draftChangeCount;
   final bool hasPublishedVersion;
   final int gradeLevelId;
+  final int assignedApproverId;
+  final String assignedApproverName;
+  final String rejectionReason;
+  final String revisionReason;
+  final String createdBy;
+  final bool creatorOwned;
 
   factory ClassRequirementGroup.fromJson(Map<String, dynamic> json) {
     final rawItems = json['items'];
@@ -140,12 +152,21 @@ class ClassRequirementGroup {
                 )
                 .toList()
           : const [],
-      status: '${json['status'] ?? ''}'.toUpperCase() == 'PUBLISHED'
-          ? RequirementStatus.published
-          : RequirementStatus.draft,
+      status: switch ('${json['status'] ?? ''}'.toUpperCase()) {
+        'PUBLISHED' => RequirementStatus.published,
+        'APPROVED' => RequirementStatus.approved,
+        'PENDING_APPROVAL' => RequirementStatus.pendingApproval,
+        _ => RequirementStatus.draft,
+      },
       draftChangeCount: _asInt(json['draftChangeCount']),
       hasPublishedVersion: json['hasPublishedVersion'] == true,
       gradeLevelId: _asInt(json['gradeLevelId']),
+      assignedApproverId: _asInt(json['assignedApproverId']),
+      assignedApproverName: '${json['assignedApproverName'] ?? ''}',
+      rejectionReason: '${json['rejectionReason'] ?? ''}',
+      revisionReason: '${json['revisionReason'] ?? ''}',
+      createdBy: '${json['createdBy'] ?? ''}',
+      creatorOwned: json['creatorOwned'] == true,
     );
   }
 
@@ -155,6 +176,12 @@ class ClassRequirementGroup {
     int? draftChangeCount,
     bool? hasPublishedVersion,
     int? gradeLevelId,
+    int? assignedApproverId,
+    String? assignedApproverName,
+    String? rejectionReason,
+    String? revisionReason,
+    String? createdBy,
+    bool? creatorOwned,
   }) {
     return ClassRequirementGroup(
       id: id,
@@ -165,6 +192,12 @@ class ClassRequirementGroup {
       draftChangeCount: draftChangeCount ?? this.draftChangeCount,
       hasPublishedVersion: hasPublishedVersion ?? this.hasPublishedVersion,
       gradeLevelId: gradeLevelId ?? this.gradeLevelId,
+      assignedApproverId: assignedApproverId ?? this.assignedApproverId,
+      assignedApproverName: assignedApproverName ?? this.assignedApproverName,
+      rejectionReason: rejectionReason ?? this.rejectionReason,
+      revisionReason: revisionReason ?? this.revisionReason,
+      createdBy: createdBy ?? this.createdBy,
+      creatorOwned: creatorOwned ?? this.creatorOwned,
     );
   }
 }
@@ -174,6 +207,8 @@ int _asInt(dynamic value) {
   if (value is num) return value.toInt();
   return int.tryParse('$value') ?? 0;
 }
+
+int? _nullableInt(dynamic value) => value == null ? null : _asInt(value);
 
 double _asDouble(dynamic value) {
   if (value is num) return value.toDouble();
@@ -231,6 +266,33 @@ class StudentRequirementAdjustment {
   };
 }
 
+enum StudentSpecificRequirementStatus {
+  draft,
+  pendingApproval,
+  changesRequested,
+  active,
+  inactive,
+}
+
+class StudentRequirementCandidate {
+  const StudentRequirementCandidate({
+    required this.studentId,
+    required this.studentName,
+    required this.className,
+  });
+
+  final String studentId;
+  final String studentName;
+  final String className;
+
+  factory StudentRequirementCandidate.fromJson(Map<String, dynamic> json) =>
+      StudentRequirementCandidate(
+        studentId: '${json['studentId'] ?? ''}',
+        studentName: '${json['studentName'] ?? ''}',
+        className: '${json['className'] ?? ''}',
+      );
+}
+
 class StudentCustomRequirement {
   const StudentCustomRequirement({
     required this.id,
@@ -239,6 +301,24 @@ class StudentCustomRequirement {
     required this.unit,
     required this.dueDate,
     required this.notes,
+    this.studentId = '',
+    this.studentName = '',
+    this.className = '',
+    this.receivedQuantity = 0,
+    this.estimatedUnitPrice = 0,
+    this.status = StudentSpecificRequirementStatus.draft,
+    this.creatorOwned = false,
+    this.canApprove = false,
+    this.canWithdraw = false,
+    this.assignedApproverId,
+    this.assignedApproverName = '',
+    this.requesterName = '',
+    this.requesterNote = '',
+    this.rejectionReason = '',
+    this.createdAt,
+    this.updatedAt,
+    this.submittedAt,
+    this.approvedAt,
   });
 
   final String id;
@@ -247,15 +327,53 @@ class StudentCustomRequirement {
   final String unit;
   final DateTime dueDate;
   final String notes;
+  final String studentId;
+  final String studentName;
+  final String className;
+  final int receivedQuantity;
+  final double estimatedUnitPrice;
+  final StudentSpecificRequirementStatus status;
+  final bool creatorOwned;
+  final bool canApprove;
+  final bool canWithdraw;
+  final int? assignedApproverId;
+  final String assignedApproverName;
+  final String requesterName;
+  final String requesterNote;
+  final String rejectionReason;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+  final DateTime? submittedAt;
+  final DateTime? approvedAt;
+
+  bool get isPublished => status == StudentSpecificRequirementStatus.active;
 
   factory StudentCustomRequirement.fromJson(Map<String, dynamic> json) {
     return StudentCustomRequirement(
       id: '${json['obligationId'] ?? ''}',
       name: '${json['name'] ?? ''}',
       quantity: _asInt(json['quantity']),
+      receivedQuantity: _asInt(json['receivedQuantity']),
       unit: '${json['unit'] ?? ''}',
+      estimatedUnitPrice: _asDouble(json['estimatedUnitPrice']),
       dueDate: DateTime.tryParse('${json['dueDate'] ?? ''}') ?? DateTime.now(),
       notes: '${json['notes'] ?? ''}',
+      studentId: '${json['studentId'] ?? ''}',
+      studentName: '${json['studentName'] ?? ''}',
+      className: '${json['className'] ?? ''}',
+      status: _studentSpecificStatus('${json['workflowStatus'] ?? 'DRAFT'}'),
+      creatorOwned: json['creatorOwned'] == true,
+      canApprove: json['canApprove'] == true,
+      canWithdraw: json['canWithdraw'] == true,
+      assignedApproverId: _nullableInt(json['assignedApproverId']),
+      assignedApproverName: '${json['assignedApproverName'] ?? ''}',
+      requesterName: '${json['requesterName'] ?? ''}',
+      requesterNote: '${json['requesterNote'] ?? ''}',
+      rejectionReason: '${json['rejectionReason'] ?? ''}',
+      createdAt: DateTime.tryParse('${json['createdAt'] ?? ''}'),
+      updatedAt: DateTime.tryParse('${json['updatedAt'] ?? ''}'),
+      submittedAt: DateTime.tryParse('${json['submittedAt'] ?? ''}'),
+      approvedAt: DateTime.tryParse('${json['approvedAt'] ?? ''}'),
     );
   }
 
@@ -264,11 +382,20 @@ class StudentCustomRequirement {
     'name': name.trim(),
     'quantity': quantity,
     'unit': unit.trim(),
-    'estimatedUnitPrice': 0,
+    'estimatedUnitPrice': estimatedUnitPrice,
     'dueDate': _dateOnly(dueDate),
     if (notes.trim().isNotEmpty) 'notes': notes.trim(),
   };
 }
+
+StudentSpecificRequirementStatus _studentSpecificStatus(String raw) =>
+    switch (raw.trim().toUpperCase()) {
+      'PENDING_APPROVAL' => StudentSpecificRequirementStatus.pendingApproval,
+      'CHANGES_REQUESTED' => StudentSpecificRequirementStatus.changesRequested,
+      'ACTIVE' => StudentSpecificRequirementStatus.active,
+      'INACTIVE' => StudentSpecificRequirementStatus.inactive,
+      _ => StudentSpecificRequirementStatus.draft,
+    };
 
 class StudentRequirementProgress {
   const StudentRequirementProgress({

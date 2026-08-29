@@ -142,6 +142,37 @@ void main() {
     expect(student.customRequirements.single.name, 'Art sketch pad');
   });
 
+  test(
+    'student-specific requirements follow their own approval lifecycle',
+    () async {
+      final repository = FakeClassRequirementsRepository();
+      await repository.addStudentRequirement(
+        studentId: 'stu-ama',
+        requirement: StudentCustomRequirement(
+          id: 'custom-art',
+          name: 'Art sketch pad',
+          quantity: 1,
+          unit: 'pad',
+          dueDate: DateTime(2026, 8, 1),
+          notes: 'Required for the student art project.',
+        ),
+      );
+
+      expect(repository.unpublishedStudentRequirementCount, 1);
+      await repository.submitStudentRequirement('custom-art', 99);
+      expect(
+        repository.studentSpecificRequirements.single.status,
+        StudentSpecificRequirementStatus.pendingApproval,
+      );
+      await repository.approveStudentRequirement('custom-art');
+      expect(
+        repository.studentSpecificRequirements.single.status,
+        StudentSpecificRequirementStatus.active,
+      );
+      expect(repository.unpublishedStudentRequirementCount, 0);
+    },
+  );
+
   test('summarizes prior-term physical requirement arrears', () {
     final repository = FakeClassRequirementsRepository();
     final pending = repository.priorTermRequirements
@@ -340,11 +371,14 @@ void main() {
 
     expect(find.text('Basic 1 requirements'), findsOneWidget);
     expect(find.text('Add class item'), findsOneWidget);
-    expect(find.text('UNIT ESTIMATE'), findsOneWidget);
-    expect(find.text('TOTAL / STUDENT'), findsOneWidget);
+    expect(find.text('REQUIRED QUANTITY'), findsOneWidget);
+    expect(find.text('ESTIMATED PRICE'), findsOneWidget);
+    expect(find.text('TOTAL / STUDENT'), findsNothing);
     expect(find.text('ACTIONS'), findsOneWidget);
     expect(find.byTooltip('Edit requirement'), findsNWidgets(3));
     expect(find.byTooltip('Delete requirement'), findsNWidgets(3));
+    expect(find.text('Active'), findsNWidgets(3));
+    expect(find.text('Draft'), findsNothing);
     expect(find.text('Ama Mensah'), findsOneWidget);
     expect(find.text('Student progress'), findsOneWidget);
   });
@@ -386,6 +420,114 @@ void main() {
     expect(find.text('Kojo Asare'), findsOneWidget);
   });
 
+  testWidgets('approval review makes quantities prominent before price', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repository = FakeClassRequirementsRepository();
+    await repository.submitClass('basic-2', 99);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: ClassRequirementsScreen(
+                repository: repository,
+                termName: 'Term 2 · 2025/26',
+                currentUserId: 99,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Basic 2'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Review approval'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Review required items'), findsOneWidget);
+    expect(find.byKey(const Key('approval-quantity-b2-soap')), findsOneWidget);
+    expect(
+      find.byKey(const Key('approval-quantity-b2-disinfectant')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('approval-quantity-b2-books')), findsOneWidget);
+    expect(
+      find.textContaining('Estimated price: GH₵ 22 per bottle'),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const Key('approve-requirement-list')));
+    await tester.pumpAndSettle();
+    expect(find.text('Approved — publication required'), findsOneWidget);
+    expect(find.textContaining('The creator must publish'), findsOneWidget);
+  });
+
+  testWidgets('approved creator sees the publish-items next step', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repository = FakeClassRequirementsRepository();
+    await repository.addClass(
+      ClassRequirementGroup(
+        id: 'nursery-1',
+        className: 'Nursery 1',
+        studentCount: 20,
+        status: RequirementStatus.approved,
+        creatorOwned: true,
+        items: [
+          ClassRequirementItem(
+            id: 'n1-crayons',
+            name: 'Colouring crayons',
+            category: 'Learning materials',
+            quantity: 2,
+            unit: 'packs',
+            estimatedUnitPrice: 15,
+            dueDate: DateTime(2026, 9, 15),
+          ),
+        ],
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: ClassRequirementsScreen(
+                repository: repository,
+                termName: 'Term 2 · 2025/26',
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.ensureVisible(find.text('Nursery 1'));
+    await tester.tap(find.text('Nursery 1'));
+    await tester.pumpAndSettle();
+    expect(find.text('Approved — publication required'), findsOneWidget);
+    expect(
+      find.byKey(const Key('publish-approved-requirements')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Next step: publish'), findsOneWidget);
+    expect(find.text('Publish approved items'), findsNothing);
+    expect(find.text('Add class item'), findsNothing);
+    expect(find.byTooltip('Edit requirement'), findsNothing);
+    expect(find.byTooltip('Delete requirement'), findsNothing);
+  });
+
   testWidgets('class cards preview only three items and show the remainder', (
     tester,
   ) async {
@@ -425,4 +567,60 @@ void main() {
     expect(find.text('+ 1 more item'), findsOneWidget);
     expect(find.text('Colouring crayons'), findsNothing);
   });
+
+  testWidgets(
+    'overview separates class and student requirements with one action badge',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final repository = FakeClassRequirementsRepository();
+      await repository.addStudentRequirement(
+        studentId: 'stu-ama',
+        requirement: StudentCustomRequirement(
+          id: 'custom-art',
+          name: 'Art sketch pad',
+          quantity: 2,
+          unit: 'pads',
+          dueDate: DateTime(2026, 9, 1),
+          notes: 'For the student art project.',
+        ),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: ClassRequirementsScreen(
+                  repository: repository,
+                  termName: 'Term 2 · 2025/26',
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Class requirements'), findsOneWidget);
+      expect(find.text('Student-specific requirements'), findsOneWidget);
+      expect(
+        find.byKey(
+          const Key('requirements-unpublished-Student-specific requirements'),
+        ),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.text('Student-specific requirements'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Ama Mensah'), findsOneWidget);
+      expect(find.text('Art sketch pad'), findsOneWidget);
+      expect(find.text('2 pads'), findsOneWidget);
+      expect(find.text('Draft'), findsOneWidget);
+      expect(find.text('Add student requirement'), findsOneWidget);
+      expect(find.textContaining('total'), findsNothing);
+    },
+  );
 }

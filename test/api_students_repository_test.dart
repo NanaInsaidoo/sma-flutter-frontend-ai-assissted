@@ -45,8 +45,42 @@ void main() {
               {'assessmentId': 501, 'feeName': 'Tuition Fee', 'amount': 1000},
             ],
             'adjustments': [],
-            'payments': [],
+            'payments': [
+              {
+                'paymentId': 81,
+                'amount': 250,
+                'refundedAmount': 250,
+                'netAmount': 0,
+                'paymentDate': [2026, 7, 11, 10, 30],
+                'paymentMethod': 'Cash',
+                'referenceNumber': 'RCPT-0081',
+                'receivedBy': 'Kofi Nketia',
+                'status': 'REVERSED',
+                'statusReason': 'Reversed under REV-0081',
+              },
+            ],
           });
+        }
+        if (path.endsWith('/api/payments/schools/SCH-001/reversals')) {
+          return _json([
+            {
+              'id': 91,
+              'paymentId': 81,
+              'paymentReference': 'RCPT-0081',
+              'customStudentId': 'STU-001',
+              'studentName': 'Kofi Moley',
+              'termId': 44,
+              'amount': 250,
+              'status': 'APPROVED',
+              'reason': 'Payment entered for the wrong student',
+              'requesterName': 'Kofi Nketia',
+              'approverName': 'Efua Nyarko',
+              'decidedByName': 'Efua Nyarko',
+              'reversalReference': 'REV-0081',
+              'createdAt': [2026, 7, 12, 9, 0],
+              'decidedAt': [2026, 7, 12, 9, 30],
+            },
+          ]);
         }
         if (path.endsWith('/api/schools/SCH-001/fee-adjustments')) {
           return _json([
@@ -91,8 +125,86 @@ void main() {
         student.feeAdjustments.single.status,
         StudentFeeAdjustmentStatus.pending,
       );
+      expect(student.payments, hasLength(1));
+      expect(student.payments.single.recordedAmount, 250);
+      expect(student.payments.single.amount, 0);
+      expect(student.payments.single.refundedAmount, 250);
+      expect(student.payments.single.isReversed, isTrue);
+      expect(student.paymentReversals, hasLength(1));
+      expect(student.paymentReversals.single.reversalReference, 'REV-0081');
+      expect(
+        student.paymentReversals.single.reason,
+        'Payment entered for the wrong student',
+      );
     },
   );
+
+  test('shows approved class items while they await publication', () async {
+    final client = MockClient((request) async {
+      final path = request.url.path;
+      if (path.endsWith('/api/v1/current-term/SCH-001')) {
+        return _json({
+          'id': 44,
+          'academicYear': {'name': '2026-2027'},
+          'termType': {'name': 'First Term'},
+          'startDate': '2026-08-25',
+          'endDate': '2026-12-11',
+        });
+      }
+      if (path.endsWith('/api/students/schools/SCH-001/students/STU-001')) {
+        return _json({
+          'customStudentId': 'STU-001',
+          'firstName': 'Kojo',
+          'lastName': 'Boateng',
+          'status': 'ACTIVE',
+          'gradeLevel': {'id': 7, 'name': 'Creche'},
+          'genderName': 'Male',
+          'dateOfBirth': '2020-01-02',
+        });
+      }
+      if (path.endsWith('/api/schools/SCH-001/class-requirements')) {
+        return _json([
+          {
+            'requirementId': 90,
+            'className': 'Creche',
+            'gradeLevelId': 7,
+            'status': 'APPROVED',
+            'items': [
+              {
+                'itemId': 901,
+                'name': 'Exercise books',
+                'category': 'Learning materials',
+                'quantity': 10,
+                'unit': 'pieces',
+                'estimatedUnitPrice': 30,
+                'dueDate': '2026-09-10',
+              },
+            ],
+          },
+        ]);
+      }
+      if (path.contains('/attendance/student/')) {
+        return _json({'attendanceRate': 0, 'recentAttendanceRecords': []});
+      }
+      return http.Response('{}', 404);
+    });
+    final repository = ApiStudentsRepository(
+      customSchoolId: 'SCH-001',
+      accessToken: 'token',
+      client: client,
+    );
+
+    final student = await repository.getStudent('STU-001');
+
+    expect(student.requirements, hasLength(1));
+    expect(student.requirements.single.name, 'Exercise books');
+    expect(
+      student.requirements.single.status,
+      StudentRequirementStatus.awaitingPublication,
+    );
+    expect(student.requirementsAwaitingPublication, 1);
+    expect(student.requirementsOutstanding, 0);
+  });
 }
 
 http.Response _json(Object body) => http.Response(

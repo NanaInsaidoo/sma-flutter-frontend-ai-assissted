@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../domain/class_requirement_models.dart';
+import '../domain/fee_models.dart';
 
 abstract class ClassRequirementsRepository extends ChangeNotifier {
   List<ClassRequirementGroup> get groups;
@@ -11,6 +12,10 @@ abstract class ClassRequirementsRepository extends ChangeNotifier {
   int draftChangeCountForClass(String classGroupId);
   RequirementNotificationPlan? get lastNotificationPlan;
   List<PriorTermRequirement> get priorTermRequirements;
+  List<StudentCustomRequirement> get studentSpecificRequirements;
+  List<StudentRequirementCandidate> get studentCandidates;
+  int get unpublishedClassRequirementCount;
+  int get unpublishedStudentRequirementCount;
 
   Future<void> load();
   Future<void> loadPriorTermRequirements();
@@ -18,16 +23,19 @@ abstract class ClassRequirementsRepository extends ChangeNotifier {
   Future<ClassRequirementGroup> addClass(ClassRequirementGroup group);
   Future<ClassRequirementGroup> addRequirement(
     String classGroupId,
-    ClassRequirementItem item,
-  );
+    ClassRequirementItem item, {
+    String? revisionReason,
+  });
   Future<ClassRequirementGroup> updateRequirement(
     String classGroupId,
-    ClassRequirementItem item,
-  );
+    ClassRequirementItem item, {
+    String? revisionReason,
+  });
   Future<ClassRequirementGroup> deleteRequirement(
     String classGroupId,
-    String requirementId,
-  );
+    String requirementId, {
+    String? revisionReason,
+  });
   Future<void> recordPriorTermReceived({
     required String requirementId,
     required int quantity,
@@ -56,9 +64,43 @@ abstract class ClassRequirementsRepository extends ChangeNotifier {
     required String studentId,
     required StudentCustomRequirement requirement,
   });
+  Future<void> loadStudentSpecificRequirements();
+  Future<StudentCustomRequirement> updateStudentRequirement(
+    StudentCustomRequirement requirement,
+  );
+  Future<void> deleteStudentRequirement(String requirementId);
+  Future<List<FeeApprover>> getStudentRequirementApprovers();
+  Future<StudentCustomRequirement> submitStudentRequirement(
+    String requirementId,
+    int approverId, {
+    String note = '',
+  });
+  Future<StudentCustomRequirement> withdrawStudentRequirement(
+    String requirementId,
+  );
+  Future<StudentCustomRequirement> approveStudentRequirement(
+    String requirementId,
+  );
+  Future<StudentCustomRequirement> rejectStudentRequirement(
+    String requirementId,
+    String reason,
+  );
+  Future<StudentCustomRequirement> recordStudentRequirementReceived(
+    String requirementId,
+    int receivedQuantity,
+  );
   void publishChanges(RequirementNotificationPlan notificationPlan);
   Future<ClassRequirementGroup> publishClass(
     String classGroupId,
     RequirementNotificationPlan notificationPlan,
   );
+  Future<List<FeeApprover>> getApprovers();
+  Future<ClassRequirementGroup> submitClass(
+    String classGroupId,
+    int approverId, {
+    String note = '',
+  });
+  Future<ClassRequirementGroup> withdrawClass(String classGroupId);
+  Future<ClassRequirementGroup> approveClass(String classGroupId);
+  Future<ClassRequirementGroup> rejectClass(String classGroupId, String reason);
 }

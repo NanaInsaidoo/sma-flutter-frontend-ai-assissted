@@ -454,8 +454,16 @@ class _FakeGuardianApi extends GuardianPortalApiClient {
             'title': 'Parent meeting',
             'description': 'Meet the class teachers in the school hall.',
             'category': 'School event',
-            'startDate': '2026-08-22',
-            'endDate': '2026-08-22',
+            'startDate': DateTime.now()
+                .add(const Duration(days: 1))
+                .toIso8601String()
+                .split('T')
+                .first,
+            'endDate': DateTime.now()
+                .add(const Duration(days: 1))
+                .toIso8601String()
+                .split('T')
+                .first,
             'startTime': '15:00',
             'endTime': '16:30',
             'schoolDay': true,

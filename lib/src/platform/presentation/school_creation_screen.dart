@@ -60,6 +60,16 @@ String _ghanaCountryValue(List<String> countries) {
   return 'Ghana';
 }
 
+bool _isSeniorSecondaryGrade(String value) {
+  final normalized = value.trim().toLowerCase().replaceAll(
+    RegExp(r'[^a-z0-9]'),
+    '',
+  );
+  return normalized.startsWith('shs') ||
+      normalized.contains('seniorhigh') ||
+      normalized.contains('seniorsecondary');
+}
+
 class SchoolCreationScreen extends StatefulWidget {
   const SchoolCreationScreen({
     super.key,
@@ -147,9 +157,11 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
   String _country = 'Ghana';
   String _socialMediaPlatform = '';
   final List<SocialMediaContact> _socialMediaLinks = [];
+  final List<SchoolPhoneContact> _phoneContacts = [];
   final Set<String> _levels = {'Kindergarten', 'Primary'};
   final Map<String, int> _gradeStreams = {};
   final Map<String, int> _savedGradeLevelIds = {};
+  final Set<String> _customGradeLevels = {};
   String _academicYear = '';
   String _academicTerm = '';
   String _termDescription = '';
@@ -383,6 +395,38 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
     } else {
       await _loadExistingSchoolRecord();
     }
+  }
+
+  Future<SchoolGradeLevelInfo> _createCustomGradeLevel(
+    String gradeLevelName,
+    int numberOfStreams,
+  ) async {
+    final customSchoolId = _customSchoolId?.trim() ?? '';
+    if (customSchoolId.isEmpty) {
+      throw StateError(
+        'Save the school information before adding a custom class.',
+      );
+    }
+    final created = await widget.repository.createCustomGradeLevel(
+      customSchoolId: customSchoolId,
+      gradeLevelName: gradeLevelName,
+      numberOfStreams: numberOfStreams,
+    );
+    if (!mounted) return created;
+    setState(() {
+      final labels = <String>{
+        ..._lookups.gradeLevels,
+        created.gradeLevelName,
+      }.toList();
+      final ids = <String, int>{
+        ..._lookups.gradeLevelIds,
+        created.gradeLevelName: created.gradeLevelId,
+      };
+      _lookups = _lookups.copyWith(gradeLevels: labels, gradeLevelIds: ids);
+      _savedGradeLevelIds[created.gradeLevelName] = created.gradeLevelId;
+      _customGradeLevels.add(created.gradeLevelName);
+    });
+    return created;
   }
 
   Future<void> _loadReviewRecord() async {
@@ -670,6 +714,12 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
       secondaryPhone: _secondaryPhone,
       secondaryPhoneNetwork: _secondaryPhoneNetwork,
       officePhone: _officePhone,
+      phoneContacts: _phoneContacts,
+      onPhoneContactsChanged: (contacts) {
+        _phoneContacts
+          ..clear()
+          ..addAll(contacts);
+      },
       email: _email,
       website: _website,
       socialMedia: _socialMedia,
@@ -726,6 +776,10 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
           ..addAll(value);
       },
       gradeStreams: _gradeStreams,
+      customGradeLevels: _customGradeLevels,
+      canCreateCustomGradeLevel:
+          _customSchoolId != null && _customSchoolId!.trim().isNotEmpty,
+      onCreateCustomGradeLevel: _createCustomGradeLevel,
       onGradeStreamsChanged: (value) {
         _gradeStreams
           ..clear()
@@ -1147,25 +1201,43 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
 
     final contact = _mapOf(data['contactInfo']);
     final personalPhones = _listOf(contact['personalPhoneNumbers']);
+    _phoneContacts.clear();
+    final savedPhoneNumbers = <String>{};
     for (final phoneValue in personalPhones) {
       final phone = _mapOf(phoneValue);
       final number = _text(phone, ['phoneNumber', 'number']);
       if (number == null || number.isEmpty) continue;
-      final type = _text(phone, ['type']);
-      final isPrimary = phone['isPrimary'] == true;
+      final normalized = number.replaceAll(RegExp(r'\D'), '');
+      if (normalized.isNotEmpty && !savedPhoneNumbers.add(normalized)) continue;
+      final type = _text(phone, ['type']) ?? 'mobile';
+      final isPrimary = _phoneContacts.isEmpty || phone['isPrimary'] == true;
+      _phoneContacts.add(
+        SchoolPhoneContact(number: number, type: type, isPrimary: isPrimary),
+      );
       if (isPrimary || _phone.text.trim().isEmpty) {
         _phone.text = number;
-        if (type != null) _phoneNetwork.text = type;
+        _phoneNetwork.text = type;
       } else if (_secondaryPhone.text.trim().isEmpty) {
         _secondaryPhone.text = number;
-        if (type != null) _secondaryPhoneNetwork.text = type;
+        _secondaryPhoneNetwork.text = type;
       }
     }
     final workPhones = _listOf(contact['workPhoneNumbers']);
     if (workPhones.isNotEmpty) {
-      _officePhone.text =
-          _text(_mapOf(workPhones.first), ['phoneNumber', 'number']) ??
-          _officePhone.text;
+      final savedWorkPhones = <String>[];
+      for (final phoneValue in workPhones) {
+        final phone = _mapOf(phoneValue);
+        final number = _text(phone, ['phoneNumber', 'number']);
+        if (number == null || number.isEmpty) continue;
+        final normalized = number.replaceAll(RegExp(r'\D'), '');
+        if (normalized.isNotEmpty && !savedPhoneNumbers.add(normalized)) {
+          continue;
+        }
+        final type = _text(phone, ['type']) ?? 'office';
+        _phoneContacts.add(SchoolPhoneContact(number: number, type: type));
+        savedWorkPhones.add(number);
+      }
+      _officePhone.text = savedWorkPhones.join(', ');
     }
     final emails = _listOf(contact['emails'])
         .map((email) => email.toString())
@@ -1260,7 +1332,9 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
               fallback: '00:00:00',
             ),
             endTime: _parseTimeValue(event['endTime'], fallback: '23:59:59'),
-            isSchoolDay: event['isSchoolDay'] == true,
+            isSchoolDay: event.containsKey('isSchoolDay')
+                ? event['isSchoolDay'] == true
+                : null,
           );
         }),
       );
@@ -1307,6 +1381,13 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
         gradeLevels.map(
           (grade) => MapEntry(grade.gradeLevelName, grade.gradeLevelId),
         ),
+      );
+    _customGradeLevels
+      ..clear()
+      ..addAll(
+        gradeLevels
+            .where((grade) => grade.isCustom)
+            .map((grade) => grade.gradeLevelName),
       );
     _lookups = _lookups.copyWith(
       gradeLevels: _savedGradeLevelIds.keys.toList(),
@@ -1551,6 +1632,7 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
       secondaryPhone: _secondaryPhone.text.trim(),
       secondaryPhoneNetwork: _secondaryPhoneNetwork.text.trim(),
       officePhone: _officePhone.text.trim(),
+      phoneContacts: List.unmodifiable(_phoneContacts),
       email: _email.text.trim(),
       website: _website.text.trim(),
       socialMedia: _socialMedia.text.trim(),
@@ -1572,6 +1654,7 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
       levels: _levels.toList(),
       gradeStreams: Map.unmodifiable(_gradeStreams),
       gradeLevelIds: _lookups.gradeLevelIds,
+      customGradeLevels: Set.unmodifiable(_customGradeLevels),
       academicYear: _academicYear,
       academicYearId: _lookups.academicYearIds[_academicYear],
       academicTerm: _academicTerm,
@@ -1589,7 +1672,7 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
               endDate: event.endDate,
               startTime: event.startTime,
               endTime: event.endTime,
-              isSchoolDay: event.isSchoolDay,
+              isSchoolDay: event.isSchoolDay ?? false,
             ),
           )
           .toList(),
@@ -1930,6 +2013,8 @@ class _StepFormDialog extends StatefulWidget {
     required this.secondaryPhone,
     required this.secondaryPhoneNetwork,
     required this.officePhone,
+    required this.phoneContacts,
+    required this.onPhoneContactsChanged,
     required this.email,
     required this.website,
     required this.socialMedia,
@@ -1966,6 +2051,9 @@ class _StepFormDialog extends StatefulWidget {
     required this.onSocialMediaLinksChanged,
     required this.onLevelsChanged,
     required this.gradeStreams,
+    required this.customGradeLevels,
+    required this.canCreateCustomGradeLevel,
+    required this.onCreateCustomGradeLevel,
     required this.onGradeStreamsChanged,
     required this.academicYear,
     required this.academicTerm,
@@ -2016,6 +2104,8 @@ class _StepFormDialog extends StatefulWidget {
   final TextEditingController secondaryPhone;
   final TextEditingController secondaryPhoneNetwork;
   final TextEditingController officePhone;
+  final List<SchoolPhoneContact> phoneContacts;
+  final ValueChanged<List<SchoolPhoneContact>> onPhoneContactsChanged;
   final TextEditingController email;
   final TextEditingController website;
   final TextEditingController socialMedia;
@@ -2052,6 +2142,10 @@ class _StepFormDialog extends StatefulWidget {
   final ValueChanged<List<SocialMediaContact>> onSocialMediaLinksChanged;
   final ValueChanged<Set<String>> onLevelsChanged;
   final Map<String, int> gradeStreams;
+  final Set<String> customGradeLevels;
+  final bool canCreateCustomGradeLevel;
+  final Future<SchoolGradeLevelInfo> Function(String, int)
+  onCreateCustomGradeLevel;
   final ValueChanged<Map<String, int>> onGradeStreamsChanged;
   final String academicYear;
   final String academicTerm;
@@ -2085,7 +2179,11 @@ class _StepFormDialogState extends State<_StepFormDialog> {
   late String _country = _ghanaCountryValue(widget.lookups.countries);
   late String _socialMediaPlatform = widget.socialMediaPlatform;
   late final Set<String> _levels = {...widget.levels};
-  late final Map<String, int> _gradeStreams = {...widget.gradeStreams};
+  late final Map<String, int> _gradeStreams = Map<String, int>.fromEntries(
+    widget.gradeStreams.entries.where(
+      (entry) => !_isSeniorSecondaryGrade(entry.key),
+    ),
+  );
   late String _academicYear = widget.academicYear;
   late String _academicTerm = widget.academicTerm;
   late final TextEditingController _termDescription = TextEditingController(
@@ -2098,6 +2196,8 @@ class _StepFormDialogState extends State<_StepFormDialog> {
       .toList();
   late final Map<String, PlatformFile> _documents = {...widget.documents};
   late final List<_SocialMediaFormRow> _socialMediaRows;
+  late final List<_SchoolPhoneFormRow> _phoneRows;
+  late final List<TextEditingController> _emailRows;
   bool _reviewConfirmed = false;
   bool _saving = false;
   String? _validationMessage;
@@ -2106,6 +2206,8 @@ class _StepFormDialogState extends State<_StepFormDialog> {
   @override
   void initState() {
     super.initState();
+    _phoneRows = _initialPhoneRows();
+    _emailRows = _contactControllers(widget.email.text);
     _socialMediaRows = widget.socialMediaLinks.isNotEmpty
         ? widget.socialMediaLinks
               .map(
@@ -2127,6 +2229,12 @@ class _StepFormDialogState extends State<_StepFormDialog> {
   @override
   void dispose() {
     _termDescription.dispose();
+    for (final row in _phoneRows) {
+      row.dispose();
+    }
+    for (final controller in _emailRows) {
+      controller.dispose();
+    }
     for (final row in _socialMediaRows) {
       row.dispose();
     }
@@ -2134,6 +2242,7 @@ class _StepFormDialogState extends State<_StepFormDialog> {
   }
 
   Future<void> _save() async {
+    _syncContactRows();
     if (widget.index < widget.completedSteps &&
         widget.index < 8 &&
         _stepSignature() == _initialSignature) {
@@ -2212,6 +2321,7 @@ class _StepFormDialogState extends State<_StepFormDialog> {
             'event name',
           if (event.startDate == null) 'start date',
           if (event.endDate == null) 'end date',
+          if (event.isSchoolDay == null) 'whether students attend school',
         ];
         if (missing.isEmpty) continue;
         setState(() {
@@ -2330,8 +2440,8 @@ class _StepFormDialogState extends State<_StepFormDialog> {
         widget.phoneNetwork.text.trim(),
         widget.secondaryPhone.text.trim(),
         widget.secondaryPhoneNetwork.text.trim(),
-        widget.officePhone.text.trim(),
-        widget.email.text.trim(),
+        for (final row in _phoneRows) [row.number.text.trim(), row.type],
+        for (final controller in _emailRows) controller.text.trim(),
         widget.website.text.trim(),
         for (final row in _socialMediaRows)
           [row.platform, row.handle.text.trim()],
@@ -2832,56 +2942,16 @@ class _StepFormDialogState extends State<_StepFormDialog> {
         ),
       ]),
       4 => _fields([
+        _contactSection('Phone numbers', _phoneNumbersEditor()),
         _contactSection(
-          'Primary contact',
-          _pair(
-            _requiredField(
-              'Phone Number',
-              widget.phone,
-              '+233 24 000 0000',
-              keyboardType: TextInputType.phone,
-            ),
-            _phoneNetworkDropdown(
-              label: 'Type',
-              controller: widget.phoneNetwork,
-            ),
-          ),
-        ),
-        _contactSection(
-          'Secondary contact',
-          _pair(
-            _optionalField(
-              'Phone Number',
-              widget.secondaryPhone,
-              '+233 20 000 0000',
-              keyboardType: TextInputType.phone,
-              optional: true,
-            ),
-            _phoneNetworkDropdown(
-              label: 'Type',
-              controller: widget.secondaryPhoneNetwork,
-              optional: true,
-            ),
-          ),
-        ),
-        _contactSection(
-          'Work & email',
-          _pair(
-            _optionalField(
-              'Office Phone',
-              widget.officePhone,
-              '+233 30 000 0000',
-              keyboardType: TextInputType.phone,
-              optional: true,
-            ),
-            _optionalField(
-              'Email Address(es)',
-              widget.email,
-              'admin@school.edu.gh',
-              keyboardType: TextInputType.emailAddress,
-              optional: true,
-              helperText: 'Comma-separated for multiple',
-            ),
+          'Email addresses',
+          _repeatableContactFields(
+            title: 'Email address',
+            controllers: _emailRows,
+            hint: 'admin@school.edu.gh',
+            keyboardType: TextInputType.emailAddress,
+            addLabel: 'Add another email',
+            validator: _optionalEmailValidator,
           ),
         ),
         _contactSection(
@@ -2934,6 +3004,9 @@ class _StepFormDialogState extends State<_StepFormDialog> {
       6 => _GradeLevelSetup(
         streams: _gradeStreams,
         gradeLevels: widget.lookups.gradeLevels,
+        customGradeLevels: widget.customGradeLevels,
+        canCreateCustomGradeLevel: widget.canCreateCustomGradeLevel,
+        onCreateCustomGradeLevel: widget.onCreateCustomGradeLevel,
         loading: widget.loadingGradeLevels,
         error: widget.gradeLevelsError,
         onRetry: widget.onReloadLookups,
@@ -2987,6 +3060,7 @@ class _StepFormDialogState extends State<_StepFormDialog> {
         secondaryPhone: widget.secondaryPhone.text,
         secondaryPhoneNetwork: widget.secondaryPhoneNetwork.text,
         officePhone: widget.officePhone.text,
+        phoneContacts: widget.phoneContacts,
         email: widget.email.text,
         website: widget.website.text,
         socialMedia: widget.socialMedia.text,
@@ -3091,6 +3165,7 @@ class _StepFormDialogState extends State<_StepFormDialog> {
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 620;
         final platformField = DropdownButtonFormField<String>(
+          isExpanded: true,
           value: platform,
           validator: (selected) =>
               row.handle.text.trim().isNotEmpty &&
@@ -3310,33 +3385,6 @@ class _StepFormDialogState extends State<_StepFormDialog> {
         ),
       );
 
-  Widget _phoneNetworkDropdown({
-    required String label,
-    required TextEditingController controller,
-    bool optional = false,
-  }) {
-    const values = ['mobile', 'home', 'office', 'whatsapp', 'other'];
-    final value = values.contains(controller.text) ? controller.text : null;
-    return DropdownButtonFormField<String>(
-      value: value,
-      validator: optional
-          ? null
-          : (selected) =>
-                selected == null || selected.trim().isEmpty ? 'Required' : null,
-      decoration: InputDecoration(
-        labelText: optional ? '$label (optional)' : label,
-        hintText: 'Select ${label.toLowerCase()}',
-        border: const OutlineInputBorder(),
-      ),
-      items: values
-          .map((item) => DropdownMenuItem(value: item, child: Text(item)))
-          .toList(),
-      onChanged: (selected) {
-        if (selected != null) setState(() => controller.text = selected);
-      },
-    );
-  }
-
   String _formatDate(DateTime value) =>
       '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
 
@@ -3348,6 +3396,333 @@ class _StepFormDialogState extends State<_StepFormDialog> {
     final day = int.tryParse(parts[2]);
     if (year == null || month == null || day == null) return null;
     return DateTime(year, month, day);
+  }
+
+  List<TextEditingController> _contactControllers(String value) {
+    final values = value
+        .split(',')
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList();
+    return (values.isEmpty ? const [''] : values)
+        .map((item) => TextEditingController(text: item))
+        .toList();
+  }
+
+  List<_SchoolPhoneFormRow> _initialPhoneRows() {
+    final contacts = widget.phoneContacts.isNotEmpty
+        ? widget.phoneContacts
+        : <SchoolPhoneContact>[
+            if (widget.phone.text.trim().isNotEmpty)
+              SchoolPhoneContact(
+                number: widget.phone.text.trim(),
+                type: widget.phoneNetwork.text.trim().isEmpty
+                    ? 'mobile'
+                    : widget.phoneNetwork.text.trim(),
+                isPrimary: true,
+              ),
+            if (widget.secondaryPhone.text.trim().isNotEmpty)
+              SchoolPhoneContact(
+                number: widget.secondaryPhone.text.trim(),
+                type: widget.secondaryPhoneNetwork.text.trim().isEmpty
+                    ? 'mobile'
+                    : widget.secondaryPhoneNetwork.text.trim(),
+              ),
+            ...widget.officePhone.text
+                .split(',')
+                .map((number) => number.trim())
+                .where((number) => number.isNotEmpty)
+                .map(
+                  (number) =>
+                      SchoolPhoneContact(number: number, type: 'office'),
+                ),
+          ];
+    final seen = <String>{};
+    final rows = <_SchoolPhoneFormRow>[];
+    for (final contact in contacts) {
+      final normalized = contact.number.replaceAll(RegExp(r'\D'), '');
+      if (normalized.isNotEmpty && !seen.add(normalized)) continue;
+      rows.add(
+        _SchoolPhoneFormRow(
+          number: contact.number,
+          type: contact.type.trim().isEmpty ? 'mobile' : contact.type,
+        ),
+      );
+    }
+    if (rows.isEmpty) rows.add(_SchoolPhoneFormRow(type: 'mobile'));
+    return rows;
+  }
+
+  void _syncContactRows() {
+    final contacts = _phoneRows
+        .where((row) => row.number.text.trim().isNotEmpty)
+        .toList();
+    widget.phone.text = _phoneRows.first.number.text.trim();
+    widget.phoneNetwork.text = _phoneRows.first.type;
+    widget.secondaryPhone.text = contacts.length > 1
+        ? contacts[1].number.text.trim()
+        : '';
+    widget.secondaryPhoneNetwork.text = contacts.length > 1
+        ? contacts[1].type
+        : '';
+    widget.officePhone.text = contacts
+        .skip(1)
+        .where((row) => row.type == 'office')
+        .map((row) => row.number.text.trim())
+        .join(', ');
+    widget.onPhoneContactsChanged(
+      contacts
+          .asMap()
+          .entries
+          .map(
+            (entry) => SchoolPhoneContact(
+              number: entry.value.number.text.trim(),
+              type: entry.value.type,
+              isPrimary: entry.key == 0,
+            ),
+          )
+          .toList(growable: false),
+    );
+    widget.email.text = _emailRows
+        .map((controller) => controller.text.trim())
+        .where((value) => value.isNotEmpty)
+        .join(', ');
+  }
+
+  Widget _phoneNumbersEditor() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'The primary number is used first when the school needs to be contacted.',
+          style: TextStyle(color: AppColors.muted, fontSize: 13),
+        ),
+        const SizedBox(height: 14),
+        ..._phoneRows.asMap().entries.map(
+          (entry) => Padding(
+            padding: EdgeInsets.only(
+              bottom: entry.key == _phoneRows.length - 1 ? 0 : 10,
+            ),
+            child: _phoneNumberRow(entry.key, entry.value),
+          ),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          key: const ValueKey('Add another phone'),
+          onPressed: () {
+            setState(() {
+              _phoneRows.add(_SchoolPhoneFormRow(type: 'mobile'));
+              _syncContactRows();
+            });
+          },
+          icon: const Icon(Icons.add_rounded, size: 18),
+          label: const Text('Add another phone'),
+        ),
+      ],
+    );
+  }
+
+  Widget _phoneNumberRow(int index, _SchoolPhoneFormRow row) {
+    const types = ['mobile', 'whatsapp', 'office', 'home', 'other'];
+    final type = types.contains(row.type) ? row.type : 'other';
+    final numberField = TextFormField(
+      key: ValueKey('Phone number $index'),
+      controller: row.number,
+      keyboardType: TextInputType.phone,
+      onChanged: (_) => _syncContactRows(),
+      validator: index == 0
+          ? (value) => value == null || value.trim().isEmpty ? 'Required' : null
+          : null,
+      decoration: InputDecoration(
+        labelText: index == 0 ? 'Primary phone number' : 'Phone number',
+        hintText: '+233 24 000 0000',
+        prefixIcon: const Icon(Icons.phone_outlined, size: 19),
+        border: const OutlineInputBorder(),
+      ),
+    );
+    final typeField = DropdownButtonFormField<String>(
+      isExpanded: true,
+      value: type,
+      decoration: const InputDecoration(
+        labelText: 'Phone type',
+        border: OutlineInputBorder(),
+      ),
+      items: types
+          .map(
+            (value) => DropdownMenuItem(
+              value: value,
+              child: Text('${value[0].toUpperCase()}${value.substring(1)}'),
+            ),
+          )
+          .toList(),
+      onChanged: (value) {
+        if (value == null) return;
+        setState(() {
+          row.type = value;
+          _syncContactRows();
+        });
+      },
+    );
+    final primaryBadge = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE4F3F0),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: const Text(
+        'PRIMARY',
+        style: TextStyle(
+          color: AppColors.green,
+          fontSize: 10,
+          fontWeight: FontWeight.w800,
+          letterSpacing: .5,
+        ),
+      ),
+    );
+    final removeButton = IconButton.outlined(
+      tooltip: 'Remove phone number',
+      onPressed: () {
+        setState(() {
+          final removed = _phoneRows.removeAt(index);
+          removed.dispose();
+          _syncContactRows();
+        });
+      },
+      icon: const Icon(Icons.close_rounded),
+      color: const Color(0xFFDC4C4C),
+    );
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFA),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 700) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (index == 0)
+                  Align(alignment: Alignment.centerLeft, child: primaryBadge),
+                if (index == 0) const SizedBox(height: 10),
+                numberField,
+                const SizedBox(height: 10),
+                typeField,
+                if (index > 0)
+                  Align(alignment: Alignment.centerRight, child: removeButton),
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(flex: 3, child: numberField),
+              const SizedBox(width: 12),
+              Expanded(flex: 2, child: typeField),
+              const SizedBox(width: 12),
+              if (index == 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 16),
+                  child: primaryBadge,
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: removeButton,
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  String? _optionalEmailValidator(String? value) {
+    final email = value?.trim() ?? '';
+    if (email.isEmpty) return null;
+    final parts = email.split('@');
+    if (parts.length != 2 ||
+        parts.first.isEmpty ||
+        parts.last.isEmpty ||
+        !parts.last.contains('.') ||
+        parts.last.startsWith('.') ||
+        parts.last.endsWith('.')) {
+      return 'Enter a valid email address';
+    }
+    return null;
+  }
+
+  Widget _repeatableContactFields({
+    required String title,
+    required List<TextEditingController> controllers,
+    required String hint,
+    required TextInputType keyboardType,
+    required String addLabel,
+    String? Function(String?)? validator,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ...controllers.asMap().entries.map((entry) {
+          final index = entry.key;
+          final controller = entry.value;
+          return Padding(
+            padding: EdgeInsets.only(
+              bottom: index == controllers.length - 1 ? 0 : 10,
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    key: ValueKey('$title-$index'),
+                    controller: controller,
+                    keyboardType: keyboardType,
+                    validator: validator,
+                    onChanged: (_) => _syncContactRows(),
+                    decoration: InputDecoration(
+                      labelText: '$title ${index + 1} (optional)',
+                      hintText: hint,
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                if (controllers.length > 1) ...[
+                  const SizedBox(width: 8),
+                  IconButton.outlined(
+                    key: ValueKey('remove-$title-$index'),
+                    tooltip: 'Remove ${title.toLowerCase()}',
+                    onPressed: () {
+                      setState(() {
+                        final removed = controllers.removeAt(index);
+                        removed.dispose();
+                        _syncContactRows();
+                      });
+                    },
+                    icon: const Icon(Icons.close_rounded),
+                    color: const Color(0xFFDC4C4C),
+                  ),
+                ],
+              ],
+            ),
+          );
+        }),
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          key: ValueKey(addLabel),
+          onPressed: () {
+            setState(() {
+              controllers.add(TextEditingController());
+              _syncContactRows();
+            });
+          },
+          icon: const Icon(Icons.add_rounded, size: 18),
+          label: Text(addLabel),
+        ),
+      ],
+    );
   }
 
   Widget _optionalField(
@@ -3379,10 +3754,23 @@ class _SocialMediaFormRow {
   void dispose() => handle.dispose();
 }
 
+class _SchoolPhoneFormRow {
+  _SchoolPhoneFormRow({String number = '', required this.type})
+    : number = TextEditingController(text: number);
+
+  final TextEditingController number;
+  String type;
+
+  void dispose() => number.dispose();
+}
+
 class _GradeLevelSetup extends StatefulWidget {
   const _GradeLevelSetup({
     required this.streams,
     required this.gradeLevels,
+    required this.customGradeLevels,
+    required this.canCreateCustomGradeLevel,
+    required this.onCreateCustomGradeLevel,
     required this.loading,
     required this.error,
     required this.onRetry,
@@ -3390,6 +3778,10 @@ class _GradeLevelSetup extends StatefulWidget {
   });
   final Map<String, int> streams;
   final List<String> gradeLevels;
+  final Set<String> customGradeLevels;
+  final bool canCreateCustomGradeLevel;
+  final Future<SchoolGradeLevelInfo> Function(String, int)
+  onCreateCustomGradeLevel;
   final bool loading;
   final String? error;
   final Future<void> Function() onRetry;
@@ -3400,11 +3792,8 @@ class _GradeLevelSetup extends StatefulWidget {
 }
 
 class _GradeLevelSetupState extends State<_GradeLevelSetup> {
-  final List<int> _draftRows = [];
-  int _nextDraftId = 0;
-
   static const groups = {
-    'Early Childhood': ['Creche', 'Nursery 1', 'Nursery 2', 'KG1', 'KG2'],
+    'GES kindergarten': ['KG1', 'KG2'],
     'Primary School': [
       'Basic 1',
       'Basic 2',
@@ -3414,7 +3803,6 @@ class _GradeLevelSetupState extends State<_GradeLevelSetup> {
       'Basic 6',
     ],
     'Junior High School': ['JHS 1', 'JHS 2', 'JHS 3'],
-    'Senior High School': ['SHS 1', 'SHS 2', 'SHS 3'],
   };
 
   @override
@@ -3437,7 +3825,7 @@ class _GradeLevelSetupState extends State<_GradeLevelSetup> {
         ),
       );
     }
-    if (widget.gradeLevels.isEmpty) {
+    if (_supportedGradeLevels.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 40),
@@ -3477,7 +3865,7 @@ class _GradeLevelSetupState extends State<_GradeLevelSetup> {
       0,
       (total, value) => total + value,
     );
-    final selectedPreview = widget.streams.entries
+    final selectedPreview = _orderedSelectedEntries
         .take(6)
         .map(
           (entry) =>
@@ -3534,30 +3922,7 @@ class _GradeLevelSetupState extends State<_GradeLevelSetup> {
             ],
           ),
         ),
-        const SizedBox(height: 16),
-        _AddGradeLevelControl(
-          canAdd: _availableGradeLevels.isNotEmpty,
-          onAdd: _addDraftRow,
-        ),
-        if (_draftRows.isNotEmpty) ...[
-          const SizedBox(height: 10),
-          ..._draftRows.map(
-            (id) => Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: _DraftGradeLevelRow(
-                availableGrades: _availableGradeLevels,
-                onSelected: (grade) {
-                  if (grade == null || grade.trim().isEmpty) return;
-                  final next = {...widget.streams, grade: 1};
-                  widget.onChanged(next);
-                  setState(() => _draftRows.remove(id));
-                },
-                onCancel: () => setState(() => _draftRows.remove(id)),
-              ),
-            ),
-          ),
-          const SizedBox(height: 6),
-        ],
+        const SizedBox(height: 14),
         ...groupedLevels.entries.map(
           (group) => Padding(
             padding: const EdgeInsets.only(bottom: 16),
@@ -3598,7 +3963,9 @@ class _GradeLevelSetupState extends State<_GradeLevelSetup> {
                               ),
                             ),
                             Text(
-                              '${_selectedInGroup(group.value)} of ${group.value.length} selected',
+                              group.key == 'Custom early-years classes'
+                                  ? 'Creche and nursery levels appear before KG1 and start with editable KG subject suggestions.'
+                                  : '${_selectedInGroup(group.value)} of ${group.value.length} selected',
                               style: const TextStyle(
                                 color: AppColors.muted,
                                 fontSize: 11,
@@ -3607,30 +3974,63 @@ class _GradeLevelSetupState extends State<_GradeLevelSetup> {
                           ],
                         ),
                       ),
-                      TextButton(
-                        onPressed: () {
-                          final next = {...widget.streams};
-                          final allSelected = group.value.every(
-                            next.containsKey,
-                          );
-                          for (final grade in group.value) {
-                            if (allSelected) {
-                              next.remove(grade);
-                            } else {
-                              next.putIfAbsent(grade, () => 1);
+                      if (group.key == 'Custom early-years classes')
+                        OutlinedButton.icon(
+                          key: const ValueKey('add-custom-grade-level'),
+                          onPressed: widget.canCreateCustomGradeLevel
+                              ? _showAddCustomGradeLevelDialog
+                              : null,
+                          icon: const Icon(Icons.add_rounded, size: 18),
+                          label: const Text('Add custom class'),
+                        )
+                      else
+                        TextButton(
+                          onPressed: () {
+                            final next = {...widget.streams};
+                            final allSelected = group.value.every(
+                              next.containsKey,
+                            );
+                            for (final grade in group.value) {
+                              if (allSelected) {
+                                next.remove(grade);
+                              } else {
+                                next.putIfAbsent(grade, () => 1);
+                              }
                             }
-                          }
-                          widget.onChanged(next);
-                        },
-                        child: Text(
-                          group.value.every(widget.streams.containsKey)
-                              ? 'Clear'
-                              : 'Select all',
+                            widget.onChanged(next);
+                          },
+                          child: Text(
+                            group.value.every(widget.streams.containsKey)
+                                ? 'Clear'
+                                : 'Select all',
+                          ),
                         ),
-                      ),
                     ],
                   ),
+                  if (group.key == 'Custom early-years classes' &&
+                      !widget.canCreateCustomGradeLevel) ...[
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Save the school information first, then add Creche or Nursery classes here.',
+                      style: TextStyle(color: AppColors.muted, fontSize: 11),
+                    ),
+                  ],
                   const SizedBox(height: 12),
+                  if (group.key == 'Custom early-years classes' &&
+                      group.value.isEmpty)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: AppColors.background,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: AppColors.border),
+                      ),
+                      child: const Text(
+                        'No custom early-years classes have been added yet.',
+                        style: TextStyle(color: AppColors.muted, fontSize: 12),
+                      ),
+                    ),
                   ...group.value.map((grade) {
                     final active = widget.streams.containsKey(grade);
                     final count = widget.streams[grade] ?? 1;
@@ -3668,6 +4068,19 @@ class _GradeLevelSetupState extends State<_GradeLevelSetup> {
                                     fontWeight: FontWeight.w800,
                                   ),
                                 ),
+                                if (widget.customGradeLevels.contains(grade))
+                                  const Padding(
+                                    padding: EdgeInsets.only(top: 3),
+                                    child: Text(
+                                      'CUSTOM CLASS · KG SUBJECTS SUGGESTED',
+                                      style: TextStyle(
+                                        color: AppColors.purple,
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w900,
+                                        letterSpacing: .35,
+                                      ),
+                                    ),
+                                  ),
                                 const SizedBox(height: 2),
                                 Text(
                                   active
@@ -3784,116 +4197,229 @@ class _GradeLevelSetupState extends State<_GradeLevelSetup> {
   int _selectedInGroup(List<String> grades) =>
       grades.where(widget.streams.containsKey).length;
 
-  List<String> get _availableGradeLevels => widget.gradeLevels
-      .where((grade) => !widget.streams.containsKey(grade))
-      .toList();
-
-  void _addDraftRow() {
-    if (_availableGradeLevels.isEmpty) return;
-    setState(() => _draftRows.insert(0, _nextDraftId++));
+  List<MapEntry<String, int>> get _orderedSelectedEntries {
+    final custom = <MapEntry<String, int>>[];
+    final standard = <MapEntry<String, int>>[];
+    for (final entry in widget.streams.entries) {
+      (widget.customGradeLevels.contains(entry.key) ? custom : standard).add(
+        entry,
+      );
+    }
+    return [...custom, ...standard];
   }
 
+  List<String> get _supportedGradeLevels => widget.gradeLevels
+      .where((grade) => !_isSeniorSecondaryGrade(grade))
+      .toList(growable: false);
+
   Map<String, List<String>> get _groupedLevels {
-    final grouped = {for (final entry in groups.entries) entry.key: <String>[]};
+    final grouped = <String, List<String>>{
+      'Custom early-years classes': <String>[],
+      for (final entry in groups.entries) entry.key: <String>[],
+    };
+    final custom = <String>[];
     final extras = <String>[];
-    for (final grade in widget.gradeLevels) {
+    for (final grade in _supportedGradeLevels) {
+      if (widget.customGradeLevels.contains(grade)) {
+        custom.add(grade);
+        continue;
+      }
       final normalized = grade.toLowerCase().replaceAll(' ', '');
       if (normalized.contains('nursery') ||
           normalized.contains('creche') ||
           normalized.contains('crèche') ||
           normalized.startsWith('kg')) {
-        grouped['Early Childhood']!.add(grade);
+        grouped['GES kindergarten']!.add(grade);
       } else if (normalized.startsWith('basic')) {
         grouped['Primary School']!.add(grade);
       } else if (normalized.startsWith('jhs')) {
         grouped['Junior High School']!.add(grade);
-      } else if (normalized.startsWith('shs')) {
-        grouped['Senior High School']!.add(grade);
       } else {
         extras.add(grade);
       }
     }
+    grouped['Custom early-years classes'] = custom;
     if (extras.isNotEmpty) grouped['Other'] = extras;
     return {
       for (final entry in grouped.entries)
-        if (entry.value.isNotEmpty) entry.key: entry.value,
+        if (entry.value.isNotEmpty || entry.key == 'Custom early-years classes')
+          entry.key: entry.value,
     };
   }
 
   IconData _categoryIcon(String category) => switch (category) {
-    'Early Childhood' => Icons.child_care_rounded,
+    'GES kindergarten' => Icons.child_care_rounded,
     'Primary School' => Icons.menu_book_rounded,
     'Junior High School' => Icons.school_rounded,
-    'Senior High School' => Icons.workspace_premium_rounded,
+    'Custom early-years classes' => Icons.auto_awesome_outlined,
     _ => Icons.school_outlined,
   };
-}
 
-class _AddGradeLevelControl extends StatelessWidget {
-  const _AddGradeLevelControl({required this.canAdd, required this.onAdd});
-
-  final bool canAdd;
-  final VoidCallback onAdd;
-
-  @override
-  Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: OutlinedButton.icon(
-        onPressed: canAdd ? onAdd : null,
-        icon: const Icon(Icons.add_rounded, size: 18),
-        label: const Text('Add New'),
-      ),
-    );
-  }
-}
-
-class _DraftGradeLevelRow extends StatelessWidget {
-  const _DraftGradeLevelRow({
-    required this.availableGrades,
-    required this.onSelected,
-    required this.onCancel,
-  });
-
-  final List<String> availableGrades;
-  final ValueChanged<String?> onSelected;
-  final VoidCallback onCancel;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.greenSoft,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.green.withValues(alpha: .22)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: DropdownButtonFormField<String>(
-              value: null,
-              items: availableGrades
-                  .map(
-                    (grade) =>
-                        DropdownMenuItem(value: grade, child: Text(grade)),
-                  )
-                  .toList(),
-              decoration: const InputDecoration(
-                labelText: 'New grade level',
-                hintText: 'Select grade level',
-              ),
-              onChanged: onSelected,
+  Future<void> _showAddCustomGradeLevelDialog() async {
+    var gradeName = '';
+    var streams = 1;
+    var saving = false;
+    String? error;
+    final created = await showDialog<SchoolGradeLevelInfo>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+          title: const Text('Add custom class'),
+          content: SizedBox(
+            width: 480,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Use this for an early-years class such as Creche, Nursery 1, or Nursery 2.',
+                  style: TextStyle(color: AppColors.muted, height: 1.4),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  key: const ValueKey('custom-grade-name'),
+                  autofocus: true,
+                  enabled: !saving,
+                  textCapitalization: TextCapitalization.words,
+                  onChanged: (value) => gradeName = value,
+                  decoration: const InputDecoration(
+                    labelText: 'Class name',
+                    hintText: 'Example: Nursery 1',
+                  ),
+                ),
+                const SizedBox(height: 14),
+                DropdownButtonFormField<int>(
+                  key: const ValueKey('custom-grade-stream-count'),
+                  value: streams,
+                  decoration: const InputDecoration(
+                    labelText: 'Number of streams',
+                  ),
+                  items: List.generate(
+                    10,
+                    (index) => DropdownMenuItem(
+                      value: index + 1,
+                      child: Text(
+                        '${index + 1} ${index == 0 ? 'stream' : 'streams'}',
+                      ),
+                    ),
+                  ),
+                  onChanged: saving
+                      ? null
+                      : (value) => streams = value ?? streams,
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppColors.greenSoft,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.info_outline_rounded,
+                        size: 18,
+                        color: AppColors.green,
+                      ),
+                      SizedBox(width: 9),
+                      Expanded(
+                        child: Text(
+                          'The class is placed below KG1. KG subjects are suggested automatically and can be edited later under Classes and Subjects.',
+                          style: TextStyle(fontSize: 11, height: 1.4),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (error != null) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    error!,
+                    style: const TextStyle(
+                      color: AppColors.red,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
-          const SizedBox(width: 10),
-          IconButton(
-            tooltip: 'Remove row',
-            onPressed: onCancel,
-            icon: const Icon(Icons.close_rounded),
-          ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              key: const ValueKey('create-custom-grade-level'),
+              onPressed: saving
+                  ? null
+                  : () async {
+                      final value = gradeName.trim();
+                      if (value.isEmpty) {
+                        setDialogState(
+                          () => error = 'Enter a name for the custom class.',
+                        );
+                        return;
+                      }
+                      if (widget.gradeLevels.any(
+                        (grade) => grade.toLowerCase() == value.toLowerCase(),
+                      )) {
+                        setDialogState(
+                          () =>
+                              error = 'A class with this name already exists.',
+                        );
+                        return;
+                      }
+                      setDialogState(() {
+                        saving = true;
+                        error = null;
+                      });
+                      try {
+                        final result = await widget.onCreateCustomGradeLevel(
+                          value,
+                          streams,
+                        );
+                        if (dialogContext.mounted) {
+                          Navigator.pop(dialogContext, result);
+                        }
+                      } catch (exception) {
+                        if (!dialogContext.mounted) return;
+                        setDialogState(() {
+                          saving = false;
+                          error = exception
+                              .toString()
+                              .replaceFirst('Exception: ', '')
+                              .replaceFirst('ClientException: ', '');
+                        });
+                      }
+                    },
+              child: saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text('Create class'),
+            ),
+          ],
+        ),
       ),
+    );
+    if (created == null || !mounted) return;
+    widget.onChanged({
+      ...widget.streams,
+      created.gradeLevelName: created.numberOfStreams,
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${created.gradeLevelName} was added.')),
     );
   }
 }
@@ -4008,18 +4534,6 @@ class _CalendarSetup extends StatelessWidget {
                     endDate: endDate,
                     events: events,
                   ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              TextFormField(
-                controller: description,
-                validator: (value) =>
-                    value == null || value.trim().isEmpty ? 'Required' : null,
-                maxLines: 3,
-                decoration: const InputDecoration(
-                  labelText: 'Description',
-                  hintText:
-                      'e.g. First term calendar for 2026/27 academic year',
                 ),
               ),
               const SizedBox(height: 14),
@@ -4506,18 +5020,53 @@ class _EventEditor extends StatelessWidget {
               },
             ),
           ),
-          const SizedBox(height: 6),
-          SwitchListTile.adaptive(
-            value: event.isSchoolDay,
-            onChanged: (value) => onChanged(event.copy(isSchoolDay: value)),
-            contentPadding: EdgeInsets.zero,
-            title: const Text(
-              'School day',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+          const SizedBox(height: 10),
+          FormField<bool>(
+            key: ValueKey(
+              'event-school-attendance-$index-${event.isSchoolDay}',
             ),
-            subtitle: const Text(
-              'Students are expected to attend school on this event date.',
-              style: TextStyle(color: AppColors.muted, fontSize: 11),
+            initialValue: event.isSchoolDay,
+            validator: (value) => value == null ? 'Select Yes or No' : null,
+            builder: (field) => Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Are students expected to attend school? *',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 10,
+                  children: [
+                    ChoiceChip(
+                      label: const Text('Yes'),
+                      selected: event.isSchoolDay == true,
+                      onSelected: (_) {
+                        field.didChange(true);
+                        onChanged(event.copy(isSchoolDay: true));
+                      },
+                    ),
+                    ChoiceChip(
+                      label: const Text('No'),
+                      selected: event.isSchoolDay == false,
+                      onSelected: (_) {
+                        field.didChange(false);
+                        onChanged(event.copy(isSchoolDay: false));
+                      },
+                    ),
+                  ],
+                ),
+                if (field.hasError) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    field.errorText!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
         ],
@@ -4556,6 +5105,7 @@ class _ReviewSetup extends StatelessWidget {
     required this.secondaryPhone,
     required this.secondaryPhoneNetwork,
     required this.officePhone,
+    required this.phoneContacts,
     required this.email,
     required this.website,
     required this.socialMedia,
@@ -4628,6 +5178,7 @@ class _ReviewSetup extends StatelessWidget {
       academicYear,
       academicTerm,
       description;
+  final List<SchoolPhoneContact> phoneContacts;
   final Map<String, int> gradeStreams;
   final DateTime? startDate, endDate;
   final List<_CalendarEvent> events;
@@ -4665,7 +5216,6 @@ class _ReviewSetup extends StatelessWidget {
       ('Academic Term', academicTerm),
       ('Start Date', _date(startDate)),
       ('End Date', _date(endDate)),
-      ('Description', description),
       ('Events', '${events.length} ${events.length == 1 ? 'event' : 'events'}'),
     ];
   }
@@ -4718,9 +5268,20 @@ class _ReviewSetup extends StatelessWidget {
         step: 4,
         onEdit: onEdit,
         rows: [
-          ('Primary Phone', '$phone · $phoneNetwork'),
-          ('Secondary Phone', '$secondaryPhone · $secondaryPhoneNetwork'),
-          ('Work Phone Numbers', officePhone),
+          if (phoneContacts.isNotEmpty)
+            ...phoneContacts.asMap().entries.map(
+              (entry) => (
+                entry.key == 0
+                    ? 'Primary Phone'
+                    : 'Additional Phone ${entry.key}',
+                '${entry.value.number} · ${entry.value.type}',
+              ),
+            )
+          else ...[
+            ('Primary Phone', '$phone · $phoneNetwork'),
+            ('Secondary Phone', '$secondaryPhone · $secondaryPhoneNetwork'),
+            ('Work Phone Numbers', officePhone),
+          ],
           ('Email Addresses', email),
           ('Website', website),
           ('Social Media', socialMedia),
@@ -4993,10 +5554,14 @@ class _ReviewEventList extends StatelessWidget {
                             color: AppColors.green,
                           ),
                           _EventReviewBadge(
-                            label: event.isSchoolDay
+                            label: event.isSchoolDay == null
+                                ? 'Attendance not answered'
+                                : event.isSchoolDay!
                                 ? 'School day'
                                 : 'No school',
-                            color: event.isSchoolDay
+                            color: event.isSchoolDay == null
+                                ? AppColors.muted
+                                : event.isSchoolDay!
                                 ? AppColors.green
                                 : AppColors.amber,
                           ),
@@ -5235,7 +5800,7 @@ class _CalendarEvent {
     this.endDate,
     this.startTime = '00:00:00',
     this.endTime = '23:59:59',
-    this.isSchoolDay = false,
+    this.isSchoolDay,
     this.isDraft = false,
   });
   final String type;
@@ -5245,7 +5810,7 @@ class _CalendarEvent {
   final DateTime? endDate;
   final String startTime;
   final String endTime;
-  final bool isSchoolDay;
+  final bool? isSchoolDay;
   final bool isDraft;
   String get shortStart =>
       '${startDate!.day}-${startDate!.month}-${startDate!.year}';
@@ -5253,7 +5818,7 @@ class _CalendarEvent {
   bool get isComplete {
     if (type.trim().isEmpty) return false;
     if (type == 'Other' && otherName.trim().isEmpty) return false;
-    return startDate != null && endDate != null;
+    return startDate != null && endDate != null && isSchoolDay != null;
   }
 
   _CalendarEvent copy({
@@ -5265,6 +5830,7 @@ class _CalendarEvent {
     String? startTime,
     String? endTime,
     bool? isSchoolDay,
+    bool clearSchoolDay = false,
     bool? isDraft,
   }) => _CalendarEvent(
     type: type ?? this.type,
@@ -5274,7 +5840,7 @@ class _CalendarEvent {
     endDate: endDate ?? this.endDate,
     startTime: startTime ?? this.startTime,
     endTime: endTime ?? this.endTime,
-    isSchoolDay: isSchoolDay ?? this.isSchoolDay,
+    isSchoolDay: clearSchoolDay ? null : isSchoolDay ?? this.isSchoolDay,
     isDraft: isDraft ?? this.isDraft,
   );
 }

@@ -620,6 +620,7 @@ class _AccountManagerDetailScreenState
                 ),
                 onForceResetPassword: _forceResetPassword,
                 onResendCredentials: _resendCredentials,
+                onCancelInvitation: _cancelManagerInvitation,
                 onDelete: _deleteManager,
               ),
               const SizedBox(height: 16),
@@ -648,14 +649,7 @@ class _AccountManagerDetailScreenState
                   onViewSchool: widget.onViewSchool,
                 )
               else
-                const _ActivityPanel(
-                  title: 'Activity Log',
-                  activities: [
-                    'Account manager profile opened',
-                    'Assigned schools reviewed',
-                    'Credential actions available',
-                  ],
-                ),
+                const _ActivityPanel(title: 'Activity Log', activities: []),
             ],
           ),
         ),
@@ -697,23 +691,17 @@ class _AccountManagerDetailScreenState
 
   Future<void> _deleteManager() async {
     if (_busy) return;
-    final confirmed = await _confirmAccountManagerAction(
-      title: 'Delete account manager?',
-      message:
-          'This will remove ${_manager.name} from account manager access. This action should only be used when the account is no longer needed.',
-      confirmLabel: 'Delete',
-      destructive: true,
-    );
-    if (!confirmed || !mounted) return;
+    final reason = await _requestPermanentDeletionReason();
+    if (reason == null || !mounted) return;
     setState(() => _busy = true);
     try {
       await widget.repository.deleteAccountManager(
         accountManagerId: _manager.id,
-        reason: 'Deleted by Super Admin',
+        reason: reason,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${_manager.name} deleted successfully.')),
+        SnackBar(content: Text('${_manager.name} permanently deleted.')),
       );
       widget.onManagerDeleted();
     } catch (error) {
@@ -729,12 +717,104 @@ class _AccountManagerDetailScreenState
     }
   }
 
+  Future<void> _cancelManagerInvitation() async {
+    if (_busy) return;
+    final confirmed = await _confirmAccountManagerAction(
+      title: 'Cancel invitation?',
+      message:
+          '${_manager.name} will no longer be able to activate this invitation. The audit history will be kept.',
+      confirmLabel: 'Cancel invitation',
+      destructive: true,
+    );
+    if (!confirmed || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      await widget.repository.cancelAccountManagerInvitation(
+        accountManagerId: _manager.id,
+        reason: 'Invitation cancelled by platform administrator',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Invitation cancelled.')));
+      widget.onBack();
+      widget.onManagerDeleted();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not cancel invitation. ${_actionError(error)}'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<String?> _requestPermanentDeletionReason() async {
+    final controller = TextEditingController();
+    var canDelete = false;
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Delete account manager permanently?'),
+          content: SizedBox(
+            width: 520,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'This will permanently delete ${_manager.name}, their invitation, login and account-manager access. This cannot be undone.',
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'The administrator, time, account details and reason will remain in the audit log.',
+                ),
+                const SizedBox(height: 18),
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  maxLines: 3,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: const InputDecoration(
+                    labelText: 'Reason for permanent deletion',
+                    hintText: 'Explain why this account is being removed',
+                    alignLabelWithHint: true,
+                  ),
+                  onChanged: (value) =>
+                      setDialogState(() => canDelete = value.trim().isNotEmpty),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: AppColors.red),
+              onPressed: canDelete
+                  ? () => Navigator.pop(context, controller.text.trim())
+                  : null,
+              child: const Text('Delete permanently'),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+    return reason;
+  }
+
   Future<void> _forceResetPassword() async {
     await _runAccountManagerCredentialAction(
-      title: 'Force reset password?',
+      title: 'Require password change?',
       message:
-          'This will generate a new temporary password for ${_manager.name}, mark the account as requiring password change, and send the credentials.',
-      confirmLabel: 'Force reset',
+          '${_manager.name} will continue using their current password to sign in. Before entering the dashboard, they must create a new password.',
+      confirmLabel: 'Require change',
       action: () =>
           widget.repository.forceResetAccountManagerPassword(manager: _manager),
     );
@@ -742,10 +822,10 @@ class _AccountManagerDetailScreenState
 
   Future<void> _resendCredentials() async {
     await _runAccountManagerCredentialAction(
-      title: 'Send temporary password?',
+      title: 'Resend invitation?',
       message:
-          'This will generate and send temporary login credentials to ${_manager.name}.',
-      confirmLabel: 'Send temporary password',
+          'This creates new temporary access for ${_manager.name}; the previous temporary password will stop working.',
+      confirmLabel: 'Resend invitation',
       action: () =>
           widget.repository.resendAccountManagerCredentials(manager: _manager),
     );
@@ -829,6 +909,7 @@ class _AccountManagerProfileHeader extends StatelessWidget {
     required this.onReactivate,
     required this.onForceResetPassword,
     required this.onResendCredentials,
+    required this.onCancelInvitation,
     required this.onDelete,
   });
 
@@ -840,12 +921,14 @@ class _AccountManagerProfileHeader extends StatelessWidget {
   final VoidCallback onReactivate;
   final VoidCallback onForceResetPassword;
   final VoidCallback onResendCredentials;
+  final VoidCallback onCancelInvitation;
   final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
     final status = _managerStatus(manager.status);
     final pending = manager.status == AccountManagerStatus.pendingApproval;
+    final invited = manager.status == AccountManagerStatus.invited;
     final active = manager.status == AccountManagerStatus.active;
     final suspended = manager.status == AccountManagerStatus.suspended;
     return Card(
@@ -871,22 +954,44 @@ class _AccountManagerProfileHeader extends StatelessWidget {
                   icon: Icons.apartment_rounded,
                   text: '$assignedCount schools assigned',
                 ),
+                if (invited)
+                  _ManagerMeta(
+                    icon: _invitationDeliveryIcon(
+                      manager.invitationDeliveryStatus,
+                    ),
+                    text:
+                        '${_invitationDeliveryLabel(manager.invitationDeliveryStatus)} · ${manager.invitationSendCount} ${manager.invitationSendCount == 1 ? 'attempt' : 'attempts'}',
+                  ),
+                if (invited && manager.invitationLastSentAt.isNotEmpty)
+                  _ManagerMeta(
+                    icon: Icons.schedule_rounded,
+                    text:
+                        'Last sent ${_formatReadableDateTime(manager.invitationLastSentAt)}',
+                  ),
               ],
             );
             final primaryActions = Wrap(
               spacing: 10,
               runSpacing: 10,
               children: [
-                OutlinedButton.icon(
-                  onPressed: busy ? null : onForceResetPassword,
-                  icon: const Icon(Icons.lock_reset_rounded, size: 18),
-                  label: const Text('Force reset password'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: busy ? null : onResendCredentials,
-                  icon: const Icon(Icons.mark_email_read_outlined, size: 18),
-                  label: const Text('Send temporary password'),
-                ),
+                if (!invited)
+                  OutlinedButton.icon(
+                    onPressed: busy ? null : onForceResetPassword,
+                    icon: const Icon(Icons.lock_reset_rounded, size: 18),
+                    label: const Text('Require password change'),
+                  ),
+                if (invited)
+                  OutlinedButton.icon(
+                    onPressed: busy ? null : onResendCredentials,
+                    icon: const Icon(Icons.forward_to_inbox_rounded, size: 18),
+                    label: const Text('Resend invitation'),
+                  ),
+                if (invited)
+                  TextButton.icon(
+                    onPressed: busy ? null : onCancelInvitation,
+                    icon: const Icon(Icons.cancel_outlined, size: 18),
+                    label: const Text('Cancel invitation'),
+                  ),
                 if (pending)
                   FilledButton.icon(
                     onPressed: busy ? null : onApprove,
@@ -1132,11 +1237,7 @@ class _SchoolOverview extends StatelessWidget {
         const _ActivityPanel(
           title: 'Recent Activity',
           compact: true,
-          activities: [
-            'Attendance summary synced',
-            'Fee reminder generated',
-            'School profile reviewed',
-          ],
+          activities: [],
         ),
       ],
     );
@@ -1834,6 +1935,98 @@ class _SchoolUserDetailPageState extends State<_SchoolUserDetailPage> {
     }
   }
 
+  Future<void> _requirePasswordChange() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.lock_reset_rounded, color: AppColors.green),
+        title: const Text('Require password change?'),
+        content: Text(
+          '${widget.user.name} will continue using their current password to sign in. '
+          'Before entering the dashboard, they must create a new password.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Require change'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _runCredentialAction(
+      () => widget.repository.resetSchoolUserPassword(
+        customSchoolId: widget.user.customSchoolId,
+        userId: widget.user.id,
+      ),
+    );
+  }
+
+  Future<String?> _invitationReason(String title) async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            labelText: 'Reason',
+            hintText: 'Enter a short reason for the audit record',
+            alignLabelWithHint: true,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Keep invitation'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final value = controller.text.trim();
+              if (value.isNotEmpty) Navigator.pop(context, value);
+            },
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    return result;
+  }
+
+  Future<void> _cancelInvitation() async {
+    final reason = await _invitationReason('Cancel invitation?');
+    if (reason == null || !mounted) return;
+    await _runAction(
+      () => widget.repository.cancelSchoolUserInvitation(
+        customSchoolId: widget.user.customSchoolId,
+        userId: widget.user.id,
+        reason: reason,
+      ),
+      'Invitation cancelled.',
+    );
+  }
+
+  Future<void> _deleteInvitation() async {
+    final reason = await _invitationReason('Delete invitation permanently?');
+    if (reason == null || !mounted) return;
+    await _runAction(
+      () => widget.repository.deleteSchoolUserInvitation(
+        customSchoolId: widget.user.customSchoolId,
+        userId: widget.user.id,
+        reason: reason,
+      ),
+      'Invitation permanently deleted.',
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = widget.user;
@@ -1886,12 +2079,7 @@ class _SchoolUserDetailPageState extends State<_SchoolUserDetailPage> {
                     userId: user.id,
                   ),
                 ),
-                onResetPassword: () => _runCredentialAction(
-                  () => widget.repository.resetSchoolUserPassword(
-                    customSchoolId: user.customSchoolId,
-                    userId: user.id,
-                  ),
-                ),
+                onResetPassword: _requirePasswordChange,
               ),
               const SizedBox(height: 14),
               _UserAccountActionsCard(
@@ -1929,6 +2117,8 @@ class _SchoolUserDetailPageState extends State<_SchoolUserDetailPage> {
                   ),
                   'User reactivated.',
                 ),
+                onCancelInvitation: _cancelInvitation,
+                onDeleteInvitation: _deleteInvitation,
               ),
               if (_busy) ...[
                 const SizedBox(height: 12),
@@ -2030,6 +2220,20 @@ class _UserProfileHero extends StatelessWidget {
                         ? 'No phone provided'
                         : user.phoneNumber,
                   ),
+                  if (user.isInvited)
+                    _UserMetaLine(
+                      icon: _invitationDeliveryIcon(
+                        user.invitationDeliveryStatus,
+                      ),
+                      label:
+                          '${_invitationDeliveryLabel(user.invitationDeliveryStatus)} · ${user.invitationSendCount} ${user.invitationSendCount == 1 ? 'attempt' : 'attempts'}',
+                    ),
+                  if (user.isInvited && user.invitationLastSentAt.isNotEmpty)
+                    _UserMetaLine(
+                      icon: Icons.schedule_rounded,
+                      label:
+                          'Last sent ${_formatReadableDateTime(user.invitationLastSentAt)}',
+                    ),
                   _UserMetaLine(icon: Icons.school_outlined, label: schoolName),
                   _UserMetaLine(
                     icon: Icons.calendar_today_outlined,
@@ -2045,16 +2249,18 @@ class _UserProfileHero extends StatelessWidget {
                 spacing: 10,
                 runSpacing: 10,
                 children: [
-                  OutlinedButton.icon(
-                    onPressed: busy ? null : onResendCredentials,
-                    icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('Resend credentials'),
-                  ),
-                  FilledButton.icon(
-                    onPressed: busy ? null : onResetPassword,
-                    icon: const Icon(Icons.lock_outline_rounded),
-                    label: const Text('Reset password'),
-                  ),
+                  if (user.isInvited)
+                    OutlinedButton.icon(
+                      onPressed: busy ? null : onResendCredentials,
+                      icon: const Icon(Icons.forward_to_inbox_rounded),
+                      label: const Text('Resend invitation'),
+                    ),
+                  if (!user.isInvited)
+                    FilledButton.icon(
+                      onPressed: busy ? null : onResetPassword,
+                      icon: const Icon(Icons.lock_outline_rounded),
+                      label: const Text('Require password change'),
+                    ),
                 ],
               ),
             ],
@@ -2111,6 +2317,8 @@ class _UserAccountActionsCard extends StatelessWidget {
     required this.onReject,
     required this.onSuspend,
     required this.onReactivate,
+    required this.onCancelInvitation,
+    required this.onDeleteInvitation,
   });
 
   final SchoolUserInfo user;
@@ -2121,6 +2329,8 @@ class _UserAccountActionsCard extends StatelessWidget {
   final VoidCallback onReject;
   final VoidCallback onSuspend;
   final VoidCallback onReactivate;
+  final VoidCallback onCancelInvitation;
+  final VoidCallback onDeleteInvitation;
 
   @override
   Widget build(BuildContext context) {
@@ -2141,7 +2351,9 @@ class _UserAccountActionsCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  user.isPendingApproval
+                  user.isInvited
+                      ? 'This invitation has not been activated. You can resend it, cancel it, or permanently delete it.'
+                      : user.isPendingApproval
                       ? 'Review this user registration and approve or reject access.'
                       : 'Current status: ${status.label}. Use these actions to manage account access.',
                   style: const TextStyle(color: AppColors.muted),
@@ -2153,7 +2365,22 @@ class _UserAccountActionsCard extends StatelessWidget {
               runSpacing: 10,
               alignment: isNarrow ? WrapAlignment.start : WrapAlignment.end,
               children: [
-                if (user.isPendingApproval) ...[
+                if (user.isInvited) ...[
+                  OutlinedButton.icon(
+                    onPressed: busy ? null : onCancelInvitation,
+                    icon: const Icon(Icons.cancel_outlined),
+                    label: const Text('Cancel invitation'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: busy ? null : onDeleteInvitation,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.red,
+                      side: const BorderSide(color: AppColors.red),
+                    ),
+                    icon: const Icon(Icons.delete_outline_rounded),
+                    label: const Text('Delete permanently'),
+                  ),
+                ] else if (user.isPendingApproval) ...[
                   OutlinedButton.icon(
                     onPressed: busy ? null : onReject,
                     icon: const Icon(Icons.cancel_outlined),
@@ -3749,6 +3976,14 @@ class _ActivityPanel extends StatelessWidget {
             ),
           ),
           const Divider(height: 1, color: AppColors.border),
+          if (shown.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(18),
+              child: Text(
+                'No activity has been recorded yet.',
+                style: TextStyle(color: AppColors.muted),
+              ),
+            ),
           ...shown.map(
             (activity) => Padding(
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
@@ -4656,6 +4891,34 @@ String _formatReadableDate(String value) {
   final parsed = DateTime.tryParse(raw.replaceFirst(' ', 'T'));
   if (parsed == null) return raw;
   return _formatDayMonthYear(parsed);
+}
+
+String _formatReadableDateTime(String value) {
+  final parsed = DateTime.tryParse(value.trim().replaceFirst(' ', 'T'));
+  if (parsed == null) return _formatReadableDate(value);
+  final local = parsed.toLocal();
+  final hour = local.hour == 0
+      ? 12
+      : (local.hour > 12 ? local.hour - 12 : local.hour);
+  final minute = local.minute.toString().padLeft(2, '0');
+  final period = local.hour >= 12 ? 'PM' : 'AM';
+  return '${_formatDayMonthYear(local)} at $hour:$minute $period';
+}
+
+String _invitationDeliveryLabel(String value) {
+  return switch (value.trim().toUpperCase()) {
+    'SENT' => 'Sent',
+    'FAILED' => 'Send failed',
+    _ => 'Not sent',
+  };
+}
+
+IconData _invitationDeliveryIcon(String value) {
+  return switch (value.trim().toUpperCase()) {
+    'SENT' => Icons.mark_email_read_outlined,
+    'FAILED' => Icons.error_outline_rounded,
+    _ => Icons.drafts_outlined,
+  };
 }
 
 String _formatDayMonthYear(DateTime value) {

@@ -122,6 +122,10 @@ class AccountManagerProfile {
     required this.inviteMethod,
     required this.verified,
     required this.bio,
+    this.invitationDeliveryStatus = 'NOT_SENT',
+    this.invitationLastSentAt = '',
+    this.invitationLastAttemptAt = '',
+    this.invitationSendCount = 0,
   });
 
   final String id;
@@ -138,6 +142,12 @@ class AccountManagerProfile {
   final String inviteMethod;
   final bool verified;
   final String bio;
+  final String invitationDeliveryStatus;
+  final String invitationLastSentAt;
+  final String invitationLastAttemptAt;
+  final int invitationSendCount;
+
+  bool get isInvited => status == AccountManagerStatus.invited;
 }
 
 class AccountManagerPage {
@@ -241,6 +251,10 @@ class SchoolUserInfo {
     this.createdAt = '',
     this.invitedAt = '',
     this.dateOfBirth = '',
+    this.invitationDeliveryStatus = 'NOT_SENT',
+    this.invitationLastSentAt = '',
+    this.invitationLastAttemptAt = '',
+    this.invitationSendCount = 0,
   });
 
   final String id;
@@ -257,8 +271,14 @@ class SchoolUserInfo {
   final String createdAt;
   final String invitedAt;
   final String dateOfBirth;
+  final String invitationDeliveryStatus;
+  final String invitationLastSentAt;
+  final String invitationLastAttemptAt;
+  final int invitationSendCount;
 
   bool get isAdministrator => role.trim().toUpperCase() == 'ADMINISTRATOR';
+
+  bool get isInvited => status.trim().toUpperCase() == 'INVITED';
 
   bool get isPendingApproval {
     final value = status.trim().toUpperCase();
@@ -282,6 +302,10 @@ class SchoolUserInfo {
     String? createdAt,
     String? invitedAt,
     String? dateOfBirth,
+    String? invitationDeliveryStatus,
+    String? invitationLastSentAt,
+    String? invitationLastAttemptAt,
+    int? invitationSendCount,
   }) {
     return SchoolUserInfo(
       id: id ?? this.id,
@@ -298,6 +322,12 @@ class SchoolUserInfo {
       createdAt: createdAt ?? this.createdAt,
       invitedAt: invitedAt ?? this.invitedAt,
       dateOfBirth: dateOfBirth ?? this.dateOfBirth,
+      invitationDeliveryStatus:
+          invitationDeliveryStatus ?? this.invitationDeliveryStatus,
+      invitationLastSentAt: invitationLastSentAt ?? this.invitationLastSentAt,
+      invitationLastAttemptAt:
+          invitationLastAttemptAt ?? this.invitationLastAttemptAt,
+      invitationSendCount: invitationSendCount ?? this.invitationSendCount,
     );
   }
 }
@@ -505,12 +535,14 @@ class SchoolGradeLevelInfo {
     required this.gradeLevelName,
     required this.numberOfStreams,
     this.status = 'ACTIVE',
+    this.isCustom = false,
   });
 
   final int gradeLevelId;
   final String gradeLevelName;
   final int numberOfStreams;
   final String status;
+  final bool isCustom;
 }
 
 class NeedsAttentionSummary {
@@ -708,6 +740,18 @@ class SchoolDraft {
   final String administratorEmail;
 }
 
+class SchoolPhoneContact {
+  const SchoolPhoneContact({
+    required this.number,
+    required this.type,
+    this.isPrimary = false,
+  });
+
+  final String number;
+  final String type;
+  final bool isPrimary;
+}
+
 class SchoolOnboardingDraft {
   const SchoolOnboardingDraft({
     required this.customSchoolId,
@@ -752,6 +796,7 @@ class SchoolOnboardingDraft {
     required this.secondaryPhone,
     required this.secondaryPhoneNetwork,
     required this.officePhone,
+    this.phoneContacts = const [],
     required this.email,
     required this.website,
     required this.socialMedia,
@@ -763,6 +808,7 @@ class SchoolOnboardingDraft {
     required this.levels,
     required this.gradeStreams,
     required this.gradeLevelIds,
+    this.customGradeLevels = const {},
     required this.academicYear,
     required this.academicYearId,
     required this.academicTerm,
@@ -817,6 +863,7 @@ class SchoolOnboardingDraft {
   final String secondaryPhone;
   final String secondaryPhoneNetwork;
   final String officePhone;
+  final List<SchoolPhoneContact> phoneContacts;
   final String email;
   final String website;
   final String socialMedia;
@@ -828,6 +875,7 @@ class SchoolOnboardingDraft {
   final List<String> levels;
   final Map<String, int> gradeStreams;
   final Map<String, int> gradeLevelIds;
+  final Set<String> customGradeLevels;
   final String academicYear;
   final int? academicYearId;
   final String academicTerm;

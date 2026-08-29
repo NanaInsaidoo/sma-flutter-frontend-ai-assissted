@@ -631,6 +631,21 @@ class FeeClassStructure {
     required this.totalPerTerm,
     required this.publishedAt,
     required this.feeItems,
+    this.streamId = 0,
+    this.streamName = '',
+    this.customGradeLevelId = 0,
+    this.revisionReason = '',
+    this.assignedApproverId = 0,
+    this.assignedApproverName = '',
+    this.submittedBy = '',
+    this.submittedAt,
+    this.approvedBy = '',
+    this.approvedAt,
+    this.rejectionReason = '',
+    this.hasPublishedVersion = false,
+    this.changePending = false,
+    this.createdBy = '',
+    this.creatorOwned = false,
   });
 
   final int structureId;
@@ -643,6 +658,21 @@ class FeeClassStructure {
   final double totalPerTerm;
   final DateTime? publishedAt;
   final List<FeeStructureItem> feeItems;
+  final int streamId;
+  final String streamName;
+  final int customGradeLevelId;
+  final String revisionReason;
+  final int assignedApproverId;
+  final String assignedApproverName;
+  final String submittedBy;
+  final DateTime? submittedAt;
+  final String approvedBy;
+  final DateTime? approvedAt;
+  final String rejectionReason;
+  final bool hasPublishedVersion;
+  final bool changePending;
+  final String createdBy;
+  final bool creatorOwned;
 
   factory FeeClassStructure.fromJson(Map<String, dynamic> json) {
     return FeeClassStructure(
@@ -659,6 +689,21 @@ class FeeClassStructure {
           .whereType<Map<String, dynamic>>()
           .map(FeeStructureItem.fromJson)
           .toList(),
+      streamId: _intValue(json['streamId']),
+      streamName: '${json['streamName'] ?? ''}',
+      customGradeLevelId: _intValue(json['customGradeLevelId']),
+      revisionReason: '${json['revisionReason'] ?? ''}',
+      assignedApproverId: _intValue(json['assignedApproverId']),
+      assignedApproverName: '${json['assignedApproverName'] ?? ''}',
+      submittedBy: '${json['submittedBy'] ?? ''}',
+      submittedAt: _dateValue(json['submittedAt']),
+      approvedBy: '${json['approvedBy'] ?? ''}',
+      approvedAt: _dateValue(json['approvedAt']),
+      rejectionReason: '${json['rejectionReason'] ?? ''}',
+      hasPublishedVersion: json['hasPublishedVersion'] == true,
+      changePending: json['changePending'] == true,
+      createdBy: '${json['createdBy'] ?? ''}',
+      creatorOwned: json['creatorOwned'] == true,
     );
   }
 }
@@ -673,6 +718,10 @@ class FeeStructureItem {
     required this.description,
     required this.status,
     required this.dueDate,
+    this.feeMasterItemId = 0,
+    this.masterCode = '',
+    this.mandatory = true,
+    this.instructions = '',
   });
 
   final int feeId;
@@ -683,6 +732,10 @@ class FeeStructureItem {
   final String description;
   final String status;
   final DateTime? dueDate;
+  final int feeMasterItemId;
+  final String masterCode;
+  final bool mandatory;
+  final String instructions;
 
   factory FeeStructureItem.fromJson(Map<String, dynamic> json) {
     final active = json['active'];
@@ -697,6 +750,10 @@ class FeeStructureItem {
           ? (active == false ? 'INACTIVE' : 'ACTIVE')
           : '${json['status']}',
       dueDate: _dateValue(json['dueDate']),
+      feeMasterItemId: _intValue(json['feeMasterItemId']),
+      masterCode: '${json['masterCode'] ?? ''}',
+      mandatory: json['mandatory'] != false,
+      instructions: '${json['instructions'] ?? ''}',
     );
   }
 
@@ -709,7 +766,211 @@ class FeeStructureItem {
     'description': description.trim().isEmpty ? null : description.trim(),
     'status': status.trim().isEmpty ? 'ACTIVE' : status.trim(),
     'dueDate': dueDate == null ? null : _dateOnly(dueDate!),
+    'feeMasterItemId': feeMasterItemId,
+    'mandatory': mandatory,
+    'instructions': instructions.trim().isEmpty ? null : instructions.trim(),
   };
+}
+
+class FeeMasterItem {
+  const FeeMasterItem({
+    required this.id,
+    required this.code,
+    required this.itemName,
+    required this.category,
+    required this.description,
+    required this.active,
+    required this.status,
+    required this.hasApprovedVersion,
+    required this.hasPendingChange,
+    this.draftCode = '',
+    this.draftItemName = '',
+    this.draftCategory = '',
+    this.draftDescription = '',
+    this.draftActive = true,
+    this.changeReason = '',
+    this.assignedApproverId = 0,
+    this.assignedApproverName = '',
+    this.rejectionReason = '',
+    this.creatorOwned = false,
+    this.systemDefined = false,
+  });
+
+  final int id;
+  final String code;
+  final String itemName;
+  final String category;
+  final String description;
+  final bool active;
+  final String status;
+  final bool hasApprovedVersion;
+  final bool hasPendingChange;
+  final String draftCode;
+  final String draftItemName;
+  final String draftCategory;
+  final String draftDescription;
+  final bool draftActive;
+  final String changeReason;
+  final int assignedApproverId;
+  final String assignedApproverName;
+  final String rejectionReason;
+  final bool creatorOwned;
+  final bool systemDefined;
+
+  String get editableCode => draftCode.trim().isEmpty ? code : draftCode;
+  String get editableName =>
+      draftItemName.trim().isEmpty ? itemName : draftItemName;
+  String get editableCategory =>
+      draftCategory.trim().isEmpty ? category : draftCategory;
+  String get editableDescription =>
+      draftDescription.trim().isEmpty ? description : draftDescription;
+
+  factory FeeMasterItem.fromJson(Map<String, dynamic> json) => FeeMasterItem(
+    id: _intValue(json['id']),
+    code: '${json['code'] ?? ''}',
+    itemName: '${json['itemName'] ?? ''}',
+    category: '${json['category'] ?? ''}',
+    description: '${json['description'] ?? ''}',
+    active: json['active'] != false,
+    status: '${json['status'] ?? 'DRAFT'}',
+    hasApprovedVersion: json['hasApprovedVersion'] == true,
+    hasPendingChange: json['hasPendingChange'] == true,
+    draftCode: '${json['draftCode'] ?? ''}',
+    draftItemName: '${json['draftItemName'] ?? ''}',
+    draftCategory: '${json['draftCategory'] ?? ''}',
+    draftDescription: '${json['draftDescription'] ?? ''}',
+    draftActive: json['draftActive'] != false,
+    changeReason: '${json['changeReason'] ?? ''}',
+    assignedApproverId: _intValue(json['assignedApproverId']),
+    assignedApproverName: '${json['assignedApproverName'] ?? ''}',
+    rejectionReason: '${json['rejectionReason'] ?? ''}',
+    creatorOwned: json['creatorOwned'] == true,
+    systemDefined: json['systemDefined'] == true,
+  );
+}
+
+class FeeApprover {
+  const FeeApprover({required this.id, required this.name, required this.role});
+  final int id;
+  final String name;
+  final String role;
+  factory FeeApprover.fromJson(Map<String, dynamic> json) => FeeApprover(
+    id: _intValue(json['id']),
+    name: '${json['name'] ?? ''}',
+    role: '${json['role'] ?? ''}',
+  );
+}
+
+class FeeStreamOption {
+  const FeeStreamOption({
+    required this.id,
+    required this.name,
+    required this.gradeLevelId,
+    required this.gradeName,
+    required this.active,
+    required this.studentCount,
+  });
+  final int id;
+  final String name;
+  final int gradeLevelId;
+  final String gradeName;
+  final bool active;
+  final int studentCount;
+}
+
+class FeeWorkflowSummary {
+  const FeeWorkflowSummary({
+    required this.pendingMyApproval,
+    required this.pendingAll,
+    required this.masterPendingMyApproval,
+    required this.masterPendingAll,
+    required this.requiredItemsPendingMyApproval,
+    required this.requiredItemsPendingAll,
+    required this.myDrafts,
+    required this.approvedNotPublished,
+    required this.streamsWithoutActiveFees,
+    required this.activeStreams,
+    required this.activeStreamsWithFees,
+  });
+  final int pendingMyApproval;
+  final int pendingAll;
+  final int masterPendingMyApproval;
+  final int masterPendingAll;
+  final int requiredItemsPendingMyApproval;
+  final int requiredItemsPendingAll;
+  final int myDrafts;
+  final int approvedNotPublished;
+  final int streamsWithoutActiveFees;
+  final int activeStreams;
+  final int activeStreamsWithFees;
+  factory FeeWorkflowSummary.fromJson(Map<String, dynamic> json) =>
+      FeeWorkflowSummary(
+        pendingMyApproval: _intValue(json['pendingMyApproval']),
+        pendingAll: _intValue(json['pendingAll']),
+        masterPendingMyApproval: _intValue(json['masterPendingMyApproval']),
+        masterPendingAll: _intValue(json['masterPendingAll']),
+        requiredItemsPendingMyApproval: _intValue(
+          json['requiredItemsPendingMyApproval'],
+        ),
+        requiredItemsPendingAll: _intValue(json['requiredItemsPendingAll']),
+        myDrafts: _intValue(json['myDrafts']),
+        approvedNotPublished: _intValue(json['approvedNotPublished']),
+        streamsWithoutActiveFees: _intValue(json['streamsWithoutActiveFees']),
+        activeStreams: _intValue(json['activeStreams']),
+        activeStreamsWithFees: _intValue(json['activeStreamsWithFees']),
+      );
+}
+
+class FeeCopyConflict {
+  const FeeCopyConflict({
+    required this.streamId,
+    required this.streamName,
+    required this.gradeName,
+    required this.status,
+    required this.conflictCount,
+  });
+  final int streamId;
+  final String streamName;
+  final String gradeName;
+  final String status;
+  final int conflictCount;
+  factory FeeCopyConflict.fromJson(Map<String, dynamic> json) =>
+      FeeCopyConflict(
+        streamId: _intValue(json['streamId']),
+        streamName: '${json['streamName'] ?? ''}',
+        gradeName: '${json['gradeName'] ?? ''}',
+        status: '${json['status'] ?? ''}',
+        conflictCount: _intValue(json['conflictCount']),
+      );
+}
+
+class FeeCopyResult {
+  const FeeCopyResult({
+    required this.requiresConfirmation,
+    required this.conflicts,
+    required this.draftUpdated,
+    required this.pendingWithdrawn,
+    required this.approvalsInvalidated,
+    required this.publishedRevisionsCreated,
+  });
+  final bool requiresConfirmation;
+  final List<FeeCopyConflict> conflicts;
+  final int draftUpdated;
+  final int pendingWithdrawn;
+  final int approvalsInvalidated;
+  final int publishedRevisionsCreated;
+  factory FeeCopyResult.fromJson(Map<String, dynamic> json) => FeeCopyResult(
+    requiresConfirmation: json['requiresConfirmation'] == true,
+    conflicts:
+        (json['conflicts'] is List ? json['conflicts'] as List : const [])
+            .whereType<Map<String, dynamic>>()
+            .map(FeeCopyConflict.fromJson)
+            .toList(),
+    draftUpdated: _intValue(json['draftUpdated']),
+    pendingWithdrawn: _intValue(json['pendingWithdrawn']),
+    approvalsInvalidated: _intValue(json['approvalsInvalidated']),
+    publishedRevisionsCreated: _intValue(json['publishedRevisionsCreated']),
+  );
 }
 
 class FeeWaiverSummary {
@@ -1030,6 +1291,9 @@ class FeePaymentRequest {
     this.chequeNumber,
     this.chequeBank,
     this.chequeDate,
+    this.overpaymentConfirmed = false,
+    this.overpaymentReason,
+    required this.idempotencyKey,
   });
 
   final String customStudentId;
@@ -1048,6 +1312,9 @@ class FeePaymentRequest {
   final String? chequeNumber;
   final String? chequeBank;
   final DateTime? chequeDate;
+  final bool overpaymentConfirmed;
+  final String? overpaymentReason;
+  final String idempotencyKey;
 }
 
 class FeePaymentReceipt {
@@ -1059,6 +1326,10 @@ class FeePaymentReceipt {
     required this.paymentMethod,
     required this.paymentDate,
     required this.status,
+    required this.balance,
+    required this.creditBalance,
+    required this.overpaymentAmount,
+    this.overpaymentReason,
   });
 
   final int paymentId;
@@ -1068,6 +1339,10 @@ class FeePaymentReceipt {
   final String paymentMethod;
   final DateTime? paymentDate;
   final String status;
+  final double balance;
+  final double creditBalance;
+  final double overpaymentAmount;
+  final String? overpaymentReason;
 
   factory FeePaymentReceipt.fromJson(Map<String, dynamic> json) {
     return FeePaymentReceipt(
@@ -1075,10 +1350,14 @@ class FeePaymentReceipt {
       receiptNumber:
           '${json['receiptNumber'] ?? json['paymentReference'] ?? ''}',
       studentName: '${json['studentName'] ?? ''}',
-      amount: _doubleValue(json['amount']),
+      amount: _doubleValue(json['amountPaid'] ?? json['amount']),
       paymentMethod: '${json['paymentMethod'] ?? ''}',
-      paymentDate: _dateValue(json['paymentDate']),
+      paymentDate: _dateValue(json['receiptDate'] ?? json['paymentDate']),
       status: '${json['status'] ?? ''}'.toUpperCase(),
+      balance: _doubleValue(json['balance']),
+      creditBalance: _doubleValue(json['creditBalance']),
+      overpaymentAmount: _doubleValue(json['overpaymentAmount']),
+      overpaymentReason: json['overpaymentReason']?.toString(),
     );
   }
 }
@@ -1221,6 +1500,7 @@ class FeeStudentPayment {
   const FeeStudentPayment({
     required this.id,
     required this.amount,
+    required this.refundedAmount,
     required this.netAmount,
     required this.paymentDate,
     required this.paymentMethod,
@@ -1232,10 +1512,13 @@ class FeeStudentPayment {
     required this.chequeNumber,
     required this.chequeBank,
     required this.chequeDate,
+    required this.overpaymentAmount,
+    required this.overpaymentReason,
   });
 
   final int id;
   final double amount;
+  final double refundedAmount;
   final double netAmount;
   final DateTime? paymentDate;
   final String paymentMethod;
@@ -1247,11 +1530,14 @@ class FeeStudentPayment {
   final String chequeNumber;
   final String chequeBank;
   final DateTime? chequeDate;
+  final double overpaymentAmount;
+  final String overpaymentReason;
 
   factory FeeStudentPayment.fromJson(Map<String, dynamic> json) {
     return FeeStudentPayment(
       id: _intValue(json['id'] ?? json['paymentId']),
       amount: _doubleValue(json['amount']),
+      refundedAmount: _doubleValue(json['refundedAmount']),
       netAmount: _doubleValue(json['netAmount'] ?? json['amount']),
       paymentDate: _dateValue(json['paymentDate']),
       paymentMethod:
@@ -1264,6 +1550,8 @@ class FeeStudentPayment {
       chequeNumber: '${json['chequeNumber'] ?? ''}',
       chequeBank: '${json['chequeBank'] ?? ''}',
       chequeDate: _dateValue(json['chequeDate']),
+      overpaymentAmount: _doubleValue(json['overpaymentAmount']),
+      overpaymentReason: '${json['overpaymentReason'] ?? ''}',
     );
   }
 }

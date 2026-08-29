@@ -1,5 +1,6 @@
 import 'package:school_management_app/src/fees/data/class_requirements_repository.dart';
 import 'package:school_management_app/src/fees/domain/class_requirement_models.dart';
+import 'package:school_management_app/src/fees/domain/fee_models.dart';
 
 class FakeClassRequirementsRepository extends ClassRequirementsRepository {
   FakeClassRequirementsRepository() {
@@ -162,6 +163,19 @@ class FakeClassRequirementsRepository extends ClassRequirementsRepository {
         }),
       ],
     };
+    _studentCandidates = _students.values.expand((students) => students).map((
+      student,
+    ) {
+      final className = _groups
+          .firstWhere((group) => group.id == student.classGroupId)
+          .className;
+      return StudentRequirementCandidate(
+        studentId: student.id,
+        studentName: student.name,
+        className: className,
+      );
+    }).toList();
+    _studentSpecificRequirements = const [];
     _draftChangeCount = 1;
     _priorTermRequirements = [
       const PriorTermRequirement(
@@ -237,6 +251,8 @@ class FakeClassRequirementsRepository extends ClassRequirementsRepository {
   int _draftChangeCount = 0;
   RequirementNotificationPlan? _lastNotificationPlan;
   late List<PriorTermRequirement> _priorTermRequirements;
+  late List<StudentCustomRequirement> _studentSpecificRequirements;
+  late List<StudentRequirementCandidate> _studentCandidates;
 
   static StudentRequirementProgress _student(
     String id,
@@ -281,6 +297,23 @@ class FakeClassRequirementsRepository extends ClassRequirementsRepository {
       List.unmodifiable(_priorTermRequirements);
 
   @override
+  List<StudentCustomRequirement> get studentSpecificRequirements =>
+      List.unmodifiable(_studentSpecificRequirements);
+
+  @override
+  List<StudentRequirementCandidate> get studentCandidates =>
+      List.unmodifiable(_studentCandidates);
+
+  @override
+  int get unpublishedClassRequirementCount => _groups
+      .where((group) => group.status != RequirementStatus.published)
+      .length;
+
+  @override
+  int get unpublishedStudentRequirementCount =>
+      _studentSpecificRequirements.where((item) => !item.isPublished).length;
+
+  @override
   Future<void> loadPriorTermRequirements() async {}
 
   @override
@@ -306,8 +339,9 @@ class FakeClassRequirementsRepository extends ClassRequirementsRepository {
   @override
   Future<ClassRequirementGroup> addRequirement(
     String classGroupId,
-    ClassRequirementItem item,
-  ) async {
+    ClassRequirementItem item, {
+    String? revisionReason,
+  }) async {
     _groups = _groups.map((group) {
       if (group.id != classGroupId) return group;
       return group.copyWith(
@@ -329,8 +363,9 @@ class FakeClassRequirementsRepository extends ClassRequirementsRepository {
   @override
   Future<ClassRequirementGroup> updateRequirement(
     String classGroupId,
-    ClassRequirementItem item,
-  ) async {
+    ClassRequirementItem item, {
+    String? revisionReason,
+  }) async {
     _groups = _groups.map((group) {
       if (group.id != classGroupId) return group;
       final replacement = group.hasPublishedVersion
@@ -352,8 +387,9 @@ class FakeClassRequirementsRepository extends ClassRequirementsRepository {
   @override
   Future<ClassRequirementGroup> deleteRequirement(
     String classGroupId,
-    String requirementId,
-  ) async {
+    String requirementId, {
+    String? revisionReason,
+  }) async {
     _groups = _groups.map((group) {
       if (group.id != classGroupId) return group;
       return group.copyWith(
@@ -466,11 +502,206 @@ class FakeClassRequirementsRepository extends ClassRequirementsRepository {
     required String studentId,
     required StudentCustomRequirement requirement,
   }) async {
+    final student = _studentCandidates.firstWhere(
+      (candidate) => candidate.studentId == studentId,
+    );
+    final saved = _copyStudentRequirement(
+      requirement,
+      studentId: student.studentId,
+      studentName: student.studentName,
+      className: student.className,
+      status: StudentSpecificRequirementStatus.draft,
+      creatorOwned: true,
+    );
+    _studentSpecificRequirements = [..._studentSpecificRequirements, saved];
     _updateStudent(studentId, (student) {
       return student.copyWith(
-        customRequirements: [...student.customRequirements, requirement],
+        customRequirements: [...student.customRequirements, saved],
       );
     });
+  }
+
+  @override
+  Future<void> loadStudentSpecificRequirements() async {}
+
+  @override
+  Future<StudentCustomRequirement> updateStudentRequirement(
+    StudentCustomRequirement requirement,
+  ) async {
+    final updated = _copyStudentRequirement(
+      requirement,
+      status: StudentSpecificRequirementStatus.draft,
+      creatorOwned: true,
+    );
+    _replaceStudentRequirement(updated);
+    return updated;
+  }
+
+  @override
+  Future<void> deleteStudentRequirement(String requirementId) async {
+    _studentSpecificRequirements = _studentSpecificRequirements
+        .where((item) => item.id != requirementId)
+        .toList();
+    notifyListeners();
+  }
+
+  @override
+  Future<List<FeeApprover>> getStudentRequirementApprovers() async => const [
+    FeeApprover(id: 99, name: 'Test Headmaster', role: 'Headmaster'),
+  ];
+
+  @override
+  Future<StudentCustomRequirement> submitStudentRequirement(
+    String requirementId,
+    int approverId, {
+    String note = '',
+  }) async {
+    return _setStudentRequirementWorkflow(
+      requirementId,
+      StudentSpecificRequirementStatus.pendingApproval,
+      assignedApproverId: approverId,
+      assignedApproverName: 'Test Headmaster',
+      requesterNote: note,
+    );
+  }
+
+  @override
+  Future<StudentCustomRequirement> withdrawStudentRequirement(
+    String requirementId,
+  ) async => _setStudentRequirementWorkflow(
+    requirementId,
+    StudentSpecificRequirementStatus.draft,
+  );
+
+  @override
+  Future<StudentCustomRequirement> approveStudentRequirement(
+    String requirementId,
+  ) async => _setStudentRequirementWorkflow(
+    requirementId,
+    StudentSpecificRequirementStatus.active,
+  );
+
+  @override
+  Future<StudentCustomRequirement> rejectStudentRequirement(
+    String requirementId,
+    String reason,
+  ) async => _setStudentRequirementWorkflow(
+    requirementId,
+    StudentSpecificRequirementStatus.changesRequested,
+    rejectionReason: reason,
+  );
+
+  @override
+  Future<StudentCustomRequirement> recordStudentRequirementReceived(
+    String requirementId,
+    int receivedQuantity,
+  ) async {
+    final current = _studentSpecificRequirements.firstWhere(
+      (item) => item.id == requirementId,
+    );
+    final updated = StudentCustomRequirement(
+      id: current.id,
+      name: current.name,
+      quantity: current.quantity,
+      unit: current.unit,
+      dueDate: current.dueDate,
+      notes: current.notes,
+      studentId: current.studentId,
+      studentName: current.studentName,
+      className: current.className,
+      receivedQuantity: receivedQuantity,
+      estimatedUnitPrice: current.estimatedUnitPrice,
+      status: current.status,
+      creatorOwned: current.creatorOwned,
+      canApprove: current.canApprove,
+      canWithdraw: current.canWithdraw,
+      assignedApproverId: current.assignedApproverId,
+      assignedApproverName: current.assignedApproverName,
+      requesterName: current.requesterName,
+      requesterNote: current.requesterNote,
+      rejectionReason: current.rejectionReason,
+      createdAt: current.createdAt,
+      updatedAt: DateTime.now(),
+      submittedAt: current.submittedAt,
+      approvedAt: current.approvedAt,
+    );
+    _replaceStudentRequirement(updated);
+    return updated;
+  }
+
+  StudentCustomRequirement _setStudentRequirementWorkflow(
+    String requirementId,
+    StudentSpecificRequirementStatus status, {
+    int? assignedApproverId,
+    String assignedApproverName = '',
+    String requesterNote = '',
+    String rejectionReason = '',
+  }) {
+    final current = _studentSpecificRequirements.firstWhere(
+      (item) => item.id == requirementId,
+    );
+    final updated = _copyStudentRequirement(
+      current,
+      status: status,
+      assignedApproverId: assignedApproverId,
+      assignedApproverName: assignedApproverName,
+      requesterNote: requesterNote,
+      rejectionReason: rejectionReason,
+      creatorOwned: true,
+      canApprove: status == StudentSpecificRequirementStatus.pendingApproval,
+      canWithdraw: status == StudentSpecificRequirementStatus.pendingApproval,
+    );
+    _replaceStudentRequirement(updated);
+    return updated;
+  }
+
+  void _replaceStudentRequirement(StudentCustomRequirement replacement) {
+    _studentSpecificRequirements = _studentSpecificRequirements
+        .map((item) => item.id == replacement.id ? replacement : item)
+        .toList();
+    notifyListeners();
+  }
+
+  StudentCustomRequirement _copyStudentRequirement(
+    StudentCustomRequirement source, {
+    String? studentId,
+    String? studentName,
+    String? className,
+    StudentSpecificRequirementStatus? status,
+    bool? creatorOwned,
+    bool? canApprove,
+    bool? canWithdraw,
+    int? assignedApproverId,
+    String? assignedApproverName,
+    String? requesterNote,
+    String? rejectionReason,
+  }) {
+    return StudentCustomRequirement(
+      id: source.id,
+      name: source.name,
+      quantity: source.quantity,
+      unit: source.unit,
+      dueDate: source.dueDate,
+      notes: source.notes,
+      studentId: studentId ?? source.studentId,
+      studentName: studentName ?? source.studentName,
+      className: className ?? source.className,
+      receivedQuantity: source.receivedQuantity,
+      estimatedUnitPrice: source.estimatedUnitPrice,
+      status: status ?? source.status,
+      creatorOwned: creatorOwned ?? source.creatorOwned,
+      canApprove: canApprove ?? source.canApprove,
+      canWithdraw: canWithdraw ?? source.canWithdraw,
+      assignedApproverId: assignedApproverId ?? source.assignedApproverId,
+      assignedApproverName: assignedApproverName ?? source.assignedApproverName,
+      requesterName: source.requesterName,
+      requesterNote: requesterNote ?? source.requesterNote,
+      rejectionReason: rejectionReason ?? source.rejectionReason,
+      createdAt: source.createdAt,
+      updatedAt: source.updatedAt,
+      submittedAt: source.submittedAt,
+      approvedAt: source.approvedAt,
+    );
   }
 
   void _updateStudent(
@@ -530,6 +761,61 @@ class FakeClassRequirementsRepository extends ClassRequirementsRepository {
       0,
       (sum, group) => sum + group.draftChangeCount,
     );
+    notifyListeners();
+    return _groups.firstWhere((group) => group.id == classGroupId);
+  }
+
+  @override
+  Future<List<FeeApprover>> getApprovers() async => const [
+    FeeApprover(id: 99, name: 'Test Headmaster', role: 'Headmaster'),
+  ];
+
+  @override
+  Future<ClassRequirementGroup> submitClass(
+    String classGroupId,
+    int approverId, {
+    String note = '',
+  }) async => _setWorkflow(
+    classGroupId,
+    RequirementStatus.pendingApproval,
+    approverId: approverId,
+    approverName: 'Test Headmaster',
+  );
+
+  @override
+  Future<ClassRequirementGroup> withdrawClass(String classGroupId) async =>
+      _setWorkflow(classGroupId, RequirementStatus.draft);
+
+  @override
+  Future<ClassRequirementGroup> approveClass(String classGroupId) async =>
+      _setWorkflow(classGroupId, RequirementStatus.approved);
+
+  @override
+  Future<ClassRequirementGroup> rejectClass(
+    String classGroupId,
+    String reason,
+  ) async => _setWorkflow(
+    classGroupId,
+    RequirementStatus.draft,
+    rejectionReason: reason,
+  );
+
+  ClassRequirementGroup _setWorkflow(
+    String classGroupId,
+    RequirementStatus status, {
+    int approverId = 0,
+    String approverName = '',
+    String rejectionReason = '',
+  }) {
+    _groups = _groups.map((group) {
+      if (group.id != classGroupId) return group;
+      return group.copyWith(
+        status: status,
+        assignedApproverId: approverId,
+        assignedApproverName: approverName,
+        rejectionReason: rejectionReason,
+      );
+    }).toList();
     notifyListeners();
     return _groups.firstWhere((group) => group.id == classGroupId);
   }

@@ -52,33 +52,43 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
 
   List<_GradeLevel> get _visibleLevels {
     final query = _search.trim().toLowerCase();
-    return _levels
-        .where((level) => _phase == _PhaseFilter.all || level.phase == _phase)
-        .map((level) {
-          final streams = level.streams.where((stream) {
-            final matchesSearch =
-                query.isEmpty ||
-                stream.name.toLowerCase().contains(query) ||
-                stream.teacherName.toLowerCase().contains(query) ||
-                level.name.toLowerCase().contains(query);
-            final matchesStatus = switch (_status) {
-              _StreamStatusFilter.all => true,
-              _StreamStatusFilter.active => stream.active,
-              _StreamStatusFilter.inactive => !stream.active,
-              _StreamStatusFilter.noTeacher => stream.teacherName.isEmpty,
-            };
-            return matchesSearch && matchesStatus;
-          }).toList();
-          return _GradeLevel(
-            id: level.id,
-            gradeLevelId: level.gradeLevelId,
-            name: level.name,
-            phase: level.phase,
-            streams: streams,
-          );
-        })
-        .where((level) => level.streams.isNotEmpty)
-        .toList();
+    final visible = <_GradeLevel>[];
+    for (final level in _levels) {
+      if (_phase != _PhaseFilter.all && level.phase != _phase) continue;
+      final gradeMatches =
+          query.isEmpty || level.name.toLowerCase().contains(query);
+      final streams = level.streams.where((stream) {
+        final matchesSearch =
+            gradeMatches ||
+            stream.name.toLowerCase().contains(query) ||
+            stream.teacherName.toLowerCase().contains(query);
+        final matchesStatus = switch (_status) {
+          _StreamStatusFilter.all => true,
+          _StreamStatusFilter.active => stream.active,
+          _StreamStatusFilter.inactive => !stream.active,
+          _StreamStatusFilter.noTeacher => stream.teacherName.isEmpty,
+        };
+        return matchesSearch && matchesStatus;
+      }).toList();
+      final showActiveGradeWithoutStreams =
+          level.streams.isEmpty &&
+          gradeMatches &&
+          (_status == _StreamStatusFilter.all ||
+              _status == _StreamStatusFilter.active);
+      if (streams.isEmpty && !showActiveGradeWithoutStreams) continue;
+      visible.add(
+        _GradeLevel(
+          id: level.id,
+          gradeLevelId: level.gradeLevelId,
+          name: level.name,
+          phase: level.phase,
+          custom: level.custom,
+          displayOrder: level.displayOrder,
+          streams: streams,
+        ),
+      );
+    }
+    return visible;
   }
 
   @override
@@ -102,8 +112,17 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
         liveLevels: results[1],
       );
       if (!mounted) return;
+      final orderedLevels =
+          levels
+              .where((level) => !_isSeniorSecondaryGrade(level.name))
+              .map(_GradeLevel.fromApi)
+              .toList()
+            ..sort((a, b) {
+              if (a.custom != b.custom) return a.custom ? -1 : 1;
+              return a.displayOrder.compareTo(b.displayOrder);
+            });
       setState(() {
-        _levels = levels.map(_GradeLevel.fromApi).toList();
+        _levels = orderedLevels;
         _loading = false;
       });
     } catch (error) {
@@ -115,7 +134,7 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
     }
   }
 
-  Future<void> _openClassConfiguration() async {
+  Future<void> _openClassConfiguration({bool addCustomClass = false}) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => Scaffold(
@@ -125,11 +144,26 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
             accessToken: widget.accessToken,
             onRefreshAccessToken: widget.onRefreshAccessToken,
             repository: _repository,
+            startWithAddCustomClass: addCustomClass,
           ),
         ),
       ),
     );
     await _loadGradeStreams();
+  }
+
+  Future<void> _showAddClassOrSectionDialog() async {
+    final choice = await showDialog<_AddClassOrSectionChoice>(
+      context: context,
+      builder: (context) => const _AddClassOrSectionDialog(),
+    );
+    if (!mounted || choice == null) return;
+    switch (choice) {
+      case _AddClassOrSectionChoice.classLevel:
+        await _openClassConfiguration(addCustomClass: true);
+      case _AddClassOrSectionChoice.section:
+        await _showAddStreamDialog();
+    }
   }
 
   List<ClassGradeLevel> _mergeLiveStreamMetrics({
@@ -165,6 +199,11 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
             active: live.active,
           );
         }).toList(),
+        custom: level.custom,
+        studentCount: level.studentCount,
+        displayOrder: level.displayOrder,
+        nextGradeLevelId: level.nextGradeLevelId,
+        nextGradeLevelName: level.nextGradeLevelName,
       );
     }).toList();
   }
@@ -206,7 +245,7 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
       children: [
         _Header(
           totalStreams: totalStreams,
-          onConfigure: _openClassConfiguration,
+          onConfigure: () => _openClassConfiguration(),
         ),
         _PhaseTabs(
           selected: _phase,
@@ -218,7 +257,7 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
           status: _status,
           onSearchChanged: (value) => setState(() => _search = value),
           onStatusChanged: (value) => setState(() => _status = value),
-          onAddStream: _showAddStreamDialog,
+          onAddClassOrSection: _showAddClassOrSectionDialog,
         ),
         Expanded(
           child: _GradeStreamsBody(
@@ -228,6 +267,7 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
             onRetry: _loadGradeStreams,
             onOpenStream: _openStream,
             onDeleteStream: _deleteStream,
+            onAddStream: (level) => _showAddStreamDialog(level.id),
           ),
         ),
       ],
@@ -257,12 +297,29 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
   }
 
   Future<void> _deleteStream(_GradeLevel level, _StreamSummary stream) async {
+    final completeLevel = _levels.firstWhere(
+      (candidate) => candidate.id == level.id,
+      orElse: () => level,
+    );
+    final activeStreamCount = completeLevel.streams
+        .where((candidate) => candidate.active)
+        .length;
+    if (stream.active && activeStreamCount <= 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Every active class must keep at least one section. Make the class inactive before deleting its final section.',
+          ),
+        ),
+      );
+      return;
+    }
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete stream?'),
+        title: const Text('Delete section?'),
         content: Text(
-          'This will delete ${stream.name} from ${level.name}. Continue only if this stream is no longer needed.',
+          'This will delete ${stream.name} from ${level.name}. Continue only if this section is no longer needed.',
         ),
         actions: [
           TextButton(
@@ -288,7 +345,7 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not delete stream. $error')),
+        SnackBar(content: Text('Could not delete section. $error')),
       );
       return;
     }
@@ -301,25 +358,25 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
       for (final phase in _PhaseFilter.values) phase: 0,
     };
     for (final level in _levels) {
-      counts[_PhaseFilter.all] =
-          (counts[_PhaseFilter.all] ?? 0) + level.streams.length;
-      counts[level.phase] = (counts[level.phase] ?? 0) + level.streams.length;
+      counts[_PhaseFilter.all] = (counts[_PhaseFilter.all] ?? 0) + 1;
+      counts[level.phase] = (counts[level.phase] ?? 0) + 1;
     }
     return counts;
   }
 
-  Future<void> _showAddStreamDialog() async {
+  Future<void> _showAddStreamDialog([int? initialGradeInternalId]) async {
     if (_levels.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Add a grade level before creating a stream.'),
-        ),
+        const SnackBar(content: Text('Add a class before creating a section.')),
       );
       return;
     }
     final created = await showDialog<_NewStreamDraft>(
       context: context,
-      builder: (context) => _AddStreamDialog(levels: _levels),
+      builder: (context) => _AddStreamDialog(
+        levels: _levels,
+        initialGradeInternalId: initialGradeInternalId,
+      ),
     );
     if (created == null) return;
 
@@ -339,7 +396,7 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Could not add stream. $error')));
+      ).showSnackBar(SnackBar(content: Text('Could not add section. $error')));
       return;
     }
     if (!mounted) return;
@@ -369,7 +426,7 @@ class _Header extends StatelessWidget {
       child: Row(
         children: [
           Text(
-            'Grade Levels & Streams',
+            'Classes & Sections',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
               color: AppColors.text,
               fontWeight: FontWeight.w900,
@@ -379,11 +436,11 @@ class _Header extends StatelessWidget {
           OutlinedButton.icon(
             onPressed: onConfigure,
             icon: const Icon(Icons.tune_rounded, size: 18),
-            label: const Text('Classes & subjects'),
+            label: const Text('Manage classes & subjects'),
           ),
           const SizedBox(width: 14),
           Text(
-            '$totalStreams streams configured',
+            '$totalStreams sections configured',
             style: const TextStyle(
               color: AppColors.muted,
               fontSize: 12,
@@ -500,14 +557,14 @@ class _Toolbar extends StatelessWidget {
     required this.status,
     required this.onSearchChanged,
     required this.onStatusChanged,
-    required this.onAddStream,
+    required this.onAddClassOrSection,
   });
 
   final String search;
   final _StreamStatusFilter status;
   final ValueChanged<String> onSearchChanged;
   final ValueChanged<_StreamStatusFilter> onStatusChanged;
-  final VoidCallback onAddStream;
+  final VoidCallback onAddClassOrSection;
 
   @override
   Widget build(BuildContext context) {
@@ -526,7 +583,7 @@ class _Toolbar extends StatelessWidget {
               onChanged: onSearchChanged,
               decoration: const InputDecoration(
                 prefixIcon: Icon(Icons.search_rounded, size: 18),
-                hintText: 'Search streams...',
+                hintText: 'Search classes or sections...',
               ),
             ),
           ),
@@ -557,9 +614,10 @@ class _Toolbar extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           FilledButton.icon(
-            onPressed: onAddStream,
+            key: const ValueKey('add-class-or-section'),
+            onPressed: onAddClassOrSection,
             icon: const Icon(Icons.add_rounded, size: 18),
-            label: const Text('Add Stream'),
+            label: const Text('Add class or section'),
           ),
         ],
       ),
@@ -575,6 +633,7 @@ class _GradeStreamsBody extends StatelessWidget {
     required this.onRetry,
     required this.onOpenStream,
     required this.onDeleteStream,
+    required this.onAddStream,
   });
 
   final bool loading;
@@ -583,6 +642,7 @@ class _GradeStreamsBody extends StatelessWidget {
   final VoidCallback onRetry;
   final void Function(_GradeLevel level, _StreamSummary stream) onOpenStream;
   final void Function(_GradeLevel level, _StreamSummary stream) onDeleteStream;
+  final ValueChanged<_GradeLevel> onAddStream;
 
   @override
   Widget build(BuildContext context) {
@@ -598,23 +658,95 @@ class _GradeStreamsBody extends StatelessWidget {
                 return _StreamsErrorCard(message: error!, onRetry: onRetry);
               }
               if (visibleLevels.isEmpty) return const _EmptyStreamsCard();
-              return Column(
-                children: visibleLevels
-                    .map(
-                      (level) => Padding(
-                        padding: const EdgeInsets.only(bottom: 26),
-                        child: _GradeLevelSection(
-                          level: level,
-                          onOpenStream: onOpenStream,
-                          onDeleteStream: onDeleteStream,
-                        ),
-                      ),
-                    )
-                    .toList(),
-              );
+              final children = <Widget>[];
+              var customHeadingAdded = false;
+              var standardHeadingAdded = false;
+              for (final level in visibleLevels) {
+                if (level.custom && !customHeadingAdded) {
+                  children.add(
+                    const _GradeGroupHeading(
+                      title: 'Custom early-years classes',
+                      subtitle:
+                          'School-defined Creche and Nursery classes · ordered before KG1',
+                    ),
+                  );
+                  customHeadingAdded = true;
+                } else if (!level.custom && !standardHeadingAdded) {
+                  children.add(
+                    const _GradeGroupHeading(
+                      title: 'GES grade levels',
+                      subtitle: 'Kindergarten, Basic School and Junior High',
+                    ),
+                  );
+                  standardHeadingAdded = true;
+                }
+                children.add(
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 26),
+                    child: _GradeLevelSection(
+                      level: level,
+                      onOpenStream: onOpenStream,
+                      onDeleteStream: onDeleteStream,
+                      onAddStream: () => onAddStream(level),
+                    ),
+                  ),
+                );
+              }
+              return Column(children: children);
             },
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _GradeGroupHeading extends StatelessWidget {
+  const _GradeGroupHeading({required this.title, required this.subtitle});
+
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: AppColors.greenSoft,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(
+              Icons.auto_awesome_outlined,
+              color: AppColors.green,
+              size: 18,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: AppColors.text,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                Text(
+                  subtitle,
+                  style: const TextStyle(color: AppColors.muted, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -625,11 +757,13 @@ class _GradeLevelSection extends StatelessWidget {
     required this.level,
     required this.onOpenStream,
     required this.onDeleteStream,
+    required this.onAddStream,
   });
 
   final _GradeLevel level;
   final void Function(_GradeLevel level, _StreamSummary stream) onOpenStream;
   final void Function(_GradeLevel level, _StreamSummary stream) onDeleteStream;
+  final VoidCallback onAddStream;
 
   @override
   Widget build(BuildContext context) {
@@ -649,78 +783,132 @@ class _GradeLevelSection extends StatelessWidget {
             const Expanded(child: Divider(height: 1)),
             const SizedBox(width: 8),
             Text(
-              '${level.streams.length} streams',
+              '${level.streams.length} section${level.streams.length == 1 ? '' : 's'}',
               style: const TextStyle(
                 color: AppColors.muted,
                 fontSize: 12,
                 fontWeight: FontWeight.w800,
               ),
             ),
+            const SizedBox(width: 10),
+            OutlinedButton.icon(
+              key: ValueKey('add-section-${level.id}'),
+              onPressed: onAddStream,
+              icon: const Icon(Icons.add_rounded, size: 16),
+              label: const Text('Add section'),
+            ),
           ],
         ),
         const SizedBox(height: 8),
-        Card(
-          margin: EdgeInsets.zero,
-          clipBehavior: Clip.antiAlias,
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: SizedBox(
-              width: 1280,
-              child: DataTable(
-                headingRowHeight: 42,
-                dataRowMinHeight: 58,
-                dataRowMaxHeight: 58,
-                columnSpacing: 28,
-                headingRowColor: WidgetStateProperty.all(
-                  const Color(0xFFF8FAF9),
-                ),
-                headingTextStyle: const TextStyle(
-                  color: AppColors.muted,
-                  fontSize: 11,
-                  letterSpacing: .55,
-                  fontWeight: FontWeight.w900,
-                ),
-                dataTextStyle: const TextStyle(
-                  color: AppColors.text,
-                  fontSize: 13,
-                ),
-                columns: const [
-                  DataColumn(label: Text('STREAM')),
-                  DataColumn(label: Text('CLASS TEACHER')),
-                  DataColumn(label: Text('ENROLLED / CAPACITY')),
-                  DataColumn(label: Text('FILL')),
-                  DataColumn(label: Text('STATUS')),
-                  DataColumn(label: Text('')),
+        if (level.streams.isEmpty)
+          Card(
+            margin: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+              child: Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: level.phase.color.withValues(alpha: .12),
+                      borderRadius: BorderRadius.circular(11),
+                    ),
+                    child: Icon(
+                      Icons.meeting_room_outlined,
+                      color: level.phase.color,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'No sections configured yet',
+                          style: TextStyle(
+                            color: AppColors.text,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        SizedBox(height: 3),
+                        Text(
+                          'This class is active. Add its first section to assign students and teachers.',
+                          style: TextStyle(
+                            color: AppColors.muted,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
-                rows: level.streams
-                    .map(
-                      (stream) => DataRow(
-                        key: ValueKey('stream-row-${stream.id}'),
-                        cells: [
-                          DataCell(
-                            _OpenStreamButton(
-                              stream: stream,
-                              onOpen: () => onOpenStream(level, stream),
+              ),
+            ),
+          )
+        else
+          Card(
+            margin: EdgeInsets.zero,
+            clipBehavior: Clip.antiAlias,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                width: 1280,
+                child: DataTable(
+                  headingRowHeight: 42,
+                  dataRowMinHeight: 58,
+                  dataRowMaxHeight: 58,
+                  columnSpacing: 28,
+                  headingRowColor: WidgetStateProperty.all(
+                    const Color(0xFFF8FAF9),
+                  ),
+                  headingTextStyle: const TextStyle(
+                    color: AppColors.muted,
+                    fontSize: 11,
+                    letterSpacing: .55,
+                    fontWeight: FontWeight.w900,
+                  ),
+                  dataTextStyle: const TextStyle(
+                    color: AppColors.text,
+                    fontSize: 13,
+                  ),
+                  columns: const [
+                    DataColumn(label: Text('SECTION')),
+                    DataColumn(label: Text('CLASS TEACHER')),
+                    DataColumn(label: Text('ENROLLED / CAPACITY')),
+                    DataColumn(label: Text('FILL')),
+                    DataColumn(label: Text('STATUS')),
+                    DataColumn(label: Text('')),
+                  ],
+                  rows: level.streams
+                      .map(
+                        (stream) => DataRow(
+                          key: ValueKey('stream-row-${stream.id}'),
+                          cells: [
+                            DataCell(
+                              _OpenStreamButton(
+                                stream: stream,
+                                onOpen: () => onOpenStream(level, stream),
+                              ),
                             ),
-                          ),
-                          DataCell(_TeacherCell(name: stream.teacherName)),
-                          DataCell(_EnrollmentText(stream: stream)),
-                          DataCell(_FillCell(stream: stream)),
-                          DataCell(_StatusChip(active: stream.active)),
-                          DataCell(
-                            _StreamActionsMenu(
-                              onOpen: () => onOpenStream(level, stream),
-                              onDelete: () => onDeleteStream(level, stream),
+                            DataCell(_TeacherCell(name: stream.teacherName)),
+                            DataCell(_EnrollmentText(stream: stream)),
+                            DataCell(_FillCell(stream: stream)),
+                            DataCell(_StatusChip(active: stream.active)),
+                            DataCell(
+                              _StreamActionsMenu(
+                                onOpen: () => onOpenStream(level, stream),
+                                onDelete: () => onDeleteStream(level, stream),
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
-                    )
-                    .toList(),
+                          ],
+                        ),
+                      )
+                      .toList(),
+                ),
               ),
             ),
           ),
-        ),
       ],
     );
   }
@@ -949,7 +1137,7 @@ class _StreamActionsMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return PopupMenuButton<_StreamAction>(
-      tooltip: 'Stream actions',
+      tooltip: 'Section actions',
       onSelected: (action) {
         switch (action) {
           case _StreamAction.open:
@@ -963,7 +1151,7 @@ class _StreamActionsMenu extends StatelessWidget {
           value: _StreamAction.open,
           child: _MenuActionLabel(
             icon: Icons.chevron_right_rounded,
-            label: 'Open stream',
+            label: 'Open section',
           ),
         ),
         PopupMenuDivider(),
@@ -971,7 +1159,7 @@ class _StreamActionsMenu extends StatelessWidget {
           value: _StreamAction.delete,
           child: _MenuActionLabel(
             icon: Icons.delete_outline_rounded,
-            label: 'Delete stream',
+            label: 'Delete section',
             danger: true,
           ),
         ),
@@ -1024,7 +1212,7 @@ class _EmptyStreamsCard extends StatelessWidget {
               ),
               SizedBox(height: 12),
               Text(
-                'No streams match the selected filters.',
+                'No sections match the selected filters.',
                 style: TextStyle(
                   color: AppColors.muted,
                   fontWeight: FontWeight.w700,
@@ -1117,7 +1305,7 @@ class _StreamsErrorCard extends StatelessWidget {
               ),
               const SizedBox(height: 14),
               const Text(
-                'Unable to load grade levels and streams',
+                'Unable to load classes and sections',
                 style: TextStyle(
                   color: AppColors.text,
                   fontSize: 18,
@@ -1144,10 +1332,163 @@ class _StreamsErrorCard extends StatelessWidget {
   }
 }
 
+class _AddClassOrSectionDialog extends StatelessWidget {
+  const _AddClassOrSectionDialog();
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 18, 14, 12),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Add class or section',
+                          style: TextStyle(
+                            color: AppColors.text,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'What would you like to add?',
+                          style: TextStyle(color: AppColors.muted),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Close',
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                children: [
+                  _AddChoiceCard(
+                    key: const ValueKey('add-new-class-choice'),
+                    icon: Icons.school_outlined,
+                    title: 'Create a new class',
+                    description:
+                        'Add a school-specific class such as Creche or Nursery 1.',
+                    onTap: () => Navigator.of(
+                      context,
+                    ).pop(_AddClassOrSectionChoice.classLevel),
+                  ),
+                  const SizedBox(height: 12),
+                  _AddChoiceCard(
+                    key: const ValueKey('add-section-choice'),
+                    icon: Icons.meeting_room_outlined,
+                    title: 'Add a section to an existing class',
+                    description:
+                        'Choose a class and add another section, such as A or Section 2.',
+                    onTap: () => Navigator.of(
+                      context,
+                    ).pop(_AddClassOrSectionChoice.section),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AddChoiceCard extends StatelessWidget {
+  const _AddChoiceCard({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.description,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String description;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: const BorderSide(color: AppColors.border),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: AppColors.greenSoft,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: AppColors.green),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: AppColors.text,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      description,
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _AddStreamDialog extends StatefulWidget {
-  const _AddStreamDialog({required this.levels});
+  const _AddStreamDialog({required this.levels, this.initialGradeInternalId});
 
   final List<_GradeLevel> levels;
+  final int? initialGradeInternalId;
 
   @override
   State<_AddStreamDialog> createState() => _AddStreamDialogState();
@@ -1155,8 +1496,27 @@ class _AddStreamDialog extends StatefulWidget {
 
 class _AddStreamDialogState extends State<_AddStreamDialog> {
   final _formKey = GlobalKey<FormState>();
-  late int _gradeInternalId = widget.levels.first.id;
+  late int _gradeInternalId;
   final _streamController = TextEditingController();
+
+  bool get _classIsLocked =>
+      widget.initialGradeInternalId != null &&
+      widget.levels.any((level) => level.id == widget.initialGradeInternalId);
+
+  _GradeLevel get _selectedLevel => widget.levels.firstWhere(
+    (level) => level.id == _gradeInternalId,
+    orElse: () => widget.levels.first,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    final requested = widget.initialGradeInternalId;
+    _gradeInternalId =
+        requested != null && widget.levels.any((level) => level.id == requested)
+        ? requested
+        : widget.levels.first.id;
+  }
 
   @override
   void dispose() {
@@ -1185,7 +1545,7 @@ class _AddStreamDialogState extends State<_AddStreamDialog> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Add Stream',
+                            'Add section',
                             style: TextStyle(
                               color: AppColors.text,
                               fontSize: 20,
@@ -1194,7 +1554,7 @@ class _AddStreamDialogState extends State<_AddStreamDialog> {
                           ),
                           SizedBox(height: 4),
                           Text(
-                            'Create a class stream under an existing grade level.',
+                            'Create another section under an existing class.',
                             style: TextStyle(color: AppColors.muted),
                           ),
                         ],
@@ -1212,35 +1572,56 @@ class _AddStreamDialogState extends State<_AddStreamDialog> {
                 padding: const EdgeInsets.all(22),
                 child: Column(
                   children: [
-                    DropdownButtonFormField<int>(
-                      value: _gradeInternalId,
-                      decoration: const InputDecoration(
-                        labelText: 'Grade level',
-                      ),
-                      items: widget.levels
-                          .map(
-                            (level) => DropdownMenuItem(
-                              value: level.id,
-                              child: Text(level.name),
+                    if (_classIsLocked)
+                      InputDecorator(
+                        key: const ValueKey('locked-section-class'),
+                        decoration: const InputDecoration(labelText: 'Class'),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.school_outlined,
+                              size: 18,
+                              color: AppColors.green,
                             ),
-                          )
-                          .toList(),
-                      onChanged: (value) {
-                        if (value != null) {
-                          setState(() => _gradeInternalId = value);
-                        }
-                      },
-                    ),
+                            const SizedBox(width: 10),
+                            Text(
+                              _selectedLevel.name,
+                              style: const TextStyle(
+                                color: AppColors.text,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    else
+                      DropdownButtonFormField<int>(
+                        value: _gradeInternalId,
+                        decoration: const InputDecoration(labelText: 'Class'),
+                        items: widget.levels
+                            .map(
+                              (level) => DropdownMenuItem(
+                                value: level.id,
+                                child: Text(level.name),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value != null) {
+                            setState(() => _gradeInternalId = value);
+                          }
+                        },
+                      ),
                     const SizedBox(height: 14),
                     TextFormField(
                       controller: _streamController,
                       decoration: const InputDecoration(
-                        labelText: 'Stream name',
-                        hintText: 'e.g. Section 1, Stream A',
+                        labelText: 'Section name',
+                        hintText: 'e.g. Section 1 or A',
                       ),
                       validator: (value) {
                         if (value == null || value.trim().isEmpty) {
-                          return 'Enter stream name';
+                          return 'Enter a section name';
                         }
                         return null;
                       },
@@ -1262,7 +1643,7 @@ class _AddStreamDialogState extends State<_AddStreamDialog> {
                     FilledButton.icon(
                       onPressed: _submit,
                       icon: const Icon(Icons.add_rounded, size: 18),
-                      label: const Text('Add Stream'),
+                      label: const Text('Add section'),
                     ),
                   ],
                 ),
@@ -1287,6 +1668,7 @@ class _AddStreamDialogState extends State<_AddStreamDialog> {
 
 enum _PhaseFilter {
   all('All', AppColors.green),
+  earlyYears('Early Years', AppColors.green),
   kindergarten('Kindergarten', AppColors.amber),
   basic('Basic School', AppColors.blue),
   jhs('Junior High', AppColors.purple);
@@ -1310,6 +1692,8 @@ enum _StreamStatusFilter {
 
 enum _StreamAction { open, delete }
 
+enum _AddClassOrSectionChoice { classLevel, section }
+
 enum _CapacityState { ok, warning, full }
 
 class _GradeLevel {
@@ -1318,16 +1702,22 @@ class _GradeLevel {
     required this.gradeLevelId,
     required this.name,
     required this.phase,
+    required this.custom,
+    required this.displayOrder,
     required this.streams,
   });
 
   factory _GradeLevel.fromApi(ClassGradeLevel level) {
-    final phase = _phaseForGradeName(level.name);
+    final phase = level.custom
+        ? _PhaseFilter.earlyYears
+        : _phaseForGradeName(level.name);
     return _GradeLevel(
       id: level.id,
       gradeLevelId: level.gradeLevelId,
       name: level.name,
       phase: phase,
+      custom: level.custom,
+      displayOrder: level.displayOrder,
       streams: level.streams
           .map(
             (stream) => _StreamSummary(
@@ -1349,6 +1739,8 @@ class _GradeLevel {
   final int gradeLevelId;
   final String name;
   final _PhaseFilter phase;
+  final bool custom;
+  final int displayOrder;
   final List<_StreamSummary> streams;
 }
 
@@ -1440,6 +1832,13 @@ _PhaseFilter _phaseForGradeName(String name) {
     return _PhaseFilter.jhs;
   }
   return _PhaseFilter.basic;
+}
+
+bool _isSeniorSecondaryGrade(String value) {
+  final normalized = value.trim().toUpperCase();
+  return normalized.startsWith('SHS') ||
+      normalized.startsWith('SENIOR HIGH') ||
+      normalized.startsWith('SENIOR SECONDARY');
 }
 
 String _initials(String name) {

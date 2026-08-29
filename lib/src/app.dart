@@ -106,69 +106,79 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
         ),
         GoRoute(
           path: '/login',
-          builder: (context, state) => AuthScreen(
-            onForgotUsername: () => _router.go('/recover-username'),
-            onForgotPassword: () => _router.go('/reset-password'),
-            onAuthenticated: (session) {
-              if (session.isBlockedFromLogin) {
-                _sessionStore.clear();
-                _session = null;
-                _router.go('/login');
-                return;
-              }
-              _sessionStore.save(session);
-              setState(() {
-                _session = session;
-                _platformRepository = null;
-                _platformSnapshot = null;
-                _platformSnapshotData = null;
-              });
-              _restartRoleRefreshTimer();
-              _router.go(_routeForSession(session));
-            },
+          builder: (context, state) => _selectable(
+            AuthScreen(
+              onForgotUsername: () => _router.go('/recover-username'),
+              onForgotPassword: () => _router.go('/reset-password'),
+              onAuthenticated: (session) {
+                if (session.isBlockedFromLogin) {
+                  _sessionStore.clear();
+                  _session = null;
+                  _router.go('/login');
+                  return;
+                }
+                _sessionStore.save(session);
+                setState(() {
+                  _session = session;
+                  _platformRepository = null;
+                  _platformSnapshot = null;
+                  _platformSnapshotData = null;
+                });
+                _restartRoleRefreshTimer();
+                _router.go(_routeForSession(session));
+              },
+            ),
           ),
         ),
         GoRoute(
           path: '/activate/:token',
           builder: (context, state) {
             final token = state.pathParameters['token'] ?? '';
-            return AccountActivationScreen(
-              key: ValueKey(token),
-              token: token,
-              onGoToLogin: () => _router.go('/login'),
+            return _selectable(
+              AccountActivationScreen(
+                key: ValueKey(token),
+                token: token,
+                onGoToLogin: () => _router.go('/login'),
+              ),
             );
           },
         ),
         GoRoute(
           path: '/recover-username',
-          builder: (context, state) => AccountRecoveryScreen(
-            kind: AccountRecoveryKind.username,
-            onBackToLogin: () => _router.go('/login'),
+          builder: (context, state) => _selectable(
+            AccountRecoveryScreen(
+              kind: AccountRecoveryKind.username,
+              onBackToLogin: () => _router.go('/login'),
+            ),
           ),
         ),
         GoRoute(
           path: '/reset-password',
-          builder: (context, state) => AccountRecoveryScreen(
-            kind: AccountRecoveryKind.password,
-            onBackToLogin: () => _router.go('/login'),
+          builder: (context, state) => _selectable(
+            AccountRecoveryScreen(
+              kind: AccountRecoveryKind.password,
+              onBackToLogin: () => _router.go('/login'),
+            ),
           ),
         ),
         GoRoute(
           path: '/school-admin',
-          builder: (context, state) => _schoolStaffDashboard(),
+          builder: (context, state) => _selectable(_schoolStaffDashboard()),
         ),
         GoRoute(
           path: '/guardian',
-          builder: (context, state) => _guardianPortal(),
+          builder: (context, state) => _selectable(_guardianPortal()),
         ),
         ShellRoute(
           builder: (context, state, child) {
             final route = _platformRouteFromPath(state.uri.path);
-            return _platformShell(
-              route.page,
-              createSchool: route.createSchool,
-              resumeOnboarding: route.resumeOnboarding,
-              schoolCode: route.schoolCode,
+            return _selectable(
+              _platformShell(
+                route.page,
+                createSchool: route.createSchool,
+                resumeOnboarding: route.resumeOnboarding,
+                schoolCode: route.schoolCode,
+              ),
             );
           },
           routes: [
@@ -256,6 +266,10 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
           path: 'account-managers',
           builder: (context, state) => const SizedBox.shrink(),
         ),
+        GoRoute(
+          path: 'audit-activity',
+          builder: (context, state) => const SizedBox.shrink(),
+        ),
       ],
     );
   }
@@ -320,6 +334,9 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
     }
     if (segments.length >= 2 && segments[1] == 'account-managers') {
       return const _PlatformRouteConfig(page: PlatformPage.accountManagers);
+    }
+    if (segments.length >= 2 && segments[1] == 'audit-activity') {
+      return const _PlatformRouteConfig(page: PlatformPage.auditActivity);
     }
     return const _PlatformRouteConfig(page: PlatformPage.overview);
   }
@@ -531,6 +548,8 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
     });
   }
 
+  Widget _selectable(Widget child) => _SelectableWorkspace(child: child);
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp.router(
@@ -539,6 +558,35 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
       theme: AppTheme.light,
       scaffoldMessengerKey: _scaffoldMessengerKey,
       routerConfig: _router,
+    );
+  }
+}
+
+class _SelectableWorkspace extends StatefulWidget {
+  const _SelectableWorkspace({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_SelectableWorkspace> createState() => _SelectableWorkspaceState();
+}
+
+class _SelectableWorkspaceState extends State<_SelectableWorkspace> {
+  final FocusNode _selectionFocusNode = FocusNode(
+    debugLabel: 'workspace text selection',
+  );
+
+  @override
+  void dispose() {
+    _selectionFocusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      onPointerDown: (_) => _selectionFocusNode.requestFocus(),
+      child: SelectionArea(focusNode: _selectionFocusNode, child: widget.child),
     );
   }
 }

@@ -247,6 +247,7 @@ void main() {
       expect(body['phoneNumber'], '+233241234567');
       expect(body['dateOfBirth'], '1990-06-20');
       expect(body['role'], 'SUPER_ACCOUNT_MANAGER');
+      expect(body['userType'], 'ACCOUNT_MANAGER');
       expect(body['inviteMethod'], 'Email and SMS');
       return http.Response(
         jsonEncode({
@@ -600,6 +601,52 @@ void main() {
     );
   });
 
+  test('contact step preserves every phone number and its type', () async {
+    final client = MockClient((request) async {
+      expect(request.method, 'PUT');
+      expect(request.url.queryParameters['currentStep'], 'CONTACT_INFO');
+      final body = jsonDecode(request.body) as Map<String, dynamic>;
+      expect(body['contactInfo'], {
+        'personalPhoneNumbers': [
+          {'number': '0299000000', 'type': 'office'},
+          {'number': '0244000000', 'type': 'mobile'},
+        ],
+        'workPhoneNumbers': [
+          {'number': '0302000000', 'type': 'office'},
+        ],
+        'emails': ['office@school.test', 'accounts@school.test'],
+        'socialMedia': <dynamic>[],
+      });
+      return http.Response(
+        jsonEncode({
+          'customSchoolId': 'SCH-001',
+          'currentStep': 'DOCUMENTS',
+          'completedSteps': ['CONTACT_INFO'],
+        }),
+        200,
+      );
+    });
+
+    await LivePlatformRepository(
+      accessToken: 'test-token',
+      client: client,
+    ).saveSchoolOnboardingStep(
+      stepIndex: 4,
+      draft: _documentDraft(
+        phoneContacts: const [
+          SchoolPhoneContact(
+            number: '0299000000',
+            type: 'office',
+            isPrimary: true,
+          ),
+          SchoolPhoneContact(number: '0244000000', type: 'mobile'),
+          SchoolPhoneContact(number: '0302000000', type: 'office'),
+        ],
+        email: 'office@school.test, accounts@school.test',
+      ),
+    );
+  });
+
   test('grade levels use the backend registration contract', () async {
     final client = MockClient((request) async {
       expect(request.method, 'PUT');
@@ -607,15 +654,24 @@ void main() {
       expect(jsonDecode(request.body), {
         'gradeLevels': [
           {
+            'gradeLevelId': 100001,
+            'gradeName': 'Nursery 1',
+            'streamsCount': 2,
+            'custom': true,
+            'status': 'ACTIVE',
+          },
+          {
             'gradeLevelId': 5,
             'gradeName': 'Basic 1',
             'streamsCount': 3,
+            'custom': false,
             'status': 'ACTIVE',
           },
           {
             'gradeLevelId': 6,
             'gradeName': 'Basic 2',
             'streamsCount': 0,
+            'custom': false,
             'status': 'INACTIVE',
           },
         ],
@@ -637,8 +693,9 @@ void main() {
     await repository.saveSchoolOnboardingStep(
       stepIndex: 6,
       draft: _documentDraft(
-        gradeStreams: const {'Basic 1': 3},
-        gradeLevelIds: const {'Basic 1': 5, 'Basic 2': 6},
+        gradeStreams: const {'Nursery 1': 2, 'Basic 1': 3},
+        gradeLevelIds: const {'Nursery 1': 100001, 'Basic 1': 5, 'Basic 2': 6},
+        customGradeLevels: const {'Nursery 1'},
       ),
     );
   });
@@ -775,6 +832,7 @@ SchoolOnboardingDraft _documentDraft({
   double? gpsLongitude,
   Map<String, int> gradeStreams = const {},
   Map<String, int> gradeLevelIds = const {},
+  Set<String> customGradeLevels = const {},
   String academicYear = '',
   int? academicYearId,
   String academicTerm = '',
@@ -786,6 +844,8 @@ SchoolOnboardingDraft _documentDraft({
   Map<String, int> eventTypeIds = const {},
   DateTime? eventStartDate,
   DateTime? eventEndDate,
+  List<SchoolPhoneContact> phoneContacts = const [],
+  String email = '',
 }) => SchoolOnboardingDraft(
   customSchoolId: customSchoolId,
   schoolName: 'Test School',
@@ -829,7 +889,8 @@ SchoolOnboardingDraft _documentDraft({
   secondaryPhone: '',
   secondaryPhoneNetwork: '',
   officePhone: '',
-  email: '',
+  phoneContacts: phoneContacts,
+  email: email,
   website: '',
   socialMedia: '',
   socialMediaPlatformId: null,
@@ -840,6 +901,7 @@ SchoolOnboardingDraft _documentDraft({
   levels: const [],
   gradeStreams: gradeStreams,
   gradeLevelIds: gradeLevelIds,
+  customGradeLevels: customGradeLevels,
   academicYear: academicYear,
   academicYearId: academicYearId,
   academicTerm: academicTerm,

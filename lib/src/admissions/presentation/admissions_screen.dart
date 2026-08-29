@@ -1952,10 +1952,16 @@ class _StudentProfileScreen extends StatefulWidget {
 
 class _StudentProfileScreenState extends State<_StudentProfileScreen> {
   late Future<_LiveStudentProfileData> _studentFuture;
+  late final ApiStudentsRepository _studentsRepository;
 
   @override
   void initState() {
     super.initState();
+    _studentsRepository = ApiStudentsRepository(
+      customSchoolId: widget.customSchoolId,
+      accessToken: widget.api.accessToken,
+      onRefreshAccessToken: widget.api.onRefreshAccessToken,
+    );
     _studentFuture = _loadStudent();
   }
 
@@ -1965,11 +1971,6 @@ class _StudentProfileScreenState extends State<_StudentProfileScreen> {
       customStudentId: widget.application.studentId,
     );
     final householdId = student.householdId ?? widget.application.householdId;
-    final studentsRepository = ApiStudentsRepository(
-      customSchoolId: widget.customSchoolId,
-      accessToken: widget.api.accessToken,
-      onRefreshAccessToken: widget.api.onRefreshAccessToken,
-    );
     final results = await Future.wait([
       widget.api.getCurrentTerm(widget.customSchoolId),
       if (householdId != null)
@@ -1986,7 +1987,7 @@ class _StudentProfileScreenState extends State<_StudentProfileScreen> {
         )
       else
         Future.value(const <AdmissionStudent>[]),
-      studentsRepository.getStudent(student.customStudentId),
+      _studentsRepository.getStudent(student.customStudentId),
     ]);
     final term = results[0] as AdmissionTermContext;
     final guardians = results[1] as List<AdmissionGuardian>;
@@ -2040,6 +2041,7 @@ class _StudentProfileScreenState extends State<_StudentProfileScreen> {
               onOpenStudent: (studentId) =>
                   _openHouseholdStudent(data, studentId),
               onOpenHousehold: () => _openStudentHousehold(data),
+              repository: _studentsRepository,
             );
           },
         ),
@@ -9911,28 +9913,32 @@ class _DateField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    Future<void> chooseDate() async {
+      final now = DateTime.now();
+      final current = DateTime.tryParse(controller?.text.trim() ?? '');
+      final selected = await showDatePicker(
+        context: context,
+        initialDate: current ?? now,
+        firstDate: DateTime(1900),
+        lastDate: DateTime(now.year + 20),
+      );
+      if (selected != null) {
+        controller?.text = selected.toIso8601String().split('T').first;
+      }
+    }
+
     return TextField(
       controller: controller,
       enabled: enabled,
-      readOnly: true,
-      onTap: !enabled
-          ? null
-          : () async {
-              final now = DateTime.now();
-              final selected = await showDatePicker(
-                context: context,
-                initialDate: now,
-                firstDate: DateTime(1900),
-                lastDate: DateTime(now.year + 20),
-              );
-              if (selected != null) {
-                controller?.text = selected.toIso8601String().split('T').first;
-              }
-            },
+      keyboardType: TextInputType.datetime,
       decoration: InputDecoration(
         labelText: label,
-        hintText: enabled ? 'Select date' : 'Available when received',
-        suffixIcon: const Icon(Icons.calendar_today_rounded),
+        hintText: enabled ? 'YYYY-MM-DD' : 'Available when received',
+        suffixIcon: IconButton(
+          tooltip: 'Choose $label',
+          onPressed: enabled ? chooseDate : null,
+          icon: const Icon(Icons.calendar_today_rounded),
+        ),
         errorText: errorText,
       ),
     );

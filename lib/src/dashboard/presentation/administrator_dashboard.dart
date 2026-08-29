@@ -5,14 +5,20 @@ import '../data/api_dashboard_repository.dart';
 import '../data/dashboard_repository.dart';
 import '../domain/dashboard_models.dart';
 import '../../admissions/presentation/admissions_screen.dart';
+import '../../approvals/data/approval_api_client.dart';
+import '../../approvals/domain/approval_models.dart';
+import '../../approvals/presentation/approvals_screen.dart';
+import '../../audit/data/audit_api_client.dart';
+import '../../audit/presentation/audit_activity_screen.dart';
 import '../../attendance/data/attendance_api_client.dart';
 import '../../attendance/presentation/attendance_dashboard_screen.dart';
 import '../../assessments/presentation/assessment_dashboard_screen.dart';
 import '../../assessments/presentation/evaluation_management_screen.dart';
 import '../../classes/presentation/grade_streams_screen.dart';
-import '../../classes/presentation/class_subject_configuration_screen.dart';
 import '../../expenses/presentation/expenses_screen.dart';
 import '../../fees/presentation/fee_management_screen.dart';
+import '../../fees/data/fee_api_client.dart';
+import '../../fees/domain/fee_models.dart' hide FeeSummary;
 import '../../incidents/presentation/incidents_screen.dart';
 import '../../settings/presentation/school_settings_screen.dart';
 import '../../term_review/presentation/term_review_screen.dart';
@@ -26,13 +32,16 @@ import '../../staff/presentation/staff_screen.dart';
 import '../../staff_attendance/data/staff_attendance_api_client.dart';
 import '../../staff_attendance/presentation/staff_attendance_screen.dart';
 import '../../students/data/api_students_repository.dart';
+import '../../students/domain/student_models.dart';
 import '../../students/presentation/students_screen.dart';
 import '../../readiness/data/school_readiness_repository.dart';
 import '../../readiness/domain/school_readiness.dart';
-import '../../readiness/presentation/academic_term_setup_screen.dart';
+import '../../notifications/data/school_notification_api_client.dart';
+import '../../notifications/domain/school_notification_models.dart';
 
 enum _SchoolAdminPage {
   dashboard,
+  approvals,
   admissions,
   students,
   attendance,
@@ -48,6 +57,7 @@ enum _SchoolAdminPage {
   incidents,
   calendar,
   termReview,
+  auditActivity,
   settings,
 }
 
@@ -86,22 +96,32 @@ class AdministratorDashboard extends StatefulWidget {
 class _AdministratorDashboardState extends State<AdministratorDashboard> {
   Future<DashboardSnapshot>? _dashboard;
   late Future<SchoolReadiness> _readiness;
-  _SchoolAdminPage? _setupPage;
+  late Future<FeeWorkflowSummary?> _feeWorkflowSummary;
+  late Future<ApprovalInbox?> _approvalInbox;
+  late Future<SchoolNotificationInbox?> _notifications;
   bool _sidebarCollapsed = false;
   _SchoolAdminPage _selectedPage = _SchoolAdminPage.dashboard;
   bool _openStartAdmissionOnNextAdmissions = false;
+  bool _focusStudentSearchOnNextStudents = false;
   bool _openRecordPaymentOnNextFees = false;
+  String? _recordPaymentStudentId;
+  bool _openNewRequisitionOnNextExpenses = false;
   bool _openAddEventOnNextCalendar = false;
   bool _openAddStaffOnNextStaff = false;
+  bool _openFeeStructureOnNextFees = false;
   late String _activeRole;
 
   @override
   void initState() {
     super.initState();
     _activeRole = _initialRole();
+    _dashboard = _loadDashboard();
     _readiness = widget.readinessRepository == null
         ? Future.value(SchoolReadiness.readySchool)
         : widget.readinessRepository!.getReadiness(_schoolId);
+    _feeWorkflowSummary = _loadFeeWorkflowSummary();
+    _approvalInbox = _loadApprovalInbox();
+    _notifications = _loadNotifications();
   }
 
   @override
@@ -111,6 +131,9 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
       _activeRole = _initialRole();
       _selectedPage = _SchoolAdminPage.dashboard;
       _dashboard = _loadDashboard();
+      _feeWorkflowSummary = _loadFeeWorkflowSummary();
+      _approvalInbox = _loadApprovalInbox();
+      _notifications = _loadNotifications();
     }
   }
 
@@ -138,12 +161,34 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
       _activeRole = role;
       _selectedPage = _SchoolAdminPage.dashboard;
       _dashboard = _loadDashboard();
+      _feeWorkflowSummary = _loadFeeWorkflowSummary();
+      _approvalInbox = _loadApprovalInbox();
+      _notifications = _loadNotifications();
     });
   }
 
   void _refresh() {
     setState(() {
       _dashboard = _loadDashboard();
+      _feeWorkflowSummary = _loadFeeWorkflowSummary();
+      _approvalInbox = _loadApprovalInbox();
+      _notifications = _loadNotifications();
+    });
+  }
+
+  void _refreshApprovalInbox() {
+    if (!mounted) return;
+    setState(() {
+      _approvalInbox = _loadApprovalInbox();
+    });
+  }
+
+  void _refreshFeeWorkflowSummary() {
+    if (!mounted) return;
+    setState(() {
+      _feeWorkflowSummary = _loadFeeWorkflowSummary();
+      _approvalInbox = _loadApprovalInbox();
+      _notifications = _loadNotifications();
     });
   }
 
@@ -153,21 +198,92 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
     ).then((value) => value);
   }
 
-  void _refreshReadiness() {
-    setState(() {
-      _setupPage = null;
-      _readiness = widget.readinessRepository == null
-          ? Future.value(SchoolReadiness.readySchool)
-          : widget.readinessRepository!.getReadiness(_schoolId);
-    });
+  Future<FeeWorkflowSummary?> _loadFeeWorkflowSummary() async {
+    if (_schoolId.isEmpty || !_canSeeFinancialNotices(_activeRole)) return null;
+    try {
+      final api = FeeApiClient(
+        accessToken: widget.accessToken,
+        onRefreshAccessToken: widget.onRefreshAccessToken,
+      );
+      final term = await api.getCurrentTerm(_schoolId);
+      if (term.id <= 0) return null;
+      return api.getFeeWorkflowSummary(
+        customSchoolId: _schoolId,
+        academicTermId: term.id,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<ApprovalInbox?> _loadApprovalInbox() async {
+    if (_schoolId.isEmpty || _isTeachingRole(_activeRole)) return null;
+    try {
+      return await ApprovalApiClient(
+        accessToken: widget.accessToken,
+        onRefreshAccessToken: widget.onRefreshAccessToken,
+      ).getInbox(_schoolId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<SchoolNotificationInbox?> _loadNotifications() async {
+    if (_schoolId.isEmpty || !_canSeeFinancialNotices(_activeRole)) return null;
+    try {
+      return await SchoolNotificationApiClient(
+        accessToken: widget.accessToken,
+        onRefreshAccessToken: widget.onRefreshAccessToken,
+      ).getInbox(_schoolId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _refreshNotifications() {
+    if (!mounted) return;
+    setState(() => _notifications = _loadNotifications());
+  }
+
+  void _openNotifications() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _SchoolNotificationsSheet(
+        inbox: _notifications,
+        schoolId: _schoolId,
+        accessToken: widget.accessToken,
+        onRefreshAccessToken: widget.onRefreshAccessToken,
+        onChanged: _refreshNotifications,
+      ),
+    );
   }
 
   void _selectPage(_SchoolAdminPage page) {
     setState(() {
+      _openFeeStructureOnNextFees = false;
+      _focusStudentSearchOnNextStudents = false;
+      _openNewRequisitionOnNextExpenses = false;
       _selectedPage = page;
+      _feeWorkflowSummary = _loadFeeWorkflowSummary();
+      _approvalInbox = _loadApprovalInbox();
+      _notifications = _loadNotifications();
       if (page == _SchoolAdminPage.dashboard) {
         _dashboard = _loadDashboard();
+        _readiness = widget.readinessRepository == null
+            ? Future.value(SchoolReadiness.readySchool)
+            : widget.readinessRepository!.getReadiness(_schoolId);
       }
+    });
+  }
+
+  void _openFeeWorkflow() {
+    setState(() {
+      _openFeeStructureOnNextFees = true;
+      _selectedPage = _SchoolAdminPage.fees;
+      _feeWorkflowSummary = _loadFeeWorkflowSummary();
+      _approvalInbox = _loadApprovalInbox();
     });
   }
 
@@ -178,10 +294,33 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
     });
   }
 
+  void _openFindStudent() {
+    setState(() {
+      _focusStudentSearchOnNextStudents = true;
+      _selectedPage = _SchoolAdminPage.students;
+    });
+  }
+
   void _openRecordPayment() {
     setState(() {
+      _recordPaymentStudentId = null;
       _openRecordPaymentOnNextFees = true;
       _selectedPage = _SchoolAdminPage.fees;
+    });
+  }
+
+  void _openRecordPaymentForStudent(EnrolledStudent student) {
+    setState(() {
+      _recordPaymentStudentId = student.id;
+      _openRecordPaymentOnNextFees = true;
+      _selectedPage = _SchoolAdminPage.fees;
+    });
+  }
+
+  void _openRecordExpense() {
+    setState(() {
+      _openNewRequisitionOnNextExpenses = true;
+      _selectedPage = _SchoolAdminPage.expenses;
     });
   }
 
@@ -207,22 +346,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   Widget build(BuildContext context) {
     return FutureBuilder<SchoolReadiness>(
       future: _readiness,
-      builder: (context, readinessSnapshot) {
-        if (readinessSnapshot.hasError) {
-          return _ReadinessError(onRetry: _refreshReadiness);
-        }
-        if (!readinessSnapshot.hasData) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
-        }
-        final readiness = readinessSnapshot.requireData;
-        if (!readiness.ready) {
-          return _buildReadinessGate(readiness);
-        }
-        _dashboard ??= _loadDashboard();
-        return _buildDashboard();
-      },
+      builder: (context, _) => _buildDashboard(),
     );
   }
 
@@ -230,16 +354,14 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
     return FutureBuilder<DashboardSnapshot>(
       future: _dashboard,
       builder: (context, snapshot) {
-        final teachingRole = _isTeachingRole(_activeRole);
-        if (snapshot.hasError && !teachingRole) {
-          return _ErrorView(onRetry: _refresh);
-        }
         if (!snapshot.hasData && !snapshot.hasError) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
           );
         }
 
+        final teachingRole = _isTeachingRole(_activeRole);
+        final dashboardUnavailable = snapshot.hasError && !teachingRole;
         final data = snapshot.data ?? _teachingWorkspaceSnapshot();
         return LayoutBuilder(
           builder: (context, constraints) {
@@ -256,6 +378,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                       roles: _availableRoles,
                       onRoleChanged: _changeWorkspace,
                       selectedPage: _selectedPage,
+                      approvalInbox: _approvalInbox,
                       onSelectPage: _selectPage,
                       onLogout: widget.onLogout,
                       onCollapse: () => setState(
@@ -265,12 +388,20 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                     Expanded(
                       child: _DashboardBody(
                         data: data,
+                        feeWorkflowSummary: _feeWorkflowSummary,
+                        approvalInbox: _approvalInbox,
+                        notifications: _notifications,
+                        onOpenNotifications: _openNotifications,
+                        dashboardUnavailable: dashboardUnavailable,
                         onRefresh: _refresh,
                         userDisplayName: widget.userDisplayName,
                         role: _activeRole,
                         userId: widget.userId,
                         selectedPage: _selectedPage,
                         onSelectPage: _selectPage,
+                        onOpenFeeWorkflow: _openFeeWorkflow,
+                        onFeeWorkflowChanged: _refreshFeeWorkflowSummary,
+                        openFeeStructureOnNextFees: _openFeeStructureOnNextFees,
                         schoolId: _schoolId,
                         schoolName: widget.schoolName,
                         accessToken: widget.accessToken,
@@ -282,9 +413,11 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                         ),
                         openRecordPaymentOnNextFees:
                             _openRecordPaymentOnNextFees,
-                        onRecordPaymentRequestConsumed: () => setState(
-                          () => _openRecordPaymentOnNextFees = false,
-                        ),
+                        recordPaymentStudentId: _recordPaymentStudentId,
+                        onRecordPaymentRequestConsumed: () => setState(() {
+                          _openRecordPaymentOnNextFees = false;
+                          _recordPaymentStudentId = null;
+                        }),
                         openAddEventOnNextCalendar: _openAddEventOnNextCalendar,
                         onAddEventRequestConsumed: () =>
                             setState(() => _openAddEventOnNextCalendar = false),
@@ -292,7 +425,17 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                         onAddStaffRequestConsumed: () =>
                             setState(() => _openAddStaffOnNextStaff = false),
                         onStartAdmission: _openStartAdmission,
+                        focusStudentSearchOnNextStudents:
+                            _focusStudentSearchOnNextStudents,
+                        onFindStudent: _openFindStudent,
                         onRecordPayment: _openRecordPayment,
+                        onCollectStudentPayment: _openRecordPaymentForStudent,
+                        openNewRequisitionOnNextExpenses:
+                            _openNewRequisitionOnNextExpenses,
+                        onNewRequisitionRequestConsumed: () => setState(
+                          () => _openNewRequisitionOnNextExpenses = false,
+                        ),
+                        onRecordExpense: _openRecordExpense,
                         onAddCalendarEvent: _openAddCalendarEvent,
                         onAddStaff: _openAddStaff,
                       ),
@@ -303,6 +446,9 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
             }
 
             return Scaffold(
+              onDrawerChanged: (opened) {
+                if (opened) _refreshApprovalInbox();
+              },
               drawer: Drawer(
                 child: _Sidebar(
                   data: data,
@@ -312,6 +458,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                   roles: _availableRoles,
                   onRoleChanged: _changeWorkspace,
                   selectedPage: _selectedPage,
+                  approvalInbox: _approvalInbox,
                   onSelectPage: (page) {
                     _selectPage(page);
                     Navigator.pop(context);
@@ -321,6 +468,11 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
               ),
               body: _DashboardBody(
                 data: data,
+                feeWorkflowSummary: _feeWorkflowSummary,
+                approvalInbox: _approvalInbox,
+                notifications: _notifications,
+                onOpenNotifications: _openNotifications,
+                dashboardUnavailable: dashboardUnavailable,
                 onRefresh: _refresh,
                 userDisplayName: widget.userDisplayName,
                 role: _activeRole,
@@ -328,6 +480,9 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                 showMenu: true,
                 selectedPage: _selectedPage,
                 onSelectPage: _selectPage,
+                onOpenFeeWorkflow: _openFeeWorkflow,
+                onFeeWorkflowChanged: _refreshFeeWorkflowSummary,
+                openFeeStructureOnNextFees: _openFeeStructureOnNextFees,
                 schoolId: _schoolId,
                 schoolName: widget.schoolName,
                 accessToken: widget.accessToken,
@@ -337,8 +492,11 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                 onStartAdmissionRequestConsumed: () =>
                     setState(() => _openStartAdmissionOnNextAdmissions = false),
                 openRecordPaymentOnNextFees: _openRecordPaymentOnNextFees,
-                onRecordPaymentRequestConsumed: () =>
-                    setState(() => _openRecordPaymentOnNextFees = false),
+                recordPaymentStudentId: _recordPaymentStudentId,
+                onRecordPaymentRequestConsumed: () => setState(() {
+                  _openRecordPaymentOnNextFees = false;
+                  _recordPaymentStudentId = null;
+                }),
                 openAddEventOnNextCalendar: _openAddEventOnNextCalendar,
                 onAddEventRequestConsumed: () =>
                     setState(() => _openAddEventOnNextCalendar = false),
@@ -346,7 +504,16 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                 onAddStaffRequestConsumed: () =>
                     setState(() => _openAddStaffOnNextStaff = false),
                 onStartAdmission: _openStartAdmission,
+                focusStudentSearchOnNextStudents:
+                    _focusStudentSearchOnNextStudents,
+                onFindStudent: _openFindStudent,
                 onRecordPayment: _openRecordPayment,
+                onCollectStudentPayment: _openRecordPaymentForStudent,
+                openNewRequisitionOnNextExpenses:
+                    _openNewRequisitionOnNextExpenses,
+                onNewRequisitionRequestConsumed: () =>
+                    setState(() => _openNewRequisitionOnNextExpenses = false),
+                onRecordExpense: _openRecordExpense,
                 onAddCalendarEvent: _openAddCalendarEvent,
                 onAddStaff: _openAddStaff,
               ),
@@ -381,300 +548,16 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
       fees: const FeeSummary(collected: 0, outstanding: 0, waivers: 0),
     );
   }
-
-  Widget _buildReadinessGate(SchoolReadiness readiness) {
-    if (_setupPage == _SchoolAdminPage.classes) {
-      return _ReadinessSetupShell(
-        title: 'Class structure setup',
-        onBack: _refreshReadiness,
-        child: ClassSubjectConfigurationScreen(
-          customSchoolId: _schoolId,
-          accessToken: widget.accessToken,
-          onRefreshAccessToken: widget.onRefreshAccessToken,
-        ),
-      );
-    }
-    if (_setupPage == _SchoolAdminPage.fees) {
-      return _ReadinessSetupShell(
-        title: 'Tuition fee setup',
-        onBack: _refreshReadiness,
-        child: FeeManagementScreen(
-          customSchoolId: _schoolId,
-          schoolName: widget.schoolName ?? _schoolId,
-          accessToken: widget.accessToken,
-          onRefreshAccessToken: widget.onRefreshAccessToken,
-          role: _activeRole,
-          userId: widget.userId,
-        ),
-      );
-    }
-    if (_setupPage == _SchoolAdminPage.settings) {
-      return _ReadinessSetupShell(
-        title: 'School settings',
-        onBack: _refreshReadiness,
-        child: AcademicTermSetupScreen(
-          customSchoolId: _schoolId,
-          accessToken: widget.accessToken,
-          onRefreshAccessToken: widget.onRefreshAccessToken,
-          onSaved: _refreshReadiness,
-        ),
-      );
-    }
-    return _SchoolReadinessGate(
-      readiness: readiness,
-      schoolName: widget.schoolName ?? _schoolId,
-      onLogout: widget.onLogout,
-      onRefresh: _refreshReadiness,
-      onOpenItem: (item) {
-        setState(() {
-          _setupPage = switch (item.key) {
-            'CLASS_STRUCTURE' => _SchoolAdminPage.classes,
-            'TUITION_FEES' => _SchoolAdminPage.fees,
-            _ => _SchoolAdminPage.settings,
-          };
-        });
-      },
-    );
-  }
-}
-
-class _SchoolReadinessGate extends StatelessWidget {
-  const _SchoolReadinessGate({
-    required this.readiness,
-    required this.schoolName,
-    required this.onRefresh,
-    required this.onOpenItem,
-    this.onLogout,
-  });
-
-  final SchoolReadiness readiness;
-  final String schoolName;
-  final VoidCallback onRefresh;
-  final ValueChanged<SchoolReadinessItem> onOpenItem;
-  final VoidCallback? onLogout;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: Text(schoolName),
-        actions: [
-          TextButton.icon(
-            onPressed: onRefresh,
-            icon: const Icon(Icons.refresh_rounded),
-            label: const Text('Recheck setup'),
-          ),
-          if (onLogout != null)
-            TextButton.icon(
-              onPressed: onLogout,
-              icon: const Icon(Icons.logout_rounded),
-              label: const Text('Logout'),
-            ),
-          const SizedBox(width: 12),
-        ],
-      ),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 860),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Icon(
-                  Icons.fact_check_outlined,
-                  size: 46,
-                  color: AppColors.green,
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  'Finish setting up your school',
-                  style: TextStyle(
-                    color: AppColors.text,
-                    fontSize: 30,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Completed work is preserved. Finish only the items marked incomplete to unlock daily school operations.',
-                  style: TextStyle(color: AppColors.muted, fontSize: 16),
-                ),
-                const SizedBox(height: 24),
-                ...readiness.items.map(
-                  (item) => Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: _ReadinessItemCard(
-                      item: item,
-                      current: item.key == readiness.currentBlockingStep,
-                      onOpen: item.complete || item.blocked
-                          ? null
-                          : () => onOpenItem(item),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ReadinessItemCard extends StatelessWidget {
-  const _ReadinessItemCard({
-    required this.item,
-    required this.current,
-    this.onOpen,
-  });
-
-  final SchoolReadinessItem item;
-  final bool current;
-  final VoidCallback? onOpen;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = item.complete
-        ? AppColors.green
-        : item.blocked
-        ? AppColors.muted
-        : AppColors.amber;
-    return Card(
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(
-          color: current ? AppColors.amber : AppColors.border,
-          width: current ? 1.5 : 1,
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Row(
-          children: [
-            CircleAvatar(
-              backgroundColor: color.withValues(alpha: 0.12),
-              foregroundColor: color,
-              child: Icon(
-                item.complete
-                    ? Icons.check_rounded
-                    : item.blocked
-                    ? Icons.lock_outline_rounded
-                    : Icons.priority_high_rounded,
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.label,
-                    style: const TextStyle(
-                      color: AppColors.text,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    item.detail,
-                    style: const TextStyle(color: AppColors.muted),
-                  ),
-                  if (item.missingGradeLevels.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      'Missing: ${item.missingGradeLevels.join(', ')}',
-                      style: const TextStyle(
-                        color: AppColors.red,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            if (onOpen != null)
-              FilledButton(onPressed: onOpen, child: const Text('Set up'))
-            else
-              Text(
-                item.complete ? 'Completed' : 'Blocked',
-                style: TextStyle(color: color, fontWeight: FontWeight.w800),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ReadinessSetupShell extends StatelessWidget {
-  const _ReadinessSetupShell({
-    required this.title,
-    required this.onBack,
-    required this.child,
-  });
-
-  final String title;
-  final VoidCallback onBack;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        leading: const SizedBox.shrink(),
-        leadingWidth: 0,
-        title: Text(title),
-        actions: [
-          FilledButton.icon(
-            onPressed: onBack,
-            icon: const Icon(Icons.fact_check_outlined),
-            label: const Text('Save complete — recheck'),
-          ),
-          const SizedBox(width: 16),
-        ],
-      ),
-      body: child,
-    );
-  }
-}
-
-class _ReadinessError extends StatelessWidget {
-  const _ReadinessError({required this.onRetry});
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.cloud_off_rounded, size: 44, color: AppColors.red),
-            const SizedBox(height: 12),
-            const Text(
-              'School readiness could not be verified.',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: onRetry,
-              icon: const Icon(Icons.refresh_rounded),
-              label: const Text('Try again'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 class _DashboardBody extends StatelessWidget {
   const _DashboardBody({
     required this.data,
+    required this.feeWorkflowSummary,
+    required this.approvalInbox,
+    required this.notifications,
+    required this.onOpenNotifications,
+    required this.dashboardUnavailable,
     required this.onRefresh,
     this.userDisplayName,
     this.role,
@@ -682,6 +565,9 @@ class _DashboardBody extends StatelessWidget {
     this.showMenu = false,
     required this.selectedPage,
     required this.onSelectPage,
+    required this.onOpenFeeWorkflow,
+    required this.onFeeWorkflowChanged,
+    required this.openFeeStructureOnNextFees,
     required this.schoolId,
     this.schoolName,
     this.accessToken,
@@ -689,18 +575,30 @@ class _DashboardBody extends StatelessWidget {
     required this.openStartAdmissionOnNextAdmissions,
     required this.onStartAdmissionRequestConsumed,
     required this.openRecordPaymentOnNextFees,
+    this.recordPaymentStudentId,
     required this.onRecordPaymentRequestConsumed,
     required this.openAddEventOnNextCalendar,
     required this.onAddEventRequestConsumed,
     required this.openAddStaffOnNextStaff,
     required this.onAddStaffRequestConsumed,
     required this.onStartAdmission,
+    required this.focusStudentSearchOnNextStudents,
+    required this.onFindStudent,
     required this.onRecordPayment,
+    required this.onCollectStudentPayment,
+    required this.openNewRequisitionOnNextExpenses,
+    required this.onNewRequisitionRequestConsumed,
+    required this.onRecordExpense,
     required this.onAddCalendarEvent,
     required this.onAddStaff,
   });
 
   final DashboardSnapshot data;
+  final Future<FeeWorkflowSummary?> feeWorkflowSummary;
+  final Future<ApprovalInbox?> approvalInbox;
+  final Future<SchoolNotificationInbox?> notifications;
+  final VoidCallback onOpenNotifications;
+  final bool dashboardUnavailable;
   final VoidCallback onRefresh;
   final String? userDisplayName;
   final String? role;
@@ -708,6 +606,9 @@ class _DashboardBody extends StatelessWidget {
   final bool showMenu;
   final _SchoolAdminPage selectedPage;
   final ValueChanged<_SchoolAdminPage> onSelectPage;
+  final VoidCallback onOpenFeeWorkflow;
+  final VoidCallback onFeeWorkflowChanged;
+  final bool openFeeStructureOnNextFees;
   final String schoolId;
   final String? schoolName;
   final String? accessToken;
@@ -715,27 +616,60 @@ class _DashboardBody extends StatelessWidget {
   final bool openStartAdmissionOnNextAdmissions;
   final VoidCallback onStartAdmissionRequestConsumed;
   final bool openRecordPaymentOnNextFees;
+  final String? recordPaymentStudentId;
   final VoidCallback onRecordPaymentRequestConsumed;
   final bool openAddEventOnNextCalendar;
   final VoidCallback onAddEventRequestConsumed;
   final bool openAddStaffOnNextStaff;
   final VoidCallback onAddStaffRequestConsumed;
   final VoidCallback onStartAdmission;
+  final bool focusStudentSearchOnNextStudents;
+  final VoidCallback onFindStudent;
   final VoidCallback onRecordPayment;
+  final ValueChanged<EnrolledStudent> onCollectStudentPayment;
+  final bool openNewRequisitionOnNextExpenses;
+  final VoidCallback onNewRequisitionRequestConsumed;
+  final VoidCallback onRecordExpense;
   final VoidCallback onAddCalendarEvent;
   final VoidCallback onAddStaff;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        _TopBar(
-          data: data,
-          showMenu: showMenu,
-          userDisplayName: userDisplayName,
-        ),
-        Expanded(child: _content(context)),
-      ],
+    return FutureBuilder<FeeWorkflowSummary?>(
+      future: feeWorkflowSummary,
+      builder: (context, snapshot) {
+        final summary = snapshot.data;
+        final showNotice =
+            selectedPage != _SchoolAdminPage.fees &&
+            _canSeeFinancialNotices(role) &&
+            summary != null &&
+            (summary.streamsWithoutActiveFees > 0 ||
+                summary.pendingMyApproval > 0 ||
+                summary.masterPendingMyApproval > 0 ||
+                summary.requiredItemsPendingMyApproval > 0);
+        return Column(
+          children: [
+            _TopBar(
+              data: data,
+              showMenu: showMenu,
+              userDisplayName: userDisplayName,
+              notifications: notifications,
+              onNotifications: onOpenNotifications,
+            ),
+            if (showNotice)
+              _GlobalFinanceWorkflowBanner(
+                summary: summary,
+                onOpen:
+                    summary.pendingMyApproval > 0 ||
+                        summary.masterPendingMyApproval > 0 ||
+                        summary.requiredItemsPendingMyApproval > 0
+                    ? () => onSelectPage(_SchoolAdminPage.approvals)
+                    : onOpenFeeWorkflow,
+              ),
+            Expanded(child: _content(context)),
+          ],
+        );
+      },
     );
   }
 
@@ -747,6 +681,24 @@ class _DashboardBody extends StatelessWidget {
         onRefreshAccessToken: onRefreshAccessToken,
         openStartAdmissionOnLoad: openStartAdmissionOnNextAdmissions,
         onStartAdmissionRequestConsumed: onStartAdmissionRequestConsumed,
+      );
+    }
+
+    if (selectedPage == _SchoolAdminPage.approvals) {
+      return ApprovalsScreen(
+        schoolId: schoolId,
+        repository: ApprovalApiClient(
+          accessToken: accessToken,
+          onRefreshAccessToken: onRefreshAccessToken,
+        ),
+        onInboxChanged: (_) => onFeeWorkflowChanged(),
+        onOpenSource: (ApprovalItem item) {
+          if (item.sourcePage == 'fees') {
+            onSelectPage(_SchoolAdminPage.fees);
+          } else if (item.sourcePage == 'students') {
+            onSelectPage(_SchoolAdminPage.students);
+          }
+        },
       );
     }
 
@@ -762,12 +714,16 @@ class _DashboardBody extends StatelessWidget {
       return StudentsScreen(
         term: data.term,
         academicYear: data.academicYear,
+        focusSearchOnLoad: focusStudentSearchOnNextStudents,
         repository: ApiStudentsRepository(
           customSchoolId: schoolId,
           accessToken: accessToken,
           onRefreshAccessToken: onRefreshAccessToken,
         ),
         onOpenHousehold: () => onSelectPage(_SchoolAdminPage.households),
+        onCollectPayment: _canSeeFinancialNotices(role)
+            ? onCollectStudentPayment
+            : null,
       );
     }
 
@@ -835,6 +791,7 @@ class _DashboardBody extends StatelessWidget {
         openAddStaffOnLoad: openAddStaffOnNextStaff,
         onAddStaffRequestConsumed: onAddStaffRequestConsumed,
         customSchoolId: schoolId,
+        currentUserId: userId,
         accessToken: accessToken,
         onRefreshAccessToken: onRefreshAccessToken,
       );
@@ -851,7 +808,10 @@ class _DashboardBody extends StatelessWidget {
         role: role,
         userId: userId,
         openRecordPaymentOnLoad: openRecordPaymentOnNextFees,
+        recordPaymentStudentId: recordPaymentStudentId,
+        openFeeStructureOnLoad: openFeeStructureOnNextFees,
         onRecordPaymentRequestConsumed: onRecordPaymentRequestConsumed,
+        onWorkflowChanged: onFeeWorkflowChanged,
       );
     }
 
@@ -864,6 +824,8 @@ class _DashboardBody extends StatelessWidget {
             ? userDisplayName!.trim()
             : data.administratorName,
         role: role,
+        openNewRequisitionOnLoad: openNewRequisitionOnNextExpenses,
+        onNewRequisitionRequestConsumed: onNewRequisitionRequestConsumed,
       );
     }
 
@@ -962,6 +924,15 @@ class _DashboardBody extends StatelessWidget {
       );
     }
 
+    if (selectedPage == _SchoolAdminPage.auditActivity) {
+      return AuditActivityScreen(
+        repository: AuditApiClient(
+          accessToken: accessToken,
+          onRefreshAccessToken: onRefreshAccessToken,
+        ),
+      );
+    }
+
     if (_isTeachingRole(role)) {
       return _TeacherWorkspaceLanding(
         displayName: userDisplayName?.trim().isNotEmpty == true
@@ -983,8 +954,27 @@ class _DashboardBody extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _OfflineBanner(lastUpdated: data.lastUpdated),
+                if (dashboardUnavailable) ...[
+                  _DashboardDataUnavailableBanner(onRetry: onRefresh),
+                ],
                 const SizedBox(height: 18),
+                FutureBuilder<ApprovalInbox?>(
+                  future: approvalInbox,
+                  builder: (context, snapshot) => _QuickActionsCard(
+                    role: role,
+                    inbox: snapshot.data,
+                    onFindStudent: onFindStudent,
+                    onRecordPayment: onRecordPayment,
+                    onRecordExpense: onRecordExpense,
+                    onOpenApprovals: () =>
+                        onSelectPage(_SchoolAdminPage.approvals),
+                    onOpenFees: () => onSelectPage(_SchoolAdminPage.fees),
+                    onStartAdmission: onStartAdmission,
+                    onAddStaff: onAddStaff,
+                    onCreateEvent: onAddCalendarEvent,
+                  ),
+                ),
+                const SizedBox(height: 20),
                 _MetricGrid(metrics: data.metrics),
                 const SizedBox(height: 20),
                 _DashboardGrid(
@@ -995,14 +985,6 @@ class _DashboardBody extends StatelessWidget {
                       onSelectPage(_SchoolAdminPage.attendance),
                   onOpenFees: () => onSelectPage(_SchoolAdminPage.fees),
                   onOpenCalendar: () => onSelectPage(_SchoolAdminPage.calendar),
-                  onStartAdmission: onStartAdmission,
-                  onRecordPayment: onRecordPayment,
-                  onCreateEvent: onAddCalendarEvent,
-                  onAddStaffLater: onAddStaff,
-                  onSendAnnouncementLater: () => _showLaterMessage(
-                    context,
-                    'Send announcement will be connected when Communications is ready.',
-                  ),
                 ),
               ],
             ),
@@ -1011,11 +993,111 @@ class _DashboardBody extends StatelessWidget {
       ),
     );
   }
+}
 
-  void _showLaterMessage(BuildContext context, String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+class _DashboardDataUnavailableBanner extends StatelessWidget {
+  const _DashboardDataUnavailableBanner({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const ValueKey('dashboard-data-unavailable-warning'),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF4F7FA),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.info_outline_rounded, color: AppColors.muted),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              'The dashboard summary is temporarily unavailable. You can still use all school features.',
+              style: TextStyle(
+                color: AppColors.text,
+                fontWeight: FontWeight.w700,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          OutlinedButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh_rounded, size: 17),
+            label: const Text('Retry'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _GlobalFinanceWorkflowBanner extends StatelessWidget {
+  const _GlobalFinanceWorkflowBanner({
+    required this.summary,
+    required this.onOpen,
+  });
+
+  final FeeWorkflowSummary summary;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final approvals =
+        summary.pendingMyApproval +
+        summary.masterPendingMyApproval +
+        summary.requiredItemsPendingMyApproval;
+    final details = <String>[
+      if (approvals > 0)
+        '$approvals financial ${approvals == 1 ? 'approval requires' : 'approvals require'} your decision',
+      if (summary.streamsWithoutActiveFees > 0)
+        '${summary.streamsWithoutActiveFees} of ${summary.activeStreams} streams do not have active fees',
+    ];
+    return Material(
+      color: const Color(0xFFFFF8E8),
+      child: InkWell(
+        onTap: onOpen,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 11),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(color: AppColors.amber.withValues(alpha: .35)),
+            ),
+          ),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.account_balance_wallet_outlined,
+                size: 19,
+                color: AppColors.amber,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  details.join(' · '),
+                  style: const TextStyle(
+                    color: AppColors.text,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: onOpen,
+                icon: const Icon(Icons.arrow_forward_rounded, size: 17),
+                label: Text(approvals > 0 ? 'Review fees' : 'Set up fees'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -1024,10 +1106,14 @@ class _TopBar extends StatelessWidget {
     required this.data,
     required this.showMenu,
     this.userDisplayName,
+    required this.notifications,
+    required this.onNotifications,
   });
   final DashboardSnapshot data;
   final bool showMenu;
   final String? userDisplayName;
+  final Future<SchoolNotificationInbox?> notifications;
+  final VoidCallback onNotifications;
 
   @override
   Widget build(BuildContext context) {
@@ -1081,10 +1167,14 @@ class _TopBar extends StatelessWidget {
           const SizedBox(width: 10),
           const _TopIcon(icon: Icons.search_rounded, label: 'Search'),
           const SizedBox(width: 8),
-          const _TopIcon(
-            icon: Icons.notifications_none_rounded,
-            label: 'Notifications',
-            hasBadge: true,
+          FutureBuilder<SchoolNotificationInbox?>(
+            future: notifications,
+            builder: (context, snapshot) => _TopIcon(
+              icon: Icons.notifications_none_rounded,
+              label: 'Notifications',
+              badgeCount: snapshot.data?.unreadCount ?? 0,
+              onTap: onNotifications,
+            ),
           ),
         ],
       ),
@@ -1094,6 +1184,250 @@ class _TopBar extends StatelessWidget {
   String _displayName(DashboardSnapshot data, String? userDisplayName) {
     final name = userDisplayName?.trim() ?? '';
     return name.isEmpty ? data.administratorName : name;
+  }
+}
+
+class _SchoolNotificationsSheet extends StatefulWidget {
+  const _SchoolNotificationsSheet({
+    required this.inbox,
+    required this.schoolId,
+    required this.accessToken,
+    required this.onRefreshAccessToken,
+    required this.onChanged,
+  });
+
+  final Future<SchoolNotificationInbox?> inbox;
+  final String schoolId;
+  final String? accessToken;
+  final Future<String?> Function()? onRefreshAccessToken;
+  final VoidCallback onChanged;
+
+  @override
+  State<_SchoolNotificationsSheet> createState() =>
+      _SchoolNotificationsSheetState();
+}
+
+class _SchoolNotificationsSheetState extends State<_SchoolNotificationsSheet> {
+  late Future<SchoolNotificationInbox?> _inbox = widget.inbox;
+  int? _markingRead;
+
+  Future<void> _markRead(SchoolNotificationItem item) async {
+    if (item.read || _markingRead != null) return;
+    setState(() => _markingRead = item.id);
+    try {
+      await SchoolNotificationApiClient(
+        accessToken: widget.accessToken,
+        onRefreshAccessToken: widget.onRefreshAccessToken,
+      ).markRead(schoolId: widget.schoolId, notificationId: item.id);
+      widget.onChanged();
+      if (mounted) {
+        setState(() {
+          _markingRead = null;
+          _inbox = SchoolNotificationApiClient(
+            accessToken: widget.accessToken,
+            onRefreshAccessToken: widget.onRefreshAccessToken,
+          ).getInbox(widget.schoolId);
+        });
+      }
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _markingRead = null);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final height = MediaQuery.sizeOf(context).height * .72;
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Container(
+        width: 680,
+        height: height,
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 18, 12, 14),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Notifications',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Close',
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: FutureBuilder<SchoolNotificationInbox?>(
+                future: _inbox,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (snapshot.hasError) {
+                    return Center(
+                      child: Text(
+                        snapshot.error.toString(),
+                        style: const TextStyle(color: AppColors.muted),
+                      ),
+                    );
+                  }
+                  final items = snapshot.data?.items ?? const [];
+                  if (items.isEmpty) {
+                    return const Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.notifications_none_rounded,
+                            size: 42,
+                            color: AppColors.muted,
+                          ),
+                          SizedBox(height: 10),
+                          Text(
+                            'No notifications yet',
+                            style: TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+                  return ListView.separated(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: items.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) {
+                      final item = items[index];
+                      return Material(
+                        color: item.read
+                            ? Colors.white
+                            : AppColors.greenSoft.withValues(alpha: .65),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          side: const BorderSide(color: AppColors.border),
+                        ),
+                        child: InkWell(
+                          onTap: () => _markRead(item),
+                          borderRadius: BorderRadius.circular(14),
+                          child: Padding(
+                            padding: const EdgeInsets.all(15),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Container(
+                                  width: 38,
+                                  height: 38,
+                                  decoration: BoxDecoration(
+                                    color: AppColors.amber.withValues(
+                                      alpha: .12,
+                                    ),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: const Icon(
+                                    Icons.account_balance_wallet_outlined,
+                                    size: 20,
+                                    color: AppColors.amber,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              item.title,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w900,
+                                              ),
+                                            ),
+                                          ),
+                                          if (!item.read)
+                                            Container(
+                                              width: 8,
+                                              height: 8,
+                                              decoration: const BoxDecoration(
+                                                color: AppColors.red,
+                                                shape: BoxShape.circle,
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 5),
+                                      Text(
+                                        item.message,
+                                        style: const TextStyle(
+                                          color: AppColors.muted,
+                                          height: 1.35,
+                                        ),
+                                      ),
+                                      if (item.createdAt != null) ...[
+                                        const SizedBox(height: 7),
+                                        Text(
+                                          _notificationTime(item.createdAt!),
+                                          style: const TextStyle(
+                                            color: AppColors.muted,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                                if (_markingRead == item.id) ...[
+                                  const SizedBox(width: 10),
+                                  const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _notificationTime(DateTime value) {
+    final local = value.toLocal();
+    final hour = local.hour == 0
+        ? 12
+        : (local.hour > 12 ? local.hour - 12 : local.hour);
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '${local.day}/${local.month}/${local.year} · $hour:$minute ${local.hour >= 12 ? 'PM' : 'AM'}';
   }
 }
 
@@ -1174,81 +1508,61 @@ class _TopIcon extends StatelessWidget {
   const _TopIcon({
     required this.icon,
     required this.label,
-    this.hasBadge = false,
+    this.badgeCount = 0,
+    this.onTap,
   });
   final IconData icon;
   final String label;
-  final bool hasBadge;
+  final int badgeCount;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     return Semantics(
       label: label,
       button: true,
-      child: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          border: Border.all(color: AppColors.border),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            Icon(icon, size: 20, color: AppColors.text),
-            if (hasBadge)
-              Positioned(
-                right: 8,
-                top: 7,
-                child: Container(
-                  width: 7,
-                  height: 7,
-                  decoration: const BoxDecoration(
-                    color: AppColors.red,
-                    shape: BoxShape.circle,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            border: Border.all(color: AppColors.border),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Icon(icon, size: 20, color: AppColors.text),
+              if (badgeCount > 0)
+                Positioned(
+                  right: 3,
+                  top: 2,
+                  child: Container(
+                    constraints: const BoxConstraints(
+                      minWidth: 17,
+                      minHeight: 17,
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    decoration: BoxDecoration(
+                      color: AppColors.red,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      badgeCount > 99 ? '99+' : '$badgeCount',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
-      ),
-    );
-  }
-}
-
-class _OfflineBanner extends StatelessWidget {
-  const _OfflineBanner({required this.lastUpdated});
-  final DateTime lastUpdated;
-
-  @override
-  Widget build(BuildContext context) {
-    final time = TimeOfDay.fromDateTime(lastUpdated).format(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF7E8),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFF8D99A)),
-      ),
-      child: Row(
-        children: [
-          const Icon(
-            Icons.cloud_done_outlined,
-            size: 19,
-            color: Color(0xFFA96D00),
-          ),
-          const SizedBox(width: 9),
-          Expanded(
-            child: Text(
-              'Views are available offline · Last refreshed today at $time · Changes require internet',
-              style: const TextStyle(
-                color: Color(0xFF855900),
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -1358,22 +1672,12 @@ class _DashboardGrid extends StatelessWidget {
     required this.onOpenAttendance,
     required this.onOpenFees,
     required this.onOpenCalendar,
-    required this.onStartAdmission,
-    required this.onRecordPayment,
-    required this.onCreateEvent,
-    required this.onAddStaffLater,
-    required this.onSendAnnouncementLater,
   });
   final DashboardSnapshot data;
   final VoidCallback onOpenAdmissions;
   final VoidCallback onOpenAttendance;
   final VoidCallback onOpenFees;
   final VoidCallback onOpenCalendar;
-  final VoidCallback onStartAdmission;
-  final VoidCallback onRecordPayment;
-  final VoidCallback onCreateEvent;
-  final VoidCallback onAddStaffLater;
-  final VoidCallback onSendAnnouncementLater;
 
   @override
   Widget build(BuildContext context) {
@@ -1395,14 +1699,6 @@ class _DashboardGrid extends StatelessWidget {
               _AttendanceCard(
                 attendance: data.attendance,
                 onOpenAttendance: onOpenAttendance,
-              ),
-              const SizedBox(height: 16),
-              _QuickActionsCard(
-                onStartAdmission: onStartAdmission,
-                onRecordPayment: onRecordPayment,
-                onAddStaffLater: onAddStaffLater,
-                onSendAnnouncementLater: onSendAnnouncementLater,
-                onCreateEvent: onCreateEvent,
               ),
               const SizedBox(height: 16),
               _EventsCard(events: data.events, onOpenCalendar: onOpenCalendar),
@@ -1441,14 +1737,6 @@ class _DashboardGrid extends StatelessWidget {
                         ),
                       ),
                     ],
-                  ),
-                  const SizedBox(height: 16),
-                  _QuickActionsCard(
-                    onStartAdmission: onStartAdmission,
-                    onRecordPayment: onRecordPayment,
-                    onAddStaffLater: onAddStaffLater,
-                    onSendAnnouncementLater: onSendAnnouncementLater,
-                    onCreateEvent: onCreateEvent,
                   ),
                 ],
               ),
@@ -2048,53 +2336,326 @@ class _EventsCard extends StatelessWidget {
 
 class _QuickActionsCard extends StatelessWidget {
   const _QuickActionsCard({
+    required this.role,
+    required this.inbox,
+    required this.onFindStudent,
+    required this.onRecordExpense,
+    required this.onOpenApprovals,
+    required this.onOpenFees,
     required this.onStartAdmission,
     required this.onRecordPayment,
-    required this.onAddStaffLater,
-    required this.onSendAnnouncementLater,
+    required this.onAddStaff,
     required this.onCreateEvent,
   });
 
+  final String? role;
+  final ApprovalInbox? inbox;
+  final VoidCallback onFindStudent;
+  final VoidCallback onRecordExpense;
+  final VoidCallback onOpenApprovals;
+  final VoidCallback onOpenFees;
   final VoidCallback onStartAdmission;
   final VoidCallback onRecordPayment;
-  final VoidCallback onAddStaffLater;
-  final VoidCallback onSendAnnouncementLater;
+  final VoidCallback onAddStaff;
   final VoidCallback onCreateEvent;
 
   @override
   Widget build(BuildContext context) {
-    final actions = [
-      (Icons.person_add_alt_1_rounded, 'Admit student', onStartAdmission),
-      (Icons.payments_rounded, 'Receive payment', onRecordPayment),
-      (Icons.group_add_rounded, 'Add staff', onAddStaffLater),
-      (Icons.campaign_rounded, 'Send announcement', onSendAnnouncementLater),
-      (Icons.event_rounded, 'Create event', onCreateEvent),
+    final normalizedRole = role?.trim().toUpperCase() ?? '';
+    final financialRole = _canSeeFinancialNotices(normalizedRole);
+    final managesSchool = const {
+      'ADMINISTRATOR',
+      'HEAD_TEACHER',
+      'HEADMASTER',
+    }.contains(normalizedRole);
+    final actions = <_DashboardQuickAction>[
+      _DashboardQuickAction(
+        icon: Icons.person_search_rounded,
+        label: 'Find student',
+        description: 'Search by name, ID or guardian',
+        color: AppColors.green,
+        onTap: onFindStudent,
+      ),
+      if (financialRole)
+        _DashboardQuickAction(
+          icon: Icons.payments_rounded,
+          label: 'Record payment',
+          description: 'Open fee collection',
+          color: AppColors.blue,
+          onTap: onRecordPayment,
+        ),
+      if (financialRole)
+        _DashboardQuickAction(
+          icon: Icons.receipt_long_rounded,
+          label: 'Record expense',
+          description: 'Start an expense requisition',
+          color: AppColors.purple,
+          onTap: onRecordExpense,
+        ),
+      if (financialRole)
+        _DashboardQuickAction(
+          icon: Icons.approval_rounded,
+          label: 'Requests & approvals',
+          description: inbox == null
+              ? 'Open your request inbox'
+              : '${inbox!.pendingMyRequests} requests · ${inbox!.pendingMyApproval} approvals',
+          color: AppColors.amber,
+          badgeCount: inbox?.pendingTotal ?? 0,
+          onTap: onOpenApprovals,
+        ),
     ];
-    return _SectionCard(
-      title: 'Quick actions',
-      child: Wrap(
-        spacing: 10,
-        runSpacing: 10,
-        children: actions
-            .map(
-              (action) => OutlinedButton.icon(
-                onPressed: action.$3,
-                icon: Icon(action.$1, size: 18),
-                label: Text(action.$2),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppColors.text,
-                  side: const BorderSide(color: AppColors.border),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 15,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(11),
+    final moreActions = <({String label, IconData icon, VoidCallback onTap})>[
+      if (financialRole)
+        (
+          label: 'Fee management',
+          icon: Icons.account_balance_wallet_outlined,
+          onTap: onOpenFees,
+        ),
+      if (managesSchool)
+        (
+          label: 'Start admission',
+          icon: Icons.person_add_alt_1_rounded,
+          onTap: onStartAdmission,
+        ),
+      if (managesSchool)
+        (label: 'Add staff', icon: Icons.group_add_rounded, onTap: onAddStaff),
+      if (managesSchool)
+        (
+          label: 'Add school event',
+          icon: Icons.event_rounded,
+          onTap: onCreateEvent,
+        ),
+    ];
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Quick actions',
+                        style: TextStyle(
+                          color: AppColors.text,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      SizedBox(height: 3),
+                      Text(
+                        'Start common tasks without searching the menu.',
+                        style: TextStyle(color: AppColors.muted, fontSize: 12),
+                      ),
+                    ],
                   ),
                 ),
+                if (moreActions.isNotEmpty)
+                  PopupMenuButton<int>(
+                    tooltip: 'More actions',
+                    onSelected: (index) => moreActions[index].onTap(),
+                    itemBuilder: (context) => [
+                      for (var index = 0; index < moreActions.length; index++)
+                        PopupMenuItem<int>(
+                          value: index,
+                          child: Row(
+                            children: [
+                              Icon(moreActions[index].icon, size: 19),
+                              const SizedBox(width: 10),
+                              Text(moreActions[index].label),
+                            ],
+                          ),
+                        ),
+                    ],
+                    child: const _MoreActionsButton(),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final columns = constraints.maxWidth >= 920
+                    ? actions.length.clamp(1, 4)
+                    : constraints.maxWidth >= 560
+                    ? 2
+                    : 1;
+                const gap = 12.0;
+                final width =
+                    (constraints.maxWidth - gap * (columns - 1)) / columns;
+                return Wrap(
+                  spacing: gap,
+                  runSpacing: gap,
+                  children: [
+                    for (final action in actions)
+                      SizedBox(
+                        width: width,
+                        child: _DashboardQuickActionButton(action: action),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DashboardQuickAction {
+  const _DashboardQuickAction({
+    required this.icon,
+    required this.label,
+    required this.description,
+    required this.color,
+    required this.onTap,
+    this.badgeCount = 0,
+  });
+
+  final IconData icon;
+  final String label;
+  final String description;
+  final Color color;
+  final VoidCallback onTap;
+  final int badgeCount;
+}
+
+class _DashboardQuickActionButton extends StatelessWidget {
+  const _DashboardQuickActionButton({required this.action});
+
+  final _DashboardQuickAction action;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: action.label,
+      child: InkWell(
+        key: ValueKey(
+          'dashboard-quick-${action.label.toLowerCase().replaceAll(' ', '-')}',
+        ),
+        onTap: action.onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 86),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: action.color.withValues(alpha: .07),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: action.color.withValues(alpha: .2)),
+          ),
+          child: Row(
+            children: [
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: action.color.withValues(alpha: .13),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(action.icon, color: action.color, size: 22),
+                  ),
+                  if (action.badgeCount > 0)
+                    Positioned(
+                      right: -7,
+                      top: -7,
+                      child: Container(
+                        constraints: const BoxConstraints(minWidth: 21),
+                        height: 21,
+                        padding: const EdgeInsets.symmetric(horizontal: 5),
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: AppColors.red,
+                          borderRadius: BorderRadius.circular(11),
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                        child: Text(
+                          action.badgeCount > 99
+                              ? '99+'
+                              : '${action.badgeCount}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
-            )
-            .toList(),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      action.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppColors.text,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      action.description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 11,
+                        height: 1.2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              Icon(Icons.arrow_forward_rounded, color: action.color, size: 18),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MoreActionsButton extends StatelessWidget {
+  const _MoreActionsButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.add_rounded, size: 18, color: AppColors.green),
+          SizedBox(width: 6),
+          Text(
+            'More actions',
+            style: TextStyle(
+              color: AppColors.text,
+              fontWeight: FontWeight.w800,
+              fontSize: 12,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -3822,6 +4383,17 @@ bool _isTeachingRole(String? role) {
       value == 'SUBJECT_TEACHER';
 }
 
+bool _canSeeFinancialNotices(String? role) {
+  final normalized = role?.trim().toUpperCase() ?? '';
+  return const {
+    'ADMINISTRATOR',
+    'HEAD_TEACHER',
+    'HEADMASTER',
+    'BURSAR',
+    'ACCOUNTANT',
+  }.contains(normalized);
+}
+
 class _TeacherWorkspaceLanding extends StatelessWidget {
   const _TeacherWorkspaceLanding({
     required this.displayName,
@@ -3959,6 +4531,7 @@ class _Sidebar extends StatelessWidget {
     this.roles = const [],
     this.onRoleChanged,
     required this.selectedPage,
+    this.approvalInbox,
     required this.onSelectPage,
     this.onLogout,
     this.onCollapse,
@@ -3971,6 +4544,7 @@ class _Sidebar extends StatelessWidget {
   final List<String> roles;
   final ValueChanged<String>? onRoleChanged;
   final _SchoolAdminPage selectedPage;
+  final Future<ApprovalInbox?>? approvalInbox;
   final ValueChanged<_SchoolAdminPage> onSelectPage;
   final VoidCallback? onLogout;
   final VoidCallback? onCollapse;
@@ -4130,6 +4704,31 @@ class _Sidebar extends StatelessWidget {
                     active: selectedPage == _SchoolAdminPage.dashboard,
                     onTap: () => onSelectPage(_SchoolAdminPage.dashboard),
                   ),
+                  if (!isTeacher)
+                    FutureBuilder<ApprovalInbox?>(
+                      future: approvalInbox,
+                      builder: (context, snapshot) {
+                        final inbox = snapshot.data;
+                        return _SidebarButton(
+                          icon: Icons.approval_outlined,
+                          label:
+                              inbox?.navigationLabel ??
+                              'Requests (0) & Approvals (0)',
+                          collapsed: collapsed,
+                          collapsedBadgeCount: inbox?.pendingTotal ?? 0,
+                          active: selectedPage == _SchoolAdminPage.approvals,
+                          onTap: () => onSelectPage(_SchoolAdminPage.approvals),
+                        );
+                      },
+                    ),
+                  if (!isBursar && !isTeacher)
+                    _SidebarButton(
+                      icon: Icons.manage_history_rounded,
+                      label: 'Audit & Activity',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.auditActivity,
+                      onTap: () => onSelectPage(_SchoolAdminPage.auditActivity),
+                    ),
                   if (!isBursar && !isTeacher)
                     _SidebarButton(
                       icon: Icons.assignment_ind_rounded,
@@ -4178,7 +4777,7 @@ class _Sidebar extends StatelessWidget {
                     ),
                     _SidebarButton(
                       icon: Icons.account_tree_rounded,
-                      label: 'Classes & Streams',
+                      label: 'Classes & Sections',
                       collapsed: collapsed,
                       active: selectedPage == _SchoolAdminPage.classes,
                       onTap: () => onSelectPage(_SchoolAdminPage.classes),
@@ -4300,12 +4899,14 @@ class _SidebarButton extends StatelessWidget {
     required this.label,
     required this.collapsed,
     this.active = false,
+    this.collapsedBadgeCount = 0,
     this.onTap,
   });
   final IconData icon;
   final String label;
   final bool collapsed;
   final bool active;
+  final int collapsedBadgeCount;
   final VoidCallback? onTap;
 
   @override
@@ -4330,16 +4931,31 @@ class _SidebarButton extends StatelessWidget {
                     ? MainAxisAlignment.center
                     : MainAxisAlignment.start,
                 children: [
-                  Icon(icon, size: 20, color: Colors.white),
+                  if (collapsed && collapsedBadgeCount > 0)
+                    Badge.count(
+                      count: collapsedBadgeCount,
+                      backgroundColor: const Color(0xFFF5A623),
+                      textColor: Colors.white,
+                      textStyle: const TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w900,
+                      ),
+                      child: Icon(icon, size: 20, color: Colors.white),
+                    )
+                  else
+                    Icon(icon, size: 20, color: Colors.white),
                   if (!collapsed) ...[
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
                         label,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 13,
                           fontWeight: FontWeight.w600,
+                          height: 1.25,
                         ),
                       ),
                     ),
@@ -4356,33 +4972,6 @@ class _SidebarButton extends StatelessWidget {
               ),
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ErrorView extends StatelessWidget {
-  const _ErrorView({required this.onRetry});
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              Icons.cloud_off_rounded,
-              size: 48,
-              color: AppColors.muted,
-            ),
-            const SizedBox(height: 12),
-            const Text('Dashboard data is not available yet.'),
-            const SizedBox(height: 12),
-            FilledButton(onPressed: onRetry, child: const Text('Try again')),
-          ],
         ),
       ),
     );

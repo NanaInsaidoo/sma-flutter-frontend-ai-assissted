@@ -33,6 +33,12 @@ void main() {
     expect(find.text('No recent activity to display.'), findsOne);
     expect(find.text('Final Report Management'), findsOneWidget);
     expect(find.text('Evaluation Management'), findsOneWidget);
+    expect(find.text('Quick actions'), findsOneWidget);
+    expect(find.text('Find student'), findsOneWidget);
+    expect(find.text('Record payment'), findsOneWidget);
+    expect(find.text('Record expense'), findsOneWidget);
+    expect(find.text('Requests & approvals'), findsOneWidget);
+    expect(find.text('More actions'), findsOneWidget);
     expect(find.text('Bad state: No element'), findsNothing);
     expect(tester.takeException(), isNull);
   });
@@ -105,6 +111,10 @@ void main() {
 
     expect(find.text('Fees & Requirements'), findsOneWidget);
     expect(find.text('Expenses & Petty Cash'), findsOneWidget);
+    expect(find.text('Find student'), findsOneWidget);
+    expect(find.text('Record payment'), findsOneWidget);
+    expect(find.text('Record expense'), findsOneWidget);
+    expect(find.text('Requests & approvals'), findsOneWidget);
     expect(find.text('Students'), findsNothing);
     expect(find.text('Open assessments'), findsNothing);
     expect(tester.takeException(), isNull);

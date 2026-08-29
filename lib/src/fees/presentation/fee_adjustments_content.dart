@@ -178,6 +178,7 @@ class _FeeAdjustmentsContentState extends State<FeeAdjustmentsContent> {
 
   Future<String?> _requestReason(_ReviewAction action) async {
     final controller = TextEditingController();
+    final noteIsOptional = action == _ReviewAction.approve;
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
@@ -187,7 +188,9 @@ class _FeeAdjustmentsContentState extends State<FeeAdjustmentsContent> {
           autofocus: true,
           maxLength: 500,
           maxLines: 3,
-          decoration: const InputDecoration(labelText: 'Reason *'),
+          decoration: InputDecoration(
+            labelText: noteIsOptional ? 'Approval note (optional)' : 'Reason *',
+          ),
         ),
         actions: [
           TextButton(
@@ -196,7 +199,7 @@ class _FeeAdjustmentsContentState extends State<FeeAdjustmentsContent> {
           ),
           FilledButton(
             onPressed: () {
-              if (controller.text.trim().isNotEmpty) {
+              if (noteIsOptional || controller.text.trim().isNotEmpty) {
                 Navigator.pop(context, controller.text.trim());
               }
             },

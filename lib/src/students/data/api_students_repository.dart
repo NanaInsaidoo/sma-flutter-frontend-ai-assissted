@@ -76,6 +76,25 @@ class ApiStudentsRepository implements StudentsRepository {
         gradeName: '${e['gradeName'] ?? ''}',
         streamId: _integer(e['streamId']),
         streamName: '${e['streamName'] ?? ''}',
+        feeReady: e['feeReady'] != false,
+      );
+    }).toList();
+  }
+
+  @override
+  Future<List<StudentTransferApprover>> getTransferApprovers(
+    String studentId,
+  ) async {
+    final value = await _json(
+      'GET',
+      '/api/schools/$customSchoolId/students/$studentId/transfer-approvers',
+    );
+    return (value as List? ?? const []).whereType<Map>().map((raw) {
+      final item = Map<String, dynamic>.from(raw);
+      return StudentTransferApprover(
+        id: _integer(item['id']),
+        name: '${item['name'] ?? ''}',
+        role: '${item['role'] ?? ''}',
       );
     }).toList();
   }
@@ -112,7 +131,7 @@ class ApiStudentsRepository implements StudentsRepository {
   }
 
   @override
-  Future<StudentPlacement> confirmTransfer(
+  Future<StudentTransferOutcome> confirmTransfer(
     String studentId,
     StudentTransferInput input,
   ) async {
@@ -124,7 +143,11 @@ class ApiStudentsRepository implements StudentsRepository {
           )
           as Map,
     );
-    return _placement(Map<String, dynamic>.from(j['placement'] as Map));
+    return StudentTransferOutcome(
+      placement: _placement(Map<String, dynamic>.from(j['placement'] as Map)),
+      pendingApproval: j['pendingApproval'] == true,
+      message: '${j['message'] ?? ''}',
+    );
   }
 
   Map<String, Object?> _transferBody(StudentTransferInput i) => {
@@ -138,6 +161,7 @@ class ApiStudentsRepository implements StudentsRepository {
     'reason': i.reason.trim(),
     'previewToken': i.previewToken,
     'actorUserId': i.actorUserId,
+    'approverId': i.approverId,
   };
 
   StudentPlacement _placement(Map<String, dynamic> j) => StudentPlacement(
@@ -389,6 +413,9 @@ class ApiStudentsRepository implements StudentsRepository {
             customSchoolId: customSchoolId,
             termId: term.id!,
           );
+    final reversalsFuture = (term.id ?? 0) <= 0
+        ? Future.value(const <PaymentReversal>[])
+        : _fees.getSchoolPaymentReversals(customSchoolId: customSchoolId);
     final attendanceFuture = _getAttendanceSummary(
       studentId,
       term.startDate,
@@ -409,10 +436,16 @@ class ApiStudentsRepository implements StudentsRepository {
       adjustmentsFuture,
       null,
     );
+    final reversals = await _optional<List<PaymentReversal>>(
+      reversalsFuture,
+      const [],
+    );
     final attendance = await attendanceFuture;
     final requirements = await _loadRequirements(
       studentId: studentId,
       academicTermId: term.id ?? 0,
+      gradeLevelId: _studentGradeLevelId(detail.rawJson),
+      gradeLevelName: detail.gradeLevel,
     );
 
     return _mapStudent(
@@ -432,12 +465,21 @@ class ApiStudentsRepository implements StudentsRepository {
                   .map(_studentAdjustment),
               ..._feeAdjustments(feeAccount, onlyWaivers: true),
             ],
+      paymentReversals: _paymentReversals(
+        reversals.where(
+          (item) =>
+              item.customStudentId == studentId &&
+              ((term.id ?? 0) <= 0 || item.termId == term.id),
+        ),
+      ),
     );
   }
 
   Future<List<StudentRequirement>> _loadRequirements({
     required String studentId,
     required int academicTermId,
+    required int gradeLevelId,
+    required String gradeLevelName,
   }) async {
     if (academicTermId <= 0) return const [];
     final groups = await _optional(
@@ -457,7 +499,30 @@ class ApiStudentsRepository implements StudentsRepository {
       ),
       null,
     );
-    if (progress == null) return const [];
+    if (progress == null) {
+      final normalizedGradeName = gradeLevelName.trim().toLowerCase();
+      final approved = groups.where(
+        (item) =>
+            item.status == RequirementStatus.approved &&
+            ((gradeLevelId > 0 && item.gradeLevelId == gradeLevelId) ||
+                (normalizedGradeName.isNotEmpty &&
+                    item.className.trim().toLowerCase() ==
+                        normalizedGradeName)),
+      );
+      if (approved.isEmpty) return const [];
+      return approved.first.items
+          .map(
+            (item) => StudentRequirement(
+              name: item.name,
+              requiredQuantity: item.quantity,
+              receivedQuantity: 0,
+              unit: item.unit,
+              status: StudentRequirementStatus.awaitingPublication,
+              note: item.instructions,
+            ),
+          )
+          .toList();
+    }
     final group = groups.where((item) => item.id == progress.classGroupId);
     final classItems = group.isEmpty
         ? const <ClassRequirementItem>[]
@@ -480,10 +545,24 @@ class ApiStudentsRepository implements StudentsRepository {
         (item) => StudentRequirement(
           name: item.name,
           requiredQuantity: item.quantity,
-          receivedQuantity: 0,
+          receivedQuantity: item.receivedQuantity,
           unit: item.unit,
-          status: StudentRequirementStatus.outstanding,
+          status: switch (item.status) {
+            StudentSpecificRequirementStatus.active =>
+              item.receivedQuantity >= item.quantity
+                  ? StudentRequirementStatus.complete
+                  : item.receivedQuantity > 0
+                  ? StudentRequirementStatus.partial
+                  : StudentRequirementStatus.outstanding,
+            StudentSpecificRequirementStatus.inactive =>
+              StudentRequirementStatus.inactive,
+            StudentSpecificRequirementStatus.draft ||
+            StudentSpecificRequirementStatus.pendingApproval ||
+            StudentSpecificRequirementStatus.changesRequested =>
+              StudentRequirementStatus.awaitingPublication,
+          },
           note: item.notes,
+          studentSpecific: true,
         ),
       ),
     ];
@@ -500,6 +579,7 @@ class ApiStudentsRepository implements StudentsRepository {
     List<AdmissionStudentDocument> documents = const [],
     List<StudentRequirement> requirements = const [],
     List<StudentFeeAdjustment>? feeAdjustments,
+    List<StudentPaymentReversal> paymentReversals = const [],
   }) {
     final json = detail.rawJson;
     final primary = guardians.where((guardian) => guardian.isPrimary);
@@ -560,7 +640,11 @@ class ApiStudentsRepository implements StudentsRepository {
       attendanceRate: attendance.rate,
       feeBalance: feeBalance,
       requirementsCompleted: requirements
-          .where((item) => item.status == StudentRequirementStatus.complete)
+          .where(
+            (item) =>
+                item.status == StudentRequirementStatus.complete ||
+                item.status == StudentRequirementStatus.waived,
+          )
           .length,
       requirementsTotal: requirements.length,
       countryOfBirth: _namedValue(json['countryOfBirth']),
@@ -581,6 +665,7 @@ class ApiStudentsRepository implements StudentsRepository {
       fees: _feeItems(feeAccount),
       feeAdjustments: feeAdjustments ?? _feeAdjustments(feeAccount),
       payments: _payments(feeAccount),
+      paymentReversals: paymentReversals,
       requirements: requirements,
       documents: documents
           .map(
@@ -869,20 +954,60 @@ StudentFeeAdjustment _studentAdjustment(FeeAdjustment item) {
 
 List<StudentPayment> _payments(FeeStudentAccount? account) {
   if (account == null) return const [];
-  return account.payments
-      .map(
-        (item) => StudentPayment(
-          date:
-              item.paymentDate ??
-              (throw const ApiStudentsException(
-                'A payment is missing its payment date.',
-              )),
-          amount: item.netAmount,
-          method: item.paymentMethod,
-          receiptNumber: item.referenceNumber,
-        ),
-      )
-      .toList();
+  return account.payments.map((item) {
+    final status = item.status.toUpperCase();
+    final amountApplied = status == 'COMPLETED' ? item.netAmount : 0.0;
+    return StudentPayment(
+      id: item.id,
+      date:
+          item.paymentDate ??
+          (throw const ApiStudentsException(
+            'A payment is missing its payment date.',
+          )),
+      amount: amountApplied,
+      method: item.paymentMethod,
+      receiptNumber: item.referenceNumber,
+      recordedAmount: item.amount,
+      refundedAmount: item.refundedAmount,
+      status: status,
+      statusReason: item.statusReason,
+      receivedBy: item.receivedBy,
+      overpaymentAmount: item.overpaymentAmount,
+      overpaymentReason: item.overpaymentReason,
+    );
+  }).toList();
+}
+
+List<StudentPaymentReversal> _paymentReversals(
+  Iterable<PaymentReversal> reversals,
+) => reversals
+    .map(
+      (item) => StudentPaymentReversal(
+        id: item.id,
+        paymentId: item.paymentId,
+        paymentReference: item.paymentReference,
+        amount: item.amount,
+        status: item.status,
+        reason: item.reason,
+        requesterName: item.requesterName,
+        approverName: item.approverName,
+        decisionReason: item.decisionReason,
+        decidedByName: item.decidedByName,
+        reversalReference: item.reversalReference,
+        createdAt: item.createdAt,
+        decidedAt: item.decidedAt,
+      ),
+    )
+    .toList(growable: false);
+
+int _studentGradeLevelId(Map<String, dynamic> json) {
+  final direct = _integer(json['gradeLevelId']);
+  if (direct > 0) return direct;
+  final gradeLevel = json['gradeLevel'];
+  if (gradeLevel is Map) {
+    return _integer(gradeLevel['id'] ?? gradeLevel['gradeLevelId']);
+  }
+  return 0;
 }
 
 EnrolledStudentStatus _studentStatus(String status) =>

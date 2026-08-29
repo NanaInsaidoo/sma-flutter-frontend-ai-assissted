@@ -89,6 +89,193 @@ void main() {
 
     expect(find.text('4 streams selected'), findsOneWidget);
   });
+
+  testWidgets('phone numbers and emails use repeatable contact rows', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchoolCreationScreen(
+            accessToken: 'preview',
+            onRefreshAccessToken: () async => null,
+            repository: _ContactRepository(),
+            existingSchool: _school,
+            initialStep: 4,
+            initialLookups: _addressLookups,
+            lookupLoader: () async => _addressLookups,
+            initialRecord: _contactRecord,
+            onBack: () {},
+            onCreated: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Primary phone number'), findsOneWidget);
+    expect(find.text('Phone number'), findsOneWidget);
+    expect(find.text('PRIMARY'), findsOneWidget);
+    expect(find.text('Email address 1 (optional)'), findsOneWidget);
+    expect(find.text('Email address 2 (optional)'), findsOneWidget);
+    expect(find.text('Add another phone'), findsOneWidget);
+    expect(find.text('Add another email'), findsOneWidget);
+
+    await tester.ensureVisible(find.text('Add another phone'));
+    await tester.tap(find.text('Add another phone'));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('Phone number 2')), findsOneWidget);
+  });
+
+  testWidgets('class structure excludes senior secondary grades', (
+    tester,
+  ) async {
+    final lookups = SchoolCreationLookups.empty().copyWith(
+      gradeLevels: const ['JHS 3', 'SHS 1', 'Senior Secondary 2'],
+      gradeLevelIds: const {'JHS 3': 10, 'SHS 1': 11, 'Senior Secondary 2': 12},
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchoolCreationScreen(
+            accessToken: 'preview',
+            onRefreshAccessToken: () async => null,
+            repository: _GradeRepository(),
+            existingSchool: _school,
+            initialStep: 6,
+            initialLookups: lookups,
+            lookupLoader: () async => lookups,
+            initialRecord: _gradeRecord,
+            initialGradeLevels: const [
+              SchoolGradeLevelInfo(
+                gradeLevelId: 10,
+                gradeLevelName: 'JHS 3',
+                numberOfStreams: 1,
+              ),
+              SchoolGradeLevelInfo(
+                gradeLevelId: 11,
+                gradeLevelName: 'SHS 1',
+                numberOfStreams: 2,
+              ),
+            ],
+            onBack: () {},
+            onCreated: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('1 grades selected'), findsOneWidget);
+    expect(find.text('JHS 3'), findsOneWidget);
+    expect(find.text('SHS 1'), findsNothing);
+    expect(find.text('Senior Secondary 2'), findsNothing);
+    expect(find.text('Senior High School'), findsNothing);
+  });
+
+  testWidgets('class structure creates and selects a custom class', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final lookups = SchoolCreationLookups.empty().copyWith(
+      gradeLevels: const ['KG1', 'KG2', 'Basic 1'],
+      gradeLevelIds: const {'KG1': 1, 'KG2': 2, 'Basic 1': 3},
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchoolCreationScreen(
+            accessToken: 'preview',
+            onRefreshAccessToken: () async => null,
+            repository: _GradeRepository(),
+            existingSchool: _school,
+            initialStep: 6,
+            initialLookups: lookups,
+            lookupLoader: () async => lookups,
+            initialRecord: _gradeRecord,
+            initialGradeLevels: const [
+              SchoolGradeLevelInfo(
+                gradeLevelId: 1,
+                gradeLevelName: 'KG1',
+                numberOfStreams: 1,
+              ),
+            ],
+            onBack: () {},
+            onCreated: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Add custom class'), findsOneWidget);
+    expect(find.text('Add New'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('add-custom-grade-level')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('custom-grade-name')),
+      'Nursery 1',
+    );
+    await tester.tap(find.byKey(const ValueKey('create-custom-grade-level')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Nursery 1'), findsOneWidget);
+    expect(find.text('Custom early-years classes'), findsOneWidget);
+    expect(find.text('GES kindergarten'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('Custom early-years classes')).dy,
+      lessThan(tester.getTopLeft(find.text('GES kindergarten')).dy),
+    );
+    expect(find.text('CUSTOM CLASS · KG SUBJECTS SUGGESTED'), findsOneWidget);
+    expect(find.text('2 grades selected'), findsOneWidget);
+  });
+
+  testWidgets(
+    'term setup omits term description and requires attendance answer',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SchoolCreationScreen(
+              accessToken: 'preview',
+              onRefreshAccessToken: () async => null,
+              repository: _GradeRepository(),
+              existingSchool: _school,
+              initialStep: 7,
+              initialLookups: SchoolCreationLookups.empty(),
+              lookupLoader: () async => SchoolCreationLookups.empty(),
+              initialRecord: _termRecord,
+              onBack: () {},
+              onCreated: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Description'), findsNothing);
+      expect(
+        find.text('Are students expected to attend school? *'),
+        findsOneWidget,
+      );
+      expect(find.text('Yes'), findsOneWidget);
+      expect(find.text('No'), findsOneWidget);
+
+      await tester.tap(find.textContaining('Continue'));
+      await tester.pump();
+      expect(find.text('Select Yes or No'), findsOneWidget);
+
+      await tester.ensureVisible(find.text('Yes'));
+      await tester.tap(find.text('Yes'));
+      await tester.pump();
+      expect(find.text('Select Yes or No'), findsNothing);
+    },
+  );
 }
 
 const _school = ManagedSchool(
@@ -153,11 +340,131 @@ const _addressRecord = SchoolOnboardingRecord(
   ),
 );
 
+const _contactRecord = SchoolOnboardingRecord(
+  data: {
+    'customSchoolId': 'SCH-ADDRESS',
+    'schoolName': 'Address Test School',
+    'contactInfo': {
+      'personalPhoneNumbers': [
+        {'number': '+233 30 111 1111', 'type': 'office'},
+      ],
+      'workPhoneNumbers': [
+        {'number': '+233 30 111 1111', 'type': 'office'},
+        {'number': '+233 30 222 2222', 'type': 'office'},
+      ],
+      'emails': ['office@school.test', 'accounts@school.test'],
+    },
+    'registrationStatus': 'IN_PROGRESS',
+    'currentStep': 'CONTACT_INFO',
+    'completedSteps': [
+      'BASIC_INFO',
+      'REGISTRATION_DETAILS',
+      'SOCIAL_WELFARE_COMPLIANCE',
+      'ADDRESS',
+    ],
+  },
+  progress: SchoolOnboardingProgress(
+    customSchoolId: 'SCH-ADDRESS',
+    registrationStatus: 'IN_PROGRESS',
+    currentStep: 'CONTACT_INFO',
+    completedSteps: [
+      'BASIC_INFO',
+      'REGISTRATION_DETAILS',
+      'SOCIAL_WELFARE_COMPLIANCE',
+      'ADDRESS',
+    ],
+  ),
+);
+
+const _gradeRecord = SchoolOnboardingRecord(
+  data: {
+    'customSchoolId': 'SCH-ADDRESS',
+    'schoolName': 'Address Test School',
+    'registrationStatus': 'IN_PROGRESS',
+    'currentStep': 'GRADE_LEVELS',
+    'completedSteps': [
+      'BASIC_INFO',
+      'REGISTRATION_DETAILS',
+      'SOCIAL_WELFARE_COMPLIANCE',
+      'ADDRESS',
+      'CONTACT_INFO',
+      'DOCUMENTS',
+    ],
+  },
+  progress: SchoolOnboardingProgress(
+    customSchoolId: 'SCH-ADDRESS',
+    registrationStatus: 'IN_PROGRESS',
+    currentStep: 'GRADE_LEVELS',
+    completedSteps: [
+      'BASIC_INFO',
+      'REGISTRATION_DETAILS',
+      'SOCIAL_WELFARE_COMPLIANCE',
+      'ADDRESS',
+      'CONTACT_INFO',
+      'DOCUMENTS',
+    ],
+  ),
+);
+
+const _termRecord = SchoolOnboardingRecord(
+  data: {
+    'customSchoolId': 'SCH-ADDRESS',
+    'schoolName': 'Address Test School',
+    'registrationStatus': 'IN_PROGRESS',
+    'currentStep': 'TERM_CALENDAR',
+    'currentAcademicTerm': {
+      'academicYear': {'name': '2026-2027'},
+      'termType': {'name': 'First Term'},
+      'description': 'A description that should no longer be editable',
+      'startDate': '2026-09-01',
+      'endDate': '2026-12-18',
+      'events': [
+        {
+          'name': 'Opening Day',
+          'eventType': {'name': 'Other'},
+          'startDate': '2026-09-01',
+          'endDate': '2026-09-01',
+        },
+      ],
+    },
+    'completedSteps': [
+      'BASIC_INFO',
+      'REGISTRATION_DETAILS',
+      'SOCIAL_WELFARE_COMPLIANCE',
+      'ADDRESS',
+      'CONTACT_INFO',
+      'DOCUMENTS',
+      'GRADE_LEVELS',
+    ],
+  },
+  progress: SchoolOnboardingProgress(
+    customSchoolId: 'SCH-ADDRESS',
+    registrationStatus: 'IN_PROGRESS',
+    currentStep: 'TERM_CALENDAR',
+    completedSteps: [
+      'BASIC_INFO',
+      'REGISTRATION_DETAILS',
+      'SOCIAL_WELFARE_COMPLIANCE',
+      'ADDRESS',
+      'CONTACT_INFO',
+      'DOCUMENTS',
+      'GRADE_LEVELS',
+    ],
+  ),
+);
+
 class _AddressRepository extends FakePlatformRepository {
   @override
   Future<SchoolOnboardingRecord> getSchoolOnboardingRecord(
     String customSchoolId,
   ) async => _addressRecord;
+}
+
+class _ContactRepository extends _AddressRepository {
+  @override
+  Future<SchoolOnboardingRecord> getSchoolOnboardingRecord(
+    String customSchoolId,
+  ) async => _contactRecord;
 }
 
 class _GradeRepository extends _AddressRepository {
@@ -204,4 +511,16 @@ class _GradeRepository extends _AddressRepository {
       numberOfStreams: 4,
     ),
   ];
+
+  @override
+  Future<SchoolGradeLevelInfo> createCustomGradeLevel({
+    required String customSchoolId,
+    required String gradeLevelName,
+    required int numberOfStreams,
+  }) async => SchoolGradeLevelInfo(
+    gradeLevelId: 100001,
+    gradeLevelName: gradeLevelName,
+    numberOfStreams: numberOfStreams,
+    isCustom: true,
+  );
 }

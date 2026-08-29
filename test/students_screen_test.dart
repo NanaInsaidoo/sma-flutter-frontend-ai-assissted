@@ -11,6 +11,8 @@ void main() {
     WidgetTester tester, {
     VoidCallback? onOpenHousehold,
     StudentsRepository repository = const FakeStudentsRepository(),
+    bool focusSearchOnLoad = false,
+    ValueChanged<EnrolledStudent>? onCollectPayment,
   }) async {
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1;
@@ -26,6 +28,8 @@ void main() {
             academicYear: '2025/26',
             repository: repository,
             onOpenHousehold: onOpenHousehold,
+            onCollectPayment: onCollectPayment,
+            focusSearchOnLoad: focusSearchOnLoad,
           ),
         ),
       ),
@@ -46,6 +50,20 @@ void main() {
     expect(find.text('Enrolled students (1)'), findsOneWidget);
     expect(find.text('Akosua Owusu'), findsOneWidget);
     expect(find.text('Kwame Yaw Asante'), findsNothing);
+  });
+
+  testWidgets('focuses student search when opened from a quick action', (
+    tester,
+  ) async {
+    await pumpStudents(tester, focusSearchOnLoad: true);
+
+    final editable = tester.widget<EditableText>(
+      find.descendant(
+        of: find.byKey(const Key('students-search')),
+        matching: find.byType(EditableText),
+      ),
+    );
+    expect(editable.focusNode.hasFocus, isTrue);
   });
 
   testWidgets('opens student profile tabs and returns to register', (
@@ -71,6 +89,25 @@ void main() {
     expect(find.text('Enrolled students (6)'), findsOneWidget);
   });
 
+  testWidgets('collect payment quick action returns the selected student', (
+    tester,
+  ) async {
+    EnrolledStudent? selectedStudent;
+    await pumpStudents(
+      tester,
+      onCollectPayment: (student) => selectedStudent = student,
+    );
+
+    await tester.tap(find.byKey(const Key('student-row-STU-FA1BC0-9043')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Collect payment'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('collect-student-payment')));
+    await tester.pump();
+
+    expect(selectedStudent?.id, 'STU-FA1BC0-9043');
+  });
+
   testWidgets('reviews and confirms a same-grade stream transfer', (
     tester,
   ) async {
@@ -81,6 +118,140 @@ void main() {
     await tester.tap(find.byKey(const Key('change-class-grade')));
     await tester.pumpAndSettle();
     expect(find.text('Change class/grade'), findsWidgets);
+    expect(find.byKey(const Key('transfer-student-summary')), findsOneWidget);
+    expect(find.byKey(const Key('transfer-from-to')), findsOneWidget);
+    expect(find.text('FROM'), findsOneWidget);
+    expect(find.text('TO'), findsOneWidget);
+    expect(find.text('Transfer type'), findsNothing);
+    expect(find.text('Same grade, different stream'), findsNothing);
+    expect(find.text('Different grade level'), findsNothing);
+    expect(find.text('Select date'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('transfer-destination')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('JHS 1 — B').last);
+    final transferDate = find.byKey(const Key('transfer-date'));
+    await tester.dragFrom(const Offset(800, 500), const Offset(0, -260));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(transferDate);
+    await tester.tap(transferDate);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(find.text('Select date'), findsNothing);
+    await tester.enterText(
+      find.byKey(const Key('transfer-reason')),
+      'Move to the other stream.',
+    );
+    await tester.tap(find.text('Review transfer'));
+    await tester.pumpAndSettle();
+    expect(find.text('Review transfer'), findsOneWidget);
+    expect(find.text('No grade-level fee change is expected.'), findsOneWidget);
+    expect(
+      repository.lastPreviewInput?.type,
+      StudentTransferType.sameGradeDifferentStream,
+    );
+    await tester.tap(find.text('Confirm transfer'));
+    await tester.pumpAndSettle();
+    expect(find.text('Student class changed successfully.'), findsOneWidget);
+    expect(repository.registerLoads, 2);
+  });
+
+  testWidgets('infers a different-grade transfer from the destination', (
+    tester,
+  ) async {
+    final repository = _CountingStudentsRepository();
+    await pumpStudents(tester, repository: repository);
+    await tester.tap(find.byKey(const Key('student-row-STU-FA1BC0-9043')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('change-class-grade')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('transfer-destination')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('JHS 2 — A').last);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('transfer-approver')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('transfer-approver')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Adjoa Mensah · Administrator').last);
+    await tester.dragFrom(const Offset(800, 500), const Offset(0, -260));
+    await tester.pumpAndSettle();
+    final transferDate = find.byKey(const Key('transfer-date'));
+    await tester.ensureVisible(transferDate);
+    await tester.tap(transferDate);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('transfer-reason')),
+      'Promote to the next grade.',
+    );
+    await tester.tap(find.text('Review transfer'));
+    await tester.pumpAndSettle();
+
+    expect(
+      repository.lastPreviewInput?.type,
+      StudentTransferType.differentGrade,
+    );
+    expect(
+      find.text(
+        'Fees will be recalculated only after approval. Existing discounts and waivers will then be cancelled and must be reapplied manually. Payments and receipts remain recorded.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Submit for approval'), findsOneWidget);
+    await tester.tap(find.text('Submit for approval'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Grade-change request submitted for approval.'),
+      findsOneWidget,
+    );
+    expect(repository.registerLoads, 1);
+  });
+
+  testWidgets('unfunded destination is labelled and cannot be selected', (
+    tester,
+  ) async {
+    await pumpStudents(tester);
+    await tester.tap(find.byKey(const Key('student-row-STU-FA1BC0-9043')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('change-class-grade')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Blocked classes need active fees.'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('transfer-destination')));
+    await tester.pumpAndSettle();
+
+    final blocked = find.byKey(const Key('blocked-transfer-destination-13'));
+    expect(blocked, findsOneWidget);
+    expect(find.text('JHS 1 — C'), findsOneWidget);
+    expect(find.text('Fees are not active'), findsOneWidget);
+    expect(find.text('Blocked'), findsOneWidget);
+    expect(find.byIcon(Icons.lock_outline), findsOneWidget);
+    await tester.tap(blocked);
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<DropdownButtonFormField<StudentTransferDestination>>(
+            find.byKey(const Key('transfer-destination')),
+          )
+          .initialValue,
+      isNull,
+    );
+  });
+
+  testWidgets('requires the user to choose an effective transfer date', (
+    tester,
+  ) async {
+    await pumpStudents(tester);
+    await tester.tap(find.byKey(const Key('student-row-STU-FA1BC0-9043')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('change-class-grade')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Select date'), findsOneWidget);
     await tester.tap(find.byKey(const Key('transfer-destination')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('JHS 1 — B').last);
@@ -90,15 +261,9 @@ void main() {
     );
     await tester.tap(find.text('Review transfer'));
     await tester.pumpAndSettle();
+
+    expect(find.text('Select an effective date.'), findsOneWidget);
     expect(find.text('Review transfer'), findsOneWidget);
-    expect(find.text('No grade-level fee change is expected.'), findsOneWidget);
-    await tester.tap(find.text('Confirm transfer'));
-    await tester.pumpAndSettle();
-    expect(
-      find.text('Student class/grade changed successfully.'),
-      findsOneWidget,
-    );
-    expect(repository.registerLoads, 2);
   });
 
   testWidgets('shows medical conditions, allergies, and vaccinations', (
@@ -141,7 +306,7 @@ void main() {
     expect(find.text('Basic 4B'), findsWidgets);
   });
 
-  testWidgets('shows fee statement and creates a pending fee-item adjustment', (
+  testWidgets('shows unified financial activity and creates an adjustment', (
     tester,
   ) async {
     await pumpStudents(tester);
@@ -152,12 +317,25 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('ORIGINAL FEES'), findsOneWidget);
-    expect(find.text('Fee statement'), findsOneWidget);
-    expect(find.text('ORIGINAL FEE ITEMS'), findsOneWidget);
-    expect(find.text('APPROVED ADJUSTMENTS'), findsOneWidget);
-    expect(find.text('TOTAL FEES'), findsOneWidget);
-    expect(find.textContaining('Adjustment history'), findsOneWidget);
     expect(find.text('Financial activity'), findsOneWidget);
+    expect(find.text('Fee statement'), findsNothing);
+    expect(find.text('Payments & reversals'), findsNothing);
+    expect(find.textContaining('Adjustment history'), findsNothing);
+    expect(find.text('All types'), findsOneWidget);
+    expect(find.text('All statuses'), findsOneWidget);
+    expect(find.text('REC-0070'), findsOneWidget);
+    expect(find.text('Completed'), findsOneWidget);
+    expect(find.text('REC-0071'), findsOneWidget);
+    expect(find.text('REV-0071'), findsOneWidget);
+    expect(find.text('Reversed'), findsWidgets);
+    final reversalRow = find.byKey(const Key('financial-row-REV-0071'));
+    await tester.ensureVisible(reversalRow);
+    await tester.tap(reversalRow);
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('Payment was recorded against the wrong student.'),
+      findsOneWidget,
+    );
     expect(
       find.text('Sibling discount for two enrolled children'),
       findsWidgets,
@@ -227,7 +405,8 @@ void main() {
     expect(find.text('1 pending adjustment'), findsOneWidget);
     await tester.tap(find.byKey(const Key('pending-adjustments-summary')));
     await tester.pumpAndSettle();
-    expect(find.text('Adjustment history · 1 pending'), findsOneWidget);
+    expect(find.text('Financial activity'), findsOneWidget);
+    expect(find.text('1 pending adjustment'), findsOneWidget);
 
     final menu = find.byKey(const Key('adjustment-menu-ADJ-1042-03'));
     expect(menu, findsOneWidget);
@@ -261,8 +440,37 @@ void main() {
     await tester.ensureVisible(saveChanges);
     await tester.tap(saveChanges);
     await tester.pumpAndSettle();
-    expect(find.text('GH₵ 20'), findsWidgets);
+    expect(find.textContaining('GH₵ 20'), findsWidgets);
     expect(find.text('Pending'), findsWidgets);
+  });
+
+  testWidgets('financial activity columns sort in both directions', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await pumpStudents(tester);
+
+    await tester.tap(find.byKey(const Key('student-row-STU-FA1BC0-9043')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('student-tab-fees')));
+    await tester.pumpAndSettle();
+
+    final amountHeader = find.byKey(const Key('financial-sort-amount'));
+    await tester.ensureVisible(amountHeader);
+    await tester.tap(amountHeader);
+    await tester.pumpAndSettle();
+    expect(
+      tester.getTopLeft(find.text('ADJ-1042-02')).dy,
+      lessThan(tester.getTopLeft(find.text('ADJ-1042-01')).dy),
+    );
+
+    await tester.tap(amountHeader);
+    await tester.pumpAndSettle();
+    expect(
+      tester.getTopLeft(find.text('ADJ-1042-01')).dy,
+      lessThan(tester.getTopLeft(find.text('ADJ-1042-02')).dy),
+    );
   });
 
   testWidgets('saved draft can later be submitted with an approver', (
@@ -345,10 +553,20 @@ void main() {
 
 class _CountingStudentsRepository extends FakeStudentsRepository {
   int registerLoads = 0;
+  StudentTransferInput? lastPreviewInput;
 
   @override
   Future<List<EnrolledStudent>> getEnrolledStudents() {
     registerLoads += 1;
     return super.getEnrolledStudents();
+  }
+
+  @override
+  Future<StudentTransferPreview> previewTransfer(
+    String studentId,
+    StudentTransferInput input,
+  ) {
+    lastPreviewInput = input;
+    return super.previewTransfer(studentId, input);
   }
 }

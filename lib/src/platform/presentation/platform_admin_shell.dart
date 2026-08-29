@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../audit/data/audit_api_client.dart';
+import '../../audit/presentation/audit_activity_screen.dart';
 import '../../theme/app_theme.dart';
 import '../data/platform_api_client.dart';
 import '../data/platform_repository.dart';
@@ -10,7 +12,14 @@ import 'account_managers_screen.dart';
 import 'school_creation_screen.dart';
 import 'school_detail_screen.dart';
 
-enum PlatformPage { overview, schools, onboarding, attention, accountManagers }
+enum PlatformPage {
+  overview,
+  schools,
+  onboarding,
+  attention,
+  accountManagers,
+  auditActivity,
+}
 
 class PlatformAdminShell extends StatefulWidget {
   const PlatformAdminShell({
@@ -178,6 +187,7 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
       PlatformPage.onboarding => '${widget.basePath}/onboarding',
       PlatformPage.attention => '${widget.basePath}/attention',
       PlatformPage.accountManagers => '${widget.basePath}/account-managers',
+      PlatformPage.auditActivity => '${widget.basePath}/audit-activity',
     };
   }
 
@@ -383,6 +393,12 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
                               onViewAttentionCategory: _openAttentionCategory,
                               onViewSchool: _openSchool,
                             ),
+                    PlatformPage.auditActivity => AuditActivityScreen(
+                      repository: AuditApiClient(
+                        accessToken: widget.accessToken,
+                        onRefreshAccessToken: widget.onRefreshAccessToken,
+                      ),
+                    ),
                   };
 
             final workspace = _PlatformWorkspace(
@@ -400,6 +416,7 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
                       PlatformPage.onboarding => 'Onboarding',
                       PlatformPage.attention => 'Needs attention',
                       PlatformPage.accountManagers => 'Account Managers',
+                      PlatformPage.auditActivity => 'Audit & Activity',
                     },
               subtitle: creatingSchool
                   ? (routeSchool == null
@@ -421,6 +438,8 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
                       PlatformPage.attention => 'Schools requiring action',
                       PlatformPage.accountManagers =>
                         'Manage your platform team',
+                      PlatformPage.auditActivity =>
+                        'Review account, access and security activity',
                     },
               role: widget.role,
               managerName: data.managerName,
@@ -618,6 +637,7 @@ class _PlatformLoadingShell extends StatelessWidget {
     PlatformPage.onboarding => 'Onboarding',
     PlatformPage.attention => 'Needs attention',
     PlatformPage.accountManagers => 'Account Managers',
+    PlatformPage.auditActivity => 'Audit & Activity',
   };
 
   String _subtitleForPage(PlatformPage page, PlatformRole role) =>
@@ -630,6 +650,8 @@ class _PlatformLoadingShell extends StatelessWidget {
         PlatformPage.onboarding => 'Schools completing setup',
         PlatformPage.attention => 'Schools requiring action',
         PlatformPage.accountManagers => 'Manage your platform team',
+        PlatformPage.auditActivity =>
+          'Review account, access and security activity',
       };
 }
 
@@ -2501,9 +2523,8 @@ class _AttentionSchoolsScreenState extends State<_AttentionSchoolsScreen> {
         case 'ACCOUNT_MANAGER_DETAIL':
           if (!widget.role.canManageAccountManagers) break;
           final page = await widget.repository.getAccountManagerPage(
-            searchTerm: item.title,
             userStatuses: const ['PENDING'],
-            size: 10,
+            size: 100,
           );
           final manager = page.managers
               .cast<AccountManagerProfile?>()
@@ -5070,6 +5091,14 @@ class _PlatformSidebar extends StatelessWidget {
                       onTap: () => onPageSelected(PlatformPage.accountManagers),
                     ),
                   ],
+                  const _NavLabel('SECURITY & AUDIT'),
+                  _PlatformNavItem(
+                    icon: Icons.manage_history_rounded,
+                    label: 'Audit & Activity',
+                    active:
+                        !creatingSchool && page == PlatformPage.auditActivity,
+                    onTap: () => onPageSelected(PlatformPage.auditActivity),
+                  ),
                 ],
               ),
             ),

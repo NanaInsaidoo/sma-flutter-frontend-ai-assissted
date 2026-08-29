@@ -10,15 +10,19 @@ class StaffScreen extends StatefulWidget {
     this.openAddStaffOnLoad = false,
     this.onAddStaffRequestConsumed,
     this.customSchoolId,
+    this.currentUserId,
     this.accessToken,
     this.onRefreshAccessToken,
+    this.apiClient,
   });
 
   final bool openAddStaffOnLoad;
   final VoidCallback? onAddStaffRequestConsumed;
   final String? customSchoolId;
+  final int? currentUserId;
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
+  final StaffApiClient? apiClient;
 
   @override
   State<StaffScreen> createState() => _StaffScreenState();
@@ -63,6 +67,15 @@ class _StaffScreenState extends State<StaffScreen> {
         onManageRoles: _selectedStaff!.userRoles.isEmpty
             ? null
             : () => _manageRoles(_selectedStaff!),
+        onResendInvitation: _selectedStaff!.invitationToken.isEmpty
+            ? null
+            : () => _resendStaffInvitation(_selectedStaff!),
+        onCancelInvitation: _selectedStaff!.invitationToken.isEmpty
+            ? null
+            : () => _cancelStaffInvitation(_selectedStaff!),
+        onDeleteInvitation: _selectedStaff!.invitationToken.isEmpty
+            ? null
+            : () => _deleteStaffInvitation(_selectedStaff!),
       );
     }
 
@@ -99,6 +112,7 @@ class _StaffScreenState extends State<StaffScreen> {
                 onQueryChanged: (value) => setState(() => _query = value),
                 onOpenStaff: (member) =>
                     setState(() => _selectedStaff = member),
+                currentUserId: widget.currentUserId,
               ),
               _StaffTab.onboarding => _OnboardingPanel(
                 staff: visibleStaff
@@ -186,10 +200,12 @@ class _StaffScreenState extends State<StaffScreen> {
     });
 
     try {
-      final apiClient = StaffApiClient(
-        accessToken: accessToken,
-        onRefreshAccessToken: widget.onRefreshAccessToken,
-      );
+      final apiClient =
+          widget.apiClient ??
+          StaffApiClient(
+            accessToken: accessToken,
+            onRefreshAccessToken: widget.onRefreshAccessToken,
+          );
       final results = await Future.wait([
         apiClient.getSchoolStaffUsers(customSchoolId: customSchoolId),
         apiClient.getSchoolStaffProfiles(customSchoolId),
@@ -203,6 +219,13 @@ class _StaffScreenState extends State<StaffScreen> {
         ...users.map(
           (user) => _staffFromUserRecord(user, profilesByUserId[user.id]),
         ),
+        ...profiles
+            .where(
+              (profile) =>
+                  profile.invitationToken.isNotEmpty &&
+                  !users.any((user) => user.id == profile.userId),
+            )
+            .map(_staffFromInvitationProfile),
         ..._localEduHireDrafts,
       ];
       if (!mounted) return;
@@ -322,6 +345,142 @@ class _StaffScreenState extends State<StaffScreen> {
     );
   }
 
+  Future<void> _resendStaffInvitation(_StaffMember staff) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Resend invitation?'),
+        content: Text(
+          'A new verification code will be sent to ${staff.fullName}. The previous code will stop working.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep current invitation'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Resend invitation'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await StaffApiClient(
+        accessToken: widget.accessToken,
+        onRefreshAccessToken: widget.onRefreshAccessToken,
+      ).resendStaffInvitation(staff.invitationToken);
+      await _loadStaff();
+      if (mounted) _showMessage('Invitation sent again.');
+    } on StaffApiException catch (error) {
+      if (mounted) _showMessage(error.message);
+    }
+  }
+
+  Future<void> _cancelStaffInvitation(_StaffMember staff) async {
+    final schoolId = widget.customSchoolId?.trim() ?? '';
+    if (schoolId.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cancel invitation?'),
+        content: Text(
+          '${staff.fullName} will no longer be able to activate this invitation. The staff draft will remain available for review.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep invitation'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Cancel invitation'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await StaffApiClient(
+        accessToken: widget.accessToken,
+        onRefreshAccessToken: widget.onRefreshAccessToken,
+      ).cancelStaffInvitation(
+        customSchoolId: schoolId,
+        invitationToken: staff.invitationToken,
+      );
+      await _loadStaff();
+      if (mounted) _showMessage('Invitation cancelled.');
+    } on StaffApiException catch (error) {
+      if (mounted) _showMessage(error.message);
+    }
+  }
+
+  Future<void> _deleteStaffInvitation(_StaffMember staff) async {
+    final schoolId = widget.customSchoolId?.trim() ?? '';
+    if (schoolId.isEmpty) return;
+    final controller = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete invitation permanently?'),
+        content: SizedBox(
+          width: 480,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'The invitation for ${staff.fullName} will be permanently removed. The staff onboarding draft will remain so it can be corrected or invited again.',
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Reason for deletion',
+                  alignLabelWithHint: true,
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Keep invitation'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.red),
+            onPressed: () {
+              final value = controller.text.trim();
+              if (value.isNotEmpty) Navigator.pop(context, value);
+            },
+            child: const Text('Delete permanently'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (reason == null || reason.isEmpty || !mounted) return;
+    try {
+      await StaffApiClient(
+        accessToken: widget.accessToken,
+        onRefreshAccessToken: widget.onRefreshAccessToken,
+      ).deleteStaffInvitation(
+        customSchoolId: schoolId,
+        invitationToken: staff.invitationToken,
+        reason: reason,
+      );
+      setState(() => _selectedStaff = null);
+      await _loadStaff();
+      if (mounted) _showMessage('Invitation permanently deleted.');
+    } on StaffApiException catch (error) {
+      if (mounted) _showMessage(error.message);
+    }
+  }
+
   _StaffMember _staffFromUserRecord(
     StaffUserRecord user, [
     StaffProfileRecord? profile,
@@ -371,6 +530,47 @@ class _StaffScreenState extends State<StaffScreen> {
       assignments: const [],
       staffProfileId: profile?.staffId ?? '',
       resumes: profile?.resumes ?? const [],
+      invitationToken: profile?.invitationToken ?? '',
+      invitationDeliveryStatus: profile?.invitationDeliveryStatus ?? 'NOT_SENT',
+      invitationLastSentAt: profile?.invitationLastSentAt ?? '',
+      invitationSendCount: profile?.invitationSendCount ?? 0,
+    );
+  }
+
+  _StaffMember _staffFromInvitationProfile(StaffProfileRecord profile) {
+    return _StaffMember(
+      id: profile.staffId,
+      firstName: profile.firstName.isEmpty ? 'Invited' : profile.firstName,
+      lastName: profile.lastName,
+      role: profile.position.isEmpty ? 'Staff' : profile.position,
+      department: profile.departmentName.isEmpty
+          ? 'Not configured'
+          : profile.departmentName,
+      category: 'Support',
+      employmentType: _employmentTypeDisplay(profile.employmentType),
+      contractType: _contractTypeDisplay(profile.employmentType),
+      email: _display(profile.email),
+      phone: 'Not provided',
+      dateOfBirth: 'Not provided',
+      address: 'Not configured',
+      emergencyName: 'Not configured',
+      emergencyRelationship: 'Not configured',
+      emergencyPhone: 'Not configured',
+      startDate: _formatDate(profile.startDate),
+      status: profile.invitationStatus.toUpperCase() == 'CANCELLED'
+          ? _StaffStatus.suspended
+          : _StaffStatus.invited,
+      sourceLabel: 'School invitation',
+      sourceReference: profile.staffId,
+      color: AppColors.green,
+      checks: const ['Awaiting account activation'],
+      assignments: const [],
+      staffProfileId: profile.staffId,
+      resumes: profile.resumes,
+      invitationToken: profile.invitationToken,
+      invitationDeliveryStatus: profile.invitationDeliveryStatus,
+      invitationLastSentAt: profile.invitationLastSentAt,
+      invitationSendCount: profile.invitationSendCount,
     );
   }
 
@@ -489,6 +689,62 @@ String _formatDate(String raw) {
     'Dec',
   ];
   return '${date.day} ${months[date.month - 1]} ${date.year}';
+}
+
+String _formatDateTime(String raw) {
+  final date = DateTime.tryParse(raw.trim().replaceFirst(' ', 'T'));
+  if (date == null) return _formatDate(raw);
+  final local = date.toLocal();
+  final hour = local.hour == 0
+      ? 12
+      : (local.hour > 12 ? local.hour - 12 : local.hour);
+  final minutes = local.minute.toString().padLeft(2, '0');
+  final period = local.hour >= 12 ? 'PM' : 'AM';
+  return '${_formatDate(local.toIso8601String())} at $hour:$minutes $period';
+}
+
+String _staffInvitationDeliveryLabel(String value) {
+  return switch (value.trim().toUpperCase()) {
+    'SENT' => 'Sent',
+    'FAILED' => 'Send failed',
+    _ => 'Not sent',
+  };
+}
+
+class _InfoPair extends StatelessWidget {
+  const _InfoPair({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 150),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              color: AppColors.muted,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: const TextStyle(
+              color: AppColors.text,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _StaffHeader extends StatelessWidget {
@@ -721,12 +977,14 @@ class _DirectoryPanel extends StatelessWidget {
     required this.query,
     required this.onQueryChanged,
     required this.onOpenStaff,
+    required this.currentUserId,
   });
 
   final List<_StaffMember> staff;
   final String query;
   final ValueChanged<String> onQueryChanged;
   final ValueChanged<_StaffMember> onOpenStaff;
+  final int? currentUserId;
 
   @override
   Widget build(BuildContext context) {
@@ -751,6 +1009,7 @@ class _DirectoryPanel extends StatelessWidget {
               (member) => _StaffRow(
                 staff: member,
                 showSource: false,
+                isCurrentUser: member.id == currentUserId?.toString(),
                 onTap: () => onOpenStaff(member),
               ),
             ),
@@ -998,11 +1257,13 @@ class _StaffRow extends StatelessWidget {
   const _StaffRow({
     required this.staff,
     required this.showSource,
+    this.isCurrentUser = false,
     required this.onTap,
   });
 
   final _StaffMember staff;
   final bool showSource;
+  final bool isCurrentUser;
   final VoidCallback onTap;
 
   @override
@@ -1026,12 +1287,23 @@ class _StaffRow extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          staff.fullName,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w800,
-                            color: AppColors.text,
-                          ),
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                staff.fullName,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.text,
+                                ),
+                              ),
+                            ),
+                            if (isCurrentUser) ...[
+                              const SizedBox(width: 8),
+                              const _CurrentUserBadge(),
+                            ],
+                          ],
                         ),
                         const SizedBox(height: 4),
                         Text(
@@ -1079,16 +1351,47 @@ class _StaffRow extends StatelessWidget {
   }
 }
 
+class _CurrentUserBadge extends StatelessWidget {
+  const _CurrentUserBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const ValueKey('current-staff-user-badge'),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: AppColors.greenSoft,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppColors.green.withValues(alpha: .28)),
+      ),
+      child: const Text(
+        'Me',
+        style: TextStyle(
+          color: AppColors.green,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
 class _StaffProfilePage extends StatefulWidget {
   const _StaffProfilePage({
     required this.staff,
     required this.onBack,
     this.onManageRoles,
+    this.onResendInvitation,
+    this.onCancelInvitation,
+    this.onDeleteInvitation,
   });
 
   final _StaffMember staff;
   final VoidCallback onBack;
   final VoidCallback? onManageRoles;
+  final VoidCallback? onResendInvitation;
+  final VoidCallback? onCancelInvitation;
+  final VoidCallback? onDeleteInvitation;
 
   @override
   State<_StaffProfilePage> createState() => _StaffProfilePageState();
@@ -1158,6 +1461,32 @@ class _StaffProfilePageState extends State<_StaffProfilePage> {
                     icon: const Icon(Icons.edit_rounded, size: 18),
                     label: const Text('Manage roles'),
                   ),
+                  if (staff.status == _StaffStatus.invited) ...[
+                    const SizedBox(width: 10),
+                    OutlinedButton.icon(
+                      onPressed: widget.onResendInvitation,
+                      icon: const Icon(
+                        Icons.forward_to_inbox_rounded,
+                        size: 18,
+                      ),
+                      label: const Text('Resend invitation'),
+                    ),
+                    const SizedBox(width: 10),
+                    TextButton.icon(
+                      onPressed: widget.onCancelInvitation,
+                      icon: const Icon(Icons.cancel_outlined, size: 18),
+                      label: const Text('Cancel invitation'),
+                    ),
+                    const SizedBox(width: 10),
+                    TextButton.icon(
+                      onPressed: widget.onDeleteInvitation,
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppColors.red,
+                      ),
+                      icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                      label: const Text('Delete'),
+                    ),
+                  ],
                   const SizedBox(width: 10),
                   FilledButton.icon(
                     onPressed: staff.status == _StaffStatus.draft
@@ -1173,6 +1502,36 @@ class _StaffProfilePageState extends State<_StaffProfilePage> {
               ),
             ),
           ),
+          if (staff.status == _StaffStatus.invited) ...[
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Wrap(
+                  spacing: 24,
+                  runSpacing: 10,
+                  children: [
+                    _InfoPair(
+                      label: 'Invitation',
+                      value: _staffInvitationDeliveryLabel(
+                        staff.invitationDeliveryStatus,
+                      ),
+                    ),
+                    _InfoPair(
+                      label: 'Send attempts',
+                      value: '${staff.invitationSendCount}',
+                    ),
+                    _InfoPair(
+                      label: 'Last sent',
+                      value: staff.invitationLastSentAt.isEmpty
+                          ? 'Not sent'
+                          : _formatDateTime(staff.invitationLastSentAt),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 18),
           _StaffProfileTabs(
             selected: _tab,
@@ -3461,6 +3820,10 @@ class _StaffMember {
     required this.assignments,
     this.staffProfileId = '',
     this.resumes = const [],
+    this.invitationToken = '',
+    this.invitationDeliveryStatus = 'NOT_SENT',
+    this.invitationLastSentAt = '',
+    this.invitationSendCount = 0,
   });
 
   final String id;
@@ -3489,6 +3852,10 @@ class _StaffMember {
   final List<String> assignments;
   final String staffProfileId;
   final List<StaffResumeRecord> resumes;
+  final String invitationToken;
+  final String invitationDeliveryStatus;
+  final String invitationLastSentAt;
+  final int invitationSendCount;
 
   String get fullName => '$firstName $lastName';
 
@@ -3520,6 +3887,10 @@ class _StaffMember {
       assignments: assignments,
       staffProfileId: staffProfileId,
       resumes: resumes,
+      invitationToken: invitationToken,
+      invitationDeliveryStatus: invitationDeliveryStatus,
+      invitationLastSentAt: invitationLastSentAt,
+      invitationSendCount: invitationSendCount,
     );
   }
 }

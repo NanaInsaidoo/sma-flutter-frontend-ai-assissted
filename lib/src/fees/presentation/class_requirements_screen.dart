@@ -13,12 +13,16 @@ class ClassRequirementsScreen extends StatefulWidget {
     required this.termName,
     this.gradeLevels = const [],
     this.canPublish = true,
+    this.currentUserId = 0,
+    this.onWorkflowChanged,
   });
 
   final ClassRequirementsRepository repository;
   final String termName;
   final List<FeeGradeLevel> gradeLevels;
   final bool canPublish;
+  final int currentUserId;
+  final VoidCallback? onWorkflowChanged;
 
   @override
   State<ClassRequirementsScreen> createState() =>
@@ -28,6 +32,7 @@ class ClassRequirementsScreen extends StatefulWidget {
 class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
   String? _selectedGroupId;
   bool _showPriorTerm = false;
+  _RequirementsView _requirementsView = _RequirementsView.classes;
 
   @override
   Widget build(BuildContext context) {
@@ -64,23 +69,32 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
           return _ClassTracker(
             repository: widget.repository,
             group: selected,
+            currentUserId: widget.currentUserId,
             onBack: () => setState(() => _selectedGroupId = null),
             onAddRequirement: () => _showRequirementForm(selected.id),
             onEditRequirement: (item) =>
                 _showRequirementForm(selected.id, initialItem: item),
             onDeleteRequirement: (item) =>
                 _confirmDeleteRequirement(selected, item),
-            onPublish: widget.canPublish
-                ? () => _showPublishDialog(selected)
-                : null,
+            onPublish: () => _handleWorkflow(selected),
             onOpenStudent: (student) => _showStudentDetails(selected, student),
           );
         }
         return _RequirementsOverview(
           repository: widget.repository,
           termName: widget.termName,
+          selectedView: _requirementsView,
+          onViewChanged: (value) => setState(() => _requirementsView = value),
           onOpenClass: _openClass,
           onAddClass: _showClassForm,
+          onAddStudentRequirement: () => _showStudentRequirementForm(),
+          onEditStudentRequirement: (item) =>
+              _showStudentRequirementForm(initial: item),
+          onDeleteStudentRequirement: _deleteStudentRequirement,
+          onSubmitStudentRequirement: _submitStudentRequirement,
+          onWithdrawStudentRequirement: _withdrawStudentRequirement,
+          onReviewStudentRequirement: _reviewStudentRequirement,
+          onRecordStudentRequirement: _recordStudentRequirement,
           onOpenPriorTerm: _openPriorTerm,
         );
       },
@@ -119,11 +133,20 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
       ),
     );
     if (result == null) return;
+    final targetGroup = widget.repository.groups.firstWhere(
+      (group) => group.id == result.groupId,
+    );
+    final revisionReason = await _revisionReasonFor(targetGroup);
+    if (targetGroup.status == RequirementStatus.published &&
+        revisionReason == null) {
+      return;
+    }
     if (initialItem == null) {
       try {
         final saved = await widget.repository.addRequirement(
           result.groupId,
           result.item,
+          revisionReason: revisionReason,
         );
         _selectedGroupId = saved.id;
       } catch (error) {
@@ -135,6 +158,7 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
         final saved = await widget.repository.updateRequirement(
           result.groupId,
           result.item,
+          revisionReason: revisionReason,
         );
         _selectedGroupId = saved.id;
       } catch (error) {
@@ -180,10 +204,15 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
       ),
     );
     if (confirmed != true) return;
+    final revisionReason = await _revisionReasonFor(group);
+    if (group.status == RequirementStatus.published && revisionReason == null) {
+      return;
+    }
     try {
       final saved = await widget.repository.deleteRequirement(
         group.id,
         item.id,
+        revisionReason: revisionReason,
       );
       _selectedGroupId = saved.id;
     } catch (error) {
@@ -216,6 +245,66 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
     }
   }
 
+  Future<String?> _revisionReasonFor(ClassRequirementGroup group) async {
+    if (group.status != RequirementStatus.published) return null;
+    final controller = TextEditingController();
+    String? errorText;
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Revise published items'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'The current published list will remain active. This change creates a new draft that must be approved and published.',
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                maxLines: 3,
+                onChanged: (_) {
+                  if (errorText != null) {
+                    setDialogState(() => errorText = null);
+                  }
+                },
+                decoration: InputDecoration(
+                  labelText: 'Reason for change',
+                  hintText: 'Explain why the published list is being revised',
+                  errorText: errorText,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final value = controller.text.trim();
+                if (value.isEmpty) {
+                  setDialogState(
+                    () => errorText = 'Enter the reason for this revision',
+                  );
+                  return;
+                }
+                Navigator.pop(context, value);
+              },
+              child: const Text('Create revision draft'),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+    return reason;
+  }
+
   Future<void> _showPublishDialog(ClassRequirementGroup group) async {
     final plan = await showDialog<RequirementNotificationPlan>(
       context: context,
@@ -233,12 +322,222 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
       return;
     }
     if (!mounted) return;
+    widget.onWorkflowChanged?.call();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
           '${group.className} requirements published and guardian alerts queued.',
         ),
       ),
+    );
+  }
+
+  Future<void> _handleWorkflow(ClassRequirementGroup group) async {
+    try {
+      switch (group.status) {
+        case RequirementStatus.draft:
+          if (!group.creatorOwned) {
+            _showError(
+              StateError('Only the creator can submit these required items.'),
+            );
+            return;
+          }
+          final approvers = await widget.repository.getApprovers();
+          if (!mounted) return;
+          if (approvers.isEmpty) {
+            throw StateError(
+              'Add another active Administrator or Headmaster before submitting.',
+            );
+          }
+          var selectedApproverId = 0;
+          final note = TextEditingController();
+          final submission = await showDialog<_RequirementSubmission>(
+            context: context,
+            barrierDismissible: false,
+            builder: (dialogContext) => StatefulBuilder(
+              builder: (context, setDialogState) => AlertDialog(
+                icon: const Icon(
+                  Icons.approval_outlined,
+                  color: AppColors.green,
+                  size: 32,
+                ),
+                title: const Text('Submit for approval'),
+                content: SizedBox(
+                  width: 460,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Choose who should review the required items for ${group.className}.',
+                        style: const TextStyle(color: AppColors.muted),
+                      ),
+                      const SizedBox(height: 18),
+                      DropdownButtonFormField<int>(
+                        value: selectedApproverId > 0
+                            ? selectedApproverId
+                            : null,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Approver',
+                          prefixIcon: Icon(Icons.person_outline_rounded),
+                        ),
+                        items: approvers
+                            .map(
+                              (approver) => DropdownMenuItem(
+                                value: approver.id,
+                                child: Text(
+                                  '${approver.name} · ${approver.role}',
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) => setDialogState(
+                          () => selectedApproverId = value ?? 0,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      TextField(
+                        controller: note,
+                        maxLines: 3,
+                        maxLength: 1000,
+                        decoration: const InputDecoration(
+                          labelText: 'Note for approver (optional)',
+                          hintText: 'Add context the approver should know',
+                          prefixIcon: Icon(Icons.notes_rounded),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('Cancel'),
+                  ),
+                  FilledButton.icon(
+                    onPressed: selectedApproverId <= 0
+                        ? null
+                        : () => Navigator.pop(
+                            dialogContext,
+                            _RequirementSubmission(
+                              selectedApproverId,
+                              note.text.trim(),
+                            ),
+                          ),
+                    icon: const Icon(Icons.send_outlined),
+                    label: const Text('Submit'),
+                  ),
+                ],
+              ),
+            ),
+          );
+          note.dispose();
+          if (submission == null) return;
+          final saved = await widget.repository.submitClass(
+            group.id,
+            submission.approverId,
+            note: submission.note,
+          );
+          _selectedGroupId = saved.id;
+          widget.onWorkflowChanged?.call();
+          _showMessage('Required items submitted for approval.');
+        case RequirementStatus.pendingApproval:
+          if (group.assignedApproverId == widget.currentUserId) {
+            final action = await showDialog<String>(
+              context: context,
+              builder: (context) => _RequirementApprovalDialog(group: group),
+            );
+            if (action == 'approve') {
+              final saved = await widget.repository.approveClass(group.id);
+              _selectedGroupId = saved.id;
+              widget.onWorkflowChanged?.call();
+              _showMessage(
+                'Required items approved. They are ready to publish.',
+              );
+            } else if (action == 'reject') {
+              final reason = await _askReason();
+              if (reason == null) return;
+              final saved = await widget.repository.rejectClass(
+                group.id,
+                reason,
+              );
+              _selectedGroupId = saved.id;
+              widget.onWorkflowChanged?.call();
+              _showMessage('Required items returned to Draft.');
+            }
+          } else if (group.creatorOwned) {
+            final saved = await widget.repository.withdrawClass(group.id);
+            _selectedGroupId = saved.id;
+            widget.onWorkflowChanged?.call();
+            _showMessage('Approval request withdrawn.');
+          } else {
+            _showError(
+              StateError('This request is assigned to another approver.'),
+            );
+          }
+        case RequirementStatus.approved:
+          await _showPublishDialog(group);
+        case RequirementStatus.published:
+          return;
+      }
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
+  Future<String?> _askReason() async {
+    final controller = TextEditingController();
+    String? errorText;
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Why are these items being rejected?'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLines: 3,
+            onChanged: (_) {
+              if (errorText != null) {
+                setDialogState(() => errorText = null);
+              }
+            },
+            decoration: InputDecoration(
+              labelText: 'Reason',
+              errorText: errorText,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final reason = controller.text.trim();
+                if (reason.isEmpty) {
+                  setDialogState(
+                    () => errorText = 'Enter a reason before rejecting.',
+                  );
+                  return;
+                }
+                Navigator.pop(context, reason);
+              },
+              child: const Text('Reject'),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+    return result;
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: AppColors.green),
     );
   }
 
@@ -315,16 +614,185 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
   }
 
   Future<void> _addCustomRequirement(StudentRequirementProgress student) async {
-    final requirement = await showDialog<StudentCustomRequirement>(
+    final result = await showDialog<_StudentRequirementFormResult>(
       context: context,
-      builder: (context) => const _StudentCustomRequirementDialog(),
+      builder: (context) => _StudentCustomRequirementDialog(
+        lockedStudentId: student.id,
+        lockedStudentName: student.name,
+        lockedClassName: widget.repository.groups
+            .where((group) => group.id == student.classGroupId)
+            .map((group) => group.className)
+            .firstOrNull,
+      ),
     );
-    if (requirement == null) return;
+    if (result == null) return;
     try {
       await widget.repository.addStudentRequirement(
         studentId: student.id,
-        requirement: requirement,
+        requirement: result.requirement,
       );
+      widget.onWorkflowChanged?.call();
+      _showMessage('Student-specific requirement saved as Draft.');
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
+  Future<void> _showStudentRequirementForm({
+    StudentCustomRequirement? initial,
+  }) async {
+    final result = await showDialog<_StudentRequirementFormResult>(
+      context: context,
+      builder: (context) => _StudentCustomRequirementDialog(
+        candidates: widget.repository.studentCandidates,
+        initialRequirement: initial,
+      ),
+    );
+    if (result == null) return;
+    try {
+      if (initial == null) {
+        await widget.repository.addStudentRequirement(
+          studentId: result.studentId,
+          requirement: result.requirement,
+        );
+      } else {
+        await widget.repository.updateStudentRequirement(result.requirement);
+      }
+      widget.onWorkflowChanged?.call();
+      _showMessage(
+        initial == null
+            ? 'Student-specific requirement saved as Draft.'
+            : 'Student-specific requirement updated.',
+      );
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
+  Future<void> _deleteStudentRequirement(
+    StudentCustomRequirement requirement,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove student-specific requirement?'),
+        content: Text(
+          'Remove ${requirement.name} from ${requirement.studentName}? This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await widget.repository.deleteStudentRequirement(requirement.id);
+      widget.onWorkflowChanged?.call();
+      _showMessage('Student-specific requirement removed.');
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
+  Future<void> _submitStudentRequirement(
+    StudentCustomRequirement requirement,
+  ) async {
+    try {
+      final approvers = await widget.repository
+          .getStudentRequirementApprovers();
+      if (!mounted) return;
+      if (approvers.isEmpty) {
+        throw StateError(
+          'Add another active Administrator or Headmaster before submitting.',
+        );
+      }
+      final submission = await showDialog<_RequirementSubmission>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => _StudentRequirementSubmissionDialog(
+          requirement: requirement,
+          approvers: approvers,
+        ),
+      );
+      if (submission == null) return;
+      await widget.repository.submitStudentRequirement(
+        requirement.id,
+        submission.approverId,
+        note: submission.note,
+      );
+      widget.onWorkflowChanged?.call();
+      _showMessage('Student-specific requirement submitted for approval.');
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
+  Future<void> _withdrawStudentRequirement(
+    StudentCustomRequirement requirement,
+  ) async {
+    try {
+      await widget.repository.withdrawStudentRequirement(requirement.id);
+      widget.onWorkflowChanged?.call();
+      _showMessage('Approval request withdrawn. The item is now Draft.');
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
+  Future<void> _reviewStudentRequirement(
+    StudentCustomRequirement requirement,
+  ) async {
+    final action = await showDialog<String>(
+      context: context,
+      builder: (context) =>
+          _StudentRequirementReviewDialog(requirement: requirement),
+    );
+    if (action == null) return;
+    try {
+      if (action == 'approve') {
+        await widget.repository.approveStudentRequirement(requirement.id);
+        widget.onWorkflowChanged?.call();
+        _showMessage(
+          'Requirement approved and made visible on the student record.',
+        );
+      } else if (action == 'reject') {
+        final reason = await _askReason();
+        if (reason == null) return;
+        await widget.repository.rejectStudentRequirement(
+          requirement.id,
+          reason,
+        );
+        widget.onWorkflowChanged?.call();
+        _showMessage('Requirement returned for changes.');
+      }
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
+  Future<void> _recordStudentRequirement(
+    StudentCustomRequirement requirement,
+  ) async {
+    final quantity = await showDialog<int>(
+      context: context,
+      builder: (context) =>
+          _StudentRequirementReceivedDialog(requirement: requirement),
+    );
+    if (quantity == null) return;
+    try {
+      await widget.repository.recordStudentRequirementReceived(
+        requirement.id,
+        quantity,
+      );
+      _showMessage('Delivered quantity updated.');
     } catch (error) {
       _showError(error);
     }
@@ -336,6 +804,14 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
       SnackBar(content: Text('$error'), backgroundColor: AppColors.red),
     );
   }
+}
+
+enum _RequirementsView { classes, students }
+
+class _RequirementSubmission {
+  const _RequirementSubmission(this.approverId, this.note);
+  final int approverId;
+  final String note;
 }
 
 class _RequirementLoadError extends StatelessWidget {
@@ -383,15 +859,33 @@ class _RequirementsOverview extends StatelessWidget {
   const _RequirementsOverview({
     required this.repository,
     required this.termName,
+    required this.selectedView,
+    required this.onViewChanged,
     required this.onOpenClass,
     required this.onAddClass,
+    required this.onAddStudentRequirement,
+    required this.onEditStudentRequirement,
+    required this.onDeleteStudentRequirement,
+    required this.onSubmitStudentRequirement,
+    required this.onWithdrawStudentRequirement,
+    required this.onReviewStudentRequirement,
+    required this.onRecordStudentRequirement,
     required this.onOpenPriorTerm,
   });
 
   final ClassRequirementsRepository repository;
   final String termName;
+  final _RequirementsView selectedView;
+  final ValueChanged<_RequirementsView> onViewChanged;
   final ValueChanged<ClassRequirementGroup> onOpenClass;
   final VoidCallback onAddClass;
+  final VoidCallback onAddStudentRequirement;
+  final ValueChanged<StudentCustomRequirement> onEditStudentRequirement;
+  final ValueChanged<StudentCustomRequirement> onDeleteStudentRequirement;
+  final ValueChanged<StudentCustomRequirement> onSubmitStudentRequirement;
+  final ValueChanged<StudentCustomRequirement> onWithdrawStudentRequirement;
+  final ValueChanged<StudentCustomRequirement> onReviewStudentRequirement;
+  final ValueChanged<StudentCustomRequirement> onRecordStudentRequirement;
   final VoidCallback onOpenPriorTerm;
 
   @override
@@ -434,12 +928,18 @@ class _RequirementsOverview extends StatelessWidget {
         _PageHeading(
           title: 'Items & Supplies',
           subtitle:
-              '$termName · Add a class, then define the items its students must supply.',
+              '$termName · Manage class-wide and student-specific requirements.',
           actions: [
             FilledButton.icon(
-              onPressed: onAddClass,
+              onPressed: selectedView == _RequirementsView.classes
+                  ? onAddClass
+                  : onAddStudentRequirement,
               icon: const Icon(Icons.add_rounded),
-              label: const Text('Add class'),
+              label: Text(
+                selectedView == _RequirementsView.classes
+                    ? 'Add class'
+                    : 'Add student requirement',
+              ),
             ),
           ],
         ),
@@ -505,49 +1005,722 @@ class _RequirementsOverview extends StatelessWidget {
           onOpen: onOpenPriorTerm,
         ),
         const SizedBox(height: 24),
-        Row(
-          children: [
-            const Expanded(
-              child: Text(
-                'Requirements by class',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
-              ),
-            ),
-            Text(
-              '${groups.length} classes',
-              style: const TextStyle(color: AppColors.muted),
-            ),
-          ],
+        _RequirementViewTabs(
+          selected: selectedView,
+          classActionCount: repository.unpublishedClassRequirementCount,
+          studentActionCount: repository.unpublishedStudentRequirementCount,
+          onChanged: onViewChanged,
         ),
-        const SizedBox(height: 14),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final columns = constraints.maxWidth < 720
-                ? 1
-                : constraints.maxWidth < 1100
-                ? 2
-                : 3;
-            final width =
-                (constraints.maxWidth - (18 * (columns - 1))) / columns;
-            return Wrap(
-              spacing: 18,
-              runSpacing: 18,
-              children: groups
-                  .map(
-                    (group) => SizedBox(
-                      width: width,
-                      child: _ClassRequirementCard(
-                        repository: repository,
-                        group: group,
-                        onTap: () => onOpenClass(group),
+        const SizedBox(height: 18),
+        if (selectedView == _RequirementsView.classes)
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth < 720
+                  ? 1
+                  : constraints.maxWidth < 1100
+                  ? 2
+                  : 3;
+              final width =
+                  (constraints.maxWidth - (18 * (columns - 1))) / columns;
+              return Wrap(
+                spacing: 18,
+                runSpacing: 18,
+                children: groups
+                    .map(
+                      (group) => SizedBox(
+                        width: width,
+                        child: _ClassRequirementCard(
+                          repository: repository,
+                          group: group,
+                          onTap: () => onOpenClass(group),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              );
+            },
+          )
+        else
+          _StudentSpecificRequirementsPanel(
+            requirements: repository.studentSpecificRequirements,
+            onAdd: onAddStudentRequirement,
+            onEdit: onEditStudentRequirement,
+            onDelete: onDeleteStudentRequirement,
+            onSubmit: onSubmitStudentRequirement,
+            onWithdraw: onWithdrawStudentRequirement,
+            onReview: onReviewStudentRequirement,
+            onRecord: onRecordStudentRequirement,
+          ),
+      ],
+    );
+  }
+}
+
+class _RequirementViewTabs extends StatelessWidget {
+  const _RequirementViewTabs({
+    required this.selected,
+    required this.classActionCount,
+    required this.studentActionCount,
+    required this.onChanged,
+  });
+
+  final _RequirementsView selected;
+  final int classActionCount;
+  final int studentActionCount;
+  final ValueChanged<_RequirementsView> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(5),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 650;
+          final tabs = [
+            _RequirementTabButton(
+              label: 'Class requirements',
+              icon: Icons.groups_2_outlined,
+              count: classActionCount,
+              selected: selected == _RequirementsView.classes,
+              onTap: () => onChanged(_RequirementsView.classes),
+            ),
+            _RequirementTabButton(
+              label: 'Student-specific requirements',
+              icon: Icons.person_outline_rounded,
+              count: studentActionCount,
+              selected: selected == _RequirementsView.students,
+              onTap: () => onChanged(_RequirementsView.students),
+            ),
+          ];
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: tabs,
+            );
+          }
+          return Row(
+            children: tabs.map((tab) => Expanded(child: tab)).toList(),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _RequirementTabButton extends StatelessWidget {
+  const _RequirementTabButton({
+    required this.label,
+    required this.icon,
+    required this.count,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final int count;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(3),
+      child: Material(
+        color: selected ? AppColors.greenSoft : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          key: Key('requirements-tab-${label.toLowerCase()}'),
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  icon,
+                  size: 20,
+                  color: selected ? AppColors.green : AppColors.muted,
+                ),
+                const SizedBox(width: 9),
+                Flexible(
+                  child: Text(
+                    label,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontWeight: selected ? FontWeight.w800 : FontWeight.w700,
+                      color: selected ? AppColors.green : AppColors.text,
+                    ),
+                  ),
+                ),
+                if (count > 0) ...[
+                  const SizedBox(width: 9),
+                  Tooltip(
+                    message: '$count not published',
+                    child: Container(
+                      key: Key('requirements-unpublished-$label'),
+                      constraints: const BoxConstraints(minWidth: 25),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 7,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.amber.withValues(alpha: .16),
+                        borderRadius: BorderRadius.circular(99),
+                      ),
+                      child: Text(
+                        '$count',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: AppColors.amber,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                        ),
                       ),
                     ),
-                  )
-                  .toList(),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StudentSpecificRequirementsPanel extends StatefulWidget {
+  const _StudentSpecificRequirementsPanel({
+    required this.requirements,
+    required this.onAdd,
+    required this.onEdit,
+    required this.onDelete,
+    required this.onSubmit,
+    required this.onWithdraw,
+    required this.onReview,
+    required this.onRecord,
+  });
+
+  final List<StudentCustomRequirement> requirements;
+  final VoidCallback onAdd;
+  final ValueChanged<StudentCustomRequirement> onEdit;
+  final ValueChanged<StudentCustomRequirement> onDelete;
+  final ValueChanged<StudentCustomRequirement> onSubmit;
+  final ValueChanged<StudentCustomRequirement> onWithdraw;
+  final ValueChanged<StudentCustomRequirement> onReview;
+  final ValueChanged<StudentCustomRequirement> onRecord;
+
+  @override
+  State<_StudentSpecificRequirementsPanel> createState() =>
+      _StudentSpecificRequirementsPanelState();
+}
+
+class _StudentSpecificRequirementsPanelState
+    extends State<_StudentSpecificRequirementsPanel> {
+  static const _pageSize = 10;
+  final _search = TextEditingController();
+  StudentSpecificRequirementStatus? _status;
+  int _page = 0;
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  List<StudentCustomRequirement> get _filtered {
+    final query = _search.text.trim().toLowerCase();
+    final values = widget.requirements.where((item) {
+      final matchesStatus = _status == null || item.status == _status;
+      final matchesQuery =
+          query.isEmpty ||
+          item.studentName.toLowerCase().contains(query) ||
+          item.name.toLowerCase().contains(query) ||
+          item.className.toLowerCase().contains(query);
+      return matchesStatus && matchesQuery;
+    }).toList();
+    values.sort((a, b) {
+      final aDate = a.updatedAt ?? a.createdAt ?? a.dueDate;
+      final bDate = b.updatedAt ?? b.createdAt ?? b.dueDate;
+      return bDate.compareTo(aDate);
+    });
+    return values;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filtered = _filtered;
+    final pageCount = filtered.isEmpty
+        ? 1
+        : (filtered.length / _pageSize).ceil();
+    if (_page >= pageCount) _page = pageCount - 1;
+    final start = _page * _pageSize;
+    final visible = filtered.skip(start).take(_pageSize).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final search = TextField(
+              controller: _search,
+              onChanged: (_) => setState(() => _page = 0),
+              decoration: const InputDecoration(
+                hintText: 'Search student, class or item',
+                prefixIcon: Icon(Icons.search_rounded),
+              ),
+            );
+            final status =
+                DropdownButtonFormField<StudentSpecificRequirementStatus?>(
+                  value: _status,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Status'),
+                  items: [
+                    const DropdownMenuItem(
+                      value: null,
+                      child: Text('All statuses'),
+                    ),
+                    ...StudentSpecificRequirementStatus.values.map(
+                      (value) => DropdownMenuItem(
+                        value: value,
+                        child: Text(_studentRequirementStatusLabel(value)),
+                      ),
+                    ),
+                  ],
+                  onChanged: (value) => setState(() {
+                    _status = value;
+                    _page = 0;
+                  }),
+                );
+            if (constraints.maxWidth < 680) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [search, const SizedBox(height: 12), status],
+              );
+            }
+            return Row(
+              children: [
+                Expanded(flex: 2, child: search),
+                const SizedBox(width: 12),
+                SizedBox(width: 220, child: status),
+              ],
             );
           },
         ),
+        const SizedBox(height: 16),
+        if (visible.isEmpty)
+          _StudentRequirementsEmptyState(onAdd: widget.onAdd)
+        else
+          LayoutBuilder(
+            builder: (context, constraints) => constraints.maxWidth < 850
+                ? Column(
+                    children: visible
+                        .map(
+                          (item) => Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: _StudentRequirementCard(
+                              requirement: item,
+                              onAction: (action) => _handleAction(item, action),
+                            ),
+                          ),
+                        )
+                        .toList(),
+                  )
+                : _StudentRequirementTable(
+                    requirements: visible,
+                    onAction: _handleAction,
+                  ),
+          ),
+        if (filtered.length > _pageSize) ...[
+          const SizedBox(height: 14),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Text(
+                '${start + 1}–${start + visible.length} of ${filtered.length}',
+                style: const TextStyle(color: AppColors.muted),
+              ),
+              const SizedBox(width: 12),
+              IconButton.outlined(
+                tooltip: 'Previous page',
+                onPressed: _page == 0 ? null : () => setState(() => _page--),
+                icon: const Icon(Icons.chevron_left_rounded),
+              ),
+              const SizedBox(width: 8),
+              IconButton.outlined(
+                tooltip: 'Next page',
+                onPressed: _page + 1 >= pageCount
+                    ? null
+                    : () => setState(() => _page++),
+                icon: const Icon(Icons.chevron_right_rounded),
+              ),
+            ],
+          ),
+        ],
       ],
+    );
+  }
+
+  void _handleAction(StudentCustomRequirement item, String action) {
+    switch (action) {
+      case 'edit':
+        widget.onEdit(item);
+      case 'delete':
+        widget.onDelete(item);
+      case 'submit':
+        widget.onSubmit(item);
+      case 'withdraw':
+        widget.onWithdraw(item);
+      case 'review':
+      case 'view':
+        widget.onReview(item);
+      case 'record':
+        widget.onRecord(item);
+    }
+  }
+}
+
+class _StudentRequirementsEmptyState extends StatelessWidget {
+  const _StudentRequirementsEmptyState({required this.onAdd});
+  final VoidCallback onAdd;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 46),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          const Icon(
+            Icons.person_add_alt_1_outlined,
+            size: 38,
+            color: AppColors.green,
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'No student-specific requirements',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Add an item needed by one student only.',
+            style: TextStyle(color: AppColors.muted),
+          ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: onAdd,
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('Add student requirement'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StudentRequirementTable extends StatelessWidget {
+  const _StudentRequirementTable({
+    required this.requirements,
+    required this.onAction,
+  });
+
+  final List<StudentCustomRequirement> requirements;
+  final void Function(StudentCustomRequirement, String) onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          const _StudentRequirementTableRow(header: true),
+          ...requirements.map(
+            (item) => _StudentRequirementTableRow(
+              requirement: item,
+              onAction: (action) => onAction(item, action),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StudentRequirementTableRow extends StatelessWidget {
+  const _StudentRequirementTableRow({
+    this.requirement,
+    this.onAction,
+    this.header = false,
+  });
+
+  final StudentCustomRequirement? requirement;
+  final ValueChanged<String>? onAction;
+  final bool header;
+
+  @override
+  Widget build(BuildContext context) {
+    final item = requirement;
+    final style = TextStyle(
+      color: header ? AppColors.muted : AppColors.text,
+      fontSize: header ? 11 : 13,
+      fontWeight: header ? FontWeight.w800 : FontWeight.w600,
+    );
+    Widget cell(String value, int flex, {Widget? child}) => Expanded(
+      flex: flex,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child:
+            child ?? Text(value, overflow: TextOverflow.ellipsis, style: style),
+      ),
+    );
+    return Container(
+      constraints: BoxConstraints(minHeight: header ? 46 : 66),
+      decoration: BoxDecoration(
+        color: header ? AppColors.background : Colors.white,
+        border: header
+            ? null
+            : const Border(top: BorderSide(color: AppColors.border)),
+      ),
+      child: Row(
+        children: [
+          cell(
+            header ? 'STUDENT' : item!.studentName,
+            22,
+            child: header
+                ? null
+                : Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item!.studentName,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        item.className,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+          cell(header ? 'ITEM' : item!.name, 22),
+          cell(
+            header ? 'QUANTITY' : '${item!.quantity} ${item.unit}',
+            14,
+            child: header
+                ? null
+                : Text(
+                    '${item!.quantity} ${item.unit}',
+                    style: const TextStyle(
+                      color: AppColors.green,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+          ),
+          cell(header ? 'DUE DATE' : _date(item!.dueDate), 15),
+          cell(
+            header ? 'STATUS' : '',
+            17,
+            child: header ? null : _StudentRequirementStatusChip(item!.status),
+          ),
+          cell(
+            header ? 'ACTIONS' : '',
+            10,
+            child: header
+                ? null
+                : Align(
+                    alignment: Alignment.centerRight,
+                    child: _StudentRequirementActions(
+                      requirement: item!,
+                      onAction: onAction!,
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StudentRequirementCard extends StatelessWidget {
+  const _StudentRequirementCard({
+    required this.requirement,
+    required this.onAction,
+  });
+  final StudentCustomRequirement requirement;
+  final ValueChanged<String> onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: AppColors.greenSoft,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.person_outline, color: AppColors.green),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  requirement.studentName,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  '${requirement.name} · ${requirement.quantity} ${requirement.unit}',
+                  style: const TextStyle(color: AppColors.muted),
+                ),
+                const SizedBox(height: 8),
+                _StudentRequirementStatusChip(requirement.status),
+              ],
+            ),
+          ),
+          _StudentRequirementActions(
+            requirement: requirement,
+            onAction: onAction,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StudentRequirementActions extends StatelessWidget {
+  const _StudentRequirementActions({
+    required this.requirement,
+    required this.onAction,
+  });
+  final StudentCustomRequirement requirement;
+  final ValueChanged<String> onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final actions = <PopupMenuEntry<String>>[];
+    final editable =
+        requirement.creatorOwned &&
+        (requirement.status == StudentSpecificRequirementStatus.draft ||
+            requirement.status ==
+                StudentSpecificRequirementStatus.changesRequested);
+    if (editable) {
+      actions.addAll(const [
+        PopupMenuItem(value: 'edit', child: Text('Edit')),
+        PopupMenuItem(value: 'submit', child: Text('Submit for approval')),
+        PopupMenuItem(value: 'delete', child: Text('Remove')),
+      ]);
+    } else if (requirement.canApprove &&
+        requirement.status ==
+            StudentSpecificRequirementStatus.pendingApproval) {
+      actions.add(
+        const PopupMenuItem(value: 'review', child: Text('Review request')),
+      );
+    } else if (requirement.canWithdraw) {
+      actions.add(
+        const PopupMenuItem(
+          value: 'withdraw',
+          child: Text('Withdraw approval request'),
+        ),
+      );
+    } else if (requirement.status == StudentSpecificRequirementStatus.active &&
+        requirement.receivedQuantity < requirement.quantity) {
+      actions.addAll(const [
+        PopupMenuItem(value: 'record', child: Text('Record delivery')),
+        PopupMenuItem(value: 'view', child: Text('View details')),
+      ]);
+    } else {
+      actions.add(
+        const PopupMenuItem(value: 'view', child: Text('View details')),
+      );
+    }
+    return PopupMenuButton<String>(
+      tooltip: 'Actions',
+      onSelected: onAction,
+      itemBuilder: (context) => actions,
+      icon: const Icon(Icons.more_horiz_rounded),
+    );
+  }
+}
+
+class _StudentRequirementStatusChip extends StatelessWidget {
+  const _StudentRequirementStatusChip(this.status);
+  final StudentSpecificRequirementStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final (color, background) = switch (status) {
+      StudentSpecificRequirementStatus.active => (
+        AppColors.green,
+        AppColors.greenSoft,
+      ),
+      StudentSpecificRequirementStatus.pendingApproval => (
+        AppColors.amber,
+        AppColors.amber.withValues(alpha: .12),
+      ),
+      StudentSpecificRequirementStatus.changesRequested => (
+        AppColors.red,
+        AppColors.red.withValues(alpha: .09),
+      ),
+      StudentSpecificRequirementStatus.draft => (
+        AppColors.blue,
+        AppColors.blue.withValues(alpha: .09),
+      ),
+      StudentSpecificRequirementStatus.inactive => (
+        AppColors.muted,
+        AppColors.background,
+      ),
+    };
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+        decoration: BoxDecoration(
+          color: background,
+          borderRadius: BorderRadius.circular(99),
+        ),
+        child: Text(
+          _studentRequirementStatusLabel(status),
+          style: TextStyle(
+            color: color,
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -656,10 +1829,282 @@ class _PriorTermBanner extends StatelessWidget {
   }
 }
 
+class _RequirementApprovalDialog extends StatelessWidget {
+  const _RequirementApprovalDialog({required this.group});
+
+  final ClassRequirementGroup group;
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 780),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 20, 12, 16),
+              child: Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: AppColors.amber.withValues(alpha: .11),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.fact_check_outlined,
+                      color: AppColors.amber,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Review required items',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          '${group.className} · ${group.items.length} item${group.items.length == 1 ? '' : 's'}',
+                          style: const TextStyle(color: AppColors.muted),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView.separated(
+                padding: const EdgeInsets.all(18),
+                itemCount: group.items.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 10),
+                itemBuilder: (context, index) {
+                  final item = group.items[index];
+                  return Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(13),
+                      border: Border.all(color: AppColors.border),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 92,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 12,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppColors.greenSoft,
+                            borderRadius: BorderRadius.circular(11),
+                          ),
+                          child: Column(
+                            children: [
+                              Text(
+                                '${item.quantity}',
+                                key: Key('approval-quantity-${item.id}'),
+                                style: const TextStyle(
+                                  color: AppColors.green,
+                                  fontSize: 26,
+                                  fontWeight: FontWeight.w900,
+                                  height: 1,
+                                ),
+                              ),
+                              const SizedBox(height: 5),
+                              Text(
+                                item.unit,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  color: AppColors.green,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                item.name,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                              const SizedBox(height: 5),
+                              Text(
+                                '${item.category} · Due ${_date(item.dueDate)}',
+                                style: const TextStyle(
+                                  color: AppColors.muted,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              if (item.instructions.isNotEmpty) ...[
+                                const SizedBox(height: 7),
+                                Text(
+                                  item.instructions,
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                              ],
+                              const SizedBox(height: 8),
+                              Text(
+                                'Estimated price: ${_money(item.estimatedUnitPrice)} per ${_singularUnit(item.unit)}',
+                                style: const TextStyle(
+                                  color: AppColors.muted,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.all(18),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    key: const Key('reject-requirement-list'),
+                    onPressed: () => Navigator.pop(context, 'reject'),
+                    child: const Text('Reject'),
+                  ),
+                  const SizedBox(width: 10),
+                  FilledButton.icon(
+                    key: const Key('approve-requirement-list'),
+                    onPressed: () => Navigator.pop(context, 'approve'),
+                    icon: const Icon(Icons.check_rounded),
+                    label: const Text('Approve items'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ApprovedRequirementsBanner extends StatelessWidget {
+  const _ApprovedRequirementsBanner({
+    required this.canPublish,
+    required this.onPublish,
+  });
+
+  final bool canPublish;
+  final VoidCallback? onPublish;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.amber.withValues(alpha: .09),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.amber.withValues(alpha: .38)),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final content = Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: const Icon(
+                  Icons.publish_rounded,
+                  color: AppColors.amber,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Approved — publication required',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      canPublish
+                          ? 'Next step: publish these items so they appear in student records, reports and guardian portals.'
+                          : 'These items are approved but still hidden. The creator must publish them before they appear in student records, reports and guardian portals.',
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+          final button = FilledButton.icon(
+            key: const Key('publish-approved-requirements'),
+            onPressed: onPublish,
+            icon: const Icon(Icons.publish_rounded, size: 18),
+            label: const Text('Publish items'),
+          );
+          if (constraints.maxWidth < 700) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                content,
+                if (canPublish) ...[const SizedBox(height: 14), button],
+              ],
+            );
+          }
+          return Row(
+            children: [
+              Expanded(child: content),
+              if (canPublish) ...[const SizedBox(width: 18), button],
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
 class _ClassTracker extends StatelessWidget {
   const _ClassTracker({
     required this.repository,
     required this.group,
+    required this.currentUserId,
     required this.onBack,
     required this.onAddRequirement,
     required this.onEditRequirement,
@@ -670,6 +2115,7 @@ class _ClassTracker extends StatelessWidget {
 
   final ClassRequirementsRepository repository;
   final ClassRequirementGroup group;
+  final int currentUserId;
   final VoidCallback onBack;
   final VoidCallback onAddRequirement;
   final ValueChanged<ClassRequirementItem> onEditRequirement;
@@ -681,6 +2127,16 @@ class _ClassTracker extends StatelessWidget {
   Widget build(BuildContext context) {
     final students = repository.studentsForClass(group.id);
     final hasItems = group.items.isNotEmpty;
+    final canEdit =
+        group.status == RequirementStatus.published ||
+        (group.status == RequirementStatus.draft && group.creatorOwned);
+    final canUseWorkflow = switch (group.status) {
+      RequirementStatus.draft => group.creatorOwned,
+      RequirementStatus.pendingApproval =>
+        group.creatorOwned || group.assignedApproverId == currentUserId,
+      RequirementStatus.approved => group.creatorOwned,
+      RequirementStatus.published => false,
+    };
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -695,37 +2151,100 @@ class _ClassTracker extends StatelessWidget {
           subtitle:
               '${group.items.length} items · ${group.studentCount} students · ${(100 * _groupCompletion(repository, group)).round()}% complete',
           actions: [
-            OutlinedButton.icon(
-              onPressed: onAddRequirement,
-              icon: const Icon(Icons.add_rounded),
-              label: const Text('Add class item'),
-            ),
-            FilledButton.icon(
-              onPressed: group.draftChangeCount == 0 ? null : onPublish,
-              icon: Icon(
-                hasItems ? Icons.campaign_outlined : Icons.inventory_2_outlined,
+            if (canEdit)
+              OutlinedButton.icon(
+                onPressed: onAddRequirement,
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('Add class item'),
               ),
-              label: Text(
-                !hasItems
-                    ? 'Add items to publish'
-                    : group.draftChangeCount == 0
-                    ? 'Published'
-                    : onPublish == null
-                    ? 'Approval required'
-                    : 'Review & publish (${group.draftChangeCount})',
+            if (group.status != RequirementStatus.approved &&
+                group.status != RequirementStatus.published)
+              FilledButton.icon(
+                onPressed: !hasItems || !canUseWorkflow ? null : onPublish,
+                icon: Icon(
+                  hasItems
+                      ? Icons.campaign_outlined
+                      : Icons.inventory_2_outlined,
+                ),
+                label: Text(
+                  !hasItems
+                      ? 'Add items to publish'
+                      : switch (group.status) {
+                          RequirementStatus.draft => 'Submit for approval',
+                          RequirementStatus.pendingApproval =>
+                            group.creatorOwned
+                                ? 'Withdraw approval request'
+                                : group.assignedApproverId == currentUserId
+                                ? 'Review approval'
+                                : 'Pending · ${group.assignedApproverName}',
+                          RequirementStatus.approved => 'Publish items',
+                          RequirementStatus.published => 'Published',
+                        },
+                ),
               ),
-            ),
+            if (!canEdit && group.status == RequirementStatus.draft)
+              const Padding(
+                padding: EdgeInsets.only(left: 8),
+                child: _SmallPill(
+                  label: 'Awaiting creator',
+                  color: AppColors.muted,
+                ),
+              ),
           ],
         ),
+        if (group.status == RequirementStatus.approved) ...[
+          const SizedBox(height: 14),
+          _ApprovedRequirementsBanner(
+            canPublish: canUseWorkflow,
+            onPublish: canUseWorkflow ? onPublish : null,
+          ),
+        ],
+        if (group.status == RequirementStatus.draft &&
+            group.rejectionReason.trim().isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+            decoration: BoxDecoration(
+              color: AppColors.red.withValues(alpha: .08),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.red.withValues(alpha: .3)),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(
+                  Icons.info_outline_rounded,
+                  color: AppColors.red,
+                  size: 20,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Returned for changes: ${group.rejectionReason}',
+                    style: const TextStyle(
+                      color: AppColors.red,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: 20),
         if (!hasItems) ...[
-          _EmptyClassSetup(onAddRequirement: onAddRequirement),
+          _EmptyClassSetup(onAddRequirement: canEdit ? onAddRequirement : null),
           const SizedBox(height: 20),
         ],
         _ClassChecklistTable(
           items: group.items,
-          onEdit: onEditRequirement,
-          onDelete: onDeleteRequirement,
+          isRevision:
+              group.hasPublishedVersion &&
+              group.status != RequirementStatus.published,
+          status: group.status,
+          onEdit: canEdit ? onEditRequirement : null,
+          onDelete: canEdit ? onDeleteRequirement : null,
         ),
         const SizedBox(height: 20),
         const Text(
@@ -800,13 +2319,17 @@ class _ClassTracker extends StatelessWidget {
 class _ClassChecklistTable extends StatelessWidget {
   const _ClassChecklistTable({
     required this.items,
+    required this.isRevision,
+    required this.status,
     required this.onEdit,
     required this.onDelete,
   });
 
   final List<ClassRequirementItem> items;
-  final ValueChanged<ClassRequirementItem> onEdit;
-  final ValueChanged<ClassRequirementItem> onDelete;
+  final bool isRevision;
+  final RequirementStatus status;
+  final ValueChanged<ClassRequirementItem>? onEdit;
+  final ValueChanged<ClassRequirementItem>? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -853,8 +2376,14 @@ class _ClassChecklistTable extends StatelessWidget {
                           ...items.map(
                             (item) => _ChecklistRow(
                               item,
-                              onEdit: () => onEdit(item),
-                              onDelete: () => onDelete(item),
+                              isRevision: isRevision,
+                              status: status,
+                              onEdit: onEdit == null
+                                  ? null
+                                  : () => onEdit!(item),
+                              onDelete: onDelete == null
+                                  ? null
+                                  : () => onDelete!(item),
                             ),
                           ),
                         ],
@@ -881,12 +2410,11 @@ class _ChecklistHeader extends StatelessWidget {
       color: AppColors.background,
       child: const Row(
         children: [
-          _TableHeading('Item', flex: 28),
-          _TableHeading('Category', flex: 17),
-          _TableHeading('Required', flex: 13),
-          _TableHeading('Due date', flex: 14),
-          _TableHeading('Unit estimate', flex: 14),
-          _TableHeading('Total / student', flex: 15),
+          _TableHeading('Item', flex: 30),
+          _TableHeading('Required quantity', flex: 20),
+          _TableHeading('Category', flex: 16),
+          _TableHeading('Due date', flex: 16),
+          _TableHeading('Estimated price', flex: 14),
           _TableHeading('Status', flex: 14),
           _TableHeading('Actions', flex: 11),
         ],
@@ -898,13 +2426,17 @@ class _ChecklistHeader extends StatelessWidget {
 class _ChecklistRow extends StatelessWidget {
   const _ChecklistRow(
     this.item, {
+    required this.isRevision,
+    required this.status,
     required this.onEdit,
     required this.onDelete,
   });
 
   final ClassRequirementItem item;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
+  final bool isRevision;
+  final RequirementStatus status;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -916,7 +2448,7 @@ class _ChecklistRow extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            flex: 28,
+            flex: 30,
             child: Row(
               children: [
                 _RequirementIcon(category: item.category),
@@ -947,18 +2479,38 @@ class _ChecklistRow extends StatelessWidget {
               ],
             ),
           ),
-          _TableValue(item.category, flex: 17),
-          _TableValue('${item.quantity} ${item.unit}', flex: 13),
-          _TableValue(_date(item.dueDate), flex: 14),
+          Expanded(
+            flex: 20,
+            child: Row(
+              children: [
+                Text(
+                  '${item.quantity}',
+                  style: const TextStyle(
+                    color: AppColors.green,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    item.unit,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          _TableValue(item.category, flex: 16),
+          _TableValue(_date(item.dueDate), flex: 16),
           _TableValue(
             '${_money(item.estimatedUnitPrice)} / ${_singularUnit(item.unit)}',
             flex: 14,
-            color: AppColors.green,
-          ),
-          _TableValue(
-            _money(item.estimatedUnitPrice * item.quantity),
-            flex: 15,
-            bold: true,
+            color: AppColors.muted,
           ),
           Expanded(
             flex: 14,
@@ -966,34 +2518,57 @@ class _ChecklistRow extends StatelessWidget {
               spacing: 6,
               runSpacing: 5,
               children: [
-                if (item.updatedSincePublished)
+                if (item.updatedSincePublished && isRevision)
                   const _SmallPill(label: 'Updated', color: AppColors.amber),
                 if (item.isOptional)
                   const _SmallPill(label: 'Optional', color: AppColors.blue),
-                if (!item.updatedSincePublished && !item.isOptional)
-                  const _SmallPill(label: 'Current', color: AppColors.green),
+                if (!item.updatedSincePublished || !isRevision)
+                  _SmallPill(
+                    label: isRevision
+                        ? 'Current'
+                        : switch (status) {
+                            RequirementStatus.draft => 'Draft',
+                            RequirementStatus.pendingApproval =>
+                              'Pending approval',
+                            RequirementStatus.approved => 'Approved',
+                            RequirementStatus.published => 'Active',
+                          },
+                    color: isRevision
+                        ? AppColors.green
+                        : switch (status) {
+                            RequirementStatus.draft => AppColors.muted,
+                            RequirementStatus.pendingApproval =>
+                              AppColors.amber,
+                            RequirementStatus.approved => AppColors.blue,
+                            RequirementStatus.published => AppColors.green,
+                          },
+                  ),
               ],
             ),
           ),
           Expanded(
             flex: 11,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                IconButton(
-                  onPressed: onEdit,
-                  tooltip: 'Edit requirement',
-                  icon: const Icon(Icons.edit_outlined),
-                  color: AppColors.green,
-                ),
-                IconButton(
-                  onPressed: onDelete,
-                  tooltip: 'Delete requirement',
-                  icon: const Icon(Icons.delete_outline_rounded),
-                  color: AppColors.red,
-                ),
-              ],
-            ),
+            child: onEdit == null && onDelete == null
+                ? const SizedBox.shrink()
+                : Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      if (onEdit != null)
+                        IconButton(
+                          onPressed: onEdit,
+                          tooltip: 'Edit requirement',
+                          icon: const Icon(Icons.edit_outlined),
+                          color: AppColors.green,
+                        ),
+                      if (onDelete != null)
+                        IconButton(
+                          onPressed: onDelete,
+                          tooltip: 'Delete requirement',
+                          icon: const Icon(Icons.delete_outline_rounded),
+                          color: AppColors.red,
+                        ),
+                    ],
+                  ),
           ),
         ],
       ),
@@ -1025,17 +2600,11 @@ class _TableHeading extends StatelessWidget {
 }
 
 class _TableValue extends StatelessWidget {
-  const _TableValue(
-    this.value, {
-    required this.flex,
-    this.color,
-    this.bold = false,
-  });
+  const _TableValue(this.value, {required this.flex, this.color});
 
   final String value;
   final int flex;
   final Color? color;
-  final bool bold;
 
   @override
   Widget build(BuildContext context) {
@@ -1047,10 +2616,7 @@ class _TableValue extends StatelessWidget {
           value,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            color: color,
-            fontWeight: bold ? FontWeight.w900 : FontWeight.w600,
-          ),
+          style: TextStyle(color: color, fontWeight: FontWeight.w600),
         ),
       ),
     );
@@ -1096,12 +2662,19 @@ class _ClassRequirementCard extends StatelessWidget {
                     ),
                   ),
                   _SmallPill(
-                    label: group.draftChangeCount == 0
-                        ? 'Published'
-                        : '${group.draftChangeCount} draft change${group.draftChangeCount == 1 ? '' : 's'}',
-                    color: group.draftChangeCount == 0
-                        ? AppColors.green
-                        : AppColors.amber,
+                    label: switch (group.status) {
+                      RequirementStatus.published => 'Published',
+                      RequirementStatus.approved => 'Approved',
+                      RequirementStatus.pendingApproval => 'Pending approval',
+                      RequirementStatus.draft =>
+                        group.hasPublishedVersion ? 'Modified draft' : 'Draft',
+                    },
+                    color: switch (group.status) {
+                      RequirementStatus.published => AppColors.green,
+                      RequirementStatus.approved => AppColors.blue,
+                      RequirementStatus.pendingApproval => AppColors.amber,
+                      RequirementStatus.draft => AppColors.muted,
+                    },
                   ),
                 ],
               ),
@@ -1126,15 +2699,29 @@ class _ClassRequirementCard extends StatelessWidget {
                           const SizedBox(width: 8),
                           Expanded(child: Text(item.name)),
                           SizedBox(
-                            width: 142,
-                            child: Text(
-                              '${item.quantity} ${item.unit} · ${_money(item.estimatedUnitPrice)}/${_singularUnit(item.unit)}',
-                              textAlign: TextAlign.right,
-                              maxLines: 2,
-                              style: const TextStyle(
-                                color: AppColors.muted,
-                                fontSize: 12,
-                              ),
+                            width: 154,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text(
+                                  '${item.quantity} ${item.unit}',
+                                  style: const TextStyle(
+                                    color: AppColors.green,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Est. ${_money(item.estimatedUnitPrice)} / ${_singularUnit(item.unit)}',
+                                  textAlign: TextAlign.right,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: AppColors.muted,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
@@ -1217,7 +2804,7 @@ class _ClassRequirementCard extends StatelessWidget {
 class _EmptyClassSetup extends StatelessWidget {
   const _EmptyClassSetup({required this.onAddRequirement});
 
-  final VoidCallback onAddRequirement;
+  final VoidCallback? onAddRequirement;
 
   @override
   Widget build(BuildContext context) {
@@ -2270,8 +3857,30 @@ class _AdjustmentDialogState extends State<_AdjustmentDialog> {
   }
 }
 
+class _StudentRequirementFormResult {
+  const _StudentRequirementFormResult({
+    required this.studentId,
+    required this.requirement,
+  });
+
+  final String studentId;
+  final StudentCustomRequirement requirement;
+}
+
 class _StudentCustomRequirementDialog extends StatefulWidget {
-  const _StudentCustomRequirementDialog();
+  const _StudentCustomRequirementDialog({
+    this.candidates = const [],
+    this.initialRequirement,
+    this.lockedStudentId = '',
+    this.lockedStudentName,
+    this.lockedClassName,
+  });
+
+  final List<StudentRequirementCandidate> candidates;
+  final StudentCustomRequirement? initialRequirement;
+  final String lockedStudentId;
+  final String? lockedStudentName;
+  final String? lockedClassName;
 
   @override
   State<_StudentCustomRequirementDialog> createState() =>
@@ -2284,14 +3893,36 @@ class _StudentCustomRequirementDialogState
   final _name = TextEditingController();
   final _quantity = TextEditingController(text: '1');
   final _unit = TextEditingController(text: 'piece');
+  final _unitPrice = TextEditingController();
   final _notes = TextEditingController();
-  DateTime _dueDate = DateTime.now().add(const Duration(days: 14));
+  late DateTime _dueDate;
+  String? _studentId;
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = widget.initialRequirement;
+    _studentId = initial?.studentId.isNotEmpty == true
+        ? initial!.studentId
+        : widget.lockedStudentId.isNotEmpty
+        ? widget.lockedStudentId
+        : null;
+    _name.text = initial?.name ?? '';
+    _quantity.text = '${initial?.quantity ?? 1}';
+    _unit.text = initial?.unit ?? 'piece';
+    _unitPrice.text = initial == null || initial.estimatedUnitPrice == 0
+        ? ''
+        : '${initial.estimatedUnitPrice}';
+    _notes.text = initial?.notes ?? '';
+    _dueDate = initial?.dueDate ?? DateTime.now().add(const Duration(days: 14));
+  }
 
   @override
   void dispose() {
     _name.dispose();
     _quantity.dispose();
     _unit.dispose();
+    _unitPrice.dispose();
     _notes.dispose();
     super.dispose();
   }
@@ -2299,59 +3930,138 @@ class _StudentCustomRequirementDialogState
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Add student-only requirement'),
+      title: Text(
+        widget.initialRequirement == null
+            ? 'Add student-specific requirement'
+            : 'Edit student-specific requirement',
+      ),
       content: SizedBox(
-        width: 520,
+        width: 560,
         child: Form(
           key: _formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextFormField(
-                controller: _name,
-                decoration: const InputDecoration(labelText: 'Item name *'),
-                validator: _required,
-              ),
-              const SizedBox(height: 14),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _quantity,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'Quantity *',
-                      ),
-                      validator: (value) =>
-                          int.tryParse(value ?? '') == null ? 'Required' : null,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (widget.lockedStudentId.isNotEmpty)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: AppColors.greenSoft,
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _unit,
-                      decoration: const InputDecoration(labelText: 'Unit *'),
-                      validator: _required,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.lockedStudentName ?? 'Selected student',
+                          style: const TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                        if (widget.lockedClassName?.isNotEmpty == true) ...[
+                          const SizedBox(height: 3),
+                          Text(
+                            widget.lockedClassName!,
+                            style: const TextStyle(color: AppColors.muted),
+                          ),
+                        ],
+                      ],
                     ),
+                  )
+                else
+                  DropdownButtonFormField<String>(
+                    value: _studentId,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Student *',
+                      hintText: 'Select a student',
+                      prefixIcon: Icon(Icons.person_search_outlined),
+                    ),
+                    items: widget.candidates
+                        .map(
+                          (student) => DropdownMenuItem(
+                            value: student.studentId,
+                            child: Text(
+                              '${student.studentName} · ${student.className}',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: widget.initialRequirement == null
+                        ? (value) => setState(() => _studentId = value)
+                        : null,
+                    validator: (value) => value == null || value.isEmpty
+                        ? 'Select a student'
+                        : null,
                   ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              _DateField(
-                label: 'Due date',
-                date: _dueDate,
-                onChanged: (value) => setState(() => _dueDate = value),
-              ),
-              const SizedBox(height: 14),
-              TextFormField(
-                controller: _notes,
-                maxLines: 3,
-                decoration: const InputDecoration(
-                  labelText: 'Reason or instructions *',
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _name,
+                  decoration: const InputDecoration(labelText: 'Item name *'),
+                  validator: _required,
                 ),
-                validator: _required,
-              ),
-            ],
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _quantity,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Quantity *',
+                        ),
+                        validator: (value) => int.tryParse(value ?? '') == null
+                            ? 'Required'
+                            : null,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _unit,
+                        decoration: const InputDecoration(labelText: 'Unit *'),
+                        validator: _required,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _unitPrice,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Suggested unit price (optional)',
+                    prefixText: 'GH₵ ',
+                  ),
+                  validator: (value) {
+                    if ((value ?? '').trim().isEmpty) return null;
+                    final amount = double.tryParse(value!.trim());
+                    return amount == null || amount < 0
+                        ? 'Enter a valid amount'
+                        : null;
+                  },
+                ),
+                const SizedBox(height: 14),
+                _DateField(
+                  label: 'Due date *',
+                  date: _dueDate,
+                  onChanged: (value) => setState(() => _dueDate = value),
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _notes,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Reason or instructions *',
+                  ),
+                  validator: _required,
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -2365,17 +4075,392 @@ class _StudentCustomRequirementDialogState
             if (!_formKey.currentState!.validate()) return;
             Navigator.pop(
               context,
-              StudentCustomRequirement(
-                id: 'custom-${DateTime.now().microsecondsSinceEpoch}',
-                name: _name.text.trim(),
-                quantity: int.parse(_quantity.text),
-                unit: _unit.text.trim(),
-                dueDate: _dueDate,
-                notes: _notes.text.trim(),
+              _StudentRequirementFormResult(
+                studentId: _studentId!,
+                requirement: StudentCustomRequirement(
+                  id:
+                      widget.initialRequirement?.id ??
+                      'custom-${DateTime.now().microsecondsSinceEpoch}',
+                  name: _name.text.trim(),
+                  quantity: int.parse(_quantity.text),
+                  unit: _unit.text.trim(),
+                  dueDate: _dueDate,
+                  notes: _notes.text.trim(),
+                  studentId: _studentId!,
+                  studentName:
+                      widget.initialRequirement?.studentName ??
+                      widget.lockedStudentName ??
+                      widget.candidates
+                          .where((item) => item.studentId == _studentId)
+                          .map((item) => item.studentName)
+                          .firstOrNull ??
+                      '',
+                  className:
+                      widget.initialRequirement?.className ??
+                      widget.lockedClassName ??
+                      widget.candidates
+                          .where((item) => item.studentId == _studentId)
+                          .map((item) => item.className)
+                          .firstOrNull ??
+                      '',
+                  receivedQuantity:
+                      widget.initialRequirement?.receivedQuantity ?? 0,
+                  estimatedUnitPrice:
+                      double.tryParse(_unitPrice.text.trim()) ?? 0,
+                  status:
+                      widget.initialRequirement?.status ??
+                      StudentSpecificRequirementStatus.draft,
+                  creatorOwned: widget.initialRequirement?.creatorOwned ?? true,
+                  requesterName: widget.initialRequirement?.requesterName ?? '',
+                  requesterNote: widget.initialRequirement?.requesterNote ?? '',
+                  rejectionReason:
+                      widget.initialRequirement?.rejectionReason ?? '',
+                ),
               ),
             );
           },
-          child: const Text('Add requirement'),
+          child: Text(
+            widget.initialRequirement == null
+                ? 'Save as Draft'
+                : 'Save changes',
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _StudentRequirementSubmissionDialog extends StatefulWidget {
+  const _StudentRequirementSubmissionDialog({
+    required this.requirement,
+    required this.approvers,
+  });
+
+  final StudentCustomRequirement requirement;
+  final List<FeeApprover> approvers;
+
+  @override
+  State<_StudentRequirementSubmissionDialog> createState() =>
+      _StudentRequirementSubmissionDialogState();
+}
+
+class _StudentRequirementSubmissionDialogState
+    extends State<_StudentRequirementSubmissionDialog> {
+  int? _approverId;
+  final _note = TextEditingController();
+
+  @override
+  void dispose() {
+    _note.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      icon: const Icon(
+        Icons.approval_outlined,
+        color: AppColors.green,
+        size: 32,
+      ),
+      title: const Text('Submit for approval'),
+      content: SizedBox(
+        width: 470,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${widget.requirement.quantity} ${widget.requirement.unit} of ${widget.requirement.name} for ${widget.requirement.studentName}',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 18),
+            DropdownButtonFormField<int>(
+              value: _approverId,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Approver *',
+                prefixIcon: Icon(Icons.person_outline_rounded),
+              ),
+              items: widget.approvers
+                  .map(
+                    (approver) => DropdownMenuItem(
+                      value: approver.id,
+                      child: Text('${approver.name} · ${approver.role}'),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) => setState(() => _approverId = value),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _note,
+              maxLines: 3,
+              maxLength: 1000,
+              decoration: const InputDecoration(
+                labelText: 'Note for approver (optional)',
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton.icon(
+          onPressed: _approverId == null
+              ? null
+              : () => Navigator.pop(
+                  context,
+                  _RequirementSubmission(_approverId!, _note.text.trim()),
+                ),
+          icon: const Icon(Icons.send_outlined),
+          label: const Text('Submit'),
+        ),
+      ],
+    );
+  }
+}
+
+class _StudentRequirementReviewDialog extends StatelessWidget {
+  const _StudentRequirementReviewDialog({required this.requirement});
+  final StudentCustomRequirement requirement;
+
+  @override
+  Widget build(BuildContext context) {
+    final canDecide =
+        requirement.canApprove &&
+        requirement.status == StudentSpecificRequirementStatus.pendingApproval;
+    return AlertDialog(
+      title: Text(canDecide ? 'Review requirement' : 'Requirement details'),
+      content: SizedBox(
+        width: 520,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppColors.greenSoft,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    requirement.studentName,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    requirement.className,
+                    style: const TextStyle(color: AppColors.muted),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 18),
+            Text(
+              requirement.name,
+              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: _ReviewFact(
+                    label: 'QUANTITY REQUIRED',
+                    value: '${requirement.quantity} ${requirement.unit}',
+                    prominent: true,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _ReviewFact(
+                    label: 'DUE DATE',
+                    value: _date(requirement.dueDate),
+                  ),
+                ),
+              ],
+            ),
+            if (requirement.estimatedUnitPrice > 0) ...[
+              const SizedBox(height: 14),
+              _ReviewFact(
+                label: 'SUGGESTED PRICE',
+                value:
+                    '${_money(requirement.estimatedUnitPrice)} per ${_singularUnit(requirement.unit)}',
+              ),
+            ],
+            if (requirement.notes.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              _ReviewFact(label: 'INSTRUCTIONS', value: requirement.notes),
+            ],
+            if (requirement.requesterNote.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              _ReviewFact(
+                label: 'REQUESTER NOTE',
+                value: requirement.requesterNote,
+              ),
+            ],
+            if (requirement.rejectionReason.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              _ReviewFact(
+                label: 'CHANGES REQUESTED',
+                value: requirement.rejectionReason,
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+        if (canDecide) ...[
+          OutlinedButton(
+            onPressed: () => Navigator.pop(context, 'reject'),
+            child: const Text('Request changes'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, 'approve'),
+            icon: const Icon(Icons.check_rounded),
+            label: const Text('Approve'),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _StudentRequirementReceivedDialog extends StatefulWidget {
+  const _StudentRequirementReceivedDialog({required this.requirement});
+  final StudentCustomRequirement requirement;
+
+  @override
+  State<_StudentRequirementReceivedDialog> createState() =>
+      _StudentRequirementReceivedDialogState();
+}
+
+class _StudentRequirementReceivedDialogState
+    extends State<_StudentRequirementReceivedDialog> {
+  late final TextEditingController _quantity;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _quantity = TextEditingController(
+      text: '${widget.requirement.receivedQuantity}',
+    );
+  }
+
+  @override
+  void dispose() {
+    _quantity.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Record delivered quantity'),
+      content: SizedBox(
+        width: 440,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${widget.requirement.studentName} · ${widget.requirement.name}',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '${widget.requirement.quantity} ${widget.requirement.unit} required in total',
+              style: const TextStyle(color: AppColors.muted),
+            ),
+            const SizedBox(height: 18),
+            TextField(
+              controller: _quantity,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: 'Quantity delivered to date *',
+                errorText: _error,
+                suffixText: widget.requirement.unit,
+              ),
+              onChanged: (_) {
+                if (_error != null) setState(() => _error = null);
+              },
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final value = int.tryParse(_quantity.text.trim());
+            if (value == null ||
+                value < 0 ||
+                value > widget.requirement.quantity) {
+              setState(
+                () => _error =
+                    'Enter a quantity from 0 to ${widget.requirement.quantity}',
+              );
+              return;
+            }
+            Navigator.pop(context, value);
+          },
+          child: const Text('Save delivery'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ReviewFact extends StatelessWidget {
+  const _ReviewFact({
+    required this.label,
+    required this.value,
+    this.prominent = false,
+  });
+  final String label;
+  final String value;
+  final bool prominent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            color: AppColors.muted,
+            fontSize: 10,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: TextStyle(
+            color: prominent ? AppColors.green : AppColors.text,
+            fontSize: prominent ? 18 : 14,
+            fontWeight: prominent ? FontWeight.w900 : FontWeight.w700,
+          ),
         ),
       ],
     );
@@ -2773,6 +4858,16 @@ String _adjustmentLabel(RequirementAdjustmentType type) {
     RequirementAdjustmentType.cashEquivalent => 'Cash equivalent received',
   };
 }
+
+String _studentRequirementStatusLabel(
+  StudentSpecificRequirementStatus status,
+) => switch (status) {
+  StudentSpecificRequirementStatus.draft => 'Draft',
+  StudentSpecificRequirementStatus.pendingApproval => 'Pending approval',
+  StudentSpecificRequirementStatus.changesRequested => 'Changes requested',
+  StudentSpecificRequirementStatus.active => 'Active',
+  StudentSpecificRequirementStatus.inactive => 'Inactive',
+};
 
 String _date(DateTime date) {
   const months = [

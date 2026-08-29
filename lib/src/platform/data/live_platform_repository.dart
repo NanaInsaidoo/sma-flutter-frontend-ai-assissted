@@ -648,6 +648,10 @@ class LivePlatformRepository implements PlatformRepository {
             gradeLevelName: name,
             numberOfStreams: resolvedStreams.clamp(1, 10),
             status: _string(map, ['status'], fallback: 'INACTIVE'),
+            isCustom:
+                map['isCustom'] == true ||
+                map['custom'] == true ||
+                id >= 100000,
           );
         })
         .where(
@@ -655,6 +659,44 @@ class LivePlatformRepository implements PlatformRepository {
               grade.gradeLevelId > 0 && grade.gradeLevelName.trim().isNotEmpty,
         )
         .toList();
+  }
+
+  @override
+  Future<SchoolGradeLevelInfo> createCustomGradeLevel({
+    required String customSchoolId,
+    required String gradeLevelName,
+    required int numberOfStreams,
+  }) async {
+    _requireApi();
+    final schoolId = Uri.encodeComponent(customSchoolId.trim());
+    final response = _asMap(
+      _unwrap(
+        await _post('/api/grade-levels/school/$schoolId/custom', {
+          'gradeName': gradeLevelName.trim(),
+          'streamsCount': numberOfStreams.clamp(1, 10),
+          'custom': true,
+          'status': 'ACTIVE',
+        }),
+      ),
+    );
+    final id = _int(response, ['gradeLevelId', 'id']);
+    final name = _string(response, ['gradeName', 'gradeLevelName', 'name']);
+    if (id <= 0 || name.trim().isEmpty) {
+      throw const FormatException(
+        'The platform did not return the created custom class.',
+      );
+    }
+    return SchoolGradeLevelInfo(
+      gradeLevelId: id,
+      gradeLevelName: name.trim(),
+      numberOfStreams: _int(response, [
+        'streamsCount',
+        'numberOfStreams',
+        'streamCount',
+      ], fallback: numberOfStreams).clamp(1, 10),
+      status: _string(response, ['status'], fallback: 'ACTIVE'),
+      isCustom: true,
+    );
   }
 
   @override
@@ -701,6 +743,12 @@ class LivePlatformRepository implements PlatformRepository {
       customSchoolId: customSchoolId,
       invitedAt: DateTime.now().toIso8601String(),
       dateOfBirth: _isoDate(invite.dateOfBirth),
+      invitationDeliveryStatus: _string(data, [
+        'invitationDeliveryStatus',
+      ], fallback: 'NOT_SENT'),
+      invitationLastSentAt: _string(data, ['invitationLastSentAt']),
+      invitationLastAttemptAt: _string(data, ['invitationLastAttemptAt']),
+      invitationSendCount: _int(data, ['invitationSendCount']),
     );
     return SchoolAdministratorInviteResult(
       message: _string(data, [
@@ -766,6 +814,12 @@ class LivePlatformRepository implements PlatformRepository {
         createdAt: _string(map, ['createdAt', 'createdDate']),
         invitedAt: _string(map, ['invitedAt', 'inviteSentAt']),
         dateOfBirth: _string(map, ['dateOfBirth', 'dob']),
+        invitationDeliveryStatus: _string(map, [
+          'invitationDeliveryStatus',
+        ], fallback: 'NOT_SENT'),
+        invitationLastSentAt: _string(map, ['invitationLastSentAt']),
+        invitationLastAttemptAt: _string(map, ['invitationLastAttemptAt']),
+        invitationSendCount: _int(map, ['invitationSendCount']),
       );
     }).toList();
   }
@@ -890,7 +944,33 @@ class LivePlatformRepository implements PlatformRepository {
     );
     return _credentialActionResult(
       _asMap(_unwrap(response)),
-      fallback: 'Password reset successfully.',
+      fallback: 'Password change will be required at the next login.',
+    );
+  }
+
+  @override
+  Future<void> cancelSchoolUserInvitation({
+    required String customSchoolId,
+    required String userId,
+    required String reason,
+  }) async {
+    _requireApi();
+    await _post(
+      '/api/user-management/schools/${Uri.encodeComponent(customSchoolId)}/users/${Uri.encodeComponent(userId)}/cancel-invitation',
+      {'reason': reason.trim()},
+    );
+  }
+
+  @override
+  Future<void> deleteSchoolUserInvitation({
+    required String customSchoolId,
+    required String userId,
+    required String reason,
+  }) async {
+    _requireApi();
+    await _delete(
+      '/api/user-management/schools/${Uri.encodeComponent(customSchoolId)}/users/${Uri.encodeComponent(userId)}/invitation',
+      {'reason': reason.trim()},
     );
   }
 
@@ -1001,6 +1081,12 @@ class LivePlatformRepository implements PlatformRepository {
       createdAt: _string(map, ['createdAt', 'createdDate']),
       invitedAt: _string(map, ['invitedAt', 'inviteSentAt']),
       dateOfBirth: _string(map, ['dateOfBirth', 'dob']),
+      invitationDeliveryStatus: _string(map, [
+        'invitationDeliveryStatus',
+      ], fallback: 'NOT_SENT'),
+      invitationLastSentAt: _string(map, ['invitationLastSentAt']),
+      invitationLastAttemptAt: _string(map, ['invitationLastAttemptAt']),
+      invitationSendCount: _int(map, ['invitationSendCount']),
     );
   }
 
@@ -1114,7 +1200,7 @@ class LivePlatformRepository implements PlatformRepository {
       'phoneNumber': draft.phone,
       'dateOfBirth': _apiDate(draft.dateOfBirth),
       'role': draft.role.apiRole,
-      'userType': 'ADMIN',
+      'userType': 'ACCOUNT_MANAGER',
       'privacyAgreementAccepted': true,
       'password': 'password',
       'inviteMethod': draft.inviteMethod,
@@ -1158,6 +1244,18 @@ class LivePlatformRepository implements PlatformRepository {
   }
 
   @override
+  Future<void> cancelAccountManagerInvitation({
+    required String accountManagerId,
+    required String reason,
+  }) async {
+    _requireApi();
+    await _patch(
+      '/api/account-managers/${Uri.encodeComponent(accountManagerId)}/status',
+      {'status': 'INACTIVE', 'reason': reason.trim()},
+    );
+  }
+
+  @override
   Future<SchoolAdministratorInviteResult> forceResetAccountManagerPassword({
     required AccountManagerProfile manager,
   }) async {
@@ -1169,7 +1267,7 @@ class LivePlatformRepository implements PlatformRepository {
     );
     return _credentialActionResult(
       _asMap(_unwrap(response)),
-      fallback: 'Password reset successfully.',
+      fallback: 'Password change will be required at the next login.',
     );
   }
 
@@ -1314,52 +1412,86 @@ class LivePlatformRepository implements PlatformRepository {
     },
   };
 
-  Map<String, dynamic> _contactBody(SchoolOnboardingDraft draft) => {
-    'contactInfo': {
-      'personalPhoneNumbers': [
-        {
-          'number': draft.phone,
-          'type': draft.phoneNetwork.trim().isEmpty
-              ? 'mobile'
-              : draft.phoneNetwork.trim(),
-        },
-        if (draft.secondaryPhone.trim().isNotEmpty)
-          {
-            'number': draft.secondaryPhone,
-            'type': draft.secondaryPhoneNetwork.trim().isEmpty
-                ? 'mobile'
-                : draft.secondaryPhoneNetwork.trim(),
-          },
-      ],
-      'workPhoneNumbers': [
-        if (draft.officePhone.trim().isNotEmpty)
-          {'number': draft.officePhone, 'type': 'office'},
-      ],
-      'emails': draft.email
-          .split(',')
-          .map((email) => email.trim())
-          .where((email) => email.isNotEmpty)
-          .toList(),
-      'socialMedia': draft.socialMediaLinks.isNotEmpty
-          ? draft.socialMediaLinks
-                .map(
-                  (link) => {
-                    if (link.platformId != null)
-                      'platform': {'id': link.platformId},
-                    'handle': link.handle,
-                  },
-                )
-                .toList()
-          : [
-              if (draft.socialMedia.trim().isNotEmpty)
+  Map<String, dynamic> _contactBody(SchoolOnboardingDraft draft) {
+    final contacts = draft.phoneContacts
+        .where((contact) => contact.number.trim().isNotEmpty)
+        .toList();
+    final hasStructuredPhones = contacts.isNotEmpty;
+    return {
+      'contactInfo': {
+        'personalPhoneNumbers': hasStructuredPhones
+            ? contacts
+                  .where(
+                    (contact) => contact.isPrimary || contact.type != 'office',
+                  )
+                  .map(
+                    (contact) => {
+                      'number': contact.number.trim(),
+                      'type': contact.type.trim().isEmpty
+                          ? 'mobile'
+                          : contact.type.trim(),
+                    },
+                  )
+                  .toList()
+            : [
                 {
-                  if (draft.socialMediaPlatformId != null)
-                    'platform': {'id': draft.socialMediaPlatformId},
-                  'handle': draft.socialMedia,
+                  'number': draft.phone,
+                  'type': draft.phoneNetwork.trim().isEmpty
+                      ? 'mobile'
+                      : draft.phoneNetwork.trim(),
                 },
-            ],
-    },
-  };
+                if (draft.secondaryPhone.trim().isNotEmpty)
+                  {
+                    'number': draft.secondaryPhone,
+                    'type': draft.secondaryPhoneNetwork.trim().isEmpty
+                        ? 'mobile'
+                        : draft.secondaryPhoneNetwork.trim(),
+                  },
+              ],
+        'workPhoneNumbers': hasStructuredPhones
+            ? contacts
+                  .where(
+                    (contact) => !contact.isPrimary && contact.type == 'office',
+                  )
+                  .map(
+                    (contact) => {
+                      'number': contact.number.trim(),
+                      'type': contact.type,
+                    },
+                  )
+                  .toList()
+            : draft.officePhone
+                  .split(',')
+                  .map((number) => number.trim())
+                  .where((number) => number.isNotEmpty)
+                  .map((number) => {'number': number, 'type': 'office'})
+                  .toList(),
+        'emails': draft.email
+            .split(',')
+            .map((email) => email.trim())
+            .where((email) => email.isNotEmpty)
+            .toList(),
+        'socialMedia': draft.socialMediaLinks.isNotEmpty
+            ? draft.socialMediaLinks
+                  .map(
+                    (link) => {
+                      if (link.platformId != null)
+                        'platform': {'id': link.platformId},
+                      'handle': link.handle,
+                    },
+                  )
+                  .toList()
+            : [
+                if (draft.socialMedia.trim().isNotEmpty)
+                  {
+                    if (draft.socialMediaPlatformId != null)
+                      'platform': {'id': draft.socialMediaPlatformId},
+                    'handle': draft.socialMedia,
+                  },
+              ],
+      },
+    };
+  }
 
   Map<String, dynamic> _gradeLevelsBody(SchoolOnboardingDraft draft) => {
     'gradeLevels': draft.gradeLevelIds.entries
@@ -1368,6 +1500,7 @@ class LivePlatformRepository implements PlatformRepository {
             'gradeLevelId': entry.value,
             'gradeName': entry.key,
             'streamsCount': draft.gradeStreams[entry.key] ?? 0,
+            'custom': draft.customGradeLevels.contains(entry.key),
             'status': draft.gradeStreams.containsKey(entry.key)
                 ? 'ACTIVE'
                 : 'INACTIVE',
@@ -2043,7 +2176,7 @@ class LivePlatformRepository implements PlatformRepository {
       ], fallback: draft == null ? 'Unknown' : 'Invite sent today'),
       inviteMethod: _string(map, [
         'inviteMethod',
-      ], fallback: draft?.inviteMethod ?? 'Email and SMS'),
+      ], fallback: draft?.inviteMethod ?? _invitationMethodFromJson(map)),
       verified: _bool(map, ['verified', 'isVerified'], fallback: false),
       bio: _string(
         map,
@@ -2052,7 +2185,22 @@ class LivePlatformRepository implements PlatformRepository {
             ? 'Platform account manager.'
             : 'Awaiting first login and profile verification.',
       ),
+      invitationDeliveryStatus: _string(map, [
+        'invitationDeliveryStatus',
+      ], fallback: 'NOT_SENT'),
+      invitationLastSentAt: _string(map, ['invitationLastSentAt']),
+      invitationLastAttemptAt: _string(map, ['invitationLastAttemptAt']),
+      invitationSendCount: _int(map, ['invitationSendCount']),
     );
+  }
+
+  String _invitationMethodFromJson(Map<String, dynamic> map) {
+    final email = _bool(map, ['emailDelivery'], fallback: false);
+    final sms = _bool(map, ['smsDelivery'], fallback: false);
+    if (email && sms) return 'Email and SMS';
+    if (email) return 'Email';
+    if (sms) return 'SMS';
+    return 'Not requested';
   }
 
   NeedsAttentionCategory _needsAttentionCategoryFromJson(dynamic json) {

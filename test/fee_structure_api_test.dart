@@ -34,6 +34,7 @@ void main() {
     description: '',
     status: status,
     dueDate: null,
+    feeMasterItemId: name.toLowerCase().contains('tuition') ? 100 : 101,
   );
 
   test('loads structures from the versioned term-scoped route', () async {
@@ -89,6 +90,100 @@ void main() {
     expect(terms.last.isPrepared, isTrue);
   });
 
+  test('loads the controlled fee category list', () async {
+    late http.Request captured;
+    final api = FeeApiClient(
+      accessToken: 'token',
+      client: MockClient((request) async {
+        captured = request;
+        return http.Response(
+          jsonEncode([
+            {'id': 1, 'name': 'Tuition'},
+            {'id': 2, 'name': 'Feeding'},
+          ]),
+          200,
+        );
+      }),
+    );
+
+    final categories = await api.getFeeCategories();
+
+    expect(captured.method, 'GET');
+    expect(captured.url.path, endsWith('/fees/categories'));
+    expect(categories.map((category) => category.name), ['Tuition', 'Feeding']);
+  });
+
+  test('distinguishes protected system items from custom catalogue items', () {
+    final system = FeeMasterItem.fromJson({
+      'id': 1,
+      'code': 'TUITION',
+      'itemName': 'Tuition Fee',
+      'category': 'Tuition',
+      'description': 'Academic tuition for the term',
+      'active': true,
+      'status': 'APPROVED',
+      'hasApprovedVersion': true,
+      'hasPendingChange': false,
+      'systemDefined': true,
+    });
+    final custom = FeeMasterItem.fromJson({
+      'id': 2,
+      'code': 'SWIMMING',
+      'itemName': 'Swimming Lessons',
+      'category': 'Activities',
+      'description': 'School swimming programme',
+      'active': true,
+      'status': 'APPROVED',
+      'hasApprovedVersion': true,
+      'hasPendingChange': false,
+      'systemDefined': false,
+    });
+
+    expect(system.systemDefined, isTrue);
+    expect(custom.systemDefined, isFalse);
+  });
+
+  test('saves a custom catalogue item without an approver', () async {
+    late http.Request captured;
+    final api = FeeApiClient(
+      accessToken: 'token',
+      client: MockClient((request) async {
+        captured = request;
+        return http.Response(
+          jsonEncode({
+            'id': 2,
+            'code': 'SWIMMING',
+            'itemName': 'Swimming Lessons',
+            'category': 'Activities',
+            'description': 'School swimming programme',
+            'active': true,
+            'status': 'APPROVED',
+            'hasApprovedVersion': true,
+            'hasPendingChange': false,
+            'systemDefined': false,
+          }),
+          201,
+        );
+      }),
+    );
+
+    final saved = await api.saveFeeMasterItem(
+      customSchoolId: 'SCH-001',
+      itemId: 0,
+      code: 'SWIMMING',
+      itemName: 'Swimming Lessons',
+      category: 'Activities',
+      description: 'School swimming programme',
+      active: true,
+    );
+
+    final body = jsonDecode(captured.body) as Map<String, dynamic>;
+    expect(captured.method, 'POST');
+    expect(captured.url.path, endsWith('/fee-master'));
+    expect(body.containsKey('approverId'), isFalse);
+    expect(saved.status, 'APPROVED');
+  });
+
   test('creates a draft with ordered fee items', () async {
     late http.Request captured;
     final api = FeeApiClient(
@@ -103,6 +198,7 @@ void main() {
       customSchoolId: 'SCH-001',
       structureId: 0,
       gradeLevelId: 12,
+      streamId: 33,
       termId: 44,
       feeItems: [item('Tuition fee', 400), item('ICT levy', 50)],
     );
@@ -112,6 +208,7 @@ void main() {
     expect(captured.method, 'POST');
     expect(body['academicTermId'], 44);
     expect(body['gradeLevelId'], 12);
+    expect(body['streamId'], 33);
     expect((items[0] as Map<String, dynamic>)['displayOrder'], 0);
     expect((items[1] as Map<String, dynamic>)['displayOrder'], 1);
   });
@@ -132,6 +229,7 @@ void main() {
         customSchoolId: 'SCH-001',
         structureId: 91,
         gradeLevelId: 12,
+        streamId: 33,
         termId: 44,
         feeItems: [
           item('Tuition fee', 450),
@@ -148,7 +246,7 @@ void main() {
     },
   );
 
-  test('publishes and deletes through lifecycle routes', () async {
+  test('withdraws, publishes and deletes through lifecycle routes', () async {
     final requests = <http.Request>[];
     final api = FeeApiClient(
       accessToken: 'token',
@@ -160,12 +258,15 @@ void main() {
       }),
     );
 
+    await api.withdrawFeeStructure(customSchoolId: 'SCH-001', structureId: 90);
     await api.publishFeeStructure(customSchoolId: 'SCH-001', structureId: 91);
     await api.deleteFeeStructure(customSchoolId: 'SCH-001', structureId: 92);
 
     expect(requests[0].method, 'POST');
-    expect(requests[0].url.path, endsWith('/fee-structures/91/publish'));
-    expect(requests[1].method, 'DELETE');
-    expect(requests[1].url.path, endsWith('/fee-structures/92'));
+    expect(requests[0].url.path, endsWith('/fee-structures/90/withdraw'));
+    expect(requests[1].method, 'POST');
+    expect(requests[1].url.path, endsWith('/fee-structures/91/publish'));
+    expect(requests[2].method, 'DELETE');
+    expect(requests[2].url.path, endsWith('/fee-structures/92'));
   });
 }

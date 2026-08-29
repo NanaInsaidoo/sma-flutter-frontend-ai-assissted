@@ -93,6 +93,35 @@ class StaffApiClient {
     return StaffOnboardingResult.fromJson(_decodeMap(response));
   }
 
+  Future<void> resendStaffInvitation(String invitationToken) async {
+    await _send(
+      'POST',
+      '/api/account-access/invitations/${Uri.encodeComponent(invitationToken)}/resend-code',
+    );
+  }
+
+  Future<void> cancelStaffInvitation({
+    required String customSchoolId,
+    required String invitationToken,
+  }) async {
+    await _send(
+      'POST',
+      '/api/account-access/schools/${Uri.encodeComponent(customSchoolId)}/invitations/${Uri.encodeComponent(invitationToken)}/cancel',
+    );
+  }
+
+  Future<void> deleteStaffInvitation({
+    required String customSchoolId,
+    required String invitationToken,
+    required String reason,
+  }) async {
+    await _send(
+      'DELETE',
+      '/api/account-access/schools/${Uri.encodeComponent(customSchoolId)}/invitations/${Uri.encodeComponent(invitationToken)}',
+      body: {'reason': reason},
+    );
+  }
+
   Future<void> createFinance({
     required String staffId,
     required Map<String, dynamic> body,
@@ -236,7 +265,7 @@ class StaffApiClient {
       return switch (method) {
         'POST' => _client.post(uri, headers: headers, body: encodedBody),
         'PUT' => _client.put(uri, headers: headers, body: encodedBody),
-        'DELETE' => _client.delete(uri, headers: headers),
+        'DELETE' => _client.delete(uri, headers: headers, body: encodedBody),
         _ => _client.get(uri, headers: headers),
       }.timeout(const Duration(seconds: 20));
     }
@@ -437,6 +466,16 @@ class StaffProfileRecord {
     required this.employmentType,
     required this.startDate,
     required this.resumes,
+    this.firstName = '',
+    this.lastName = '',
+    this.email = '',
+    this.invitationToken = '',
+    this.invitationStatus = '',
+    this.invitationDeliveryStatus = 'NOT_SENT',
+    this.invitationLastSentAt = '',
+    this.invitationLastAttemptAt = '',
+    this.invitationSendCount = 0,
+    this.invitationExpiresAt = '',
   });
 
   final String staffId;
@@ -446,6 +485,16 @@ class StaffProfileRecord {
   final String employmentType;
   final String startDate;
   final List<StaffResumeRecord> resumes;
+  final String firstName;
+  final String lastName;
+  final String email;
+  final String invitationToken;
+  final String invitationStatus;
+  final String invitationDeliveryStatus;
+  final String invitationLastSentAt;
+  final String invitationLastAttemptAt;
+  final int invitationSendCount;
+  final String invitationExpiresAt;
 
   factory StaffProfileRecord.fromJson(dynamic value) {
     final json = value is Map<String, dynamic> ? value : <String, dynamic>{};
@@ -460,6 +509,19 @@ class StaffProfileRecord {
       resumes: resumeValues is List
           ? resumeValues.map(StaffResumeRecord.fromJson).toList()
           : const [],
+      firstName: (json['firstName'] ?? '').toString(),
+      lastName: (json['lastName'] ?? '').toString(),
+      email: (json['email'] ?? '').toString(),
+      invitationToken: (json['invitationToken'] ?? '').toString(),
+      invitationStatus: (json['invitationStatus'] ?? '').toString(),
+      invitationDeliveryStatus: (json['invitationDeliveryStatus'] ?? 'NOT_SENT')
+          .toString(),
+      invitationLastSentAt: (json['invitationLastSentAt'] ?? '').toString(),
+      invitationLastAttemptAt: (json['invitationLastAttemptAt'] ?? '')
+          .toString(),
+      invitationSendCount:
+          int.tryParse('${json['invitationSendCount'] ?? 0}') ?? 0,
+      invitationExpiresAt: (json['invitationExpiresAt'] ?? '').toString(),
     );
   }
 }

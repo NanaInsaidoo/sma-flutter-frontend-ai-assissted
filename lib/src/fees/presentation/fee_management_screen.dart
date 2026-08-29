@@ -9,6 +9,7 @@ import '../data/fee_api_client.dart';
 import '../domain/fee_models.dart';
 import 'class_requirements_screen.dart';
 import 'fee_adjustments_content.dart';
+import 'fee_structure_workflow_content.dart';
 import 'payment_reversals_content.dart';
 import '../../assessments/presentation/report_pdf_download_stub.dart'
     if (dart.library.html) '../../assessments/presentation/report_pdf_download_web.dart';
@@ -17,6 +18,7 @@ enum _FeeTab {
   overview,
   studentFees,
   feeStructure,
+  feeCatalogue,
   adjustments,
   reversals,
   classRequirements,
@@ -35,7 +37,11 @@ class FeeManagementScreen extends StatefulWidget {
     this.role,
     this.userId,
     this.openRecordPaymentOnLoad = false,
+    this.recordPaymentStudentId,
+    this.openFeeStructureOnLoad = false,
     this.onRecordPaymentRequestConsumed,
+    this.onWorkflowChanged,
+    this.api,
   });
 
   final String customSchoolId;
@@ -45,7 +51,11 @@ class FeeManagementScreen extends StatefulWidget {
   final String? role;
   final int? userId;
   final bool openRecordPaymentOnLoad;
+  final String? recordPaymentStudentId;
+  final bool openFeeStructureOnLoad;
   final VoidCallback? onRecordPaymentRequestConsumed;
+  final VoidCallback? onWorkflowChanged;
+  final FeeApiClient? api;
 
   @override
   State<FeeManagementScreen> createState() => _FeeManagementScreenState();
@@ -97,10 +107,15 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
   @override
   void initState() {
     super.initState();
-    _api = FeeApiClient(
-      accessToken: widget.accessToken,
-      onRefreshAccessToken: widget.onRefreshAccessToken,
-    );
+    if (widget.openFeeStructureOnLoad) {
+      _selectedTab = _FeeTab.feeStructure;
+    }
+    _api =
+        widget.api ??
+        FeeApiClient(
+          accessToken: widget.accessToken,
+          onRefreshAccessToken: widget.onRefreshAccessToken,
+        );
     _initialLoad = _loadInitial();
     _maybeOpenRecordPaymentRequest();
   }
@@ -151,11 +166,17 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
     if (!widget.openRecordPaymentOnLoad || _openingRecordPaymentRequest) {
       return;
     }
+    // Preserve the student scope before notifying the parent that the
+    // one-shot request has been consumed. That callback rebuilds this widget
+    // and clears the request fields.
+    final requestedStudentId = widget.recordPaymentStudentId;
     _openingRecordPaymentRequest = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       widget.onRecordPaymentRequestConsumed?.call();
       await _initialLoad;
-      if (mounted) await _showRecordPaymentForm();
+      if (mounted) {
+        await _showRecordPaymentForm(selectedStudentId: requestedStudentId);
+      }
       _openingRecordPaymentRequest = false;
     });
   }
@@ -163,6 +184,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
   Future<void> _reloadFees() async {
     final termId = _activeTermId;
     if (termId <= 0) return;
+    widget.onWorkflowChanged?.call();
     final overview = await _api.getFeeManagementOverview(
       customSchoolId: widget.customSchoolId,
       termId: termId,
@@ -263,6 +285,16 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
       ),
       _FeeTab.studentFees => _buildStudentFeesContent(),
       _FeeTab.feeStructure => _buildFeeStructureContent(),
+      _FeeTab.feeCatalogue => FeeStructureWorkflowContent(
+        api: _api,
+        customSchoolId: widget.customSchoolId,
+        termId: 0,
+        termName: '',
+        currentUserId: widget.userId ?? 0,
+        money: _money,
+        onChanged: _reloadFees,
+        catalogueOnly: true,
+      ),
       _FeeTab.adjustments => FeeAdjustmentsContent(
         api: _api,
         customSchoolId: widget.customSchoolId,
@@ -290,6 +322,8 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
                 termName: _termName,
                 gradeLevels: _gradeLevels,
                 canPublish: _canApproveFinance,
+                currentUserId: widget.userId ?? 0,
+                onWorkflowChanged: widget.onWorkflowChanged,
               ),
       _FeeTab.waivers => _buildWaiversContent(),
     };
@@ -877,20 +911,18 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
         onRetry: () => _loadFeeStructures(force: true),
       );
     }
-    return _FeeStructureContent(
+    return FeeStructureWorkflowContent(
+      api: _api,
+      customSchoolId: widget.customSchoolId,
+      termId: _feeStructureTermId,
       termName: _feeStructureTermName,
-      terms: _feeTerms,
-      selectedTermId: _feeStructureTermId,
-      classFees: _classFees(),
+      currentUserId: widget.userId ?? 0,
       money: _money,
-      onTermChanged: _changeFeeStructureTerm,
-      onAddClassLevel: _openClassLevelSheet,
-      onEditClassLevel: _openClassLevelSheet,
-      onPublishClassLevel: _canApproveFinance ? _publishFeeStructure : null,
-      onDeleteClassLevel: _deleteFeeStructure,
+      onChanged: _reloadFees,
     );
   }
 
+  // ignore: unused_element
   void _changeFeeStructureTerm(int termId) {
     if (termId <= 0 || termId == _feeStructureTermId) return;
     setState(() {
@@ -902,6 +934,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
     unawaited(_loadFeeStructures(force: true));
   }
 
+  // ignore: unused_element
   Future<void> _openClassLevelSheet([_ClassFee? classFee]) async {
     FeeGradeLevel? selectedGradeLevel;
     if (classFee == null) {
@@ -985,6 +1018,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
     }
   }
 
+  // ignore: unused_element
   Future<void> _publishFeeStructure(_ClassFee classFee) async {
     if (classFee.structureId <= 0 || !classFee.isDraft) return;
     final confirmed = await showDialog<bool>(
@@ -1028,6 +1062,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
     }
   }
 
+  // ignore: unused_element
   Future<void> _deleteFeeStructure(_ClassFee classFee) async {
     if (classFee.structureId <= 0 || !classFee.isDraft) return;
     final confirmed = await showDialog<bool>(
@@ -1069,15 +1104,44 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
     }
   }
 
-  Future<void> _showRecordPaymentForm() async {
-    await _loadStudentFees(force: !_studentFeesLoaded);
+  Future<void> _showRecordPaymentForm({String? selectedStudentId}) async {
+    final scopedStudentId = selectedStudentId?.trim() ?? '';
+    if (scopedStudentId.isNotEmpty) {
+      _studentFeeSearch = scopedStudentId;
+      _studentFeeGradeLevelId = null;
+      _studentFeePaymentStatus = null;
+    }
+    await _loadStudentFees(
+      force: scopedStudentId.isNotEmpty || !_studentFeesLoaded,
+    );
     if (!mounted || !_studentFeesLoaded) return;
+    final students = _studentFeeRows();
+    _StudentFeeRow? selectedStudent;
+    if (scopedStudentId.isNotEmpty) {
+      for (final student in students) {
+        if (student.id == scopedStudentId) {
+          selectedStudent = student;
+          break;
+        }
+      }
+      if (selectedStudent == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'This student does not have an active fee account for the current term.',
+            ),
+            backgroundColor: AppColors.red,
+          ),
+        );
+        return;
+      }
+    }
     final saved = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (context) => _RecordPaymentDialog(
-        students: _studentFeeRows(),
-        selectedStudent: null,
+        students: students,
+        selectedStudent: selectedStudent,
         paymentMethods: _paymentMethods,
         customSchoolId: widget.customSchoolId,
         termId: _activeTermId,
@@ -1116,6 +1180,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
     );
   }
 
+  // ignore: unused_element
   List<_ClassFee> _classFees() {
     return _feeStructures
         .map(
@@ -1155,6 +1220,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
       'PAID' => 'Paid',
       'PARTIAL' || 'PARTIALLY_PAID' => 'Partial',
       'UNPAID' => 'Unpaid',
+      'CREDIT' => 'Credit',
       'NO_FEES' => 'No fees',
       _ => value.trim().isEmpty ? 'Unpaid' : value,
     };
@@ -1190,6 +1256,7 @@ class _FeeTabs extends StatelessWidget {
     (_FeeTab.overview, 'Overview'),
     (_FeeTab.studentFees, 'Student Fees'),
     (_FeeTab.feeStructure, 'Fee Structure'),
+    (_FeeTab.feeCatalogue, 'Fee Catalogue'),
     (_FeeTab.adjustments, 'Fee Adjustments'),
     (_FeeTab.reversals, 'Payment Reversals'),
     (_FeeTab.classRequirements, 'Items & Supplies'),
@@ -2289,6 +2356,8 @@ class _RateBar extends StatelessWidget {
   }
 }
 
+// Kept temporarily while older deep links migrate to the stream workflow.
+// ignore: unused_element
 class _FeeStructureContent extends StatelessWidget {
   const _FeeStructureContent({
     required this.termName,
@@ -3063,6 +3132,7 @@ class _ClassLevelFeeSheetState extends State<_ClassLevelFeeSheet> {
         customSchoolId: widget.customSchoolId,
         structureId: classFee?.structureId ?? 0,
         gradeLevelId: gradeLevelId,
+        streamId: widget.classFee?.structureId ?? 0,
         termId: widget.termId,
         feeItems: _items.map((item) {
           final original = item.original;
@@ -3339,11 +3409,17 @@ class _StudentFeesContent extends StatelessWidget {
                               ),
                       ),
                       DataCell(
-                        row.balance <= 0
+                        row.balance == 0
                             ? const Text('-')
                             : Text(
-                                money(row.balance),
-                                style: const TextStyle(color: AppColors.red),
+                                row.balance < 0
+                                    ? 'Credit ${money(row.balance.abs())}'
+                                    : money(row.balance),
+                                style: TextStyle(
+                                  color: row.balance > 0
+                                      ? AppColors.red
+                                      : AppColors.green,
+                                ),
                               ),
                       ),
                       DataCell(_PaymentStatus(status: row.status)),
@@ -3351,8 +3427,13 @@ class _StudentFeesContent extends StatelessWidget {
                       DataCell(
                         TextButton.icon(
                           onPressed: () => _showStudentDetails(context, row),
-                          icon: const Icon(Icons.add_rounded, size: 16),
-                          label: const Text('Pay'),
+                          icon: Icon(
+                            row.balance > 0
+                                ? Icons.add_rounded
+                                : Icons.visibility_outlined,
+                            size: 16,
+                          ),
+                          label: Text(row.balance > 0 ? 'Pay' : 'View'),
                         ),
                       ),
                     ],
@@ -3622,14 +3703,17 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
   late final TextEditingController _chequeNumberController;
   late final TextEditingController _chequeBankController;
   late final TextEditingController _notesController;
+  late final TextEditingController _overpaymentReasonController;
   _StudentFeeRow? _student;
   FeePaymentMethod? _method;
   DateTime _paymentDate = DateTime.now();
   DateTime _chequeDate = DateTime.now();
   bool _saving = false;
   bool _success = false;
+  bool _overpaymentAcknowledged = false;
   _PaymentReceipt? _receipt;
   PlatformFile? _receiptPhoto;
+  late String _idempotencyKey = _newPaymentRequestKey();
 
   bool get _isScopedToStudent => widget.selectedStudent != null;
   bool get _isCheque =>
@@ -3652,6 +3736,7 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
     _chequeNumberController = TextEditingController();
     _chequeBankController = TextEditingController();
     _notesController = TextEditingController();
+    _overpaymentReasonController = TextEditingController();
   }
 
   @override
@@ -3663,6 +3748,7 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
     _chequeNumberController.dispose();
     _chequeBankController.dispose();
     _notesController.dispose();
+    _overpaymentReasonController.dispose();
     super.dispose();
   }
 
@@ -3670,6 +3756,12 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
   Widget build(BuildContext context) {
     final student = _student;
     final amount = double.tryParse(_amountController.text.trim()) ?? 0;
+    final amountDue = student == null || student.balance < 0
+        ? 0.0
+        : student.balance;
+    final overpaymentAmount = student == null
+        ? 0.0
+        : (amount - amountDue).clamp(0, double.infinity).toDouble();
     if (_success) {
       return AlertDialog(
         content: ConstrainedBox(
@@ -3714,7 +3806,9 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
                 ] else ...[
                   _PaymentSectionTitle('Student'),
                   TextFormField(
+                    key: const ValueKey('payment-student-search'),
                     controller: _studentController,
+                    autofocus: true,
                     decoration: const InputDecoration(
                       labelText: 'Student Name or ID',
                       hintText: 'Search by name or student ID...',
@@ -3765,6 +3859,7 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
                           width: width,
                           child: _AmountEntryField(
                             controller: _amountController,
+                            autofocus: _isScopedToStudent,
                             onChanged: () => setState(() {}),
                           ),
                         ),
@@ -3793,6 +3888,18 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
                     amount: amount,
                     money: widget.money,
                     pending: _isCheque,
+                  ),
+                ],
+                if (overpaymentAmount > 0) ...[
+                  const SizedBox(height: 14),
+                  _OverpaymentWarning(
+                    amount: overpaymentAmount,
+                    money: widget.money,
+                    reasonController: _overpaymentReasonController,
+                    acknowledged: _overpaymentAcknowledged,
+                    onAcknowledged: (value) => setState(
+                      () => _overpaymentAcknowledged = value ?? false,
+                    ),
                   ),
                 ],
                 const SizedBox(height: 14),
@@ -3986,6 +4093,19 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
       return;
     }
     final amount = double.parse(_amountController.text.trim());
+    final amountDue = student.balance < 0 ? 0.0 : student.balance;
+    final overpaymentAmount = (amount - amountDue)
+        .clamp(0, double.infinity)
+        .toDouble();
+    if (overpaymentAmount > 0 && !_overpaymentAcknowledged) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Confirm that this overpayment is intentional.'),
+          backgroundColor: AppColors.amber,
+        ),
+      );
+      return;
+    }
     final physicalReceipt = _receiptController.text.trim();
     setState(() => _saving = true);
     try {
@@ -4009,6 +4129,11 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
           chequeNumber: _isCheque ? _chequeNumberController.text.trim() : null,
           chequeBank: _isCheque ? _chequeBankController.text.trim() : null,
           chequeDate: _isCheque ? _chequeDate : null,
+          overpaymentConfirmed: overpaymentAmount > 0,
+          overpaymentReason: overpaymentAmount > 0
+              ? _overpaymentReasonController.text.trim()
+              : null,
+          idempotencyKey: _idempotencyKey,
         ),
       );
       if (!mounted) return;
@@ -4030,8 +4155,12 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
               : receipt.paymentMethod,
           paymentDate: receipt.paymentDate ?? _paymentDate,
           remainingBalance: receipt.status == 'PENDING'
-              ? student.balance
-              : (student.balance - amount).clamp(0, double.infinity).toDouble(),
+              ? (student.balance < 0 ? 0 : student.balance)
+              : receipt.balance,
+          creditBalance: receipt.status == 'PENDING'
+              ? 0
+              : receipt.creditBalance,
+          overpaymentAmount: receipt.overpaymentAmount,
           pending: receipt.status == 'PENDING',
         );
       });
@@ -4085,10 +4214,16 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
       _chequeBankController.clear();
       _receiptPhoto = null;
       _notesController.clear();
+      _overpaymentReasonController.clear();
+      _overpaymentAcknowledged = false;
       _paymentDate = DateTime.now();
       _chequeDate = DateTime.now();
+      _idempotencyKey = _newPaymentRequestKey();
     });
   }
+
+  String _newPaymentRequestKey() =>
+      'SCHOOL-PAYMENT-${DateTime.now().microsecondsSinceEpoch}';
 
   String _formatDate(DateTime date) {
     const months = [
@@ -4119,6 +4254,8 @@ class _PaymentReceipt {
     required this.paymentMethod,
     required this.paymentDate,
     required this.remainingBalance,
+    required this.creditBalance,
+    required this.overpaymentAmount,
     required this.pending,
   });
 
@@ -4130,6 +4267,8 @@ class _PaymentReceipt {
   final String paymentMethod;
   final DateTime paymentDate;
   final double? remainingBalance;
+  final double creditBalance;
+  final double overpaymentAmount;
   final bool pending;
 }
 
@@ -4290,16 +4429,22 @@ class _StudentSuggestions extends StatelessWidget {
 }
 
 class _AmountEntryField extends StatelessWidget {
-  const _AmountEntryField({required this.controller, required this.onChanged});
+  const _AmountEntryField({
+    required this.controller,
+    required this.autofocus,
+    required this.onChanged,
+  });
 
   final TextEditingController controller;
+  final bool autofocus;
   final VoidCallback onChanged;
 
   @override
   Widget build(BuildContext context) {
     return TextFormField(
+      key: const ValueKey('payment-amount'),
       controller: controller,
-      autofocus: true,
+      autofocus: autofocus,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
       decoration: InputDecoration(
@@ -4347,9 +4492,11 @@ class _BalanceAfterPaymentPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final projected = currentBalance - amount;
     final remaining = pending
-        ? currentBalance
-        : (currentBalance - amount).clamp(0, double.infinity);
+        ? currentBalance.clamp(0, double.infinity).toDouble()
+        : projected.clamp(0, double.infinity).toDouble();
+    final projectedCredit = (-projected).clamp(0, double.infinity).toDouble();
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -4374,18 +4521,121 @@ class _BalanceAfterPaymentPreview extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Current balance ${money(currentBalance)}',
+                  currentBalance < 0
+                      ? 'Current credit ${money(currentBalance.abs())}'
+                      : 'Current balance ${money(currentBalance)}',
                   style: const TextStyle(color: AppColors.muted, fontSize: 12),
                 ),
               ],
             ),
           ),
-          Text(
-            money(remaining.toDouble()),
-            style: TextStyle(
-              color: remaining <= 0 ? AppColors.green : AppColors.amber,
-              fontSize: 18,
-              fontWeight: FontWeight.w900,
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                money(remaining),
+                style: TextStyle(
+                  color: remaining <= 0 ? AppColors.green : AppColors.amber,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              if (projectedCredit > 0) ...[
+                const SizedBox(height: 3),
+                Text(
+                  '${pending ? 'Credit if cleared' : 'Credit'} ${money(projectedCredit)}',
+                  style: const TextStyle(
+                    color: AppColors.green,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _OverpaymentWarning extends StatelessWidget {
+  const _OverpaymentWarning({
+    required this.amount,
+    required this.money,
+    required this.reasonController,
+    required this.acknowledged,
+    required this.onAcknowledged,
+  });
+
+  final double amount;
+  final String Function(double amount) money;
+  final TextEditingController reasonController;
+  final bool acknowledged;
+  final ValueChanged<bool?> onAcknowledged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const ValueKey('overpayment-warning'),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.amber.withValues(alpha: .09),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.amber.withValues(alpha: .45)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.info_outline_rounded, color: AppColors.amber),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  'This payment is ${money(amount)} more than the amount due.',
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 7),
+          const Text(
+            'The excess will be held as this student’s credit and carried into the next term.',
+            style: TextStyle(color: AppColors.muted, height: 1.35),
+          ),
+          const SizedBox(height: 14),
+          TextFormField(
+            key: const ValueKey('overpayment-reason'),
+            controller: reasonController,
+            minLines: 2,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              labelText: 'Reason for accepting overpayment *',
+              hintText: 'e.g. Parent requested an advance payment',
+              filled: true,
+              fillColor: Colors.white,
+            ),
+            validator: (value) {
+              final reason = value?.trim() ?? '';
+              if (reason.isEmpty) {
+                return 'Enter the reason for this overpayment.';
+              }
+              if (reason.length < 5) return 'Enter at least 5 characters.';
+              return null;
+            },
+          ),
+          const SizedBox(height: 6),
+          CheckboxListTile(
+            key: const ValueKey('overpayment-confirmation'),
+            value: acknowledged,
+            onChanged: onAcknowledged,
+            controlAffinity: ListTileControlAffinity.leading,
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: const Text(
+              'I confirm the amount is intentional and the excess should be kept as credit.',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
             ),
           ),
         ],
@@ -4511,6 +4761,19 @@ class _PaymentSuccessView extends StatelessWidget {
                         ? 'Balance while pending'
                         : 'Balance after payment',
                     value: _money(receipt.remainingBalance!),
+                  ),
+                if (receipt.creditBalance > 0)
+                  _ReceiptLine(
+                    label: 'Credit balance',
+                    value: _money(receipt.creditBalance),
+                    highlight: true,
+                  ),
+                if (receipt.overpaymentAmount > 0)
+                  _ReceiptLine(
+                    label: receipt.pending
+                        ? 'Excess if cleared'
+                        : 'Overpayment accepted',
+                    value: _money(receipt.overpaymentAmount),
                   ),
               ],
             ),
@@ -4654,7 +4917,9 @@ class _PaymentStudentSummary extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${student.className} · Balance ${money(student.balance)}',
+                  student.balance < 0
+                      ? '${student.id} · ${student.className} · Credit ${money(student.balance.abs())}'
+                      : '${student.id} · ${student.className} · Balance ${money(student.balance)}',
                   style: const TextStyle(color: AppColors.muted),
                 ),
               ],
@@ -4792,8 +5057,10 @@ class _StudentFeeDetailPanel extends StatelessWidget {
                               const SizedBox(width: 10),
                               Expanded(
                                 child: _StudentFeeTotalCard(
-                                  label: 'Balance',
-                                  value: money(account.balance),
+                                  label: account.balance < 0
+                                      ? 'Credit'
+                                      : 'Balance',
+                                  value: money(account.balance.abs()),
                                   color: account.balance > 0
                                       ? AppColors.red
                                       : AppColors.green,
@@ -4874,6 +5141,8 @@ class _StudentFeeDetailPanel extends StatelessWidget {
       chequeNumber: payment.chequeNumber,
       chequeBank: payment.chequeBank,
       chequeDate: payment.chequeDate,
+      overpaymentAmount: payment.overpaymentAmount,
+      overpaymentReason: payment.overpaymentReason,
     );
   }
 }
@@ -5499,6 +5768,30 @@ class _PaymentHistoryTileState extends State<_PaymentHistoryTile> {
               ),
             ),
           ],
+          if (payment.overpaymentAmount > 0) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.amber.withValues(alpha: .09),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'Overpayment ${money(payment.overpaymentAmount)} · ${payment.overpaymentReason}',
+                  style: const TextStyle(
+                    color: AppColors.text,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          ],
           if (pendingCheque) ...[
             const SizedBox(height: 10),
             Row(
@@ -5965,6 +6258,8 @@ class _StudentPaymentHistory {
     required this.chequeNumber,
     required this.chequeBank,
     required this.chequeDate,
+    required this.overpaymentAmount,
+    required this.overpaymentReason,
   });
 
   final int id;
@@ -5979,6 +6274,8 @@ class _StudentPaymentHistory {
   final String chequeNumber;
   final String chequeBank;
   final DateTime? chequeDate;
+  final double overpaymentAmount;
+  final String overpaymentReason;
 
   bool get isCheque => method.trim().toLowerCase() == 'cheque';
 }

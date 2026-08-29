@@ -653,7 +653,7 @@ class _CapacitySection extends StatelessWidget {
                 icon: Icons.account_tree_outlined,
                 title: 'No streams configured yet',
                 message:
-                    'Create streams from Classes & Streams before setting capacity.',
+                    'Create sections from Classes & Sections before setting capacity.',
               )
             else
               Column(

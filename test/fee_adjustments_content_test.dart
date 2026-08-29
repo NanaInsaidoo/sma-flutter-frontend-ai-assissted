@@ -118,6 +118,39 @@ void main() {
     );
   });
 
+  testWidgets('allows approval without an optional note', (tester) async {
+    var approved = false;
+    final api = FeeApiClient(
+      accessToken: 'token',
+      client: MockClient((request) async {
+        if (request.method == 'POST' && request.url.path.endsWith('/actions')) {
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          expect(body['action'], 'APPROVE');
+          expect(body['reason'], '');
+          approved = true;
+          return http.Response(_adjustmentJson(status: 'APPROVED'), 200);
+        }
+        return http.Response(
+          _pageJson(status: approved ? 'APPROVED' : 'PENDING'),
+          200,
+        );
+      }),
+    );
+    await pumpAdjustments(tester, api: api);
+
+    await tester.tap(find.text('Kwame Yaw Asante'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('adjustment-action-approve')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Approval note (optional)'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Approve'));
+    await tester.pumpAndSettle();
+
+    expect(approved, isTrue);
+    expect(find.text('Adjustment approved.'), findsOneWidget);
+  });
+
   testWidgets('historical audit records use people names and readable roles', (
     tester,
   ) async {
