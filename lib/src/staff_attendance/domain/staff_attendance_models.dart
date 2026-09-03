@@ -27,6 +27,7 @@ class StaffAttendanceEntry {
     this.absenceReason,
     this.note = '',
     this.registerStatus = 'DRAFT',
+    this.approvedLeaveEndDate,
   });
 
   final int? id;
@@ -37,6 +38,7 @@ class StaffAttendanceEntry {
   final String? absenceReason;
   final String note;
   final String registerStatus;
+  final String? approvedLeaveEndDate;
 
   StaffAttendanceEntry copyWith({
     StaffAttendanceMark? mark,
@@ -59,6 +61,7 @@ class StaffAttendanceEntry {
         : (absenceReason ?? this.absenceReason),
     note: note ?? this.note,
     registerStatus: registerStatus ?? this.registerStatus,
+    approvedLeaveEndDate: approvedLeaveEndDate,
   );
 }
 

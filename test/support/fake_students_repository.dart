@@ -214,6 +214,125 @@ class FakeStudentsRepository implements StudentsRepository {
   }
 
   @override
+  Future<StudentItemCollectionReceipt> collectStudentItems({
+    required String studentId,
+    required String idempotencyKey,
+    required List<StudentItemCollectionEntry> items,
+    String notes = '',
+  }) async {
+    final student = _students.firstWhere((value) => value.id == studentId);
+    return StudentItemCollectionReceipt(
+      id: 1,
+      number: 'ITEM-20260829-DEMO0001',
+      studentId: student.id,
+      studentName: student.name,
+      className: student.className,
+      academicTerm: 'First Term 2026-2027',
+      collectedAt: DateTime(2026, 8, 29, 10, 30),
+      collectedBy: 'Current administrator',
+      notes: notes,
+      lines: items.map((entry) {
+        final requirement = student.requirements.firstWhere(
+          (value) => value.id == entry.requirementId,
+        );
+        return StudentItemCollectionReceiptLine(
+          requirementId: requirement.id,
+          itemName: requirement.name,
+          unit: requirement.unit,
+          quantityReceived: entry.quantityReceived,
+          totalReceived: requirement.receivedQuantity + entry.quantityReceived,
+          requiredQuantity: requirement.requiredQuantity,
+        );
+      }).toList(),
+    );
+  }
+
+  @override
+  Future<List<int>> downloadStudentItemReceipt({
+    required String studentId,
+    required int receiptId,
+  }) async => const <int>[37, 80, 68, 70];
+
+  @override
+  Future<List<StudentItemCollectionReceipt>> getStudentItemReceipts({
+    required String studentId,
+  }) async {
+    final student = _students.firstWhere((value) => value.id == studentId);
+    final requirements = student.requirements
+        .where((item) => item.id.isNotEmpty)
+        .take(2)
+        .toList();
+    if (requirements.isEmpty) return const [];
+    return [
+      StudentItemCollectionReceipt(
+        id: 2,
+        number: 'ITEM-20260829-DEMO0002',
+        studentId: student.id,
+        studentName: student.name,
+        className: student.className,
+        academicTerm: 'First Term 2026-2027',
+        collectedAt: DateTime(2026, 8, 29, 14, 15),
+        collectedBy: 'Adjoa Mensah',
+        notes: 'Received at the school office.',
+        lines: requirements
+            .map(
+              (item) => StudentItemCollectionReceiptLine(
+                requirementId: item.id,
+                itemName: item.name,
+                unit: item.unit,
+                quantityReceived: 1,
+                totalReceived: item.receivedQuantity,
+                requiredQuantity: item.requiredQuantity,
+              ),
+            )
+            .toList(),
+      ),
+      StudentItemCollectionReceipt(
+        id: 1,
+        number: 'ITEM-20260820-DEMO0001',
+        studentId: student.id,
+        studentName: student.name,
+        className: student.className,
+        academicTerm: 'First Term 2026-2027',
+        collectedAt: DateTime(2026, 8, 20, 9, 30),
+        collectedBy: 'Kofi Nketia',
+        lines: [
+          StudentItemCollectionReceiptLine(
+            requirementId: requirements.first.id,
+            itemName: requirements.first.name,
+            unit: requirements.first.unit,
+            quantityReceived: 2,
+            totalReceived: requirements.first.receivedQuantity,
+            requiredQuantity: requirements.first.requiredQuantity,
+          ),
+        ],
+      ),
+    ];
+  }
+
+  @override
+  Future<List<int>> downloadStudentItemReceipts({
+    required String studentId,
+    required List<int> receiptIds,
+  }) async => const <int>[37, 80, 68, 70];
+
+  @override
+  Future<List<FeeAdjustmentApprover>> getItemExemptionApprovers({
+    required String studentId,
+  }) async => const [
+    FeeAdjustmentApprover(id: 12, name: 'Efua Nyarko', role: 'Administrator'),
+  ];
+
+  @override
+  Future<void> exemptStudentFromItem({
+    required String studentId,
+    required String requirementId,
+    required String reason,
+    int? approverId,
+    required bool submit,
+  }) async {}
+
+  @override
   Future<List<FeeAdjustmentApprover>> getFeeAdjustmentApprovers() async =>
       const [
         FeeAdjustmentApprover(
@@ -551,6 +670,7 @@ EnrolledStudent _student({
     ],
     requirements: [
       const StudentRequirement(
+        id: 'REQ-BOOKS',
         name: 'Liquid soap',
         requiredQuantity: 2,
         receivedQuantity: 2,
@@ -558,6 +678,7 @@ EnrolledStudent _student({
         status: StudentRequirementStatus.complete,
       ),
       StudentRequirement(
+        id: 'REQ-UNIFORM',
         name: 'Disinfectant',
         requiredQuantity: 1,
         receivedQuantity: completed >= 2 ? 1 : 0,
@@ -569,6 +690,7 @@ EnrolledStudent _student({
             : StudentRequirementStatus.outstanding,
       ),
       StudentRequirement(
+        id: 'REQ-ART',
         name: 'Exercise books',
         requiredQuantity: 10,
         receivedQuantity: completed >= 3

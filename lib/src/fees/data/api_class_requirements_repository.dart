@@ -22,6 +22,8 @@ class ApiClassRequirementsRepository extends ClassRequirementsRepository {
   List<PriorTermRequirement> _priorTermRequirements = const [];
   List<StudentCustomRequirement> _studentSpecificRequirements = const [];
   List<StudentRequirementCandidate> _studentCandidates = const [];
+  RequirementCompletionSummary _completionSummary =
+      const RequirementCompletionSummary.empty();
 
   @override
   List<ClassRequirementGroup> get groups => List.unmodifiable(_groups);
@@ -55,6 +57,9 @@ class ApiClassRequirementsRepository extends ClassRequirementsRepository {
   @override
   List<StudentRequirementCandidate> get studentCandidates =>
       List.unmodifiable(_studentCandidates);
+
+  @override
+  RequirementCompletionSummary get completionSummary => _completionSummary;
 
   @override
   int get unpublishedClassRequirementCount => _groups
@@ -112,6 +117,10 @@ class ApiClassRequirementsRepository extends ClassRequirementsRepository {
       );
       _studentCandidates = await _api.getStudentRequirementCandidates(
         customSchoolId: customSchoolId,
+      );
+      _completionSummary = await _api.getRequirementCompletion(
+        customSchoolId: customSchoolId,
+        academicTermId: academicTermId,
       );
     } catch (error) {
       _errorMessage = '$error';

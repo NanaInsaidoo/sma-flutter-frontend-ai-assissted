@@ -123,4 +123,119 @@ void main() {
     expect(action.takenAt, DateTime(2026, 7, 30, 9, 15, 10));
     expect(action.updatedAt, DateTime(2026, 7, 30, 10, 20, 30, 500));
   });
+
+  test('parses notified parties, closing status and edit attribution', () {
+    final incident = IncidentRecord.fromJson({
+      'incidentId': 'INC-2',
+      'customSchoolId': 'SCHOOL-1',
+      'incidentType': '1',
+      'incidentTypeName': 'Conduct',
+      'severity': 'HIGH',
+      'title': 'Resolved incident',
+      'description': 'Updated description',
+      'incidentDate': '2026-08-29',
+      'location': 'Classroom',
+      'incidentStatus': 'CLOSED_RESOLVED',
+      'notifiedParties': ['PARENT_GUARDIAN', 'POLICE', 'OTHER'],
+      'otherNotifiedDetails': 'District social welfare officer',
+      'edited': true,
+      'lastEditedBy': 'Adjoa Mensah',
+      'lastEditedAt': '2026-08-29T14:30:00',
+      'closureRequestStatus': 'APPROVED',
+      'requestedClosureStatus': 'CLOSED_RESOLVED',
+      'closureRequestedByName': 'Kofi Nketia',
+      'closureApproverId': 24,
+      'closureApproverName': 'Adjoa Mensah',
+      'closureNote': 'All follow-up actions are complete.',
+      'closureRequestedAt': '2026-08-29T13:30:00',
+    });
+
+    expect(incident.status, 'CLOSED_RESOLVED');
+    expect(incident.notifiedParties, containsAll(['POLICE', 'OTHER']));
+    expect(incident.otherNotifiedDetails, 'District social welfare officer');
+    expect(incident.lastEditedBy, 'Adjoa Mensah');
+    expect(incident.lastEditedAt, DateTime(2026, 8, 29, 14, 30));
+    expect(incident.closureRequestStatus, 'APPROVED');
+    expect(incident.closureApproverName, 'Adjoa Mensah');
+    expect(incident.closureRequestedAt, DateTime(2026, 8, 29, 13, 30));
+  });
+
+  test('submits closure for another approver and can reopen later', () async {
+    final requests = <http.Request>[];
+    final client = MockClient((request) async {
+      requests.add(request);
+      if (request.url.path.endsWith('/closure-approvers')) {
+        return http.Response(
+          jsonEncode([
+            {'id': 24, 'name': 'Adjoa Mensah', 'role': 'Headmaster'},
+          ]),
+          200,
+        );
+      }
+      return http.Response(
+        jsonEncode({
+          'incidentId': 'INC-2',
+          'customSchoolId': 'SCHOOL-1',
+          'incidentType': '1',
+          'incidentTypeName': 'Conduct',
+          'severity': 'HIGH',
+          'title': 'Test incident',
+          'description': 'Description',
+          'incidentDate': '2026-08-29',
+          'location': 'Classroom',
+          'incidentStatus': request.url.path.endsWith('/reopen')
+              ? 'OPEN'
+              : 'ESCALATED',
+          'closureRequestStatus': request.url.path.endsWith('/reopen')
+              ? 'REOPENED'
+              : 'PENDING_APPROVAL',
+        }),
+        200,
+      );
+    });
+    final api = IncidentApiClient(
+      customSchoolId: 'SCHOOL-1',
+      accessToken: 'token',
+      client: client,
+    );
+
+    final approvers = await api.getClosureApprovers();
+    final pending = await api.requestClosure(
+      'INC-2',
+      resolved: false,
+      note: 'Further work cannot continue.',
+      approverId: approvers.single.id,
+    );
+    final reopened = await api.reopen('INC-2', 'New evidence received.');
+
+    expect(approvers.single.name, 'Adjoa Mensah');
+    expect(pending.closureRequestStatus, 'PENDING_APPROVAL');
+    expect(reopened.status, 'OPEN');
+    final closureBody = jsonDecode(requests[1].body) as Map<String, dynamic>;
+    expect(closureBody['outcome'], 'CLOSED_UNRESOLVED');
+    expect(closureBody['approverId'], 24);
+    expect(jsonDecode(requests[2].body), {'comment': 'New evidence received.'});
+  });
+
+  test('downloads the prepared incident PDF', () async {
+    final client = MockClient((request) async {
+      expect(request.method, 'GET');
+      expect(request.url.path, endsWith('/api/v1/incidents/INC-9/report'));
+      expect(request.url.queryParameters['customSchoolId'], 'SCHOOL-1');
+      return http.Response.bytes(
+        [0x25, 0x50, 0x44, 0x46, 0x2D],
+        200,
+        headers: {'content-type': 'application/pdf'},
+      );
+    });
+    final api = IncidentApiClient(
+      customSchoolId: 'SCHOOL-1',
+      accessToken: 'token',
+      client: client,
+    );
+
+    final bytes = await api.downloadIncidentReport('INC-9');
+
+    expect(bytes, [0x25, 0x50, 0x44, 0x46, 0x2D]);
+  });
 }

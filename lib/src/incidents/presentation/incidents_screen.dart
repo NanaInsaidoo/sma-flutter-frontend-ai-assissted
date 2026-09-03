@@ -5,6 +5,15 @@ import 'package:flutter/material.dart';
 import '../../theme/app_theme.dart';
 import '../data/incident_api_client.dart';
 import '../domain/incident_models.dart';
+import '../../assessments/presentation/report_pdf_download_stub.dart'
+    if (dart.library.html) '../../assessments/presentation/report_pdf_download_web.dart';
+
+const _notificationOptions = [
+  ('PARENT_GUARDIAN', 'Parent / guardian'),
+  ('POLICE', 'Police'),
+  ('GES', 'GES'),
+  ('OTHER', 'Other'),
+];
 
 class IncidentsScreen extends StatefulWidget {
   const IncidentsScreen({
@@ -460,7 +469,7 @@ class _StatsGrid extends StatelessWidget {
         '',
       ),
       (
-        'Resolved',
+        'Closed incidents',
         stats.resolved,
         Icons.check_circle_outline_rounded,
         const Color(0xFF22A06B),
@@ -909,13 +918,10 @@ class _IncidentListCard extends StatelessWidget {
                         value: status,
                         hint: 'All status',
                         values: const [
-                          'REPORTED',
                           'OPEN',
-                          'IN_PROGRESS',
                           'ESCALATED',
-                          'RESOLVED',
-                          'CLOSED',
-                          'REOPENED',
+                          'CLOSED_RESOLVED',
+                          'CLOSED_UNRESOLVED',
                         ],
                         onChanged: onStatus,
                       ),
@@ -1236,86 +1242,165 @@ class _IncidentDetailViewState extends State<IncidentDetailView> {
   }
 
   @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          border: Border(bottom: BorderSide(color: AppColors.border)),
-        ),
-        child: Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            TextButton.icon(
-              onPressed: widget.onBack,
-              icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 15),
-              label: const Text('Incidents'),
-            ),
-            const Text(
-              '/',
-              style: TextStyle(color: AppColors.border, fontSize: 20),
-            ),
-            Text(
-              _incident.incidentId,
-              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 17),
-            ),
-            if (_saving)
-              const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
+  Widget build(BuildContext context) {
+    final closed = _isClosedStatus(_incident.status);
+    final closurePending = _incident.closureRequestStatus == 'PENDING_APPROVAL';
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(bottom: BorderSide(color: AppColors.border)),
+          ),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              TextButton.icon(
+                onPressed: widget.onBack,
+                icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 15),
+                label: const Text('Incidents'),
               ),
-            OutlinedButton.icon(
-              onPressed: _exportSummary,
-              icon: const Icon(Icons.download_outlined, size: 17),
-              label: const Text('Export PDF'),
-            ),
-            OutlinedButton.icon(
-              onPressed: _editIncident,
-              icon: const Icon(Icons.edit_outlined, size: 17),
-              label: const Text('Edit'),
-            ),
-            OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppColors.red,
-                side: const BorderSide(color: Color(0xFFFCA5A5)),
-                backgroundColor: const Color(0xFFFFF5F5),
+              const Text(
+                '/',
+                style: TextStyle(color: AppColors.border, fontSize: 20),
               ),
-              onPressed: _escalate,
-              icon: const Icon(Icons.warning_amber_rounded, size: 17),
-              label: const Text('Escalate'),
+              Text(
+                _incident.incidentId,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 17,
+                ),
+              ),
+              if (_saving)
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              OutlinedButton.icon(
+                onPressed: _exportSummary,
+                icon: const Icon(Icons.download_outlined, size: 17),
+                label: const Text('Export PDF'),
+              ),
+              OutlinedButton.icon(
+                onPressed: closed ? null : _editIncident,
+                icon: const Icon(Icons.edit_outlined, size: 17),
+                label: const Text('Edit'),
+              ),
+              if (!closed)
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.red,
+                    side: const BorderSide(color: Color(0xFFFCA5A5)),
+                    backgroundColor: const Color(0xFFFFF5F5),
+                  ),
+                  onPressed: _escalate,
+                  icon: const Icon(Icons.warning_amber_rounded, size: 17),
+                  label: const Text('Escalate'),
+                ),
+              if (!closed)
+                FilledButton.icon(
+                  key: const Key('close-incident'),
+                  onPressed: closurePending ? null : _closeIncident,
+                  icon: Icon(
+                    closurePending
+                        ? Icons.hourglass_top_rounded
+                        : Icons.task_alt_rounded,
+                    size: 17,
+                  ),
+                  label: Text(
+                    closurePending
+                        ? 'Closure awaiting approval'
+                        : 'Request closure',
+                  ),
+                ),
+              if (closed)
+                FilledButton.icon(
+                  key: const Key('reopen-incident'),
+                  onPressed: _reopenIncident,
+                  icon: const Icon(Icons.lock_open_rounded, size: 17),
+                  label: const Text('Reopen'),
+                ),
+            ],
+          ),
+        ),
+        if (closed)
+          Container(
+            key: const Key('closed-incident-read-only-banner'),
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            color: const Color(0xFFF1F5F9),
+            child: const Row(
+              children: [
+                Icon(
+                  Icons.lock_outline_rounded,
+                  size: 18,
+                  color: AppColors.muted,
+                ),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'This incident is closed and read-only. Reopen it to add comments or make changes.',
+                    style: TextStyle(
+                      color: AppColors.muted,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
+          )
+        else if (closurePending)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            color: const Color(0xFFFFF7E6),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.pending_actions_rounded,
+                  size: 18,
+                  color: AppColors.amber,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Closure is awaiting approval from ${_incident.closureApproverName.isEmpty ? 'the selected approver' : _incident.closureApproverName}. The incident remains open until approved.',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final main = _detailMain();
+              final side = _detailSide();
+              return ListView(
+                padding: EdgeInsets.all(constraints.maxWidth < 700 ? 14 : 20),
+                children: constraints.maxWidth >= 980
+                    ? [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(child: main),
+                            const SizedBox(width: 16),
+                            SizedBox(width: 310, child: side),
+                          ],
+                        ),
+                      ]
+                    : [main, const SizedBox(height: 14), side],
+              );
+            },
+          ),
         ),
-      ),
-      Expanded(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final main = _detailMain();
-            final side = _detailSide();
-            return ListView(
-              padding: EdgeInsets.all(constraints.maxWidth < 700 ? 14 : 20),
-              children: constraints.maxWidth >= 980
-                  ? [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(child: main),
-                          const SizedBox(width: 16),
-                          SizedBox(width: 310, child: side),
-                        ],
-                      ),
-                    ]
-                  : [main, const SizedBox(height: 14), side],
-            );
-          },
-        ),
-      ),
-    ],
-  );
+      ],
+    );
+  }
 
   Widget _detailMain() => Column(
     children: [
@@ -1385,9 +1470,26 @@ class _IncidentDetailViewState extends State<IncidentDetailView> {
                     left: BorderSide(color: AppColors.green, width: 3),
                   ),
                 ),
-                child: Text(
-                  _incident.description,
-                  style: const TextStyle(height: 1.55),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _incident.description,
+                      style: const TextStyle(height: 1.55),
+                    ),
+                    if (_incident.edited && _incident.lastEditedAt != null) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        'Edited by ${_incident.lastEditedBy.isEmpty ? 'a staff member' : _incident.lastEditedBy} · ${_dateTime(_incident.lastEditedAt!)}',
+                        key: const Key('incident-edit-attribution'),
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ],
@@ -1397,6 +1499,7 @@ class _IncidentDetailViewState extends State<IncidentDetailView> {
       const SizedBox(height: 14),
       _PeopleCard(
         incident: _incident,
+        readOnly: _isClosedStatus(_incident.status),
         onAdd: _addPerson,
         onRemove: (person) {
           if (person.involvementId != null) {
@@ -1412,6 +1515,7 @@ class _IncidentDetailViewState extends State<IncidentDetailView> {
       const SizedBox(height: 14),
       _ActionsCard(
         incident: _incident,
+        readOnly: _isClosedStatus(_incident.status),
         onAdd: _addAction,
         onEdit: _editAction,
         onRemove: (action) {
@@ -1425,6 +1529,7 @@ class _IncidentDetailViewState extends State<IncidentDetailView> {
       const SizedBox(height: 14),
       _TimelineCard(
         incident: _incident,
+        readOnly: _isClosedStatus(_incident.status),
         onSearchMentions: widget.api.searchMentions,
         onPost: (note, type, parentUpdateId, mentions) => _mutate(
           widget.api.addComment(
@@ -1443,9 +1548,18 @@ class _IncidentDetailViewState extends State<IncidentDetailView> {
     children: [
       _MetaCard(incident: _incident),
       const SizedBox(height: 14),
-      _StatusProgressCard(incident: _incident, onChange: _changeStatus),
+      _StatusProgressCard(
+        incident: _incident,
+        onClose: _incident.closureRequestStatus == 'PENDING_APPROVAL'
+            ? null
+            : _closeIncident,
+      ),
       const SizedBox(height: 14),
-      _NotificationCard(incident: _incident, onEdit: _editIncident),
+      _NotificationCard(
+        incident: _incident,
+        onEdit: _editIncident,
+        readOnly: _isClosedStatus(_incident.status),
+      ),
       const SizedBox(height: 14),
       Card(
         child: Padding(
@@ -1472,8 +1586,7 @@ class _IncidentDetailViewState extends State<IncidentDetailView> {
                   Expanded(
                     child: Text(
                       _incident.followUpRequired
-                          ? (_incident.status == 'RESOLVED' ||
-                                    _incident.status == 'CLOSED'
+                          ? (_isClosedStatus(_incident.status)
                                 ? 'Post-resolution follow-up scheduled'
                                 : 'Follow-up required')
                           : 'No follow-up required',
@@ -1504,14 +1617,27 @@ class _IncidentDetailViewState extends State<IncidentDetailView> {
     ],
   );
 
-  void _exportSummary() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'The backend does not currently expose a PDF export endpoint.',
-        ),
-      ),
-    );
+  Future<void> _exportSummary() async {
+    try {
+      final bytes = await widget.api.downloadIncidentReport(
+        _incident.incidentId,
+      );
+      final downloaded = await downloadReportPdf(
+        'incident-${_incident.incidentId}.pdf',
+        bytes,
+      );
+      if (!downloaded && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('PDF download is available on web.')),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+      }
+    }
   }
 
   Future<void> _loadRelated() async {
@@ -1570,31 +1696,42 @@ class _IncidentDetailViewState extends State<IncidentDetailView> {
     );
   }
 
-  Future<void> _changeStatus(String status) async {
-    final controller = TextEditingController();
-    final note = await showDialog<String>(
+  Future<void> _closeIncident() async {
+    List<IncidentClosureApprover> approvers;
+    try {
+      approvers = await widget.api.getClosureApprovers();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+      }
+      return;
+    }
+    if (!mounted) return;
+    final result = await showDialog<_IncidentClosureResult>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: Text('Mark as ${_label(status)}'),
-        content: TextField(
-          controller: controller,
-          maxLines: 3,
-          decoration: const InputDecoration(labelText: 'Status note'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('Update'),
-          ),
-        ],
-      ),
+      builder: (_) => _CloseIncidentDialog(approvers: approvers),
     );
-    if (note != null) {
-      _mutate(widget.api.updateStatus(_incident.incidentId, status, note));
+    if (result != null) {
+      await _mutate(
+        widget.api.requestClosure(
+          _incident.incidentId,
+          resolved: result.resolved,
+          note: result.note,
+          approverId: result.approverId,
+        ),
+      );
+    }
+  }
+
+  Future<void> _reopenIncident() async {
+    final comment = await showDialog<String>(
+      context: context,
+      builder: (_) => const _ReopenIncidentDialog(),
+    );
+    if (comment != null) {
+      await _mutate(widget.api.reopen(_incident.incidentId, comment));
     }
   }
 
@@ -1657,10 +1794,12 @@ class _PeopleCard extends StatelessWidget {
     required this.incident,
     required this.onAdd,
     required this.onRemove,
+    required this.readOnly,
   });
   final IncidentRecord incident;
   final VoidCallback onAdd;
   final ValueChanged<IncidentPerson> onRemove;
+  final bool readOnly;
   @override
   Widget build(BuildContext context) => Card(
     child: Padding(
@@ -1676,11 +1815,12 @@ class _PeopleCard extends StatelessWidget {
                   style: TextStyle(fontWeight: FontWeight.w800),
                 ),
               ),
-              TextButton.icon(
-                onPressed: onAdd,
-                icon: const Icon(Icons.add_rounded),
-                label: const Text('Add person'),
-              ),
+              if (!readOnly)
+                TextButton.icon(
+                  onPressed: onAdd,
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('Add person'),
+                ),
             ],
           ),
           if (incident.people.isEmpty)
@@ -1731,10 +1871,11 @@ class _PeopleCard extends StatelessWidget {
                       ),
                     ),
                     _Pill(text: person.roleName, color: AppColors.green),
-                    IconButton(
-                      onPressed: () => onRemove(person),
-                      icon: const Icon(Icons.close_rounded, size: 17),
-                    ),
+                    if (!readOnly)
+                      IconButton(
+                        onPressed: () => onRemove(person),
+                        icon: const Icon(Icons.close_rounded, size: 17),
+                      ),
                   ],
                 ),
               ),
@@ -1751,11 +1892,13 @@ class _ActionsCard extends StatelessWidget {
     required this.onAdd,
     required this.onEdit,
     required this.onRemove,
+    required this.readOnly,
   });
   final IncidentRecord incident;
   final VoidCallback onAdd;
   final ValueChanged<IncidentAction> onEdit;
   final ValueChanged<IncidentAction> onRemove;
+  final bool readOnly;
   @override
   Widget build(BuildContext context) => Card(
     child: Padding(
@@ -1771,11 +1914,12 @@ class _ActionsCard extends StatelessWidget {
                   style: TextStyle(fontWeight: FontWeight.w800),
                 ),
               ),
-              TextButton.icon(
-                onPressed: onAdd,
-                icon: const Icon(Icons.add_task_rounded),
-                label: const Text('Add action'),
-              ),
+              if (!readOnly)
+                TextButton.icon(
+                  onPressed: onAdd,
+                  icon: const Icon(Icons.add_task_rounded),
+                  label: const Text('Add action'),
+                ),
             ],
           ),
           if (incident.actions.isEmpty)
@@ -1825,7 +1969,7 @@ class _ActionsCard extends StatelessWidget {
                       ),
                   ],
                 ),
-                trailing: action.actionId == null
+                trailing: readOnly || action.actionId == null
                     ? null
                     : PopupMenuButton<String>(
                         tooltip: 'Action options',
@@ -1869,10 +2013,12 @@ class _TimelineCard extends StatefulWidget {
     required this.incident,
     required this.onPost,
     required this.onSearchMentions,
+    required this.readOnly,
   });
   final IncidentRecord incident;
   final void Function(String, String, String?, List<IncidentMention>) onPost;
   final Future<List<IncidentMention>> Function(String) onSearchMentions;
+  final bool readOnly;
   @override
   State<_TimelineCard> createState() => _TimelineCardState();
 }
@@ -2062,7 +2208,10 @@ class _TimelineCardState extends State<_TimelineCard> {
 
   Widget _updateTile(IncidentUpdate update, {required bool isReply}) {
     final systemEvent =
-        update.type == 'STATUS_CHANGE' || update.type == 'ESCALATION';
+        update.type == 'STATUS_CHANGE' ||
+        update.type == 'ESCALATION' ||
+        update.type.startsWith('CLOSURE_') ||
+        update.type == 'REOPENED';
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2140,7 +2289,9 @@ class _TimelineCardState extends State<_TimelineCard> {
                 ),
                 const SizedBox(height: 5),
                 Text(update.note),
-                if (!systemEvent && update.updateId.isNotEmpty) ...[
+                if (!widget.readOnly &&
+                    !systemEvent &&
+                    update.updateId.isNotEmpty) ...[
                   const SizedBox(height: 6),
                   TextButton.icon(
                     onPressed: () => _startReply(update),
@@ -2173,164 +2324,183 @@ class _TimelineCardState extends State<_TimelineCard> {
           ),
           const SizedBox(height: 12),
           ..._buildThreads(),
-          if (_replyingTo != null)
+          if (widget.readOnly)
             Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: AppColors.greenSoft,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.reply_rounded, size: 16),
-                  const SizedBox(width: 7),
-                  Expanded(
-                    child: Text(
-                      'Replying to ${_replyingTo!.updatedBy.isEmpty ? 'comment' : _replyingTo!.updatedBy}',
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Cancel reply',
-                    onPressed: () => setState(() => _replyingTo = null),
-                    icon: const Icon(Icons.close_rounded, size: 16),
-                  ),
-                ],
-              ),
-            ),
-          TextField(
-            key: _composerKey,
-            controller: _controller,
-            focusNode: _composerFocus,
-            minLines: 3,
-            maxLines: 5,
-            decoration: const InputDecoration(
-              hintText: 'Add an update or comment… Use @ to mention someone',
-            ),
-          ),
-          if (_mentionQuery != null)
-            Container(
-              constraints: const BoxConstraints(maxHeight: 230),
-              margin: const EdgeInsets.only(top: 6),
-              decoration: BoxDecoration(
-                color: Colors.white,
+                color: const Color(0xFFF8FAFC),
                 border: Border.all(color: AppColors.border),
-                borderRadius: BorderRadius.circular(10),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x14000000),
-                    blurRadius: 12,
-                    offset: Offset(0, 4),
-                  ),
-                ],
+                borderRadius: BorderRadius.circular(9),
               ),
-              child: _mentionQuery!.length < 2
-                  ? const Padding(
-                      padding: EdgeInsets.all(12),
-                      child: Text(
-                        'Type at least 2 letters after @',
-                        style: TextStyle(color: AppColors.muted),
-                      ),
-                    )
-                  : _searchingMentions
-                  ? const Padding(
-                      padding: EdgeInsets.all(14),
-                      child: Center(
-                        child: SizedBox.square(
-                          dimension: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      ),
-                    )
-                  : _mentionResults.isEmpty
-                  ? const Padding(
-                      padding: EdgeInsets.all(12),
-                      child: Text(
-                        'No matching students or staff',
-                        style: TextStyle(color: AppColors.muted),
-                      ),
-                    )
-                  : ListView(
-                      shrinkWrap: true,
-                      children: _mentionResults.map((mention) {
-                        final color = mention.isStudent
-                            ? AppColors.blue
-                            : AppColors.purple;
-                        return ListTile(
-                          dense: true,
-                          onTap: () => _insertMention(mention),
-                          leading: CircleAvatar(
-                            radius: 16,
-                            backgroundColor: color.withValues(alpha: .12),
-                            child: Icon(
-                              mention.isStudent
-                                  ? Icons.school_outlined
-                                  : Icons.badge_outlined,
-                              color: color,
-                              size: 16,
-                            ),
-                          ),
-                          title: Text(
-                            mention.name,
-                            style: TextStyle(
-                              color: color,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          subtitle: Text(mention.subtitle),
-                          trailing: _Pill(
-                            text: mention.isStudent ? 'Student' : 'Staff',
-                            color: color,
-                          ),
-                        );
-                      }).toList(),
-                    ),
+              child: const Text(
+                'Comments are read-only while this incident is closed.',
+                style: TextStyle(color: AppColors.muted),
+              ),
             ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              DropdownButton<String>(
-                value: _type,
-                items:
-                    const [
-                          'INTERNAL_NOTE',
-                          'PARENT_COMMUNICATION',
-                          'STAFF_NOTE',
-                        ]
-                        .map(
-                          (item) => DropdownMenuItem(
-                            value: item,
-                            child: Text(_label(item)),
+          if (!widget.readOnly) ...[
+            if (_replyingTo != null)
+              Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 7,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.greenSoft,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.reply_rounded, size: 16),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: Text(
+                        'Replying to ${_replyingTo!.updatedBy.isEmpty ? 'comment' : _replyingTo!.updatedBy}',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Cancel reply',
+                      onPressed: () => setState(() => _replyingTo = null),
+                      icon: const Icon(Icons.close_rounded, size: 16),
+                    ),
+                  ],
+                ),
+              ),
+            TextField(
+              key: _composerKey,
+              controller: _controller,
+              focusNode: _composerFocus,
+              minLines: 3,
+              maxLines: 5,
+              decoration: const InputDecoration(
+                hintText: 'Add an update or comment… Use @ to mention someone',
+              ),
+            ),
+            if (_mentionQuery != null)
+              Container(
+                constraints: const BoxConstraints(maxHeight: 230),
+                margin: const EdgeInsets.only(top: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: AppColors.border),
+                  borderRadius: BorderRadius.circular(10),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x14000000),
+                      blurRadius: 12,
+                      offset: Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: _mentionQuery!.length < 2
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: Text(
+                          'Type at least 2 letters after @',
+                          style: TextStyle(color: AppColors.muted),
+                        ),
+                      )
+                    : _searchingMentions
+                    ? const Padding(
+                        padding: EdgeInsets.all(14),
+                        child: Center(
+                          child: SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
                           ),
-                        )
-                        .toList(),
-                onChanged: (value) => setState(() => _type = value ?? _type),
+                        ),
+                      )
+                    : _mentionResults.isEmpty
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: Text(
+                          'No matching students or staff',
+                          style: TextStyle(color: AppColors.muted),
+                        ),
+                      )
+                    : ListView(
+                        shrinkWrap: true,
+                        children: _mentionResults.map((mention) {
+                          final color = mention.isStudent
+                              ? AppColors.blue
+                              : AppColors.purple;
+                          return ListTile(
+                            dense: true,
+                            onTap: () => _insertMention(mention),
+                            leading: CircleAvatar(
+                              radius: 16,
+                              backgroundColor: color.withValues(alpha: .12),
+                              child: Icon(
+                                mention.isStudent
+                                    ? Icons.school_outlined
+                                    : Icons.badge_outlined,
+                                color: color,
+                                size: 16,
+                              ),
+                            ),
+                            title: Text(
+                              mention.name,
+                              style: TextStyle(
+                                color: color,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            subtitle: Text(mention.subtitle),
+                            trailing: _Pill(
+                              text: mention.isStudent ? 'Student' : 'Staff',
+                              color: color,
+                            ),
+                          );
+                        }).toList(),
+                      ),
               ),
-              const Spacer(),
-              FilledButton(
-                onPressed: () {
-                  final text = _controller.text.trim();
-                  if (text.isEmpty) return;
-                  final activeMentions = _selectedMentions
-                      .where((mention) => text.contains('@${mention.name}'))
-                      .toList(growable: false);
-                  widget.onPost(
-                    text,
-                    _type,
-                    _replyingTo?.updateId,
-                    activeMentions,
-                  );
-                  _controller.clear();
-                  setState(() {
-                    _replyingTo = null;
-                    _selectedMentions.clear();
-                  });
-                },
-                child: const Text('Post comment'),
-              ),
-            ],
-          ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                DropdownButton<String>(
+                  value: _type,
+                  items:
+                      const [
+                            'INTERNAL_NOTE',
+                            'PARENT_COMMUNICATION',
+                            'STAFF_NOTE',
+                          ]
+                          .map(
+                            (item) => DropdownMenuItem(
+                              value: item,
+                              child: Text(_label(item)),
+                            ),
+                          )
+                          .toList(),
+                  onChanged: (value) => setState(() => _type = value ?? _type),
+                ),
+                const Spacer(),
+                FilledButton(
+                  onPressed: () {
+                    final text = _controller.text.trim();
+                    if (text.isEmpty) return;
+                    final activeMentions = _selectedMentions
+                        .where((mention) => text.contains('@${mention.name}'))
+                        .toList(growable: false);
+                    widget.onPost(
+                      text,
+                      _type,
+                      _replyingTo?.updateId,
+                      activeMentions,
+                    );
+                    _controller.clear();
+                    setState(() {
+                      _replyingTo = null;
+                      _selectedMentions.clear();
+                    });
+                  },
+                  child: const Text('Post comment'),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     ),
@@ -2396,61 +2566,255 @@ class _MetaCard extends StatelessWidget {
   }
 }
 
+class _IncidentClosureResult {
+  const _IncidentClosureResult({
+    required this.resolved,
+    required this.note,
+    required this.approverId,
+  });
+  final bool resolved;
+  final String note;
+  final int approverId;
+}
+
+class _CloseIncidentDialog extends StatefulWidget {
+  const _CloseIncidentDialog({required this.approvers});
+
+  final List<IncidentClosureApprover> approvers;
+
+  @override
+  State<_CloseIncidentDialog> createState() => _CloseIncidentDialogState();
+}
+
+class _CloseIncidentDialogState extends State<_CloseIncidentDialog> {
+  final _form = GlobalKey<FormState>();
+  final _note = TextEditingController();
+  bool _resolved = true;
+  int? _approverId;
+
+  @override
+  void dispose() {
+    _note.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Close incident'),
+    content: SizedBox(
+      width: 470,
+      child: Form(
+        key: _form,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Choose the outcome and a different authorized person to approve the closure. The incident remains open until approval.',
+              style: TextStyle(color: AppColors.muted),
+            ),
+            const SizedBox(height: 14),
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(
+                  value: true,
+                  icon: Icon(Icons.check_circle_outline_rounded),
+                  label: Text('Resolved'),
+                ),
+                ButtonSegment(
+                  value: false,
+                  icon: Icon(Icons.error_outline_rounded),
+                  label: Text('Unresolved'),
+                ),
+              ],
+              selected: {_resolved},
+              onSelectionChanged: (value) =>
+                  setState(() => _resolved = value.first),
+            ),
+            const SizedBox(height: 14),
+            TextFormField(
+              key: const Key('incident-closing-note'),
+              controller: _note,
+              minLines: 3,
+              maxLines: 6,
+              decoration: const InputDecoration(
+                labelText: 'Closing note *',
+                hintText: 'Summarize the outcome and any outstanding concern.',
+              ),
+              validator: (value) => value?.trim().isEmpty != false
+                  ? 'Enter a closing note'
+                  : null,
+            ),
+            const SizedBox(height: 14),
+            DropdownButtonFormField<int>(
+              key: const Key('incident-closure-approver'),
+              value: _approverId,
+              decoration: const InputDecoration(
+                labelText: 'Closure approver *',
+                hintText: 'Select another authorized person',
+              ),
+              items: widget.approvers
+                  .map(
+                    (approver) => DropdownMenuItem(
+                      value: approver.id,
+                      child: Text('${approver.name} · ${approver.role}'),
+                    ),
+                  )
+                  .toList(growable: false),
+              onChanged: (value) => setState(() => _approverId = value),
+              validator: (value) => value == null ? 'Select an approver' : null,
+            ),
+            if (widget.approvers.isEmpty) ...[
+              const SizedBox(height: 10),
+              const Text(
+                'No other eligible approver is available. Add another administrator or headmaster before requesting closure.',
+                style: TextStyle(color: AppColors.red, fontSize: 12),
+              ),
+            ],
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        onPressed: () {
+          if (!_form.currentState!.validate()) return;
+          Navigator.pop(
+            context,
+            _IncidentClosureResult(
+              resolved: _resolved,
+              note: _note.text.trim(),
+              approverId: _approverId!,
+            ),
+          );
+        },
+        child: const Text('Submit for approval'),
+      ),
+    ],
+  );
+}
+
+class _ReopenIncidentDialog extends StatefulWidget {
+  const _ReopenIncidentDialog();
+
+  @override
+  State<_ReopenIncidentDialog> createState() => _ReopenIncidentDialogState();
+}
+
+class _ReopenIncidentDialogState extends State<_ReopenIncidentDialog> {
+  final _form = GlobalKey<FormState>();
+  final _comment = TextEditingController();
+
+  @override
+  void dispose() {
+    _comment.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Reopen incident'),
+    content: SizedBox(
+      width: 460,
+      child: Form(
+        key: _form,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Reopening returns the incident to Open. You can then add comments, edit it, escalate it, or request closure again.',
+              style: TextStyle(color: AppColors.muted),
+            ),
+            const SizedBox(height: 14),
+            TextFormField(
+              key: const Key('incident-reopen-comment'),
+              controller: _comment,
+              minLines: 3,
+              maxLines: 6,
+              decoration: const InputDecoration(
+                labelText: 'Reopening comment *',
+                hintText: 'Explain why this incident needs more work.',
+              ),
+              validator: (value) => value?.trim().isEmpty != false
+                  ? 'Enter a reopening comment'
+                  : null,
+            ),
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
+      FilledButton.icon(
+        onPressed: () {
+          if (!_form.currentState!.validate()) return;
+          Navigator.pop(context, _comment.text.trim());
+        },
+        icon: const Icon(Icons.lock_open_rounded),
+        label: const Text('Reopen incident'),
+      ),
+    ],
+  );
+}
+
 class _StatusProgressCard extends StatelessWidget {
-  const _StatusProgressCard({required this.incident, required this.onChange});
+  const _StatusProgressCard({required this.incident, required this.onClose});
 
   final IncidentRecord incident;
-  final ValueChanged<String> onChange;
+  final VoidCallback? onClose;
 
   @override
   Widget build(BuildContext context) {
-    const statuses = [
-      'REPORTED',
-      'OPEN',
-      'IN_PROGRESS',
-      'ESCALATED',
-      'RESOLVED',
-      'CLOSED',
-      'REOPENED',
-    ];
-    final index = statuses.indexOf(incident.status);
+    final closed = _isClosedStatus(incident.status);
     final progress = switch (incident.status) {
       'REPORTED' => .15,
-      'OPEN' => .3,
+      'OPEN' => .35,
       'IN_PROGRESS' => .55,
       'ESCALATED' => .75,
       'RESOLVED' => 1.0,
       'CLOSED' => 1.0,
+      'CLOSED_RESOLVED' || 'CLOSED_UNRESOLVED' => 1.0,
       _ => .35,
     };
     return Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _DetailCardHeader(title: 'Update status'),
+          const _DetailCardHeader(title: 'Incident status'),
           Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
               children: [
                 Row(
                   children: [
+                    Icon(
+                      closed
+                          ? Icons.task_alt_rounded
+                          : incident.status == 'ESCALATED'
+                          ? Icons.warning_amber_rounded
+                          : Icons.pending_actions_rounded,
+                      color: _statusColor(incident.status),
+                    ),
+                    const SizedBox(width: 9),
                     Expanded(
-                      child: DropdownButtonFormField<String>(
-                        value: index < 0 ? 'REPORTED' : incident.status,
-                        isDense: true,
-                        items: statuses
-                            .map(
-                              (status) => DropdownMenuItem(
-                                value: status,
-                                child: Text(_label(status)),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) {
-                          if (value != null && value != incident.status) {
-                            onChange(value);
-                          }
-                        },
+                      child: Text(
+                        _label(
+                          incident.status == 'REPORTED'
+                              ? 'OPEN'
+                              : incident.status,
+                        ),
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 16,
+                        ),
                       ),
                     ),
                   ],
@@ -2482,6 +2846,25 @@ class _StatusProgressCard extends StatelessWidget {
                     backgroundColor: AppColors.border,
                   ),
                 ),
+                if (!closed) ...[
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: onClose,
+                      icon: Icon(
+                        onClose == null
+                            ? Icons.hourglass_top_rounded
+                            : Icons.task_alt_rounded,
+                      ),
+                      label: Text(
+                        onClose == null
+                            ? 'Closure awaiting approval'
+                            : 'Request closure',
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -2593,40 +2976,57 @@ class _DetailCardHeader extends StatelessWidget {
 }
 
 class _NotificationCard extends StatelessWidget {
-  const _NotificationCard({required this.incident, required this.onEdit});
+  const _NotificationCard({
+    required this.incident,
+    required this.onEdit,
+    required this.readOnly,
+  });
   final IncidentRecord incident;
   final VoidCallback onEdit;
+  final bool readOnly;
   @override
   Widget build(BuildContext context) {
-    final rows = [
-      ('Parent / guardian', incident.parentNotified),
-      ('Class teacher', incident.classTeacherNotified),
-      ('Counselor', incident.counselorNotified),
-      ('Headmaster', incident.headmasterNotified),
-    ];
+    final selected = incident.notifiedParties.toSet();
     return Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _DetailCardHeader(title: 'Notifications', trailing: 'Edit'),
+          _DetailCardHeader(
+            title: 'Notifications',
+            trailing: readOnly ? 'Read-only' : 'Edit',
+          ),
           Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
               children: [
-                ...rows.map(
-                  (row) => ListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    onTap: onEdit,
-                    title: Text(row.$1),
-                    trailing: Icon(
-                      row.$2
-                          ? Icons.check_box_rounded
-                          : Icons.check_box_outline_blank_rounded,
-                      color: row.$2 ? AppColors.green : AppColors.muted,
+                if (selected.isEmpty)
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'No external notification recorded.',
+                      style: TextStyle(color: AppColors.muted),
                     ),
-                  ),
-                ),
+                  )
+                else
+                  ..._notificationOptions
+                      .where((option) => selected.contains(option.$1))
+                      .map(
+                        (option) => ListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          onTap: readOnly ? null : onEdit,
+                          title: Text(option.$2),
+                          subtitle:
+                              option.$1 == 'OTHER' &&
+                                  incident.otherNotifiedDetails.isNotEmpty
+                              ? Text(incident.otherNotifiedDetails)
+                              : null,
+                          trailing: const Icon(
+                            Icons.check_circle_rounded,
+                            color: AppColors.green,
+                          ),
+                        ),
+                      ),
               ],
             ),
           ),
@@ -2650,11 +3050,9 @@ class _EditIncidentDialogState extends State<_EditIncidentDialog> {
   late final TextEditingController _description;
   late final TextEditingController _location;
   late final TextEditingController _followUpNotes;
+  late final TextEditingController _otherNotifiedDetails;
   late String _severity;
-  late bool _parent;
-  late bool _teacher;
-  late bool _counselor;
-  late bool _headmaster;
+  late Set<String> _notifiedParties;
   late bool _followUp;
   late DateTime _followUpDate;
 
@@ -2666,11 +3064,11 @@ class _EditIncidentDialogState extends State<_EditIncidentDialog> {
     _description = TextEditingController(text: incident.description);
     _location = TextEditingController(text: incident.location);
     _followUpNotes = TextEditingController(text: incident.followUpNotes);
+    _otherNotifiedDetails = TextEditingController(
+      text: incident.otherNotifiedDetails,
+    );
     _severity = incident.severity;
-    _parent = incident.parentNotified;
-    _teacher = incident.classTeacherNotified;
-    _counselor = incident.counselorNotified;
-    _headmaster = incident.headmasterNotified;
+    _notifiedParties = incident.notifiedParties.toSet();
     _followUp = incident.followUpRequired;
     _followUpDate =
         incident.followUpDate ?? DateTime.now().add(const Duration(days: 7));
@@ -2682,6 +3080,7 @@ class _EditIncidentDialogState extends State<_EditIncidentDialog> {
     _description.dispose();
     _location.dispose();
     _followUpNotes.dispose();
+    _otherNotifiedDetails.dispose();
     super.dispose();
   }
 
@@ -2732,29 +3131,37 @@ class _EditIncidentDialogState extends State<_EditIncidentDialog> {
               ),
               const SizedBox(height: 10),
               const Text(
-                'Notifications',
+                'Who has been notified?',
                 style: TextStyle(fontWeight: FontWeight.w800),
               ),
-              _dialogSwitch(
-                'Parent / guardian',
-                _parent,
-                (value) => _parent = value,
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _notificationOptions
+                    .map(
+                      (option) => FilterChip(
+                        label: Text(option.$2),
+                        selected: _notifiedParties.contains(option.$1),
+                        onSelected: (selected) => setState(() {
+                          selected
+                              ? _notifiedParties.add(option.$1)
+                              : _notifiedParties.remove(option.$1);
+                        }),
+                      ),
+                    )
+                    .toList(),
               ),
-              _dialogSwitch(
-                'Class teacher',
-                _teacher,
-                (value) => _teacher = value,
-              ),
-              _dialogSwitch(
-                'Counselor',
-                _counselor,
-                (value) => _counselor = value,
-              ),
-              _dialogSwitch(
-                'Headmaster',
-                _headmaster,
-                (value) => _headmaster = value,
-              ),
+              if (_notifiedParties.contains('OTHER')) ...[
+                const SizedBox(height: 10),
+                TextFormField(
+                  controller: _otherNotifiedDetails,
+                  decoration: const InputDecoration(
+                    labelText: 'Other party notified *',
+                  ),
+                  validator: _required,
+                ),
+              ],
               const Divider(),
               _dialogSwitch(
                 'Follow-up required',
@@ -2823,10 +3230,8 @@ class _EditIncidentDialogState extends State<_EditIncidentDialog> {
         description: _description.text.trim(),
         location: _location.text.trim(),
         severity: _severity,
-        parentNotified: _parent,
-        classTeacherNotified: _teacher,
-        counselorNotified: _counselor,
-        headmasterNotified: _headmaster,
+        notifiedParties: _notifiedParties.toList(growable: false),
+        otherNotifiedDetails: _otherNotifiedDetails.text.trim(),
         followUpRequired: _followUp,
         followUpDate: _followUpDate,
         followUpNotes: _followUpNotes.text.trim(),
@@ -3091,15 +3496,26 @@ class _CreateIncidentDialogState extends State<_CreateIncidentDialog> {
   final _title = TextEditingController();
   final _description = TextEditingController();
   final _location = TextEditingController();
+  final _otherNotifiedDetails = TextEditingController();
   List<IncidentLookup> _types = const [];
   IncidentLookup? _type;
   String _severity = 'HIGH';
   late DateTime _date;
   TimeOfDay _time = TimeOfDay.now();
-  bool _parent = true;
+  final Set<String> _notifiedParties = {};
   bool _followUp = true;
   bool _saving = false;
   String? _error;
+
+  @override
+  void dispose() {
+    _title.dispose();
+    _description.dispose();
+    _location.dispose();
+    _otherNotifiedDetails.dispose();
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -3220,12 +3636,44 @@ class _CreateIncidentDialogState extends State<_CreateIncidentDialog> {
                 decoration: const InputDecoration(labelText: 'Description'),
                 validator: _required,
               ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Parent notified'),
-                value: _parent,
-                onChanged: (value) => setState(() => _parent = value),
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Who has been notified?',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
               ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: _notificationOptions
+                      .map(
+                        (option) => FilterChip(
+                          label: Text(option.$2),
+                          selected: _notifiedParties.contains(option.$1),
+                          onSelected: (selected) => setState(() {
+                            selected
+                                ? _notifiedParties.add(option.$1)
+                                : _notifiedParties.remove(option.$1);
+                          }),
+                        ),
+                      )
+                      .toList(),
+                ),
+              ),
+              if (_notifiedParties.contains('OTHER')) ...[
+                const SizedBox(height: 10),
+                TextFormField(
+                  controller: _otherNotifiedDetails,
+                  decoration: const InputDecoration(
+                    labelText: 'Other party notified *',
+                  ),
+                  validator: _required,
+                ),
+              ],
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('Follow-up required'),
@@ -3292,10 +3740,13 @@ class _CreateIncidentDialogState extends State<_CreateIncidentDialog> {
         'incidentTime':
             '${_time.hour.toString().padLeft(2, '0')}:${_time.minute.toString().padLeft(2, '0')}',
         'location': _location.text.trim(),
-        'parentNotified': _parent,
+        'parentNotified': _notifiedParties.contains('PARENT_GUARDIAN'),
         'classTeacherNotified': false,
         'counselorNotified': false,
         'headmasterNotified': false,
+        'notifiedParties': _notifiedParties.toList(growable: false),
+        if (_notifiedParties.contains('OTHER'))
+          'otherNotifiedDetails': _otherNotifiedDetails.text.trim(),
         'followUpRequired': _followUp,
         if (_followUp)
           'followUpDate': _date
@@ -3778,6 +4229,10 @@ Color _updateColor(String type) => switch (type) {
   'STAFF_NOTE' => AppColors.amber,
   'STATUS_CHANGE' => const Color(0xFF8B5CF6),
   'ESCALATION' => AppColors.red,
+  'CLOSURE_REQUESTED' => AppColors.amber,
+  'CLOSURE_APPROVED' => const Color(0xFF22A06B),
+  'CLOSURE_REJECTED' => AppColors.red,
+  'REOPENED' => AppColors.blue,
   _ => AppColors.green,
 };
 
@@ -3795,6 +4250,10 @@ IconData _updateIcon(String type) => switch (type) {
   'STAFF_NOTE' => Icons.lock_outline_rounded,
   'STATUS_CHANGE' => Icons.sync_rounded,
   'ESCALATION' => Icons.warning_amber_rounded,
+  'CLOSURE_REQUESTED' => Icons.pending_actions_rounded,
+  'CLOSURE_APPROVED' => Icons.lock_rounded,
+  'CLOSURE_REJECTED' => Icons.cancel_outlined,
+  'REOPENED' => Icons.lock_open_rounded,
   _ => Icons.chat_bubble_outline_rounded,
 };
 Color _severityColor(String value) => switch (value) {
@@ -3806,6 +4265,14 @@ Color _severityColor(String value) => switch (value) {
 Color _statusColor(String value) => switch (value) {
   'ESCALATED' => AppColors.red,
   'IN_PROGRESS' => AppColors.purple,
-  'RESOLVED' || 'CLOSED' => const Color(0xFF22A06B),
+  'RESOLVED' || 'CLOSED' || 'CLOSED_RESOLVED' => const Color(0xFF22A06B),
+  'CLOSED_UNRESOLVED' => AppColors.amber,
   _ => AppColors.blue,
 };
+
+bool _isClosedStatus(String value) => const {
+  'CLOSED',
+  'RESOLVED',
+  'CLOSED_RESOLVED',
+  'CLOSED_UNRESOLVED',
+}.contains(value);

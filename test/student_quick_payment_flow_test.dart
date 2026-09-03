@@ -19,6 +19,28 @@ void main() {
 
       final client = MockClient((request) async {
         final path = request.url.path;
+        if (path.endsWith('/allocation-options')) {
+          return http.Response(
+            jsonEncode({
+              'customStudentId': 'STU-001',
+              'studentName': 'Ama Mensah',
+              'balance': 800,
+              'items': [
+                {
+                  'assessmentId': 71,
+                  'feeName': 'Tuition',
+                  'outstandingAmount': 600,
+                },
+                {
+                  'assessmentId': 72,
+                  'feeName': 'Transport',
+                  'outstandingAmount': 200,
+                },
+              ],
+            }),
+            200,
+          );
+        }
         if (path.endsWith('/academic-context/current')) {
           return http.Response(
             jsonEncode({
@@ -139,20 +161,36 @@ void main() {
         ),
       );
       expect(scopedAmountField.focusNode.hasFocus, isTrue);
+      expect(scopedAmountField.controller.text, isEmpty);
+      expect(find.text('Fee item *'), findsOneWidget);
+      await tester.tap(find.text('Save Payment'));
+      await tester.pumpAndSettle();
+      expect(find.text('Select the fee item being paid.'), findsOneWidget);
+      final feeField = find.byWidgetPredicate(
+        (widget) => widget is DropdownButtonFormField<int>,
+      );
+      await tester.ensureVisible(feeField);
+      await tester.tap(feeField);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Tuition · GH₵ 600.00 due').last);
+      await tester.pumpAndSettle();
+      expect(scopedAmountField.controller.text, isEmpty);
 
       await tester.enterText(
         find.byKey(const ValueKey('payment-amount')),
         '1000',
       );
       await tester.pump();
-      expect(find.byKey(const ValueKey('overpayment-warning')), findsOneWidget);
       expect(
-        find.text('This payment is GH₵ 200 more than the amount due.'),
+        find.text('Amount exceeds the selected fee item’s balance.'),
         findsOneWidget,
       );
-      expect(find.textContaining('carried into the next term'), findsOneWidget);
-      expect(find.byKey(const ValueKey('overpayment-reason')), findsOneWidget);
-      expect(find.textContaining('Credit GH₵ 200'), findsOneWidget);
+      expect(find.byKey(const ValueKey('overpayment-warning')), findsNothing);
+      expect(find.text('Physical receipt (optional)'), findsOneWidget);
+      expect(
+        find.text('Images, PDF, DOC or DOCX · up to 5 MB.'),
+        findsOneWidget,
+      );
 
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();

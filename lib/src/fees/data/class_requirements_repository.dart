@@ -16,6 +16,7 @@ abstract class ClassRequirementsRepository extends ChangeNotifier {
   List<StudentRequirementCandidate> get studentCandidates;
   int get unpublishedClassRequirementCount;
   int get unpublishedStudentRequirementCount;
+  RequirementCompletionSummary get completionSummary;
 
   Future<void> load();
   Future<void> loadPriorTermRequirements();

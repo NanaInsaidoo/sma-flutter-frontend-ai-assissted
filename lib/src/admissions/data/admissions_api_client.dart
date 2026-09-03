@@ -4,8 +4,12 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../../config/api_config.dart';
+import '../domain/guardian_directory.dart';
 
 class AdmissionsApiClient {
+  // School-scoped invalidation shared by admission and household screens.
+  static final _studentChanges = StreamController<String>.broadcast();
+  static Stream<String> get studentChanges => _studentChanges.stream;
   AdmissionsApiClient({
     required this.accessToken,
     this.onRefreshAccessToken,
@@ -55,6 +59,19 @@ class AdmissionsApiClient {
     return AdmissionTermContext.fromJson(_decodeMap(response));
   }
 
+  Future<List<Map<String, dynamic>>> getHouseholdAddresses({
+    required String customSchoolId,
+    required int householdId,
+  }) async {
+    final response = await _send(
+      'GET',
+      '/api/v1/schools/$customSchoolId/households/$householdId/addresses',
+    );
+    return _extractList(
+      _decode(response),
+    ).whereType<Map<String, dynamic>>().toList();
+  }
+
   Future<List<AdmissionGuardian>> getGuardians({
     required String customSchoolId,
     int? householdId,
@@ -75,6 +92,49 @@ class AdmissionsApiClient {
         .whereType<Map<String, dynamic>>()
         .map(AdmissionGuardian.fromJson)
         .where((guardian) => guardian.displayName.trim().isNotEmpty)
+        .toList();
+  }
+
+  Future<SchoolGuardianDirectory> getGuardianDirectory(
+    String school, {
+    int? householdId,
+  }) async {
+    final response = await _send(
+      'GET',
+      _withQuery('/api/v1/guardians/schools/$school/directory', {
+        if (householdId != null) 'householdId': '$householdId',
+      }),
+    );
+    final json = _decodeMap(response);
+    if (json['guardians'] is! List || json['studentCounts'] is! Map) {
+      throw const AdmissionsApiException(
+        'The guardian directory could not be loaded. Please retry.',
+      );
+    }
+    return SchoolGuardianDirectory.fromJson(json);
+  }
+
+  Future<List<AdmissionGuardian>> getHouseholdGuardianSummaries({
+    required String customSchoolId,
+    required int householdId,
+  }) async {
+    final directory = await getGuardianDirectory(
+      customSchoolId,
+      householdId: householdId,
+    );
+    return directory.guardians
+        .map(
+          (entry) => AdmissionGuardian.fromJson({
+            'customGuardianId': entry.id,
+            'firstName': entry.name,
+            'householdId': entry.householdId,
+            'phone': entry.phone,
+            'email': entry.email,
+            'isPrimary': entry.isPrimary,
+            'status': entry.status,
+            'createdAt': entry.createdAt,
+          }),
+        )
         .toList();
   }
 
@@ -161,6 +221,66 @@ class AdmissionsApiClient {
       '/api/students/schools/$customSchoolId/students/$customStudentId',
     );
     return AdmissionStudent.fromJson(_decodeMap(response));
+  }
+
+  Future<Map<String, dynamic>> getStudentRecordContext(
+    String school,
+    String student,
+  ) async => _decodeMap(
+    await _send(
+      'GET',
+      '/api/schools/$school/students/$student/record-changes/context',
+    ),
+  );
+
+  Future<Map<String, dynamic>> previewStudentRecordChange(
+    String school,
+    String student,
+    Map<String, dynamic> body,
+  ) async => _decodeMap(
+    await _send(
+      'POST',
+      '/api/schools/$school/students/$student/record-changes/preview',
+      body: body,
+    ),
+  );
+
+  Future<Map<String, dynamic>> submitStudentRecordChange(
+    String school,
+    String student,
+    Map<String, dynamic> body,
+  ) async => _decodeMap(
+    await _send(
+      'POST',
+      '/api/schools/$school/students/$student/record-changes',
+      body: body,
+    ),
+  );
+
+  Future<List<Map<String, dynamic>>> getStudentRecordChanges(
+    String school,
+    String student,
+  ) async => _extractList(
+    _decode(
+      await _send(
+        'GET',
+        '/api/schools/$school/students/$student/record-changes',
+      ),
+    ),
+  ).whereType<Map<String, dynamic>>().toList();
+
+  Future<void> decideStudentRecordChange(
+    String school,
+    String student,
+    int id,
+    String action,
+    String reason,
+  ) async {
+    await _send(
+      'POST',
+      '/api/schools/$school/students/$student/record-changes/$id/decision',
+      body: {'action': action, 'reason': reason},
+    );
   }
 
   Future<void> updateStudentAdmissionStatus({
@@ -289,6 +409,11 @@ class AdmissionsApiClient {
 
   Future<List<AdmissionLookupOption>> getGenders() =>
       _cachedLookup('genders', () => _loadLookup('/api/v1/guardians/genders'));
+
+  Future<List<AdmissionLookupOption>> getBloodGroups() => _cachedLookup(
+    'blood-groups',
+    () => _loadLookup('/api/lookup/blood-groups'),
+  );
 
   Future<List<AdmissionLookupOption>> getNationalities() => _cachedLookup(
     'nationalities',
@@ -574,6 +699,7 @@ class AdmissionsApiClient {
     required String documentType,
     required String fileName,
     required List<int> bytes,
+    String? changeReason,
   }) async {
     if (accessToken == null || accessToken!.isEmpty) {
       throw const AdmissionsApiException('Please sign in again to continue.');
@@ -587,12 +713,13 @@ class AdmissionsApiClient {
         ),
       );
       request.headers['Authorization'] = 'Bearer $accessToken';
+      if (changeReason != null) request.fields['changeReason'] = changeReason;
       request.files.add(
         http.MultipartFile.fromBytes('file', bytes, filename: fileName),
       );
-      final streamed = await request.send().timeout(
-        const Duration(seconds: 45),
-      );
+      final streamed = await _client
+          .send(request)
+          .timeout(const Duration(seconds: 45));
       return http.Response.fromStream(streamed);
     }
 
@@ -626,12 +753,16 @@ class AdmissionsApiClient {
     required String customSchoolId,
     required String customStudentId,
     required String fileUrl,
+    String? changeReason,
   }) async {
     await _send(
       'DELETE',
       _withQuery(
         '/api/students/$customSchoolId/students/$customStudentId/documents',
-        {'fileUrl': fileUrl},
+        {
+          'fileUrl': fileUrl,
+          if (changeReason != null) 'changeReason': changeReason,
+        },
       ),
     );
   }
@@ -709,6 +840,12 @@ class AdmissionsApiClient {
       }
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
+        if (method != 'GET') {
+          final school = RegExp(
+            r'/api/(?:students|admissions)/schools/([^/]+)',
+          ).firstMatch(path)?.group(1);
+          if (school != null) _studentChanges.add(school);
+        }
         return response;
       }
       throw AdmissionsApiException(_messageFromResponse(response));
@@ -1065,6 +1202,42 @@ class AdmissionStudent {
   final String gender;
   final String dateOfBirth;
   final Map<String, dynamic> rawJson;
+
+  String get sectionName {
+    final stream = _map(rawJson['stream']);
+    for (final value in [
+      rawJson['streamName'],
+      stream?['name'],
+      stream?['streamName'],
+      stream?['alias'],
+      rawJson['sectionName'],
+      rawJson['streamAlias'],
+    ]) {
+      final name = _text(value).trim();
+      if (name.isNotEmpty) return name;
+    }
+    return '';
+  }
+
+  String get classAndSectionLabel {
+    final grade = gradeLevel.trim();
+    final section = sectionName;
+    if (section.isEmpty) {
+      return grade.isEmpty
+          ? 'Class / section pending'
+          : '$grade · Section pending';
+    }
+    // Stream names can already include the grade (e.g. KG1 - Section 1).
+    final normalizedGrade = grade.toLowerCase();
+    final normalizedSection = section.toLowerCase();
+    if (grade.isEmpty ||
+        normalizedSection == normalizedGrade ||
+        normalizedSection.startsWith('$normalizedGrade ') ||
+        normalizedSection.startsWith('$normalizedGrade-')) {
+      return section;
+    }
+    return '$grade · $section';
+  }
 }
 
 class AdmissionStudentDocument {

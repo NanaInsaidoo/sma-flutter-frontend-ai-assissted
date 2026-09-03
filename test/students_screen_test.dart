@@ -1,5 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:school_management_app/src/admissions/data/admissions_api_client.dart';
 import 'package:school_management_app/src/students/presentation/students_screen.dart';
 import 'package:school_management_app/src/students/domain/student_models.dart';
 import 'package:school_management_app/src/theme/app_theme.dart';
@@ -13,6 +18,7 @@ void main() {
     StudentsRepository repository = const FakeStudentsRepository(),
     bool focusSearchOnLoad = false,
     ValueChanged<EnrolledStudent>? onCollectPayment,
+    AdmissionsApiClient? admissionsApi,
   }) async {
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1;
@@ -30,6 +36,8 @@ void main() {
             onOpenHousehold: onOpenHousehold,
             onCollectPayment: onCollectPayment,
             focusSearchOnLoad: focusSearchOnLoad,
+            admissionsApi: admissionsApi,
+            customSchoolId: admissionsApi == null ? null : 'SCHOOL',
           ),
         ),
       ),
@@ -107,6 +115,78 @@ void main() {
 
     expect(selectedStudent?.id, 'STU-FA1BC0-9043');
   });
+
+  testWidgets(
+    'one Edit profile action opens the editor with all stages available',
+    (tester) async {
+      final requests = <http.Request>[];
+      final api = AdmissionsApiClient(
+        accessToken: 'test',
+        client: MockClient((request) async {
+          requests.add(request);
+          if (request.url.path.endsWith('/record-changes/context')) {
+            return http.Response(
+              jsonEncode({
+                'student': {
+                  'customStudentId': 'STU-FA1BC0-9043',
+                  'householdId': 1042,
+                  'firstName': 'Kwame',
+                  'lastName': 'Asante',
+                  'status': 'ACTIVE',
+                },
+                'baseVersion': 'version-1',
+                'approvers': [],
+              }),
+              200,
+            );
+          }
+          return http.Response('[]', 200);
+        }),
+      );
+      await pumpStudents(tester, admissionsApi: api);
+      await tester.tap(find.byKey(const Key('student-row-STU-FA1BC0-9043')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Edit profile'), findsOneWidget);
+      expect(find.text('Edit student'), findsNothing);
+      for (final label in [
+        'Edit personal details',
+        'Edit address',
+        'Edit medical details',
+        'Edit vaccinations',
+        'Edit school history',
+        'Edit documents',
+      ]) {
+        expect(find.text(label), findsNothing);
+      }
+      expect(find.text('Change history'), findsOneWidget);
+
+      await tester.tap(find.text('Edit profile'));
+      await tester.pumpAndSettle();
+      expect(find.text('Edit Student'), findsOneWidget);
+      expect(
+        find.byKey(const Key('student-edit-approval-notice')),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('require another administrator’s approval'),
+        findsOneWidget,
+      );
+      for (var step = 0; step < 6; step++) {
+        expect(find.byKey(Key('admission-drawer-step-$step')), findsOneWidget);
+      }
+      await tester.tap(find.byKey(const Key('admission-drawer-step-2')));
+      await tester.pumpAndSettle();
+      expect(find.text('Step 3 of 6 — Medical'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('admission-drawer-step-0')));
+      await tester.pumpAndSettle();
+      expect(find.text('Step 1 of 6 — Basic Info'), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(find.text('Edit profile'), findsOneWidget);
+      expect(requests.where((request) => request.method != 'GET'), isEmpty);
+    },
+  );
 
   testWidgets('reviews and confirms a same-grade stream transfer', (
     tester,
@@ -283,7 +363,7 @@ void main() {
     expect(find.text('Yellow Fever'), findsOneWidget);
   });
 
-  testWidgets('household members link to student and household pages', (
+  testWidgets('household header opens household and sibling opens profile', (
     tester,
   ) async {
     var householdOpened = false;
@@ -292,9 +372,9 @@ void main() {
     await tester.tap(find.byKey(const Key('student-row-STU-FA1BC0-9043')));
     await tester.pumpAndSettle();
 
-    final guardian = find.byKey(const Key('household-member-GUA-1042-01'));
-    await tester.ensureVisible(guardian);
-    await tester.tap(guardian);
+    final household = find.byKey(const Key('open-student-household'));
+    await tester.ensureVisible(household);
+    await tester.tap(household);
     expect(householdOpened, isTrue);
 
     final sibling = find.byKey(const Key('household-member-STU-FA1BC0-3391'));
@@ -549,6 +629,89 @@ void main() {
     expect(find.byKey(const Key('adjustment-menu-ADJ-1042-01')), findsNothing);
     expect(find.text('Approved'), findsWidgets);
   });
+
+  testWidgets('collects several student items and creates one receipt', (
+    tester,
+  ) async {
+    final repository = _ItemTrackingStudentsRepository();
+    await pumpStudents(tester, repository: repository);
+
+    await tester.tap(find.byKey(const Key('student-row-STU-FA1BC0-7591')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('student-tab-requirements')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('collect-student-items')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Enter what the school received today'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const Key('collect-quantity-REQ-UNIFORM')),
+      '1',
+    );
+    await tester.enterText(
+      find.byKey(const Key('collect-quantity-REQ-ART')),
+      '2',
+    );
+    await tester.tap(find.byKey(const Key('confirm-item-collection')));
+    await tester.pumpAndSettle();
+
+    expect(repository.collectedItems, hasLength(2));
+    expect(find.text('Items collected'), findsOneWidget);
+    expect(find.text('ITEM-20260829-DEMO0001'), findsOneWidget);
+  });
+
+  testWidgets('exempts one item from the student row action', (tester) async {
+    final repository = _ItemTrackingStudentsRepository();
+    await pumpStudents(tester, repository: repository);
+
+    await tester.tap(find.byKey(const Key('student-row-STU-FA1BC0-9043')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('student-tab-requirements')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('requirement-actions-REQ-ART')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Exempt student from this item'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const Key('student-item-exemption-reason')),
+      'Approved by the school office',
+    );
+    await tester.tap(find.byKey(const Key('student-item-exemption-approver')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Efua Nyarko · Administrator').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-student-item-exemption')));
+    await tester.pumpAndSettle();
+
+    expect(repository.exemptedRequirementId, 'REQ-ART');
+    expect(repository.exemptionReason, 'Approved by the school office');
+  });
+
+  testWidgets('shows student item receipt history and downloads selected', (
+    tester,
+  ) async {
+    final repository = _ItemTrackingStudentsRepository();
+    await pumpStudents(tester, repository: repository);
+
+    await tester.tap(find.byKey(const Key('student-row-STU-FA1BC0-9043')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('student-tab-requirements')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Collection history'), findsOneWidget);
+    expect(find.text('ITEM-20260829-DEMO0002'), findsOneWidget);
+    final receipt = find.byKey(const Key('select-item-receipt-2'));
+    await tester.ensureVisible(receipt);
+    await tester.tap(receipt);
+    await tester.pumpAndSettle();
+    final download = find.byKey(const Key('download-selected-item-receipts'));
+    await tester.ensureVisible(download);
+    await tester.tap(download);
+    await tester.pumpAndSettle();
+
+    expect(repository.downloadedReceiptIds, [2]);
+  });
 }
 
 class _CountingStudentsRepository extends FakeStudentsRepository {
@@ -568,5 +731,49 @@ class _CountingStudentsRepository extends FakeStudentsRepository {
   ) {
     lastPreviewInput = input;
     return super.previewTransfer(studentId, input);
+  }
+}
+
+class _ItemTrackingStudentsRepository extends FakeStudentsRepository {
+  List<StudentItemCollectionEntry> collectedItems = const [];
+  String? exemptedRequirementId;
+  String? exemptionReason;
+  List<int> downloadedReceiptIds = const [];
+
+  @override
+  Future<StudentItemCollectionReceipt> collectStudentItems({
+    required String studentId,
+    required String idempotencyKey,
+    required List<StudentItemCollectionEntry> items,
+    String notes = '',
+  }) {
+    collectedItems = List.unmodifiable(items);
+    return super.collectStudentItems(
+      studentId: studentId,
+      idempotencyKey: idempotencyKey,
+      items: items,
+      notes: notes,
+    );
+  }
+
+  @override
+  Future<void> exemptStudentFromItem({
+    required String studentId,
+    required String requirementId,
+    required String reason,
+    int? approverId,
+    required bool submit,
+  }) async {
+    exemptedRequirementId = requirementId;
+    exemptionReason = reason;
+  }
+
+  @override
+  Future<List<int>> downloadStudentItemReceipts({
+    required String studentId,
+    required List<int> receiptIds,
+  }) async {
+    downloadedReceiptIds = List.unmodifiable(receiptIds);
+    return const <int>[37, 80, 68, 70];
   }
 }

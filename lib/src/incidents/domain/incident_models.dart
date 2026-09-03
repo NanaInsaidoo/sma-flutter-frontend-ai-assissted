@@ -41,6 +41,25 @@ class IncidentMention {
   bool get isStudent => personType == 'STUDENT';
 }
 
+class IncidentClosureApprover {
+  const IncidentClosureApprover({
+    required this.id,
+    required this.name,
+    required this.role,
+  });
+
+  final int id;
+  final String name;
+  final String role;
+
+  factory IncidentClosureApprover.fromJson(Map<String, dynamic> json) =>
+      IncidentClosureApprover(
+        id: (json['id'] as num?)?.toInt() ?? 0,
+        name: '${json['name'] ?? ''}',
+        role: '${json['role'] ?? ''}',
+      );
+}
+
 class IncidentPerson {
   const IncidentPerson({
     this.involvementId,
@@ -165,10 +184,24 @@ class IncidentRecord {
     this.classTeacherNotified = false,
     this.counselorNotified = false,
     this.headmasterNotified = false,
+    this.notifiedParties = const [],
+    this.otherNotifiedDetails = '',
     this.followUpRequired = false,
     this.followUpDate,
     this.followUpNotes = '',
     this.escalatedTo = '',
+    this.edited = false,
+    this.lastEditedBy = '',
+    this.lastEditedAt,
+    this.closureRequestStatus = '',
+    this.requestedClosureStatus = '',
+    this.closureRequestedByName = '',
+    this.closureApproverId,
+    this.closureApproverName = '',
+    this.closureNote = '',
+    this.closureRequestedAt,
+    this.closureDecidedAt,
+    this.closureDecisionReason = '',
   });
   final String incidentId;
   final String customSchoolId;
@@ -189,10 +222,24 @@ class IncidentRecord {
   final bool classTeacherNotified;
   final bool counselorNotified;
   final bool headmasterNotified;
+  final List<String> notifiedParties;
+  final String otherNotifiedDetails;
   final bool followUpRequired;
   final DateTime? followUpDate;
   final String followUpNotes;
   final String escalatedTo;
+  final bool edited;
+  final String lastEditedBy;
+  final DateTime? lastEditedAt;
+  final String closureRequestStatus;
+  final String requestedClosureStatus;
+  final String closureRequestedByName;
+  final int? closureApproverId;
+  final String closureApproverName;
+  final String closureNote;
+  final DateTime? closureRequestedAt;
+  final DateTime? closureDecidedAt;
+  final String closureDecisionReason;
 
   IncidentPerson? get primaryStudent {
     for (final person in people) {
@@ -210,6 +257,8 @@ class IncidentRecord {
     bool? classTeacherNotified,
     bool? counselorNotified,
     bool? headmasterNotified,
+    List<String>? notifiedParties,
+    String? otherNotifiedDetails,
     bool? followUpRequired,
     DateTime? followUpDate,
     String? followUpNotes,
@@ -222,6 +271,8 @@ class IncidentRecord {
     'classTeacherNotified': classTeacherNotified ?? this.classTeacherNotified,
     'counselorNotified': counselorNotified ?? this.counselorNotified,
     'headmasterNotified': headmasterNotified ?? this.headmasterNotified,
+    'notifiedParties': notifiedParties ?? this.notifiedParties,
+    'otherNotifiedDetails': otherNotifiedDetails ?? this.otherNotifiedDetails,
     'followUpRequired': followUpRequired ?? this.followUpRequired,
     if (followUpRequired ?? this.followUpRequired)
       'followUpDate': _dateOnly(
@@ -265,10 +316,26 @@ class IncidentRecord {
       classTeacherNotified: json['classTeacherNotified'] == true,
       counselorNotified: json['counselorNotified'] == true,
       headmasterNotified: json['headmasterNotified'] == true,
+      notifiedParties: (json['notifiedParties'] as List? ?? const [])
+          .map((value) => '$value')
+          .toList(growable: false),
+      otherNotifiedDetails: '${json['otherNotifiedDetails'] ?? ''}',
       followUpRequired: json['followUpRequired'] == true,
       followUpDate: _incidentDateTime(json['followUpDate']),
       followUpNotes: '${json['followUpNotes'] ?? ''}',
       escalatedTo: '${json['escalatedTo'] ?? ''}',
+      edited: json['edited'] == true,
+      lastEditedBy: '${json['lastEditedBy'] ?? ''}',
+      lastEditedAt: _incidentDateTime(json['lastEditedAt']),
+      closureRequestStatus: '${json['closureRequestStatus'] ?? ''}',
+      requestedClosureStatus: '${json['requestedClosureStatus'] ?? ''}',
+      closureRequestedByName: '${json['closureRequestedByName'] ?? ''}',
+      closureApproverId: (json['closureApproverId'] as num?)?.toInt(),
+      closureApproverName: '${json['closureApproverName'] ?? ''}',
+      closureNote: '${json['closureNote'] ?? ''}',
+      closureRequestedAt: _incidentDateTime(json['closureRequestedAt']),
+      closureDecidedAt: _incidentDateTime(json['closureDecidedAt']),
+      closureDecisionReason: '${json['closureDecisionReason'] ?? ''}',
     );
   }
 }

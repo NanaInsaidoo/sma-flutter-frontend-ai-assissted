@@ -643,6 +643,7 @@ class FeeClassStructure {
     this.approvedAt,
     this.rejectionReason = '',
     this.hasPublishedVersion = false,
+    this.publishedFeeItems = const [],
     this.changePending = false,
     this.createdBy = '',
     this.creatorOwned = false,
@@ -670,6 +671,7 @@ class FeeClassStructure {
   final DateTime? approvedAt;
   final String rejectionReason;
   final bool hasPublishedVersion;
+  final List<FeeStructureItem> publishedFeeItems;
   final bool changePending;
   final String createdBy;
   final bool creatorOwned;
@@ -701,6 +703,13 @@ class FeeClassStructure {
       approvedAt: _dateValue(json['approvedAt']),
       rejectionReason: '${json['rejectionReason'] ?? ''}',
       hasPublishedVersion: json['hasPublishedVersion'] == true,
+      publishedFeeItems:
+          (json['publishedFeeItems'] is List
+                  ? json['publishedFeeItems'] as List
+                  : const [])
+              .whereType<Map<String, dynamic>>()
+              .map(FeeStructureItem.fromJson)
+              .toList(),
       changePending: json['changePending'] == true,
       createdBy: '${json['createdBy'] ?? ''}',
       creatorOwned: json['creatorOwned'] == true,
@@ -722,6 +731,10 @@ class FeeStructureItem {
     this.masterCode = '',
     this.mandatory = true,
     this.instructions = '',
+    this.itemKey = '',
+    this.lifecycleAction = '',
+    this.lifecycleAt,
+    this.lifecycleBy = '',
   });
 
   final int feeId;
@@ -736,6 +749,14 @@ class FeeStructureItem {
   final String masterCode;
   final bool mandatory;
   final String instructions;
+  final String itemKey;
+  final String lifecycleAction;
+  final DateTime? lifecycleAt;
+  final String lifecycleBy;
+
+  String get identityKey => itemKey.isEmpty
+      ? (feeMasterItemId > 0 ? 'master:$feeMasterItemId' : 'item:$feeId')
+      : itemKey;
 
   factory FeeStructureItem.fromJson(Map<String, dynamic> json) {
     final active = json['active'];
@@ -754,6 +775,10 @@ class FeeStructureItem {
       masterCode: '${json['masterCode'] ?? ''}',
       mandatory: json['mandatory'] != false,
       instructions: '${json['instructions'] ?? ''}',
+      itemKey: '${json['itemKey'] ?? ''}',
+      lifecycleAction: '${json['lifecycleAction'] ?? ''}',
+      lifecycleAt: _dateValue(json['lifecycleAt']),
+      lifecycleBy: '${json['lifecycleBy'] ?? ''}',
     );
   }
 
@@ -1084,6 +1109,18 @@ class FeeWaiverAssignment {
     required this.status,
     required this.assessments,
     required this.createdAt,
+    this.createdById,
+    this.createdByName = '',
+    this.assignedApproverId,
+    this.assignedApproverName = '',
+    this.supersedesWaiverId,
+    this.changeType = 'NEW',
+    this.changeReason = '',
+    this.rejectionReason = '',
+    this.submittedAt,
+    this.reviewedAt,
+    this.creatorOwned = false,
+    this.canApprove = false,
   });
 
   final int id;
@@ -1102,6 +1139,22 @@ class FeeWaiverAssignment {
   final String status;
   final List<FeeWaiverAssessment> assessments;
   final DateTime? createdAt;
+  final int? createdById;
+  final String createdByName;
+  final int? assignedApproverId;
+  final String assignedApproverName;
+  final int? supersedesWaiverId;
+  final String changeType;
+  final String changeReason;
+  final String rejectionReason;
+  final DateTime? submittedAt;
+  final DateTime? reviewedAt;
+  final bool creatorOwned;
+  final bool canApprove;
+
+  bool get isDraft => status == 'DRAFT';
+  bool get isPending => status == 'PENDING_APPROVAL';
+  bool get isActive => status == 'ACTIVE';
 
   factory FeeWaiverAssignment.fromJson(Map<String, dynamic> json) =>
       FeeWaiverAssignment(
@@ -1127,6 +1180,24 @@ class FeeWaiverAssignment {
                 .map(FeeWaiverAssessment.fromJson)
                 .toList(),
         createdAt: _dateValue(json['createdAt']),
+        createdById: json['createdById'] == null
+            ? null
+            : _intValue(json['createdById']),
+        createdByName: '${json['createdByName'] ?? ''}',
+        assignedApproverId: json['assignedApproverId'] == null
+            ? null
+            : _intValue(json['assignedApproverId']),
+        assignedApproverName: '${json['assignedApproverName'] ?? ''}',
+        supersedesWaiverId: json['supersedesWaiverId'] == null
+            ? null
+            : _intValue(json['supersedesWaiverId']),
+        changeType: '${json['changeType'] ?? 'NEW'}'.toUpperCase(),
+        changeReason: '${json['changeReason'] ?? ''}',
+        rejectionReason: '${json['rejectionReason'] ?? ''}',
+        submittedAt: _dateValue(json['submittedAt']),
+        reviewedAt: _dateValue(json['reviewedAt']),
+        creatorOwned: json['creatorOwned'] == true,
+        canApprove: json['canApprove'] == true,
       );
 }
 
@@ -1275,6 +1346,7 @@ double _feeDouble(dynamic value) =>
 
 class FeePaymentRequest {
   const FeePaymentRequest({
+    required this.assessmentId,
     required this.customStudentId,
     required this.customSchoolId,
     required this.payerName,
@@ -1297,6 +1369,7 @@ class FeePaymentRequest {
   });
 
   final String customStudentId;
+  final int assessmentId;
   final String customSchoolId;
   final String payerName;
   final double amount;

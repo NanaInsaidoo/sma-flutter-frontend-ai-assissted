@@ -110,6 +110,54 @@ class IncidentApiClient {
     return IncidentRecord.fromJson(_object(response));
   }
 
+  Future<List<IncidentClosureApprover>> getClosureApprovers() async {
+    final response = await _send(
+      'GET',
+      _path('/api/v1/incidents/closure-approvers'),
+    );
+    final decoded = jsonDecode(response.body);
+    if (decoded is! List) return const [];
+    return decoded
+        .whereType<Map>()
+        .map((item) => IncidentClosureApprover.fromJson(item.cast()))
+        .toList(growable: false);
+  }
+
+  Future<IncidentRecord> requestClosure(
+    String incidentId, {
+    required bool resolved,
+    required String note,
+    required int approverId,
+  }) async {
+    final response = await _send(
+      'POST',
+      _path('/api/v1/incidents/$incidentId/closure-request'),
+      body: {
+        'outcome': resolved ? 'CLOSED_RESOLVED' : 'CLOSED_UNRESOLVED',
+        'note': note,
+        'approverId': approverId,
+      },
+    );
+    return IncidentRecord.fromJson(_object(response));
+  }
+
+  Future<IncidentRecord> reopen(String incidentId, String comment) async {
+    final response = await _send(
+      'POST',
+      _path('/api/v1/incidents/$incidentId/reopen'),
+      body: {'comment': comment},
+    );
+    return IncidentRecord.fromJson(_object(response));
+  }
+
+  Future<List<int>> downloadIncidentReport(String incidentId) async {
+    final response = await _send(
+      'GET',
+      _path('/api/v1/incidents/$incidentId/report'),
+    );
+    return response.bodyBytes;
+  }
+
   Future<IncidentRecord> addComment(
     String incidentId,
     String note,

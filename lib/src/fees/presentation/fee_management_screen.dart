@@ -41,6 +41,7 @@ class FeeManagementScreen extends StatefulWidget {
     this.openFeeStructureOnLoad = false,
     this.onRecordPaymentRequestConsumed,
     this.onWorkflowChanged,
+    this.onOpenStudent,
     this.api,
   });
 
@@ -55,6 +56,7 @@ class FeeManagementScreen extends StatefulWidget {
   final bool openFeeStructureOnLoad;
   final VoidCallback? onRecordPaymentRequestConsumed;
   final VoidCallback? onWorkflowChanged;
+  final ValueChanged<String>? onOpenStudent;
   final FeeApiClient? api;
 
   @override
@@ -421,6 +423,22 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
         _reloadStudentFeesForFilters();
       },
       onPaymentSaved: _reloadFees,
+      onAssignWaiver: (row) => _showWaiverAssignmentSheet(
+        null,
+        FeeStudentFeeRow(
+          studentId: 0,
+          customStudentId: row.id,
+          studentName: row.name,
+          gradeLevelId: 0,
+          className: row.className,
+          totalFees: row.totalFees,
+          totalAdjustments: 0,
+          paid: row.paid,
+          balance: row.balance,
+          paymentStatus: row.status,
+          lastPaymentDate: null,
+        ),
+      ),
     );
   }
 
@@ -559,6 +577,8 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
       onAssignWaiver: () => _showWaiverAssignmentSheet(),
       onEditAssignment: (assignment) => _showWaiverAssignmentSheet(assignment),
       onRevokeAssignment: _revokeWaiver,
+      onWorkflowAction: _performWaiverAction,
+      onOpenStudent: widget.onOpenStudent,
     );
   }
 
@@ -790,13 +810,12 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
 
   Future<void> _showWaiverAssignmentSheet([
     FeeWaiverAssignment? existing,
+    FeeStudentFeeRow? initialStudent,
   ]) async {
     if (_waiverTypes.isEmpty) {
       await _showWaiverTypeDialog();
       if (_waiverTypes.isEmpty || !mounted) return;
     }
-    await _loadStudentFees(force: !_studentFeesLoaded);
-    if (!mounted || !_studentFeesLoaded) return;
     final saved = await showGeneralDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -809,10 +828,11 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
           api: _api,
           customSchoolId: widget.customSchoolId,
           academicTermId: _activeTermId,
-          students: _studentFeesPage?.content ?? const [],
+          initialStudent: initialStudent,
           types: _waiverTypes,
           existing: existing,
           money: _money,
+          currentUserId: widget.userId ?? 0,
         ),
       ),
       transitionBuilder: (context, animation, secondaryAnimation, child) =>
@@ -864,9 +884,9 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Revoke waiver?'),
+        title: const Text('Request waiver revocation?'),
         content: Text(
-          'The waiver will stop reducing ${assignment.studentName}’s balance.',
+          'A draft revocation request will be created. The waiver remains active until another authorized person approves it.',
         ),
         actions: [
           TextButton(
@@ -875,7 +895,7 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Revoke'),
+            child: const Text('Create request'),
           ),
         ],
       ),
@@ -889,6 +909,11 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
       );
       await _loadWaivers(force: true);
       await _reloadFees();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Revocation request saved as draft.')),
+        );
+      }
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -896,6 +921,128 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
         ).showSnackBar(SnackBar(content: Text('$error')));
       }
     }
+  }
+
+  Future<void> _performWaiverAction(
+    FeeWaiverAssignment assignment,
+    String action,
+  ) async {
+    int? approverId;
+    String? reason;
+    if (action == 'SUBMIT') {
+      final approvers = (await _api.getFeeAdjustmentApprovers(
+        widget.customSchoolId,
+      )).where((item) => item.id != (widget.userId ?? 0)).toList();
+      if (!mounted) return;
+      approverId = await showDialog<int>(
+        context: context,
+        builder: (context) => _WaiverApproverDialog(approvers: approvers),
+      );
+      if (approverId == null) return;
+    } else if (action == 'REJECT') {
+      reason = await _showWaiverReasonDialog(
+        title: 'Reject waiver request',
+        hint: 'Explain what the requester should change.',
+      );
+      if (reason == null) return;
+    } else if (action == 'WITHDRAW') {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Withdraw approval request?'),
+          content: const Text(
+            'The request will return to Draft so you can edit and resubmit it.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Withdraw request'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+    try {
+      await _api.performStudentWaiverAction(
+        customSchoolId: widget.customSchoolId,
+        waiverId: assignment.id,
+        action: action,
+        reason: reason,
+        approverId: approverId,
+      );
+      await _loadWaivers(force: true);
+      await _reloadFees();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(switch (action) {
+              'SUBMIT' => 'Waiver submitted for approval.',
+              'WITHDRAW' =>
+                'Approval request withdrawn. The waiver is now Draft.',
+              'APPROVE' => 'Waiver approved.',
+              'REJECT' => 'Waiver returned to Draft with your reason.',
+              _ => 'Waiver updated.',
+            }),
+          ),
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Request changed'),
+          content: Text('$error'),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Refresh'),
+            ),
+          ],
+        ),
+      );
+      await _loadWaivers(force: true);
+    }
+  }
+
+  Future<String?> _showWaiverReasonDialog({
+    required String title,
+    required String hint,
+  }) async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLines: 3,
+          decoration: InputDecoration(labelText: 'Reason *', hintText: hint),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (controller.text.trim().isNotEmpty) {
+                Navigator.pop(context, controller.text.trim());
+              }
+            },
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    return result;
   }
 
   Widget _buildFeeStructureContent() {
@@ -1260,7 +1407,7 @@ class _FeeTabs extends StatelessWidget {
     (_FeeTab.adjustments, 'Fee Adjustments'),
     (_FeeTab.reversals, 'Payment Reversals'),
     (_FeeTab.classRequirements, 'Items & Supplies'),
-    (_FeeTab.waivers, 'Waivers'),
+    (_FeeTab.waivers, 'Waivers & Discounts'),
   ];
 
   @override
@@ -1895,7 +2042,7 @@ class _QuickActionsCard extends StatelessWidget {
             _QuickActionTile(
               icon: Icons.local_offer_rounded,
               color: AppColors.amber,
-              title: 'Waivers',
+              title: 'Waivers & discounts',
               subtitle: 'Manage exemptions',
               onTap: onOpenWaivers,
             ),
@@ -2188,11 +2335,9 @@ class _OutstandingArrearsPage extends StatelessWidget {
 }
 
 class _FeeEmptyCard extends StatelessWidget {
-  const _FeeEmptyCard({required this.message, this.actionLabel, this.onAction});
+  const _FeeEmptyCard({required this.message});
 
   final String message;
-  final String? actionLabel;
-  final VoidCallback? onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -2212,10 +2357,6 @@ class _FeeEmptyCard extends StatelessWidget {
               style: const TextStyle(color: AppColors.muted),
             ),
           ),
-          if (actionLabel != null && onAction != null) ...[
-            const SizedBox(width: 16),
-            OutlinedButton(onPressed: onAction, child: Text(actionLabel!)),
-          ],
         ],
       ),
     );
@@ -3299,6 +3440,7 @@ class _StudentFeesContent extends StatelessWidget {
     required this.onGradeLevelChanged,
     required this.onPaymentStatusChanged,
     required this.onPaymentSaved,
+    required this.onAssignWaiver,
   });
 
   final List<_StudentFeeRow> rows;
@@ -3317,6 +3459,7 @@ class _StudentFeesContent extends StatelessWidget {
   final ValueChanged<int?> onGradeLevelChanged;
   final ValueChanged<String?> onPaymentStatusChanged;
   final Future<void> Function() onPaymentSaved;
+  final ValueChanged<_StudentFeeRow> onAssignWaiver;
 
   @override
   Widget build(BuildContext context) {
@@ -3469,6 +3612,10 @@ class _StudentFeesContent extends StatelessWidget {
               selectedStudent: row,
               closeDetailsAfterSave: true,
             ),
+            onAssignWaiver: () {
+              Navigator.pop(context);
+              onAssignWaiver(row);
+            },
           ),
         );
       },
@@ -3671,6 +3818,65 @@ class _PaymentStatus extends StatelessWidget {
   }
 }
 
+/// Household collection uses the same single-student form as fees and student profiles.
+Future<bool?> showHouseholdFeeCollection({
+  required BuildContext context,
+  required FeeApiClient api,
+  required String customSchoolId,
+  required int householdId,
+}) async {
+  try {
+    final term = await api.getCurrentTerm(customSchoolId);
+    final options = await api.getHouseholdPaymentOptions(
+      customSchoolId: customSchoolId,
+      householdId: householdId,
+      termId: term.id,
+    );
+    final methods = await api.getPaymentMethods();
+    if (!context.mounted) return false;
+    final students = options.students
+        .map(
+          (student) => _StudentFeeRow(
+            name: student.studentName,
+            id: student.customStudentId,
+            className: '',
+            totalFees: student.balance,
+            paid: 0,
+            balance: student.balance,
+            status: '',
+            lastPayment: '',
+          ),
+        )
+        .toList();
+    if (students.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This household has no students.')),
+      );
+      return false;
+    }
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _RecordPaymentDialog(
+        students: students,
+        selectedStudent: students.length == 1 ? students.single : null,
+        paymentMethods: methods,
+        customSchoolId: customSchoolId,
+        termId: term.id,
+        api: api,
+        money: (value) => 'GH₵ ${value.toStringAsFixed(2)}',
+      ),
+    );
+  } catch (error) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$error')));
+    }
+    return false;
+  }
+}
+
 class _RecordPaymentDialog extends StatefulWidget {
   const _RecordPaymentDialog({
     required this.students,
@@ -3703,14 +3909,17 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
   late final TextEditingController _chequeNumberController;
   late final TextEditingController _chequeBankController;
   late final TextEditingController _notesController;
-  late final TextEditingController _overpaymentReasonController;
   _StudentFeeRow? _student;
+  List<HouseholdPaymentItem> _feeItems = [];
+  HouseholdPaymentItem? _feeItem;
+  bool _loadingFees = false;
+  String? _feeError;
+  int _feeLoadVersion = 0;
   FeePaymentMethod? _method;
   DateTime _paymentDate = DateTime.now();
   DateTime _chequeDate = DateTime.now();
   bool _saving = false;
   bool _success = false;
-  bool _overpaymentAcknowledged = false;
   _PaymentReceipt? _receipt;
   PlatformFile? _receiptPhoto;
   late String _idempotencyKey = _newPaymentRequestKey();
@@ -3726,17 +3935,13 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
     _studentController = TextEditingController(
       text: _student == null ? '' : _student!.name,
     );
-    _amountController = TextEditingController(
-      text: _student == null || _student!.balance <= 0
-          ? ''
-          : _student!.balance.toStringAsFixed(0),
-    );
+    _amountController = TextEditingController();
     _momoReferenceController = TextEditingController();
     _receiptController = TextEditingController();
     _chequeNumberController = TextEditingController();
     _chequeBankController = TextEditingController();
     _notesController = TextEditingController();
-    _overpaymentReasonController = TextEditingController();
+    _loadFeeItems();
   }
 
   @override
@@ -3748,7 +3953,6 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
     _chequeNumberController.dispose();
     _chequeBankController.dispose();
     _notesController.dispose();
-    _overpaymentReasonController.dispose();
     super.dispose();
   }
 
@@ -3756,12 +3960,6 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
   Widget build(BuildContext context) {
     final student = _student;
     final amount = double.tryParse(_amountController.text.trim()) ?? 0;
-    final amountDue = student == null || student.balance < 0
-        ? 0.0
-        : student.balance;
-    final overpaymentAmount = student == null
-        ? 0.0
-        : (amount - amountDue).clamp(0, double.infinity).toDouble();
     if (_success) {
       return AlertDialog(
         content: ConstrainedBox(
@@ -3787,231 +3985,299 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
       titlePadding: const EdgeInsets.fromLTRB(28, 26, 28, 0),
       content: SizedBox(
         width: 520,
-        child: Form(
-          key: _formKey,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  student == null
-                      ? 'Enter payment details below'
-                      : 'Collecting fees from ${student.name}',
-                  style: const TextStyle(color: AppColors.muted),
-                ),
-                if (_isScopedToStudent && student != null) ...[
-                  const SizedBox(height: 18),
-                  _PaymentStudentSummary(student: student, money: widget.money),
-                ] else ...[
-                  _PaymentSectionTitle('Student'),
-                  TextFormField(
-                    key: const ValueKey('payment-student-search'),
-                    controller: _studentController,
-                    autofocus: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Student Name or ID',
-                      hintText: 'Search by name or student ID...',
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'Please enter a student name or ID.';
-                      }
-                      return null;
-                    },
-                    onChanged: (value) {
-                      final selected = _findExactStudent(value);
-                      setState(() {
-                        _student = selected;
-                        if (selected != null && selected.balance > 0) {
-                          _amountController.text = selected.balance
-                              .toStringAsFixed(0);
-                        }
-                      });
-                    },
+        child: AbsorbPointer(
+          absorbing: _saving,
+          child: Form(
+            key: _formKey,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    student == null
+                        ? 'Enter payment details below'
+                        : 'Collecting fees from ${student.name}',
+                    style: const TextStyle(color: AppColors.muted),
                   ),
-                  if (student == null)
-                    _StudentSuggestions(
-                      query: _studentController.text,
-                      students: widget.students,
-                      onSelected: _selectStudent,
-                    ),
-                  if (student != null) ...[
-                    const SizedBox(height: 12),
+                  if (_isScopedToStudent && student != null) ...[
+                    const SizedBox(height: 18),
                     _PaymentStudentSummary(
                       student: student,
                       money: widget.money,
                     ),
+                  ] else ...[
+                    _PaymentSectionTitle('Student'),
+                    TextFormField(
+                      key: const ValueKey('payment-student-search'),
+                      controller: _studentController,
+                      autofocus: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Student Name or ID',
+                        hintText: 'Search by name or student ID...',
+                      ),
+                      validator: (value) {
+                        if (value == null || value.trim().isEmpty) {
+                          return 'Please enter a student name or ID.';
+                        }
+                        return null;
+                      },
+                      onChanged: (value) {
+                        final selected = _findExactStudent(value);
+                        final changed = _student?.id != selected?.id;
+                        setState(() {
+                          _student = selected;
+                          if (changed) _amountController.clear();
+                        });
+                        if (changed) {
+                          _loadFeeItems();
+                        }
+                      },
+                    ),
+                    if (student == null)
+                      _StudentSuggestions(
+                        query: _studentController.text,
+                        students: widget.students,
+                        onSelected: _selectStudent,
+                      ),
+                    if (student != null) ...[
+                      const SizedBox(height: 12),
+                      _PaymentStudentSummary(
+                        student: student,
+                        money: widget.money,
+                      ),
+                    ],
                   ],
-                ],
-                _PaymentSectionTitle('Payment Details'),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final compact = constraints.maxWidth < 560;
-                    final width = compact
-                        ? constraints.maxWidth
-                        : (constraints.maxWidth - 14) / 2;
-                    return Wrap(
-                      spacing: 14,
-                      runSpacing: 14,
-                      children: [
-                        SizedBox(
-                          width: width,
-                          child: _AmountEntryField(
-                            controller: _amountController,
-                            autofocus: _isScopedToStudent,
-                            onChanged: () => setState(() {}),
-                          ),
-                        ),
-                        SizedBox(
-                          width: width,
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(12),
-                            onTap: _pickDate,
-                            child: InputDecorator(
-                              decoration: const InputDecoration(
-                                labelText: 'Payment date',
-                                suffixIcon: Icon(Icons.calendar_month_rounded),
+                  _PaymentSectionTitle('Payment Details'),
+                  if (_loadingFees)
+                    const LinearProgressIndicator()
+                  else if (_feeError != null) ...[
+                    Text(
+                      _feeError!,
+                      style: const TextStyle(color: AppColors.red),
+                    ),
+                    TextButton(
+                      onPressed: _loadFeeItems,
+                      child: const Text('Retry fee items'),
+                    ),
+                  ] else ...[
+                    DropdownButtonFormField<int>(
+                      key: ValueKey('payment-fee-item-$_feeLoadVersion'),
+                      value: _feeItem?.assessmentId,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Fee item *',
+                        hintText: 'Select the fee being paid',
+                      ),
+                      items: _feeItems
+                          .map(
+                            (item) => DropdownMenuItem(
+                              value: item.assessmentId,
+                              child: Text(
+                                '${item.feeName} · GH₵ ${item.outstandingAmount.toStringAsFixed(2)} due',
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              child: Text(_formatDate(_paymentDate)),
+                            ),
+                          )
+                          .toList(),
+                      validator: (_) => _feeItem == null
+                          ? 'Select the fee item being paid.'
+                          : null,
+                      onChanged: _saving
+                          ? null
+                          : (id) => setState(() {
+                              _feeItem = _feeItems.firstWhere(
+                                (item) => item.assessmentId == id,
+                              );
+                              _amountController.clear();
+                            }),
+                    ),
+                    if (student != null && _feeItems.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 8),
+                        child: Text(
+                          'No fee items available to pay. Fees may be unassessed, paid, or awaiting payment clearance.',
+                        ),
+                      ),
+                  ],
+                  const SizedBox(height: 14),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final compact = constraints.maxWidth < 560;
+                      final width = compact
+                          ? constraints.maxWidth
+                          : (constraints.maxWidth - 14) / 2;
+                      return Wrap(
+                        spacing: 14,
+                        runSpacing: 14,
+                        children: [
+                          SizedBox(
+                            width: width,
+                            child: _AmountEntryField(
+                              controller: _amountController,
+                              autofocus: _isScopedToStudent,
+                              onChanged: () => setState(() {}),
                             ),
                           ),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-                if (student != null && amount > 0) ...[
-                  const SizedBox(height: 16),
-                  _BalanceAfterPaymentPreview(
-                    currentBalance: student.balance,
-                    amount: amount,
-                    money: widget.money,
-                    pending: _isCheque,
+                          SizedBox(
+                            width: width,
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(12),
+                              onTap: _pickDate,
+                              child: InputDecorator(
+                                decoration: const InputDecoration(
+                                  labelText: 'Payment date',
+                                  suffixIcon: Icon(
+                                    Icons.calendar_month_rounded,
+                                  ),
+                                ),
+                                child: Text(_formatDate(_paymentDate)),
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
                   ),
-                ],
-                if (overpaymentAmount > 0) ...[
+                  if (student != null &&
+                      _feeItem != null &&
+                      amount > 0 &&
+                      amount <= _feeItem!.outstandingAmount) ...[
+                    const SizedBox(height: 16),
+                    _BalanceAfterPaymentPreview(
+                      currentBalance: student.balance,
+                      amount: amount,
+                      money: widget.money,
+                      pending: _isCheque,
+                    ),
+                  ],
+                  if (_feeItem != null &&
+                      amount > _feeItem!.outstandingAmount) ...[
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Amount exceeds the selected fee item’s balance.',
+                      style: TextStyle(color: AppColors.red),
+                    ),
+                  ],
                   const SizedBox(height: 14),
-                  _OverpaymentWarning(
-                    amount: overpaymentAmount,
-                    money: widget.money,
-                    reasonController: _overpaymentReasonController,
-                    acknowledged: _overpaymentAcknowledged,
-                    onAcknowledged: (value) => setState(
-                      () => _overpaymentAcknowledged = value ?? false,
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 14),
-                DropdownButtonFormField<String>(
-                  value: _method == null ? null : '${_method!.id}',
-                  decoration: const InputDecoration(
-                    labelText: 'Payment Method',
-                  ),
-                  items: widget.paymentMethods
-                      .map(
-                        (method) => DropdownMenuItem(
-                          value: '${method.id}',
-                          child: Text(method.method),
-                        ),
-                      )
-                      .toList(),
-                  validator: (value) =>
-                      value == null ? 'Please select a payment method.' : null,
-                  onChanged: (value) => setState(() {
-                    _method = widget.paymentMethods.firstWhere(
-                      (method) => '${method.id}' == value,
-                    );
-                  }),
-                ),
-                if ((_method?.method.toLowerCase() ?? '').contains('mobile') ||
-                    (_method?.method.toLowerCase() ?? '').contains('momo')) ...[
-                  const SizedBox(height: 14),
-                  TextFormField(
-                    controller: _momoReferenceController,
+                  DropdownButtonFormField<String>(
+                    value: _method == null ? null : '${_method!.id}',
                     decoration: const InputDecoration(
-                      labelText: 'MoMo Reference Number',
-                      hintText: 'e.g. ABS1234567890',
+                      labelText: 'Payment Method',
                     ),
-                  ),
-                ],
-                if (_isCheque) ...[
-                  _PaymentSectionTitle('Cheque details'),
-                  TextFormField(
-                    controller: _chequeNumberController,
-                    decoration: const InputDecoration(
-                      labelText: 'Cheque number *',
-                      hintText: 'Enter the number printed on the cheque',
-                    ),
-                    validator: (value) => value == null || value.trim().isEmpty
-                        ? 'Please enter the cheque number.'
+                    items: widget.paymentMethods
+                        .map(
+                          (method) => DropdownMenuItem(
+                            value: '${method.id}',
+                            child: Text(method.method),
+                          ),
+                        )
+                        .toList(),
+                    validator: (value) => value == null
+                        ? 'Please select a payment method.'
                         : null,
+                    onChanged: (value) => setState(() {
+                      _method = widget.paymentMethods.firstWhere(
+                        (method) => '${method.id}' == value,
+                      );
+                    }),
                   ),
-                  const SizedBox(height: 14),
-                  TextFormField(
-                    controller: _chequeBankController,
-                    decoration: const InputDecoration(
-                      labelText: 'Bank *',
-                      hintText: 'Bank that issued the cheque',
-                    ),
-                    validator: (value) => value == null || value.trim().isEmpty
-                        ? 'Please enter the bank.'
-                        : null,
-                  ),
-                  const SizedBox(height: 14),
-                  InkWell(
-                    borderRadius: BorderRadius.circular(12),
-                    onTap: _pickChequeDate,
-                    child: InputDecorator(
+                  if ((_method?.method.toLowerCase() ?? '').contains(
+                        'mobile',
+                      ) ||
+                      (_method?.method.toLowerCase() ?? '').contains(
+                        'momo',
+                      )) ...[
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _momoReferenceController,
                       decoration: const InputDecoration(
-                        labelText: 'Cheque date *',
-                        suffixIcon: Icon(Icons.calendar_month_rounded),
+                        labelText: 'MoMo Reference Number',
+                        hintText: 'e.g. ABS1234567890',
                       ),
-                      child: Text(_formatDate(_chequeDate)),
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'The student balance will not change until this cheque is marked as cleared.',
-                    style: TextStyle(
-                      color: AppColors.amber,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
+                  ],
+                  if (_isCheque) ...[
+                    _PaymentSectionTitle('Cheque details'),
+                    TextFormField(
+                      controller: _chequeNumberController,
+                      decoration: const InputDecoration(
+                        labelText: 'Cheque number *',
+                        hintText: 'Enter the number printed on the cheque',
+                      ),
+                      validator: (value) =>
+                          value == null || value.trim().isEmpty
+                          ? 'Please enter the cheque number.'
+                          : null,
                     ),
-                  ),
-                ] else ...[
-                  _PaymentSectionTitle('Receipt'),
-                  TextFormField(
-                    controller: _receiptController,
-                    decoration: const InputDecoration(
-                      labelText: 'Physical Receipt Number *',
-                      hintText: 'e.g. REC-00421',
-                      helperText:
-                          'Enter the number from the paper receipt book',
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _chequeBankController,
+                      decoration: const InputDecoration(
+                        labelText: 'Bank *',
+                        hintText: 'Bank that issued the cheque',
+                      ),
+                      validator: (value) =>
+                          value == null || value.trim().isEmpty
+                          ? 'Please enter the bank.'
+                          : null,
                     ),
-                    validator: (value) => value == null || value.trim().isEmpty
-                        ? 'Please enter the physical receipt number.'
-                        : null,
-                  ),
+                    const SizedBox(height: 14),
+                    InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: _pickChequeDate,
+                      child: InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Cheque date *',
+                          suffixIcon: Icon(Icons.calendar_month_rounded),
+                        ),
+                        child: Text(_formatDate(_chequeDate)),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'The student balance will not change until this cheque is marked as cleared.',
+                      style: TextStyle(
+                        color: AppColors.amber,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ] else ...[
+                    _PaymentSectionTitle('Receipt'),
+                    TextFormField(
+                      controller: _receiptController,
+                      decoration: const InputDecoration(
+                        labelText: 'Physical Receipt Number *',
+                        hintText: 'e.g. REC-00421',
+                        helperText:
+                            'Enter the number from the paper receipt book',
+                      ),
+                      validator: (value) =>
+                          value == null || value.trim().isEmpty
+                          ? 'Please enter the physical receipt number.'
+                          : null,
+                    ),
+                  ],
                   const SizedBox(height: 14),
                   _ReceiptPhotoField(
                     file: _receiptPhoto,
                     onChoose: _pickReceiptPhoto,
                     onRemove: () => setState(() => _receiptPhoto = null),
                   ),
-                ],
-                const SizedBox(height: 14),
-                TextFormField(
-                  controller: _notesController,
-                  minLines: 2,
-                  maxLines: 3,
-                  decoration: const InputDecoration(
-                    labelText: 'Notes (optional)',
-                    hintText:
-                        'e.g. Partial payment, balance to be paid next week...',
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _notesController,
+                    minLines: 2,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      labelText: 'Notes (optional)',
+                      hintText:
+                          'e.g. Partial payment, balance to be paid next week...',
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -4022,7 +4288,9 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
           child: const Text('Cancel'),
         ),
         FilledButton.icon(
-          onPressed: _saving ? null : _save,
+          onPressed: _saving || _loadingFees || _feeError != null
+              ? null
+              : _save,
           icon: _saving
               ? const SizedBox(
                   width: 16,
@@ -4059,7 +4327,17 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
   Future<void> _pickReceiptPhoto() async {
     final result = await FilePicker.pickFiles(
       type: FileType.custom,
-      allowedExtensions: const ['jpg', 'jpeg', 'png', 'webp'],
+      allowedExtensions: const [
+        'jpg',
+        'jpeg',
+        'png',
+        'webp',
+        'gif',
+        'bmp',
+        'pdf',
+        'doc',
+        'docx',
+      ],
       allowMultiple: false,
       withData: true,
     );
@@ -4067,13 +4345,15 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
     final file = result.files.single;
     if (file.bytes == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not read the selected image.')),
+        const SnackBar(content: Text('Could not read the selected file.')),
       );
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Receipt photo must be 5 MB or smaller.')),
+        const SnackBar(
+          content: Text('Receipt attachment must be 5 MB or smaller.'),
+        ),
       );
       return;
     }
@@ -4084,7 +4364,12 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
     if (!_formKey.currentState!.validate()) return;
     final student = _student;
     final method = _method;
-    if (student == null || method == null || widget.termId <= 0) {
+    final fee = _feeItem;
+    if (student == null ||
+        method == null ||
+        fee == null ||
+        _loadingFees ||
+        widget.termId <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Select a student, payment method, and active term.'),
@@ -4093,14 +4378,12 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
       return;
     }
     final amount = double.parse(_amountController.text.trim());
-    final amountDue = student.balance < 0 ? 0.0 : student.balance;
-    final overpaymentAmount = (amount - amountDue)
-        .clamp(0, double.infinity)
-        .toDouble();
-    if (overpaymentAmount > 0 && !_overpaymentAcknowledged) {
+    if (!amount.isFinite || amount > fee.outstandingAmount) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Confirm that this overpayment is intentional.'),
+          content: Text(
+            'Enter an amount within the selected fee item’s balance.',
+          ),
           backgroundColor: AppColors.amber,
         ),
       );
@@ -4111,6 +4394,7 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
     try {
       final receipt = await widget.api.recordPayment(
         FeePaymentRequest(
+          assessmentId: fee.assessmentId,
           customStudentId: student.id,
           customSchoolId: widget.customSchoolId,
           payerName: student.name,
@@ -4129,10 +4413,6 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
           chequeNumber: _isCheque ? _chequeNumberController.text.trim() : null,
           chequeBank: _isCheque ? _chequeBankController.text.trim() : null,
           chequeDate: _isCheque ? _chequeDate : null,
-          overpaymentConfirmed: overpaymentAmount > 0,
-          overpaymentReason: overpaymentAmount > 0
-              ? _overpaymentReasonController.text.trim()
-              : null,
           idempotencyKey: _idempotencyKey,
         ),
       );
@@ -4149,6 +4429,7 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
               ? student.name
               : receipt.studentName,
           className: student.className,
+          feeName: fee.feeName,
           amount: receipt.amount == 0 ? amount : receipt.amount,
           paymentMethod: receipt.paymentMethod.trim().isEmpty
               ? method.method
@@ -4192,10 +4473,41 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
     setState(() {
       _student = student;
       _studentController.text = student.name;
-      if (student.balance > 0) {
-        _amountController.text = student.balance.toStringAsFixed(0);
-      }
+      _amountController.clear();
     });
+    _loadFeeItems();
+  }
+
+  Future<void> _loadFeeItems() async {
+    final version = ++_feeLoadVersion;
+    final student = _student;
+    setState(() {
+      _feeItem = null;
+      _feeItems = [];
+      _feeError = null;
+      _loadingFees = student != null;
+    });
+    if (student == null) return;
+    try {
+      final options = await widget.api.getStudentPaymentOptions(
+        customSchoolId: widget.customSchoolId,
+        customStudentId: student.id,
+        termId: widget.termId,
+      );
+      if (!mounted || version != _feeLoadVersion) return;
+      setState(() {
+        _feeItems = options.items
+            .where((item) => item.outstandingAmount > 0)
+            .toList();
+        _loadingFees = false;
+      });
+    } catch (error) {
+      if (!mounted || version != _feeLoadVersion) return;
+      setState(() {
+        _feeError = 'Unable to load fee items. $error';
+        _loadingFees = false;
+      });
+    }
   }
 
   void _resetForAnotherPayment() {
@@ -4214,12 +4526,11 @@ class _RecordPaymentDialogState extends State<_RecordPaymentDialog> {
       _chequeBankController.clear();
       _receiptPhoto = null;
       _notesController.clear();
-      _overpaymentReasonController.clear();
-      _overpaymentAcknowledged = false;
       _paymentDate = DateTime.now();
       _chequeDate = DateTime.now();
       _idempotencyKey = _newPaymentRequestKey();
     });
+    _loadFeeItems();
   }
 
   String _newPaymentRequestKey() =>
@@ -4250,6 +4561,7 @@ class _PaymentReceipt {
     required this.physicalReceiptNumber,
     required this.studentName,
     required this.className,
+    required this.feeName,
     required this.amount,
     required this.paymentMethod,
     required this.paymentDate,
@@ -4263,6 +4575,7 @@ class _PaymentReceipt {
   final String physicalReceiptNumber;
   final String studentName;
   final String className;
+  final String feeName;
   final double amount;
   final String paymentMethod;
   final DateTime paymentDate;
@@ -4329,7 +4642,7 @@ class _ReceiptPhotoField extends StatelessWidget {
               color: AppColors.greenSoft,
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(Icons.image_outlined, color: AppColors.green),
+            child: const Icon(Icons.attach_file, color: AppColors.green),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -4337,7 +4650,7 @@ class _ReceiptPhotoField extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  file?.name ?? 'Receipt photo (optional)',
+                  file?.name ?? 'Physical receipt (optional)',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontWeight: FontWeight.w800),
@@ -4345,7 +4658,7 @@ class _ReceiptPhotoField extends StatelessWidget {
                 const SizedBox(height: 3),
                 Text(
                   file == null
-                      ? 'Attach a JPG, PNG, or WebP image up to 5 MB.'
+                      ? 'Images, PDF, DOC or DOCX · up to 5 MB.'
                       : '${(file!.size / 1024).ceil()} KB selected',
                   style: const TextStyle(color: AppColors.muted, fontSize: 12),
                 ),
@@ -4355,7 +4668,7 @@ class _ReceiptPhotoField extends StatelessWidget {
           const SizedBox(width: 10),
           if (file != null)
             IconButton(
-              tooltip: 'Remove receipt photo',
+              tooltip: 'Remove receipt attachment',
               onPressed: onRemove,
               icon: const Icon(Icons.close_rounded),
             ),
@@ -4449,7 +4762,7 @@ class _AmountEntryField extends StatelessWidget {
       style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
       decoration: InputDecoration(
         labelText: 'Amount to Collect (GH₵)',
-        hintText: '0.00',
+        hintText: 'Enter amount',
         prefixText: 'GH₵ ',
         prefixStyle: const TextStyle(
           fontSize: 22,
@@ -4470,7 +4783,12 @@ class _AmountEntryField extends StatelessWidget {
       onChanged: (_) => onChanged(),
       validator: (value) {
         final amount = double.tryParse(value?.trim() ?? '');
-        if (amount == null || amount <= 0) return 'Enter a valid amount';
+        if (amount == null ||
+            !amount.isFinite ||
+            amount <= 0 ||
+            !RegExp(r'^\d+(\.\d{1,2})?$').hasMatch(value!.trim())) {
+          return 'Enter a positive amount with up to 2 decimal places';
+        }
         return null;
       },
     );
@@ -4552,91 +4870,6 @@ class _BalanceAfterPaymentPreview extends StatelessWidget {
                 ),
               ],
             ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _OverpaymentWarning extends StatelessWidget {
-  const _OverpaymentWarning({
-    required this.amount,
-    required this.money,
-    required this.reasonController,
-    required this.acknowledged,
-    required this.onAcknowledged,
-  });
-
-  final double amount;
-  final String Function(double amount) money;
-  final TextEditingController reasonController;
-  final bool acknowledged;
-  final ValueChanged<bool?> onAcknowledged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      key: const ValueKey('overpayment-warning'),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.amber.withValues(alpha: .09),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.amber.withValues(alpha: .45)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.info_outline_rounded, color: AppColors.amber),
-              const SizedBox(width: 9),
-              Expanded(
-                child: Text(
-                  'This payment is ${money(amount)} more than the amount due.',
-                  style: const TextStyle(fontWeight: FontWeight.w900),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 7),
-          const Text(
-            'The excess will be held as this student’s credit and carried into the next term.',
-            style: TextStyle(color: AppColors.muted, height: 1.35),
-          ),
-          const SizedBox(height: 14),
-          TextFormField(
-            key: const ValueKey('overpayment-reason'),
-            controller: reasonController,
-            minLines: 2,
-            maxLines: 3,
-            decoration: const InputDecoration(
-              labelText: 'Reason for accepting overpayment *',
-              hintText: 'e.g. Parent requested an advance payment',
-              filled: true,
-              fillColor: Colors.white,
-            ),
-            validator: (value) {
-              final reason = value?.trim() ?? '';
-              if (reason.isEmpty) {
-                return 'Enter the reason for this overpayment.';
-              }
-              if (reason.length < 5) return 'Enter at least 5 characters.';
-              return null;
-            },
-          ),
-          const SizedBox(height: 6),
-          CheckboxListTile(
-            key: const ValueKey('overpayment-confirmation'),
-            value: acknowledged,
-            onChanged: onAcknowledged,
-            controlAffinity: ListTileControlAffinity.leading,
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            title: const Text(
-              'I confirm the amount is intentional and the excess should be kept as credit.',
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
-            ),
           ),
         ],
       ),
@@ -4740,6 +4973,7 @@ class _PaymentSuccessView extends StatelessWidget {
               children: [
                 _ReceiptLine(label: 'Student', value: receipt.studentName),
                 _ReceiptLine(label: 'Class', value: receipt.className),
+                _ReceiptLine(label: 'Fee item', value: receipt.feeName),
                 _ReceiptLine(
                   label: receipt.pending ? 'Amount presented' : 'Amount paid',
                   value: _money(receipt.amount),
@@ -4918,8 +5152,8 @@ class _PaymentStudentSummary extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   student.balance < 0
-                      ? '${student.id} · ${student.className} · Credit ${money(student.balance.abs())}'
-                      : '${student.id} · ${student.className} · Balance ${money(student.balance)}',
+                      ? '${student.id}${student.className.isEmpty ? '' : ' · ${student.className}'} · Credit ${money(student.balance.abs())}'
+                      : '${student.id}${student.className.isEmpty ? '' : ' · ${student.className}'} · Balance ${money(student.balance)}',
                   style: const TextStyle(color: AppColors.muted),
                 ),
               ],
@@ -4940,6 +5174,7 @@ class _StudentFeeDetailPanel extends StatelessWidget {
     required this.termId,
     required this.currentUserId,
     required this.onRecordPayment,
+    required this.onAssignWaiver,
   });
 
   final _StudentFeeRow row;
@@ -4949,6 +5184,7 @@ class _StudentFeeDetailPanel extends StatelessWidget {
   final int termId;
   final int currentUserId;
   final VoidCallback onRecordPayment;
+  final VoidCallback onAssignWaiver;
 
   @override
   Widget build(BuildContext context) {
@@ -5094,9 +5330,10 @@ class _StudentFeeDetailPanel extends StatelessWidget {
               const Divider(height: 1),
               Padding(
                 padding: const EdgeInsets.all(16),
-                child: Row(
+                child: Column(
                   children: [
-                    Expanded(
+                    SizedBox(
+                      width: double.infinity,
                       child: FilledButton.icon(
                         onPressed: onRecordPayment,
                         icon: const Icon(Icons.add_rounded),
@@ -5104,12 +5341,25 @@ class _StudentFeeDetailPanel extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 10),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () {},
-                        icon: const Icon(Icons.print_outlined),
-                        label: const Text('Print Statement'),
-                      ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: onAssignWaiver,
+                            icon: const Icon(Icons.savings_outlined),
+                            label: const Text('Assign waiver or discount'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () {},
+                            icon: const Icon(Icons.print_outlined),
+                            label: const Text('Print Statement'),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -6302,7 +6552,7 @@ class _StudentFeeRow {
   final String lastPayment;
 }
 
-class _WaiversContent extends StatelessWidget {
+class _WaiversContent extends StatefulWidget {
   const _WaiversContent({
     required this.types,
     required this.assignments,
@@ -6313,6 +6563,8 @@ class _WaiversContent extends StatelessWidget {
     required this.onAssignWaiver,
     required this.onEditAssignment,
     required this.onRevokeAssignment,
+    required this.onWorkflowAction,
+    required this.onOpenStudent,
   });
 
   final List<FeeWaiverType> types;
@@ -6324,92 +6576,428 @@ class _WaiversContent extends StatelessWidget {
   final VoidCallback onAssignWaiver;
   final ValueChanged<FeeWaiverAssignment> onEditAssignment;
   final ValueChanged<FeeWaiverAssignment> onRevokeAssignment;
+  final Future<void> Function(FeeWaiverAssignment, String) onWorkflowAction;
+  final ValueChanged<String>? onOpenStudent;
+
+  @override
+  State<_WaiversContent> createState() => _WaiversContentState();
+}
+
+class _WaiversContentState extends State<_WaiversContent> {
+  final _searchController = TextEditingController();
+  var _selectedView = 0;
+  var _studentSortColumnIndex = 0;
+  var _studentSortAscending = true;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final activeAssignments = assignments
+    final activeAssignments = widget.assignments
         .where((item) => item.status == 'ACTIVE')
-        .toList();
+        .toList(growable: false);
+    final pendingAssignments = widget.assignments
+        .where((item) => _isPendingWaiverStatus(item.status))
+        .toList(growable: false);
+    final activeStudentCount = activeAssignments
+        .map((item) => item.customStudentId)
+        .toSet()
+        .length;
+    final totalWaived = activeAssignments.fold<double>(
+      0,
+      (total, item) => total + item.waivedAmount,
+    );
+    final query = _searchController.text.trim().toLowerCase();
+    final studentRows = _sortedStudents(
+      _studentWaiverRows(
+        widget.assignments,
+      ).where((item) => item.matches(query)).toList(),
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Waivers & Discounts',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    '${types.length} active ${types.length == 1 ? 'type' : 'types'} · ${activeAssignments.length} active ${activeAssignments.length == 1 ? 'student waiver' : 'student waivers'}',
-                    style: const TextStyle(
-                      color: AppColors.muted,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            OutlinedButton.icon(
-              onPressed: onAddType,
-              icon: const Icon(Icons.tune_rounded),
-              label: const Text('New waiver type'),
-            ),
-            const SizedBox(width: 10),
-            FilledButton.icon(
-              onPressed: onAssignWaiver,
-              icon: const Icon(Icons.add_rounded),
-              label: const Text('Assign waiver'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 18),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(22),
-            child: Column(
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final title = Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Waiver Types',
-                  style: TextStyle(fontWeight: FontWeight.w900),
+                  'Waivers & Discounts',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
                 ),
-                const SizedBox(height: 16),
-                if (types.isEmpty)
-                  _FeeEmptyCard(
-                    message:
-                        'No waiver types configured. Create a type before assigning a waiver.',
-                    actionLabel: 'Create waiver type',
-                    onAction: onAddType,
-                  )
-                else
-                  ...types.map(
-                    (type) => Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: _WaiverTypeTile(
-                        type: type,
-                        money: money,
-                        onEdit: () => onEditType(type),
-                        onDelete: () => onDeleteType(type),
-                      ),
-                    ),
+                const SizedBox(height: 5),
+                const Text(
+                  'Manage financial support types and review the students receiving them.',
+                  style: TextStyle(
+                    color: AppColors.muted,
+                    fontWeight: FontWeight.w600,
                   ),
+                ),
+              ],
+            );
+            final actions = Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                FilledButton.icon(
+                  onPressed: widget.onAssignWaiver,
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('Assign waiver or discount'),
+                ),
+              ],
+            );
+            if (constraints.maxWidth < 760) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [title, const SizedBox(height: 14), actions],
+              );
+            }
+            return Row(
+              children: [
+                Expanded(child: title),
+                const SizedBox(width: 16),
+                actions,
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 18),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final cardWidth = constraints.maxWidth >= 800
+                ? (constraints.maxWidth - 24) / 3
+                : constraints.maxWidth >= 500
+                ? (constraints.maxWidth - 12) / 2
+                : constraints.maxWidth;
+            return Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                SizedBox(
+                  width: cardWidth,
+                  child: _WaiverMetricCard(
+                    key: const Key('waiver-summary-total'),
+                    label: 'Total waiver value',
+                    value: widget.money(totalWaived),
+                    caption: 'Active waivers this term',
+                    icon: Icons.savings_outlined,
+                    color: AppColors.green,
+                  ),
+                ),
+                SizedBox(
+                  width: cardWidth,
+                  child: _WaiverMetricCard(
+                    key: const Key('waiver-summary-students'),
+                    label: 'Students receiving support',
+                    value: '$activeStudentCount',
+                    caption: 'Students currently covered',
+                    icon: Icons.school_outlined,
+                    color: AppColors.blue,
+                  ),
+                ),
+                SizedBox(
+                  width: cardWidth,
+                  child: _WaiverMetricCard(
+                    key: const Key('waiver-summary-pending'),
+                    label: 'Support requests pending',
+                    value: '${pendingAssignments.length}',
+                    caption: 'Awaiting a decision',
+                    icon: Icons.hourglass_top_rounded,
+                    color: AppColors.amber,
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 18),
+        Card(
+          margin: EdgeInsets.zero,
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _WaiverViewTab(
+                      key: const Key('waiver-view-waivers'),
+                      selected: _selectedView == 0,
+                      label: 'Waiver & discount types',
+                      count: widget.types.length,
+                      onTap: () => setState(() => _selectedView = 0),
+                    ),
+                    _WaiverViewTab(
+                      key: const Key('waiver-view-students'),
+                      selected: _selectedView == 1,
+                      label: 'Students on waivers & discounts',
+                      count: _studentWaiverRows(widget.assignments).length,
+                      onTap: () => setState(() => _selectedView = 1),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.all(18),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final search = SizedBox(
+                      width: constraints.maxWidth < 520
+                          ? constraints.maxWidth
+                          : 420,
+                      child: TextField(
+                        key: const Key('waiver-search'),
+                        controller: _searchController,
+                        onChanged: (_) => setState(() {}),
+                        decoration: InputDecoration(
+                          hintText: _selectedView == 0
+                              ? 'Search waiver or discount type'
+                              : 'Search student, ID or class',
+                          prefixIcon: const Icon(Icons.search_rounded),
+                          suffixIcon: _searchController.text.isEmpty
+                              ? null
+                              : IconButton(
+                                  tooltip: 'Clear search',
+                                  onPressed: () {
+                                    _searchController.clear();
+                                    setState(() {});
+                                  },
+                                  icon: const Icon(Icons.close_rounded),
+                                ),
+                        ),
+                      ),
+                    );
+                    final count = Text(
+                      _selectedView == 0
+                          ? '${_matchingTypes(query).length} ${_matchingTypes(query).length == 1 ? 'type' : 'types'}'
+                          : '${studentRows.length} ${studentRows.length == 1 ? 'student' : 'students'}',
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    );
+                    if (constraints.maxWidth < 620) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [search, const SizedBox(height: 10), count],
+                      );
+                    }
+                    return Row(children: [search, const Spacer(), count]);
+                  },
+                ),
+              ),
+              if (_selectedView == 0)
+                _WaiverTypesList(
+                  types: _matchingTypes(query),
+                  money: widget.money,
+                  onAdd: widget.onAddType,
+                  onEdit: widget.onEditType,
+                  onDelete: widget.onDeleteType,
+                )
+              else
+                _StudentsOnWaiversTable(
+                  rows: studentRows,
+                  money: widget.money,
+                  sortColumnIndex: _studentSortColumnIndex,
+                  sortAscending: _studentSortAscending,
+                  onSort: (column, ascending) => setState(() {
+                    _studentSortColumnIndex = column;
+                    _studentSortAscending = ascending;
+                  }),
+                  onOpenStudent: widget.onOpenStudent,
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  List<FeeWaiverType> _matchingTypes(String query) {
+    if (query.isEmpty) return widget.types;
+    return widget.types
+        .where((type) {
+          return type.name.toLowerCase().contains(query) ||
+              type.description.toLowerCase().contains(query) ||
+              type.valueType.toLowerCase().contains(query);
+        })
+        .toList(growable: false);
+  }
+
+  List<_StudentWaiverRowData> _sortedStudents(
+    List<_StudentWaiverRowData> rows,
+  ) {
+    int compare(_StudentWaiverRowData a, _StudentWaiverRowData b) {
+      return switch (_studentSortColumnIndex) {
+        0 => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+        1 => a.className.toLowerCase().compareTo(b.className.toLowerCase()),
+        2 => a.activeCount.compareTo(b.activeCount),
+        3 => a.totalWaived.compareTo(b.totalWaived),
+        4 => a.pendingCount.compareTo(b.pendingCount),
+        _ => a.status.compareTo(b.status),
+      };
+    }
+
+    rows.sort((a, b) {
+      final result = compare(a, b);
+      return _studentSortAscending ? result : -result;
+    });
+    return rows;
+  }
+}
+
+class _WaiverMetricCard extends StatelessWidget {
+  const _WaiverMetricCard({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.caption,
+    required this.icon,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final String caption;
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: .10),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: color),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label.toUpperCase(),
+                  style: const TextStyle(
+                    color: AppColors.muted,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: .45,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  caption,
+                  style: const TextStyle(color: AppColors.muted, fontSize: 12),
+                ),
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WaiverViewTab extends StatelessWidget {
+  const _WaiverViewTab({
+    super.key,
+    required this.selected,
+    required this.label,
+    required this.count,
+    required this.onTap,
+  });
+
+  final bool selected;
+  final String label;
+  final int count;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(9),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        decoration: BoxDecoration(
+          color: selected
+              ? AppColors.green.withValues(alpha: .11)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(9),
+          border: Border.all(
+            color: selected ? AppColors.green : AppColors.border,
+          ),
         ),
-        const SizedBox(height: 18),
-        _StudentsWithWaiversTable(
-          assignments: assignments,
-          money: money,
-          onEdit: onEditAssignment,
-          onRevoke: onRevokeAssignment,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: selected ? AppColors.green : AppColors.text,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(width: 8),
+            _SmallCountBadge(count: count, selected: selected),
+          ],
         ),
-      ],
+      ),
+    );
+  }
+}
+
+class _SmallCountBadge extends StatelessWidget {
+  const _SmallCountBadge({required this.count, required this.selected});
+
+  final int count;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: selected ? AppColors.green : const Color(0xFFE9EEEC),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        '$count',
+        style: TextStyle(
+          color: selected ? Colors.white : AppColors.muted,
+          fontSize: 11,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
     );
   }
 }
@@ -6479,150 +7067,269 @@ class _WaiverTypeTile extends StatelessWidget {
   }
 }
 
-class _StudentsWithWaiversTable extends StatelessWidget {
-  const _StudentsWithWaiversTable({
-    required this.assignments,
+class _WaiverTypesList extends StatelessWidget {
+  const _WaiverTypesList({
+    required this.types,
     required this.money,
+    required this.onAdd,
     required this.onEdit,
-    required this.onRevoke,
+    required this.onDelete,
   });
 
-  final List<FeeWaiverAssignment> assignments;
+  final List<FeeWaiverType> types;
   final String Function(double amount) money;
-  final ValueChanged<FeeWaiverAssignment> onEdit;
-  final ValueChanged<FeeWaiverAssignment> onRevoke;
+  final VoidCallback onAdd;
+  final ValueChanged<FeeWaiverType> onEdit;
+  final ValueChanged<FeeWaiverType> onDelete;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                const Expanded(
-                  child: Text(
-                    'Students with Waivers',
-                    style: TextStyle(fontWeight: FontWeight.w900),
-                  ),
-                ),
-                Text(
-                  '${assignments.length} ${assignments.length == 1 ? 'assignment' : 'assignments'}',
-                  style: const TextStyle(
-                    color: AppColors.muted,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            if (assignments.isEmpty)
-              const _FeeEmptyCard(
-                message: 'No waivers have been assigned for this term.',
-              )
-            else
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: DataTable(
-                  headingRowColor: WidgetStateProperty.all(
-                    const Color(0xFFF8FAF9),
-                  ),
-                  headingTextStyle: const TextStyle(
-                    color: AppColors.muted,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: .5,
-                  ),
-                  columnSpacing: 86,
-                  columns: const [
-                    DataColumn(label: Text('STUDENT')),
-                    DataColumn(label: Text('CLASS')),
-                    DataColumn(label: Text('WAIVER TYPE')),
-                    DataColumn(label: Text('ELIGIBLE FEES')),
-                    DataColumn(label: Text('WAIVED')),
-                    DataColumn(label: Text('STATUS')),
-                    DataColumn(label: Text('ACTIONS')),
-                  ],
-                  rows: assignments.map((assignment) {
-                    return DataRow(
-                      cells: [
-                        DataCell(
-                          _StudentNameCell(
-                            name: assignment.studentName,
-                            id: assignment.customStudentId,
-                          ),
-                        ),
-                        DataCell(Text(assignment.className)),
-                        DataCell(_WaiverBadge(label: assignment.waiverType)),
-                        DataCell(Text(money(assignment.eligibleAmount))),
-                        DataCell(
-                          Text(
-                            '−${money(assignment.waivedAmount)}',
-                            style: const TextStyle(color: AppColors.green),
-                          ),
-                        ),
-                        DataCell(
-                          _StatusPill(
-                            label: assignment.status == 'ACTIVE'
-                                ? 'Active'
-                                : 'Revoked',
-                            color: assignment.status == 'ACTIVE'
-                                ? AppColors.green
-                                : AppColors.muted,
-                          ),
-                        ),
-                        DataCell(
-                          assignment.status == 'ACTIVE'
-                              ? Row(
-                                  children: [
-                                    TextButton(
-                                      onPressed: () => onEdit(assignment),
-                                      child: const Text('Edit'),
-                                    ),
-                                    TextButton(
-                                      onPressed: () => onRevoke(assignment),
-                                      child: const Text('Revoke'),
-                                    ),
-                                  ],
-                                )
-                              : const Text('—'),
-                        ),
-                      ],
-                    );
-                  }).toList(),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Types available to this school',
+                  style: TextStyle(fontWeight: FontWeight.w900),
                 ),
               ),
-          ],
-        ),
+              FilledButton.icon(
+                key: const Key('add-waiver-type'),
+                onPressed: onAdd,
+                icon: const Icon(Icons.add_rounded, size: 18),
+                label: const Text('Add type'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (types.isEmpty)
+            const _FeeEmptyCard(
+              message: 'No waiver or discount types match this search.',
+            )
+          else
+            ...types.map(
+              (type) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _WaiverTypeTile(
+                  type: type,
+                  money: money,
+                  onEdit: () => onEdit(type),
+                  onDelete: () => onDelete(type),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
 }
 
-class _WaiverBadge extends StatelessWidget {
-  const _WaiverBadge({required this.label});
+bool _isPendingWaiverStatus(String status) =>
+    status.trim().toUpperCase() == 'PENDING_APPROVAL';
 
-  final String label;
+class _StudentWaiverRowData {
+  const _StudentWaiverRowData({
+    required this.id,
+    required this.name,
+    required this.className,
+    required this.activeCount,
+    required this.pendingCount,
+    required this.totalWaived,
+  });
+
+  final String id;
+  final String name;
+  final String className;
+  final int activeCount;
+  final int pendingCount;
+  final double totalWaived;
+
+  String get status => pendingCount > 0 ? 'Pending action' : 'Active';
+  bool matches(String query) =>
+      query.isEmpty ||
+      [
+        id,
+        name,
+        className,
+        status,
+      ].any((value) => value.toLowerCase().contains(query));
+}
+
+List<_StudentWaiverRowData> _studentWaiverRows(
+  List<FeeWaiverAssignment> assignments,
+) {
+  final grouped = <String, List<FeeWaiverAssignment>>{};
+  for (final assignment in assignments.where(
+    (item) => item.status != 'REVOKED',
+  )) {
+    grouped.putIfAbsent(assignment.customStudentId, () => []).add(assignment);
+  }
+  return grouped.entries.map((entry) {
+    final rows = entry.value;
+    final first = rows.first;
+    final active = rows.where((item) => item.status == 'ACTIVE').toList();
+    return _StudentWaiverRowData(
+      id: entry.key,
+      name: first.studentName,
+      className: first.className,
+      activeCount: active.length,
+      pendingCount: rows
+          .where((item) => _isPendingWaiverStatus(item.status))
+          .length,
+      totalWaived: active.fold(0, (sum, item) => sum + item.waivedAmount),
+    );
+  }).toList();
+}
+
+class _WaiverApproverDialog extends StatefulWidget {
+  const _WaiverApproverDialog({required this.approvers});
+
+  final List<FeeAdjustmentApprover> approvers;
+
+  @override
+  State<_WaiverApproverDialog> createState() => _WaiverApproverDialogState();
+}
+
+class _WaiverApproverDialogState extends State<_WaiverApproverDialog> {
+  int? _selectedId;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 220,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: AppColors.purple.withValues(alpha: .10),
-        borderRadius: BorderRadius.circular(999),
+    return AlertDialog(
+      title: const Text('Submit waiver for approval'),
+      content: SizedBox(
+        width: 440,
+        child: widget.approvers.isEmpty
+            ? const Text('No other eligible approver is available.')
+            : DropdownButtonFormField<int>(
+                value: _selectedId,
+                decoration: const InputDecoration(labelText: 'Approver *'),
+                items: widget.approvers
+                    .map(
+                      (approver) => DropdownMenuItem(
+                        value: approver.id,
+                        child: Text('${approver.name} · ${approver.role}'),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) => setState(() => _selectedId = value),
+              ),
       ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          color: AppColors.purple,
-          fontWeight: FontWeight.w900,
-          fontSize: 12,
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
         ),
+        FilledButton(
+          onPressed: _selectedId == null
+              ? null
+              : () => Navigator.pop(context, _selectedId),
+          child: const Text('Submit request'),
+        ),
+      ],
+    );
+  }
+}
+
+class _StudentsOnWaiversTable extends StatelessWidget {
+  const _StudentsOnWaiversTable({
+    required this.rows,
+    required this.money,
+    required this.sortColumnIndex,
+    required this.sortAscending,
+    required this.onSort,
+    required this.onOpenStudent,
+  });
+
+  final List<_StudentWaiverRowData> rows;
+  final String Function(double amount) money;
+  final int sortColumnIndex;
+  final bool sortAscending;
+  final void Function(int, bool) onSort;
+  final ValueChanged<String>? onOpenStudent;
+
+  @override
+  Widget build(BuildContext context) {
+    if (rows.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.fromLTRB(18, 0, 18, 18),
+        child: _FeeEmptyCard(
+          message: 'No students currently have a waiver or discount.',
+        ),
+      );
+    }
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: DataTable(
+        sortColumnIndex: sortColumnIndex,
+        sortAscending: sortAscending,
+        headingRowColor: WidgetStateProperty.all(const Color(0xFFF8FAF9)),
+        headingTextStyle: const TextStyle(
+          color: AppColors.muted,
+          fontSize: 11,
+          fontWeight: FontWeight.w900,
+          letterSpacing: .5,
+        ),
+        columnSpacing: 54,
+        columns: [
+          DataColumn(label: const Text('STUDENT'), onSort: onSort),
+          DataColumn(label: const Text('CLASS'), onSort: onSort),
+          DataColumn(
+            label: const Text('ACTIVE WAIVERS'),
+            numeric: true,
+            onSort: onSort,
+          ),
+          DataColumn(
+            label: const Text('TOTAL VALUE'),
+            numeric: true,
+            onSort: onSort,
+          ),
+          DataColumn(
+            label: const Text('PENDING'),
+            numeric: true,
+            onSort: onSort,
+          ),
+          DataColumn(label: const Text('STATUS'), onSort: onSort),
+        ],
+        rows: rows
+            .map(
+              (row) => DataRow(
+                cells: [
+                  DataCell(
+                    _StudentNameCell(name: row.name, id: row.id),
+                    onTap: onOpenStudent == null
+                        ? null
+                        : () => onOpenStudent!(row.id),
+                    showEditIcon: false,
+                  ),
+                  DataCell(Text(row.className)),
+                  DataCell(Text('${row.activeCount}')),
+                  DataCell(
+                    Text(
+                      money(row.totalWaived),
+                      style: const TextStyle(
+                        color: AppColors.green,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  DataCell(Text('${row.pendingCount}')),
+                  DataCell(
+                    _StatusPill(
+                      label: row.status,
+                      color: row.pendingCount > 0
+                          ? AppColors.amber
+                          : AppColors.green,
+                    ),
+                  ),
+                ],
+              ),
+            )
+            .toList(),
       ),
     );
   }
@@ -6659,19 +7366,21 @@ class _WaiverAssignmentSheet extends StatefulWidget {
     required this.api,
     required this.customSchoolId,
     required this.academicTermId,
-    required this.students,
+    required this.initialStudent,
     required this.types,
     required this.existing,
     required this.money,
+    required this.currentUserId,
   });
 
   final FeeApiClient api;
   final String customSchoolId;
   final int academicTermId;
-  final List<FeeStudentFeeRow> students;
+  final FeeStudentFeeRow? initialStudent;
   final List<FeeWaiverType> types;
   final FeeWaiverAssignment? existing;
   final String Function(double amount) money;
+  final int currentUserId;
 
   @override
   State<_WaiverAssignmentSheet> createState() => _WaiverAssignmentSheetState();
@@ -6680,7 +7389,12 @@ class _WaiverAssignmentSheet extends StatefulWidget {
 class _WaiverAssignmentSheetState extends State<_WaiverAssignmentSheet> {
   late final TextEditingController _value;
   late final TextEditingController _reason;
+  late final TextEditingController _studentSearch;
   String? _studentId;
+  FeeStudentFeeRow? _selectedStudent;
+  List<FeeStudentFeeRow> _studentResults = const [];
+  Timer? _studentSearchDebounce;
+  bool _searchingStudents = false;
   int? _typeId;
   FeeStudentAccount? _account;
   Set<int> _assessmentIds = {};
@@ -6699,7 +7413,14 @@ class _WaiverAssignmentSheetState extends State<_WaiverAssignmentSheet> {
   void initState() {
     super.initState();
     final existing = widget.existing;
-    _studentId = existing?.customStudentId;
+    _selectedStudent = widget.initialStudent;
+    _studentId =
+        existing?.customStudentId ?? widget.initialStudent?.customStudentId;
+    _studentSearch = TextEditingController(
+      text: existing == null
+          ? (widget.initialStudent?.studentName ?? '')
+          : '${existing.studentName} · ${existing.customStudentId}',
+    );
     _typeId =
         existing?.waiverTypeId ??
         (widget.types.isEmpty ? null : widget.types.first.id);
@@ -6718,7 +7439,54 @@ class _WaiverAssignmentSheetState extends State<_WaiverAssignmentSheet> {
   void dispose() {
     _value.dispose();
     _reason.dispose();
+    _studentSearchDebounce?.cancel();
+    _studentSearch.dispose();
     super.dispose();
+  }
+
+  void _searchStudents(String query) {
+    if (_selectedStudent != null && query != _selectedStudent!.studentName) {
+      setState(() {
+        _selectedStudent = null;
+        _studentId = null;
+        _account = null;
+        _assessmentIds.clear();
+      });
+    }
+    _studentSearchDebounce?.cancel();
+    if (query.trim().length < 2) {
+      setState(() => _studentResults = const []);
+      return;
+    }
+    _studentSearchDebounce = Timer(const Duration(milliseconds: 300), () async {
+      if (!mounted) return;
+      setState(() => _searchingStudents = true);
+      try {
+        final page = await widget.api.getFeeManagementStudents(
+          customSchoolId: widget.customSchoolId,
+          termId: widget.academicTermId,
+          search: query.trim(),
+          size: 8,
+        );
+        if (mounted) setState(() => _studentResults = page.content);
+      } catch (error) {
+        if (mounted) setState(() => _error = '$error');
+      } finally {
+        if (mounted) setState(() => _searchingStudents = false);
+      }
+    });
+  }
+
+  void _selectStudent(FeeStudentFeeRow student) {
+    setState(() {
+      _selectedStudent = student;
+      _studentId = student.customStudentId;
+      _studentSearch.text = student.studentName;
+      _studentResults = const [];
+      _account = null;
+      _assessmentIds.clear();
+    });
+    _loadAccount();
   }
 
   Future<void> _loadAccount() async {
@@ -6761,7 +7529,7 @@ class _WaiverAssignmentSheetState extends State<_WaiverAssignmentSheet> {
     return type.isPercentage ? _eligibleAmount * value / 100 : value;
   }
 
-  Future<void> _save() async {
+  Future<void> _save({bool submit = false}) async {
     final type = _type;
     final studentId = _studentId;
     final value = double.tryParse(_value.text.trim());
@@ -6789,7 +7557,7 @@ class _WaiverAssignmentSheetState extends State<_WaiverAssignmentSheet> {
       _error = null;
     });
     try {
-      await widget.api.saveStudentWaiver(
+      final saved = await widget.api.saveStudentWaiver(
         customSchoolId: widget.customSchoolId,
         customStudentId: studentId,
         waiverId: widget.existing?.id,
@@ -6801,6 +7569,26 @@ class _WaiverAssignmentSheetState extends State<_WaiverAssignmentSheet> {
             : _assessmentIds.toList(),
         reason: _reason.text,
       );
+      if (submit) {
+        final approvers = (await widget.api.getFeeAdjustmentApprovers(
+          widget.customSchoolId,
+        )).where((item) => item.id != widget.currentUserId).toList();
+        if (!mounted) return;
+        final approverId = await showDialog<int>(
+          context: context,
+          builder: (context) => _WaiverApproverDialog(approvers: approvers),
+        );
+        if (approverId == null) {
+          setState(() => _saving = false);
+          return;
+        }
+        await widget.api.performStudentWaiverAction(
+          customSchoolId: widget.customSchoolId,
+          waiverId: saved.id,
+          action: 'SUBMIT',
+          approverId: approverId,
+        );
+      }
       if (mounted) Navigator.pop(context, true);
     } catch (error) {
       if (mounted) {
@@ -6867,32 +7655,77 @@ class _WaiverAssignmentSheetState extends State<_WaiverAssignmentSheet> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      DropdownButtonFormField<String>(
-                        value: _studentId,
-                        decoration: const InputDecoration(
-                          labelText: 'Student *',
+                      TextField(
+                        key: const Key('waiver-student-search'),
+                        controller: _studentSearch,
+                        enabled: widget.existing == null && !_saving,
+                        onChanged: _searchStudents,
+                        decoration: InputDecoration(
+                          labelText: 'Find student by name or ID *',
+                          hintText: 'Start typing a student name or ID',
+                          prefixIcon: const Icon(Icons.search_rounded),
+                          suffixIcon: _searchingStudents
+                              ? const Padding(
+                                  padding: EdgeInsets.all(12),
+                                  child: SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
+                                )
+                              : null,
                         ),
-                        items: widget.students
-                            .map(
-                              (student) => DropdownMenuItem(
-                                value: student.customStudentId,
-                                child: Text(
-                                  '${student.studentName} · ${student.className}',
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: widget.existing != null || _saving
-                            ? null
-                            : (next) {
-                                setState(() {
-                                  _studentId = next;
-                                  _account = null;
-                                  _assessmentIds.clear();
-                                });
-                                _loadAccount();
-                              },
                       ),
+                      if (_studentResults.isNotEmpty)
+                        Container(
+                          margin: const EdgeInsets.only(top: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            border: Border.all(color: AppColors.border),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Column(
+                            children: _studentResults
+                                .map(
+                                  (student) => ListTile(
+                                    key: Key(
+                                      'waiver-student-${student.customStudentId}',
+                                    ),
+                                    title: Text(
+                                      student.studentName,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                    subtitle: Text(
+                                      '${student.customStudentId} · ${student.className}',
+                                    ),
+                                    trailing: const Icon(
+                                      Icons.chevron_right_rounded,
+                                    ),
+                                    onTap: () => _selectStudent(student),
+                                  ),
+                                )
+                                .toList(),
+                          ),
+                        ),
+                      if (_studentId != null) ...[
+                        const SizedBox(height: 10),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: AppColors.green.withValues(alpha: .08),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            '${_selectedStudent?.studentName ?? widget.existing?.studentName ?? ''}\n${_studentId!} · ${_selectedStudent?.className ?? widget.existing?.className ?? ''}',
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 16),
                       DropdownButtonFormField<int>(
                         value: _typeId,
@@ -7051,9 +7884,18 @@ class _WaiverAssignmentSheetState extends State<_WaiverAssignmentSheet> {
                     ),
                     const SizedBox(width: 12),
                     Expanded(
+                      child: OutlinedButton(
+                        onPressed: _saving ? null : () => _save(),
+                        child: const Text('Save draft'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
                       child: FilledButton(
-                        onPressed: _saving ? null : _save,
-                        child: Text(_saving ? 'Saving...' : 'Save waiver'),
+                        onPressed: _saving ? null : () => _save(submit: true),
+                        child: Text(
+                          _saving ? 'Saving...' : 'Submit for approval',
+                        ),
                       ),
                     ),
                   ],

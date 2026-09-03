@@ -525,6 +525,15 @@ class _StaffAttendanceScreenState extends State<StaffAttendanceScreen> {
                         fontSize: 12,
                       ),
                     ),
+                  if (entry.approvedLeaveEndDate != null)
+                    Text(
+                      'Approved leave · through ${entry.approvedLeaveEndDate}',
+                      style: const TextStyle(
+                        color: AppColors.blue,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                   if (entry.mark == StaffAttendanceMark.late)
                     Text(
                       'Arrival ${entry.timeIn}',
@@ -583,7 +592,11 @@ class _StaffAttendanceScreenState extends State<StaffAttendanceScreen> {
   ) {
     final selected = entry.mark == mark;
     return OutlinedButton(
-      onPressed: () => _selectMark(index, mark),
+      onPressed:
+          entry.approvedLeaveEndDate != null &&
+              mark != StaffAttendanceMark.absent
+          ? null
+          : () => _selectMark(index, mark),
       style: OutlinedButton.styleFrom(
         foregroundColor: selected ? color : AppColors.muted,
         backgroundColor: selected ? color.withValues(alpha: .1) : Colors.white,
@@ -664,8 +677,10 @@ class _StaffAttendanceScreenState extends State<StaffAttendanceScreen> {
   Future<StaffAttendanceEntry?> _absenceDialog(
     StaffAttendanceEntry entry,
   ) async {
-    bool? excused = entry.excused;
-    String? reason = entry.absenceReason;
+    bool? excused = entry.approvedLeaveEndDate != null ? true : entry.excused;
+    String? reason = entry.approvedLeaveEndDate != null
+        ? 'Approved leave'
+        : entry.absenceReason;
     final note = TextEditingController(text: entry.note);
     return showDialog<StaffAttendanceEntry>(
       context: context,
@@ -936,12 +951,14 @@ class _StaffAttendanceScreenState extends State<StaffAttendanceScreen> {
   void _markAllPresent() => setState(
     () => _entries = _entries
         .map(
-          (e) => e.copyWith(
-            mark: StaffAttendanceMark.present,
-            clearTimeIn: true,
-            clearExcused: true,
-            clearAbsenceReason: true,
-          ),
+          (e) => e.approvedLeaveEndDate != null
+              ? e
+              : e.copyWith(
+                  mark: StaffAttendanceMark.present,
+                  clearTimeIn: true,
+                  clearExcused: true,
+                  clearAbsenceReason: true,
+                ),
         )
         .toList(),
   );

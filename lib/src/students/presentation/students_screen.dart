@@ -3,7 +3,16 @@ import 'package:flutter/material.dart';
 import '../../theme/app_theme.dart';
 import '../domain/student_models.dart';
 import '../../fees/domain/fee_models.dart';
+import '../../assessments/presentation/report_pdf_download.dart';
 import 'student_transfer_dialog.dart';
+import '../../admissions/data/admissions_api_client.dart';
+import '../../admissions/presentation/admissions_screen.dart'
+    show
+        showStudentRecordEditor,
+        StudentDocumentsPanel,
+        openStudentHousehold,
+        openGuardianProfile;
+import '../../admissions/presentation/student_record_changes.dart';
 
 const _allClasses = 'All classes';
 const _allStatuses = 'All statuses';
@@ -17,6 +26,10 @@ class StudentsScreen extends StatefulWidget {
     this.onOpenHousehold,
     this.onCollectPayment,
     this.focusSearchOnLoad = false,
+    this.initialStudentId,
+    this.onApprovalChanged,
+    this.admissionsApi,
+    this.customSchoolId,
   });
 
   final String term;
@@ -25,6 +38,10 @@ class StudentsScreen extends StatefulWidget {
   final VoidCallback? onOpenHousehold;
   final ValueChanged<EnrolledStudent>? onCollectPayment;
   final bool focusSearchOnLoad;
+  final String? initialStudentId;
+  final VoidCallback? onApprovalChanged;
+  final AdmissionsApiClient? admissionsApi;
+  final String? customSchoolId;
 
   @override
   State<StudentsScreen> createState() => _StudentsScreenState();
@@ -44,6 +61,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
   void initState() {
     super.initState();
     _studentsFuture = widget.repository.getEnrolledStudents();
+    final studentId = widget.initialStudentId?.trim() ?? '';
+    if (studentId.isNotEmpty) _openStudent(studentId);
   }
 
   void _retry() {
@@ -117,6 +136,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
           _selectedStudent = snapshot.requireData;
           return StudentProfileView(
             student: snapshot.requireData,
+            admissionsApi: widget.admissionsApi,
+            customSchoolId: widget.customSchoolId,
             term: widget.term,
             academicYear: widget.academicYear,
             onBack: _closeStudent,
@@ -125,6 +146,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
             onOpenHousehold: widget.onOpenHousehold,
             onCollectPayment: widget.onCollectPayment,
             repository: widget.repository,
+            onApprovalChanged: widget.onApprovalChanged,
           );
         },
       );
@@ -132,6 +154,8 @@ class _StudentsScreenState extends State<StudentsScreen> {
     if (_selectedStudent != null) {
       return StudentProfileView(
         student: _selectedStudent!,
+        admissionsApi: widget.admissionsApi,
+        customSchoolId: widget.customSchoolId,
         term: widget.term,
         academicYear: widget.academicYear,
         onBack: _closeStudent,
@@ -140,6 +164,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         onOpenHousehold: widget.onOpenHousehold,
         onCollectPayment: widget.onCollectPayment,
         repository: widget.repository,
+        onApprovalChanged: widget.onApprovalChanged,
       );
     }
 
@@ -998,6 +1023,9 @@ class StudentProfileView extends StatefulWidget {
     this.onOpenHousehold,
     this.onCollectPayment,
     this.repository,
+    this.onApprovalChanged,
+    this.admissionsApi,
+    this.customSchoolId,
   });
 
   final EnrolledStudent student;
@@ -1009,6 +1037,9 @@ class StudentProfileView extends StatefulWidget {
   final VoidCallback? onOpenHousehold;
   final ValueChanged<EnrolledStudent>? onCollectPayment;
   final StudentsRepository? repository;
+  final VoidCallback? onApprovalChanged;
+  final AdmissionsApiClient? admissionsApi;
+  final String? customSchoolId;
 
   @override
   State<StudentProfileView> createState() => _StudentProfileViewState();
@@ -1016,9 +1047,119 @@ class StudentProfileView extends StatefulWidget {
 
 class _StudentProfileViewState extends State<StudentProfileView> {
   _StudentProfileTab _tab = _StudentProfileTab.overview;
+  EnrolledStudent? _refreshedStudent;
+  bool _collectingItems = false;
+  bool _editingRecord = false;
+  int _historyRevision = 0;
+  Future<void> _openHousehold() async {
+    try {
+      await openStudentHousehold(
+        context: context,
+        api: widget.admissionsApi!,
+        school: widget.customSchoolId!,
+        studentId: _student.id,
+      );
+      if (mounted) await _refreshRecord();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+      }
+    }
+  }
+
+  Future<void> _openGuardian(String guardianId) async {
+    await openGuardianProfile(
+      context: context,
+      api: widget.admissionsApi!,
+      school: widget.customSchoolId!,
+      guardianId: guardianId,
+    );
+    if (mounted) await _refreshRecord();
+  }
+
+  Future<void> _editRecord() async {
+    if (_editingRecord ||
+        widget.admissionsApi == null ||
+        widget.customSchoolId == null) {
+      return;
+    }
+    setState(() => _editingRecord = true);
+    try {
+      await showStudentRecordEditor(
+        context: context,
+        api: widget.admissionsApi!,
+        school: widget.customSchoolId!,
+        studentId: _student.id,
+      );
+      if (!mounted) return;
+      await _refreshRecord();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+      }
+    } finally {
+      if (mounted) setState(() => _editingRecord = false);
+    }
+  }
+
+  Future<void> _refreshRecord() async {
+    try {
+      final updated = await widget.repository?.getStudent(widget.student.id);
+      if (!mounted) return;
+      setState(() {
+        _refreshedStudent = updated;
+        _historyRevision++;
+      });
+      widget.onStudentTransferred?.call(widget.student.id);
+      widget.onApprovalChanged?.call();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not refresh the student record: $error'),
+          ),
+        );
+      }
+    }
+  }
+
+  EnrolledStudent get _student => _refreshedStudent ?? widget.student;
   late final Future<List<StudentPlacement>>? _placementHistory = widget
       .repository
       ?.getPlacementHistory(widget.student.id);
+  Future<List<StudentItemCollectionReceipt>>? _itemReceiptHistory;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshItemReceiptHistory(notify: false);
+  }
+
+  @override
+  void didUpdateWidget(covariant StudentProfileView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.student.id != widget.student.id ||
+        oldWidget.repository != widget.repository) {
+      _refreshedStudent = null;
+      _refreshItemReceiptHistory(notify: false);
+    }
+  }
+
+  void _refreshItemReceiptHistory({bool notify = true}) {
+    final repository = widget.repository;
+    final future = repository?.getStudentItemReceipts(
+      studentId: widget.student.id,
+    );
+    if (notify && mounted) {
+      setState(() => _itemReceiptHistory = future);
+    } else {
+      _itemReceiptHistory = future;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1038,10 +1179,16 @@ class _StudentProfileViewState extends State<StudentProfileView> {
               ),
               const SizedBox(height: 8),
               _StudentProfileHeader(
-                student: widget.student,
+                student: _student,
+                onEdit:
+                    widget.admissionsApi == null ||
+                        widget.customSchoolId == null ||
+                        _editingRecord
+                    ? null
+                    : _editRecord,
                 onCollectPayment: widget.onCollectPayment == null
                     ? null
-                    : () => widget.onCollectPayment!(widget.student),
+                    : () => widget.onCollectPayment!(_student),
                 onTransfer: widget.repository == null ? null : _transfer,
               ),
               if (_placementHistory != null) ...[
@@ -1054,30 +1201,62 @@ class _StudentProfileViewState extends State<StudentProfileView> {
                 onSelected: (tab) => setState(() => _tab = tab),
               ),
               const SizedBox(height: 16),
+              if (widget.admissionsApi != null &&
+                  widget.customSchoolId != null) ...[
+                StudentRecordHistoryPanel(
+                  key: ValueKey('${_student.id}-$_historyRevision'),
+                  api: widget.admissionsApi!,
+                  school: widget.customSchoolId!,
+                  student: _student.id,
+                  onChanged: _refreshRecord,
+                ),
+                const SizedBox(height: 16),
+              ],
               switch (_tab) {
                 _StudentProfileTab.overview => _OverviewTab(
-                  student: widget.student,
+                  student: _student,
                   compact: compact,
                   onOpenStudent: widget.onOpenStudent,
-                  onOpenHousehold: widget.onOpenHousehold,
+                  onOpenHousehold:
+                      widget.admissionsApi != null &&
+                          widget.customSchoolId != null
+                      ? _openHousehold
+                      : widget.onOpenHousehold,
+                  onOpenGuardian:
+                      widget.admissionsApi != null &&
+                          widget.customSchoolId != null
+                      ? _openGuardian
+                      : null,
                 ),
-                _StudentProfileTab.medical => _MedicalTab(
-                  student: widget.student,
-                ),
+                _StudentProfileTab.medical => _MedicalTab(student: _student),
                 _StudentProfileTab.attendance => _AttendanceTab(
-                  student: widget.student,
+                  student: _student,
                 ),
                 _StudentProfileTab.fees => _FeesTab(
-                  student: widget.student,
+                  student: _student,
                   term: widget.term,
                   academicYear: widget.academicYear,
                   repository: widget.repository,
                 ),
                 _StudentProfileTab.requirements => _RequirementsTab(
-                  student: widget.student,
+                  student: _student,
+                  collecting: _collectingItems,
+                  receiptHistory: _itemReceiptHistory,
+                  onCollect: widget.repository == null ? null : _collectItems,
+                  onExempt: widget.repository == null ? null : _exemptItem,
+                  onDownloadReceipt: widget.repository == null
+                      ? null
+                      : _downloadItemReceipt,
+                  onDownloadReceipts: widget.repository == null
+                      ? null
+                      : _downloadItemReceipts,
+                  onRefreshHistory: () => _refreshItemReceiptHistory(),
                 ),
                 _StudentProfileTab.documents => _DocumentsTab(
-                  student: widget.student,
+                  student: _student,
+                  api: widget.admissionsApi,
+                  school: widget.customSchoolId,
+                  onChanged: _refreshRecord,
                 ),
               },
             ],
@@ -1085,6 +1264,160 @@ class _StudentProfileViewState extends State<StudentProfileView> {
         );
       },
     );
+  }
+
+  Future<void> _collectItems() async {
+    final collectable = _student.requirements
+        .where(
+          (item) =>
+              item.id.isNotEmpty &&
+              (item.status == StudentRequirementStatus.outstanding ||
+                  item.status == StudentRequirementStatus.partial) &&
+              item.receivedQuantity < item.requiredQuantity,
+        )
+        .toList();
+    if (collectable.isEmpty) return;
+    final draft = await showDialog<_ItemCollectionDraft>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) =>
+          _CollectStudentItemsDialog(student: _student, items: collectable),
+    );
+    if (draft == null || !mounted) return;
+    setState(() => _collectingItems = true);
+    try {
+      final receipt = await widget.repository!.collectStudentItems(
+        studentId: _student.id,
+        idempotencyKey:
+            '${_student.id}-${DateTime.now().microsecondsSinceEpoch}',
+        items: draft.items,
+        notes: draft.notes,
+      );
+      final refreshed = await widget.repository!.getStudent(_student.id);
+      if (!mounted) return;
+      setState(() {
+        _refreshedStudent = refreshed;
+        _collectingItems = false;
+        _itemReceiptHistory = widget.repository!.getStudentItemReceipts(
+          studentId: refreshed.id,
+        );
+      });
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => _ItemCollectionReceiptDialog(
+          receipt: receipt,
+          onDownload: () => _downloadItemReceipt(receipt),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Items could not be collected. $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _collectingItems = false);
+    }
+  }
+
+  Future<void> _downloadItemReceipt(
+    StudentItemCollectionReceipt receipt,
+  ) async {
+    try {
+      final bytes = await widget.repository!.downloadStudentItemReceipt(
+        studentId: receipt.studentId,
+        receiptId: receipt.id,
+      );
+      final downloaded = await downloadReportPdf(
+        '${receipt.number}.pdf',
+        bytes,
+      );
+      if (!downloaded && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Receipt download is available on web.'),
+          ),
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Receipt could not be downloaded. $error')),
+      );
+    }
+  }
+
+  Future<void> _downloadItemReceipts(
+    List<StudentItemCollectionReceipt> receipts,
+  ) async {
+    if (receipts.isEmpty) return;
+    try {
+      final bytes = await widget.repository!.downloadStudentItemReceipts(
+        studentId: _student.id,
+        receiptIds: receipts.map((receipt) => receipt.id).toList(),
+      );
+      final downloaded = await downloadReportPdf(
+        '${_student.id}-item-receipts.pdf',
+        bytes,
+      );
+      if (!downloaded && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Receipt download is available on web.'),
+          ),
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Receipts could not be downloaded. $error')),
+      );
+    }
+  }
+
+  Future<void> _exemptItem(StudentRequirement item) async {
+    try {
+      final approvers = await widget.repository!.getItemExemptionApprovers(
+        studentId: _student.id,
+      );
+      if (!mounted) return;
+      final request = await showDialog<_StudentItemExemptionDraft>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => _ExemptStudentItemDialog(
+          studentName: _student.name,
+          itemName: item.name,
+          approvers: approvers,
+          initialReason: item.note,
+        ),
+      );
+      if (request == null || !mounted) return;
+      await widget.repository!.exemptStudentFromItem(
+        studentId: _student.id,
+        requirementId: item.id,
+        reason: request.reason,
+        approverId: request.approverId,
+        submit: request.submit,
+      );
+      final refreshed = await widget.repository!.getStudent(_student.id);
+      if (!mounted) return;
+      setState(() => _refreshedStudent = refreshed);
+      widget.onApprovalChanged?.call();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            request.submit
+                ? '${item.name} exemption submitted for approval.'
+                : '${item.name} exemption saved as Draft.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('The exemption could not be saved. $error')),
+      );
+    }
   }
 
   Future<void> _transfer() async {
@@ -1165,11 +1498,13 @@ class _StudentProfileHeader extends StatelessWidget {
     required this.student,
     this.onCollectPayment,
     this.onTransfer,
+    this.onEdit,
   });
 
   final EnrolledStudent student;
   final VoidCallback? onCollectPayment;
   final VoidCallback? onTransfer;
+  final VoidCallback? onEdit;
 
   @override
   Widget build(BuildContext context) {
@@ -1211,6 +1546,13 @@ class _StudentProfileHeader extends StatelessWidget {
               runSpacing: 10,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
+                if (onEdit != null)
+                  FilledButton.icon(
+                    key: const Key('edit-student-record'),
+                    onPressed: onEdit,
+                    icon: const Icon(Icons.edit_outlined),
+                    label: const Text('Edit profile'),
+                  ),
                 if (onCollectPayment != null)
                   FilledButton.icon(
                     key: const Key('collect-student-payment'),
@@ -1303,12 +1645,14 @@ class _OverviewTab extends StatelessWidget {
     required this.compact,
     required this.onOpenStudent,
     this.onOpenHousehold,
+    this.onOpenGuardian,
   });
 
   final EnrolledStudent student;
   final bool compact;
   final ValueChanged<String> onOpenStudent;
   final VoidCallback? onOpenHousehold;
+  final ValueChanged<String>? onOpenGuardian;
 
   @override
   Widget build(BuildContext context) {
@@ -1335,7 +1679,7 @@ class _OverviewTab extends StatelessWidget {
           child: _InfoGrid(
             values: {
               'Student ID': student.id,
-              'Current class': student.className,
+              'Current class & section': student.className,
               'Enrolled on': _formatDate(student.enrolledOn),
               'Household ID': student.householdId,
               'Enrollment status': _statusLabel(student.status),
@@ -1386,6 +1730,7 @@ class _OverviewTab extends StatelessWidget {
           student: student,
           onOpenStudent: onOpenStudent,
           onOpenHousehold: onOpenHousehold,
+          onOpenGuardian: onOpenGuardian,
         ),
         const SizedBox(height: 14),
         _SectionCard(
@@ -1438,17 +1783,25 @@ class _HouseholdMembersCard extends StatelessWidget {
     required this.student,
     required this.onOpenStudent,
     this.onOpenHousehold,
+    this.onOpenGuardian,
   });
 
   final EnrolledStudent student;
   final ValueChanged<String> onOpenStudent;
   final VoidCallback? onOpenHousehold;
+  final ValueChanged<String>? onOpenGuardian;
 
   @override
   Widget build(BuildContext context) {
     return _SectionCard(
       title: 'Household members',
       icon: Icons.family_restroom_rounded,
+      action: TextButton.icon(
+        key: const Key('open-student-household'),
+        onPressed: onOpenHousehold,
+        icon: const Icon(Icons.open_in_new, size: 16),
+        label: const Text('Open household'),
+      ),
       child: Column(
         children: student.householdMembers.map((member) {
           final isStudent = member.type == StudentHouseholdMemberType.student;
@@ -1457,11 +1810,11 @@ class _HouseholdMembersCard extends StatelessWidget {
             key: Key('household-member-${member.id}'),
             member: member,
             currentStudent: isCurrentStudent,
-            onTap: isCurrentStudent
-                ? null
-                : isStudent
+            onTap: isStudent
                 ? () => onOpenStudent(member.id)
-                : onOpenHousehold,
+                : onOpenGuardian == null
+                ? null
+                : () => onOpenGuardian!(member.id),
           );
         }).toList(),
       ),
@@ -1535,7 +1888,7 @@ class _HouseholdMemberRow extends StatelessWidget {
                       ),
                       const SizedBox(height: 3),
                       Text(
-                        '${member.relationship} · ${member.subtitle}',
+                        '${member.relationship} · ${member.subtitle}${currentStudent ? ' · Current student' : ''}',
                         style: const TextStyle(
                           color: AppColors.muted,
                           fontSize: 12,
@@ -1544,18 +1897,9 @@ class _HouseholdMemberRow extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (currentStudent)
-                  const Text(
-                    'Current student',
-                    style: TextStyle(
-                      color: AppColors.muted,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  )
-                else if (onTap != null) ...[
+                if (onTap != null) ...[
                   Text(
-                    guardian ? 'Open household' : 'View profile',
+                    'View profile',
                     style: TextStyle(
                       color: guardian ? AppColors.green : AppColors.blue,
                       fontSize: 12,
@@ -4767,9 +5111,26 @@ class _AdjustmentTypeButton extends StatelessWidget {
 }
 
 class _RequirementsTab extends StatelessWidget {
-  const _RequirementsTab({required this.student});
+  const _RequirementsTab({
+    required this.student,
+    required this.collecting,
+    required this.receiptHistory,
+    this.onCollect,
+    this.onExempt,
+    this.onDownloadReceipt,
+    this.onDownloadReceipts,
+    this.onRefreshHistory,
+  });
 
   final EnrolledStudent student;
+  final bool collecting;
+  final Future<List<StudentItemCollectionReceipt>>? receiptHistory;
+  final VoidCallback? onCollect;
+  final ValueChanged<StudentRequirement>? onExempt;
+  final ValueChanged<StudentItemCollectionReceipt>? onDownloadReceipt;
+  final Future<void> Function(List<StudentItemCollectionReceipt>)?
+  onDownloadReceipts;
+  final VoidCallback? onRefreshHistory;
 
   @override
   Widget build(BuildContext context) {
@@ -4778,85 +5139,532 @@ class _RequirementsTab extends StatelessWidget {
     final progress = activeTotal == 0
         ? 0.0
         : student.requirementsCompleted / activeTotal;
-    return _SectionCard(
-      title: 'Items & supplies progress',
-      icon: Icons.inventory_2_outlined,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (student.requirements.isEmpty)
-            const _ProfileEmptyState(
-              icon: Icons.inventory_2_outlined,
-              title: 'No items configured for this student',
-              message:
-                  'Published or approved class items will appear here for the current term.',
-            )
-          else ...[
-            if (awaiting > 0) ...[
-              _RequirementPublicationNotice(itemCount: awaiting),
-              const SizedBox(height: 16),
-            ],
-            Row(
-              children: [
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(999),
-                    child: LinearProgressIndicator(
-                      value: progress,
-                      minHeight: 9,
-                      backgroundColor: AppColors.border,
-                      color: AppColors.green,
+    final outstanding = student.requirements.where(
+      (item) =>
+          item.id.isNotEmpty &&
+          (item.status == StudentRequirementStatus.outstanding ||
+              item.status == StudentRequirementStatus.partial) &&
+          item.receivedQuantity < item.requiredQuantity,
+    );
+    return Column(
+      children: [
+        _SectionCard(
+          title: 'Items & supplies progress',
+          icon: Icons.inventory_2_outlined,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (student.requirements.isEmpty)
+                const _ProfileEmptyState(
+                  icon: Icons.inventory_2_outlined,
+                  title: 'No items configured for this student',
+                  message:
+                      'Published or approved class items will appear here for the current term.',
+                )
+              else ...[
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Student item account',
+                            style: TextStyle(fontWeight: FontWeight.w900),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            outstanding.isEmpty
+                                ? 'No outstanding items to collect.'
+                                : '${outstanding.length} outstanding ${outstanding.length == 1 ? 'item' : 'items'} can be collected together.',
+                            style: const TextStyle(color: AppColors.muted),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 16),
+                    FilledButton.icon(
+                      key: const Key('collect-student-items'),
+                      onPressed: collecting || outstanding.isEmpty
+                          ? null
+                          : onCollect,
+                      icon: collecting
+                          ? const SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.inventory_2_outlined),
+                      label: Text(
+                        collecting ? 'Collecting...' : 'Collect items',
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(height: 18),
+                if (awaiting > 0) ...[
+                  _RequirementPublicationNotice(itemCount: awaiting),
+                  const SizedBox(height: 16),
+                ],
+                Row(
+                  children: [
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(999),
+                        child: LinearProgressIndicator(
+                          value: progress,
+                          minHeight: 9,
+                          backgroundColor: AppColors.border,
+                          color: AppColors.green,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      activeTotal == 0
+                          ? '$awaiting awaiting publication'
+                          : '${student.requirementsCompleted}/$activeTotal complete',
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                ...student.requirements.map((item) {
+                  final color = switch (item.status) {
+                    StudentRequirementStatus.complete => AppColors.green,
+                    StudentRequirementStatus.partial => AppColors.amber,
+                    StudentRequirementStatus.outstanding => AppColors.red,
+                    StudentRequirementStatus.waived => AppColors.blue,
+                    StudentRequirementStatus.awaitingPublication =>
+                      AppColors.amber,
+                    StudentRequirementStatus.inactive => AppColors.muted,
+                  };
+                  final quantity = switch (item.exemptionStatus) {
+                    StudentItemExemptionStatus.pendingApproval =>
+                      'Exemption pending approval${item.exemptionApproverName.isEmpty ? '' : ' by ${item.exemptionApproverName}'}',
+                    StudentItemExemptionStatus.draft =>
+                      'Exemption request saved as Draft',
+                    StudentItemExemptionStatus.changesRequested =>
+                      'Exemption changes requested${item.exemptionRejectionReason.isEmpty ? '' : ': ${item.exemptionRejectionReason}'}',
+                    _ => switch (item.status) {
+                      StudentRequirementStatus.awaitingPublication =>
+                        '${item.requiredQuantity} ${item.unit} required',
+                      StudentRequirementStatus.waived =>
+                        'Exempted from this item',
+                      _ =>
+                        '${item.receivedQuantity} of ${item.requiredQuantity} ${item.unit} received',
+                    },
+                  };
+                  final source =
+                      item.isFromPreviousTerm && item.sourceTerm.isNotEmpty
+                      ? 'From ${item.sourceTerm} · '
+                      : '';
+                  return _DetailListRow(
+                    title: item.name,
+                    subtitle:
+                        '$source$quantity${item.note.isEmpty ? '' : ' · ${item.note}'}',
+                    trailing: switch (item.exemptionStatus) {
+                      StudentItemExemptionStatus.pendingApproval =>
+                        'Pending approval',
+                      StudentItemExemptionStatus.draft => 'Draft exemption',
+                      StudentItemExemptionStatus.changesRequested =>
+                        'Changes requested',
+                      _ => _requirementStatusLabel(item.status),
+                    },
+                    color: color,
+                    badge: item.isFromPreviousTerm
+                        ? 'Previous term'
+                        : item.studentSpecific
+                        ? 'Student-specific'
+                        : null,
+                    badgeColor: item.isFromPreviousTerm
+                        ? AppColors.amber
+                        : AppColors.green,
+                    action:
+                        item.id.isEmpty ||
+                            item.status == StudentRequirementStatus.waived ||
+                            item.status == StudentRequirementStatus.complete ||
+                            item.status ==
+                                StudentRequirementStatus.awaitingPublication ||
+                            item.status == StudentRequirementStatus.inactive ||
+                            item.hasPendingExemption
+                        ? null
+                        : PopupMenuButton<String>(
+                            key: Key('requirement-actions-${item.id}'),
+                            tooltip: 'Item actions',
+                            constraints: const BoxConstraints(
+                              minWidth: 300,
+                              maxWidth: 340,
+                            ),
+                            onSelected: (value) {
+                              if (value == 'exempt') onExempt?.call(item);
+                            },
+                            itemBuilder: (_) => [
+                              PopupMenuItem(
+                                value: 'exempt',
+                                child: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.person_off_outlined,
+                                      size: 19,
+                                    ),
+                                    const SizedBox(width: 9),
+                                    Expanded(
+                                      child: Text(
+                                        item.exemptionStatus == null
+                                            ? 'Exempt student from this item'
+                                            : 'Edit exemption request',
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                  );
+                }),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _ItemCollectionHistory(
+          history: receiptHistory,
+          onDownloadReceipt: onDownloadReceipt,
+          onDownloadReceipts: onDownloadReceipts,
+          onRefresh: onRefreshHistory,
+        ),
+      ],
+    );
+  }
+}
+
+class _ItemCollectionHistory extends StatefulWidget {
+  const _ItemCollectionHistory({
+    required this.history,
+    this.onDownloadReceipt,
+    this.onDownloadReceipts,
+    this.onRefresh,
+  });
+
+  final Future<List<StudentItemCollectionReceipt>>? history;
+  final ValueChanged<StudentItemCollectionReceipt>? onDownloadReceipt;
+  final Future<void> Function(List<StudentItemCollectionReceipt>)?
+  onDownloadReceipts;
+  final VoidCallback? onRefresh;
+
+  @override
+  State<_ItemCollectionHistory> createState() => _ItemCollectionHistoryState();
+}
+
+class _ItemCollectionHistoryState extends State<_ItemCollectionHistory> {
+  static const _pageSize = 6;
+  final _search = TextEditingController();
+  final Set<int> _selected = {};
+  int _page = 0;
+  bool _downloading = false;
+
+  @override
+  void didUpdateWidget(covariant _ItemCollectionHistory oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.history != widget.history) {
+      _selected.clear();
+      _page = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _SectionCard(
+      title: 'Collection history',
+      icon: Icons.receipt_long_outlined,
+      child: widget.history == null
+          ? const _ProfileEmptyState(
+              icon: Icons.receipt_long_outlined,
+              title: 'Collection history is unavailable',
+              message:
+                  'Connect this screen to student records to view receipts.',
+            )
+          : FutureBuilder<List<StudentItemCollectionReceipt>>(
+              future: widget.history,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 30),
+                    child: Center(child: CircularProgressIndicator()),
+                  );
+                }
+                if (snapshot.hasError) {
+                  return _HistoryError(onRetry: widget.onRefresh);
+                }
+                final receipts = snapshot.data ?? const [];
+                if (receipts.isEmpty) {
+                  return const _ProfileEmptyState(
+                    icon: Icons.receipt_long_outlined,
+                    title: 'No item collections yet',
+                    message:
+                        'Receipts will appear here after items are collected from this student.',
+                  );
+                }
+                final query = _search.text.trim().toLowerCase();
+                final filtered = receipts.where((receipt) {
+                  if (query.isEmpty) return true;
+                  return receipt.number.toLowerCase().contains(query) ||
+                      receipt.collectedBy.toLowerCase().contains(query) ||
+                      receipt.lines.any(
+                        (line) => line.itemName.toLowerCase().contains(query),
+                      );
+                }).toList();
+                final pageCount = (filtered.length / _pageSize).ceil();
+                if (pageCount > 0 && _page >= pageCount) _page = pageCount - 1;
+                final start = _page * _pageSize;
+                final visible = filtered.skip(start).take(_pageSize).toList();
+                final selectedReceipts = receipts
+                    .where((receipt) => _selected.contains(receipt.id))
+                    .toList();
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final search = TextField(
+                          key: const Key('item-receipt-search'),
+                          controller: _search,
+                          onChanged: (_) => setState(() => _page = 0),
+                          decoration: const InputDecoration(
+                            hintText: 'Search receipt, item or collector',
+                            prefixIcon: Icon(Icons.search_rounded),
+                            isDense: true,
+                          ),
+                        );
+                        final download = FilledButton.icon(
+                          key: const Key('download-selected-item-receipts'),
+                          onPressed: _downloading || selectedReceipts.isEmpty
+                              ? null
+                              : () => _downloadSelected(selectedReceipts),
+                          icon: _downloading
+                              ? const SizedBox.square(
+                                  dimension: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.download_rounded),
+                          label: Text(
+                            selectedReceipts.isEmpty
+                                ? 'Download selected'
+                                : 'Download selected (${selectedReceipts.length})',
+                          ),
+                        );
+                        if (constraints.maxWidth < 680) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              search,
+                              const SizedBox(height: 10),
+                              download,
+                            ],
+                          );
+                        }
+                        return Row(
+                          children: [
+                            Expanded(child: search),
+                            const SizedBox(width: 12),
+                            download,
+                          ],
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    ...visible.map(
+                      (receipt) => _ItemReceiptHistoryRow(
+                        receipt: receipt,
+                        selected: _selected.contains(receipt.id),
+                        onSelected: (selected) => setState(() {
+                          if (selected) {
+                            _selected.add(receipt.id);
+                          } else {
+                            _selected.remove(receipt.id);
+                          }
+                        }),
+                        onView: () => _showReceipt(receipt),
+                        onDownload: widget.onDownloadReceipt == null
+                            ? null
+                            : () => widget.onDownloadReceipt!(receipt),
+                      ),
+                    ),
+                    if (filtered.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 28),
+                        child: Center(
+                          child: Text(
+                            'No collection receipts match your search.',
+                            style: TextStyle(color: AppColors.muted),
+                          ),
+                        ),
+                      ),
+                    if (pageCount > 1) ...[
+                      const SizedBox(height: 10),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          Text(
+                            'Page ${_page + 1} of $pageCount',
+                            style: const TextStyle(color: AppColors.muted),
+                          ),
+                          IconButton(
+                            tooltip: 'Previous page',
+                            onPressed: _page == 0
+                                ? null
+                                : () => setState(() => _page--),
+                            icon: const Icon(Icons.chevron_left_rounded),
+                          ),
+                          IconButton(
+                            tooltip: 'Next page',
+                            onPressed: _page + 1 >= pageCount
+                                ? null
+                                : () => setState(() => _page++),
+                            icon: const Icon(Icons.chevron_right_rounded),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                );
+              },
+            ),
+    );
+  }
+
+  Future<void> _downloadSelected(
+    List<StudentItemCollectionReceipt> receipts,
+  ) async {
+    setState(() => _downloading = true);
+    await widget.onDownloadReceipts?.call(receipts);
+    if (mounted) setState(() => _downloading = false);
+  }
+
+  Future<void> _showReceipt(StudentItemCollectionReceipt receipt) =>
+      showDialog<void>(
+        context: context,
+        builder: (_) => _ItemCollectionReceiptDialog(
+          receipt: receipt,
+          onDownload: () async => widget.onDownloadReceipt?.call(receipt),
+        ),
+      );
+}
+
+class _ItemReceiptHistoryRow extends StatelessWidget {
+  const _ItemReceiptHistoryRow({
+    required this.receipt,
+    required this.selected,
+    required this.onSelected,
+    required this.onView,
+    this.onDownload,
+  });
+
+  final StudentItemCollectionReceipt receipt;
+  final bool selected;
+  final ValueChanged<bool> onSelected;
+  final VoidCallback onView;
+  final VoidCallback? onDownload;
+
+  @override
+  Widget build(BuildContext context) {
+    final itemNames = receipt.lines.map((line) => line.itemName).join(', ');
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      decoration: BoxDecoration(
+        color: selected ? AppColors.greenSoft : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: selected ? AppColors.green : AppColors.border,
+        ),
+      ),
+      child: Row(
+        children: [
+          Checkbox(
+            key: Key('select-item-receipt-${receipt.id}'),
+            value: selected,
+            onChanged: (value) => onSelected(value ?? false),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            flex: 3,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SelectableText(
+                  receipt.number,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 3),
                 Text(
-                  activeTotal == 0
-                      ? '$awaiting awaiting publication'
-                      : '${student.requirementsCompleted}/$activeTotal complete',
-                  style: const TextStyle(fontWeight: FontWeight.w800),
+                  _itemReceiptDate(receipt.collectedAt),
+                  style: const TextStyle(color: AppColors.muted, fontSize: 12),
                 ),
               ],
             ),
-            const SizedBox(height: 18),
-            ...student.requirements.map((item) {
-              final color = switch (item.status) {
-                StudentRequirementStatus.complete => AppColors.green,
-                StudentRequirementStatus.partial => AppColors.amber,
-                StudentRequirementStatus.outstanding => AppColors.red,
-                StudentRequirementStatus.waived => AppColors.blue,
-                StudentRequirementStatus.awaitingPublication => AppColors.amber,
-                StudentRequirementStatus.inactive => AppColors.muted,
-              };
-              final quantity =
-                  item.status == StudentRequirementStatus.awaitingPublication
-                  ? '${item.requiredQuantity} ${item.unit} required'
-                  : '${item.receivedQuantity} of ${item.requiredQuantity} ${item.unit} received';
-              final source =
-                  item.isFromPreviousTerm && item.sourceTerm.isNotEmpty
-                  ? 'From ${item.sourceTerm} · '
-                  : '';
-              return _DetailListRow(
-                title: item.name,
-                subtitle:
-                    '$source$quantity${item.note.isEmpty ? '' : ' · ${item.note}'}',
-                trailing: _requirementStatusLabel(item.status),
-                color: color,
-                badge: item.isFromPreviousTerm
-                    ? 'Previous term'
-                    : item.studentSpecific
-                    ? 'Student-specific'
-                    : null,
-                badgeColor: item.isFromPreviousTerm
-                    ? AppColors.amber
-                    : AppColors.green,
-              );
-            }),
-          ],
+          ),
+          Expanded(
+            flex: 4,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  itemNames,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  '${receipt.lines.length} ${receipt.lines.length == 1 ? 'item' : 'items'} · ${receipt.totalQuantityCollected} units · ${receipt.collectedBy}',
+                  style: const TextStyle(color: AppColors.muted, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          TextButton(onPressed: onView, child: const Text('View')),
+          IconButton(
+            tooltip: 'Download receipt',
+            onPressed: onDownload,
+            icon: const Icon(Icons.download_outlined),
+          ),
         ],
       ),
     );
   }
+}
+
+class _HistoryError extends StatelessWidget {
+  const _HistoryError({this.onRetry});
+
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 24),
+    child: Center(
+      child: Column(
+        children: [
+          const Text('Collection history could not be loaded.'),
+          const SizedBox(height: 8),
+          TextButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('Try again'),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _RequirementPublicationNotice extends StatelessWidget {
@@ -4888,6 +5696,560 @@ class _RequirementPublicationNotice extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ItemCollectionDraft {
+  const _ItemCollectionDraft({required this.items, required this.notes});
+
+  final List<StudentItemCollectionEntry> items;
+  final String notes;
+}
+
+class _ExemptStudentItemDialog extends StatefulWidget {
+  const _ExemptStudentItemDialog({
+    required this.studentName,
+    required this.itemName,
+    required this.approvers,
+    this.initialReason = '',
+  });
+
+  final String studentName;
+  final String itemName;
+  final List<FeeAdjustmentApprover> approvers;
+  final String initialReason;
+
+  @override
+  State<_ExemptStudentItemDialog> createState() =>
+      _ExemptStudentItemDialogState();
+}
+
+class _StudentItemExemptionDraft {
+  const _StudentItemExemptionDraft({
+    required this.reason,
+    required this.submit,
+    this.approverId,
+  });
+  final String reason;
+  final bool submit;
+  final int? approverId;
+}
+
+class _ExemptStudentItemDialogState extends State<_ExemptStudentItemDialog> {
+  late final _reason = TextEditingController(text: widget.initialReason);
+  int? _approverId;
+  String? _error;
+
+  @override
+  void dispose() {
+    _reason.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Exempt student from item?'),
+      content: SizedBox(
+        width: 500,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${widget.studentName} will remain responsible for ${widget.itemName} until another authorized person approves this request.',
+              style: const TextStyle(color: AppColors.muted),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<int>(
+              key: const Key('student-item-exemption-approver'),
+              value: _approverId,
+              decoration: InputDecoration(
+                labelText: 'Approver',
+                helperText: widget.approvers.isEmpty
+                    ? 'No other Administrator or Headmaster is available. You can save a draft.'
+                    : 'Required when submitting for approval',
+              ),
+              items: widget.approvers
+                  .map(
+                    (approver) => DropdownMenuItem(
+                      value: approver.id,
+                      child: Text('${approver.name} · ${approver.role}'),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) => setState(() {
+                _approverId = value;
+                _error = null;
+              }),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              key: const Key('student-item-exemption-reason'),
+              controller: _reason,
+              autofocus: true,
+              maxLength: 1000,
+              maxLines: 3,
+              onChanged: (_) => setState(() => _error = null),
+              decoration: InputDecoration(
+                labelText: 'Reason *',
+                hintText: 'Why is this student exempted?',
+                errorText: _error,
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        OutlinedButton(
+          key: const Key('save-student-item-exemption-draft'),
+          onPressed: () => _finish(false),
+          child: const Text('Save draft'),
+        ),
+        FilledButton(
+          key: const Key('confirm-student-item-exemption'),
+          onPressed: widget.approvers.isEmpty ? null : () => _finish(true),
+          child: const Text('Submit for approval'),
+        ),
+      ],
+    );
+  }
+
+  void _finish(bool submit) {
+    final reason = _reason.text.trim();
+    if (reason.isEmpty) {
+      setState(() => _error = 'Enter an exemption reason.');
+      return;
+    }
+    if (submit && _approverId == null) {
+      setState(() => _error = 'Select an approver before submitting.');
+      return;
+    }
+    Navigator.pop(
+      context,
+      _StudentItemExemptionDraft(
+        reason: reason,
+        submit: submit,
+        approverId: _approverId,
+      ),
+    );
+  }
+}
+
+class _CollectStudentItemsDialog extends StatefulWidget {
+  const _CollectStudentItemsDialog({
+    required this.student,
+    required this.items,
+  });
+
+  final EnrolledStudent student;
+  final List<StudentRequirement> items;
+
+  @override
+  State<_CollectStudentItemsDialog> createState() =>
+      _CollectStudentItemsDialogState();
+}
+
+class _CollectStudentItemsDialogState
+    extends State<_CollectStudentItemsDialog> {
+  late final Map<String, TextEditingController> _quantities = {
+    for (final item in widget.items) item.id: TextEditingController(text: '0'),
+  };
+  final _notes = TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    for (final controller in _quantities.values) {
+      controller.dispose();
+    }
+    _notes.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedCount = widget.items.where((item) {
+      return (int.tryParse(_quantities[item.id]!.text) ?? 0) > 0;
+    }).length;
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 780),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 22, 16, 18),
+              child: Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: AppColors.greenSoft,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.inventory_2_outlined,
+                      color: AppColors.green,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Collect items',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        Text(
+                          '${widget.student.name} · ${widget.student.id}',
+                          style: const TextStyle(color: AppColors.muted),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Close',
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Enter what the school received today',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Use 0 for items that were not delivered. Quantities are added to the student’s existing totals.',
+                      style: TextStyle(color: AppColors.muted),
+                    ),
+                    const SizedBox(height: 16),
+                    ...widget.items.map(_itemRow),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _notes,
+                      maxLength: 1000,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        labelText: 'Collection note (optional)',
+                        hintText: 'Condition, package details, or other note',
+                      ),
+                    ),
+                    if (_error != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        _error!,
+                        style: const TextStyle(
+                          color: AppColors.red,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.all(18),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      selectedCount == 0
+                          ? 'No quantities entered'
+                          : '$selectedCount ${selectedCount == 1 ? 'item type' : 'item types'} selected',
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancel'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton.icon(
+                    key: const Key('confirm-item-collection'),
+                    onPressed: _submit,
+                    icon: const Icon(Icons.receipt_long_outlined),
+                    label: const Text('Collect & create receipt'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _itemRow(StudentRequirement item) {
+    final remaining = item.requiredQuantity - item.receivedQuantity;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.background,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.name,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  '${item.receivedQuantity} received · $remaining ${item.unit} remaining',
+                  style: const TextStyle(color: AppColors.muted),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 14),
+          SizedBox(
+            width: 150,
+            child: TextField(
+              key: Key('collect-quantity-${item.id}'),
+              controller: _quantities[item.id],
+              keyboardType: TextInputType.number,
+              onChanged: (_) => setState(() => _error = null),
+              decoration: InputDecoration(
+                labelText: 'Received now',
+                suffixText: item.unit,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _submit() {
+    final values = <StudentItemCollectionEntry>[];
+    for (final item in widget.items) {
+      final quantity = int.tryParse(_quantities[item.id]!.text.trim());
+      if (quantity == null || quantity < 0) {
+        setState(() => _error = 'Enter a valid quantity for ${item.name}.');
+        return;
+      }
+      final remaining = item.requiredQuantity - item.receivedQuantity;
+      if (quantity > remaining) {
+        setState(
+          () =>
+              _error = 'Only $remaining ${item.unit} remain for ${item.name}.',
+        );
+        return;
+      }
+      if (quantity > 0) {
+        values.add(
+          StudentItemCollectionEntry(
+            requirementId: item.id,
+            quantityReceived: quantity,
+          ),
+        );
+      }
+    }
+    if (values.isEmpty) {
+      setState(() => _error = 'Enter a quantity for at least one item.');
+      return;
+    }
+    Navigator.pop(
+      context,
+      _ItemCollectionDraft(items: values, notes: _notes.text.trim()),
+    );
+  }
+}
+
+class _ItemCollectionReceiptDialog extends StatefulWidget {
+  const _ItemCollectionReceiptDialog({
+    required this.receipt,
+    required this.onDownload,
+  });
+
+  final StudentItemCollectionReceipt receipt;
+  final Future<void> Function() onDownload;
+
+  @override
+  State<_ItemCollectionReceiptDialog> createState() =>
+      _ItemCollectionReceiptDialogState();
+}
+
+class _ItemCollectionReceiptDialogState
+    extends State<_ItemCollectionReceiptDialog> {
+  bool _downloading = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final receipt = widget.receipt;
+    return AlertDialog(
+      title: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: AppColors.greenSoft,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.check_rounded, color: AppColors.green),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(child: Text('Items collected')),
+        ],
+      ),
+      content: SizedBox(
+        width: 600,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: AppColors.greenSoft,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'RECEIPT NUMBER',
+                      style: TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    SelectableText(
+                      receipt.number,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '${receipt.studentName} · ${receipt.studentId}\n${_itemReceiptDate(receipt.collectedAt)} · ${receipt.collectedBy}',
+                      style: const TextStyle(color: AppColors.muted),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              ...receipt.lines.map(
+                (line) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          line.itemName,
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                      Text(
+                        '+${line.quantityReceived} ${line.unit}',
+                        style: const TextStyle(
+                          color: AppColors.green,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Text(
+                        '${line.totalReceived}/${line.requiredQuantity}',
+                        style: const TextStyle(color: AppColors.muted),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              if (receipt.notes.isNotEmpty) ...[
+                const Divider(),
+                Text('Note: ${receipt.notes}'),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Done'),
+        ),
+        FilledButton.icon(
+          key: const Key('download-item-receipt'),
+          onPressed: _downloading
+              ? null
+              : () async {
+                  setState(() => _downloading = true);
+                  await widget.onDownload();
+                  if (mounted) setState(() => _downloading = false);
+                },
+          icon: _downloading
+              ? const SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.download_rounded),
+          label: Text(_downloading ? 'Preparing...' : 'Download receipt'),
+        ),
+      ],
+    );
+  }
+}
+
+String _itemReceiptDate(DateTime value) {
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  final hour = value.hour == 0
+      ? 12
+      : value.hour > 12
+      ? value.hour - 12
+      : value.hour;
+  final minute = value.minute.toString().padLeft(2, '0');
+  final period = value.hour >= 12 ? 'PM' : 'AM';
+  return '${value.day} ${months[value.month - 1]} ${value.year}, $hour:$minute $period';
 }
 
 class _ProfileEmptyState extends StatelessWidget {
@@ -4929,28 +6291,44 @@ class _ProfileEmptyState extends StatelessWidget {
 }
 
 class _DocumentsTab extends StatelessWidget {
-  const _DocumentsTab({required this.student});
+  const _DocumentsTab({
+    required this.student,
+    this.api,
+    this.school,
+    this.onChanged,
+  });
 
   final EnrolledStudent student;
+  final AdmissionsApiClient? api;
+  final String? school;
+  final VoidCallback? onChanged;
 
   @override
   Widget build(BuildContext context) {
     return _SectionCard(
       title: 'Student documents',
       icon: Icons.folder_copy_outlined,
-      child: Column(
-        children: student.documents
-            .map(
-              (document) => _DetailListRow(
-                title: document.name,
-                subtitle:
-                    '${document.fileName} · Updated ${_formatDate(document.updatedOn)}',
-                trailing: document.status,
-                color: AppColors.green,
-              ),
+      child: api != null && school != null
+          ? StudentDocumentsPanel(
+              key: ValueKey('student-documents-${student.id}'),
+              api: api!,
+              customSchoolId: school!,
+              customStudentId: student.id,
+              onChanged: onChanged,
             )
-            .toList(),
-      ),
+          : Column(
+              children: student.documents
+                  .map(
+                    (document) => _DetailListRow(
+                      title: document.name,
+                      subtitle:
+                          '${document.fileName} · Updated ${_formatDate(document.updatedOn)}',
+                      trailing: document.status,
+                      color: AppColors.green,
+                    ),
+                  )
+                  .toList(),
+            ),
     );
   }
 }
@@ -4960,11 +6338,13 @@ class _SectionCard extends StatelessWidget {
     required this.title,
     required this.icon,
     required this.child,
+    this.action,
   });
 
   final String title;
   final IconData icon;
   final Widget child;
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) {
@@ -4978,13 +6358,16 @@ class _SectionCard extends StatelessWidget {
               children: [
                 Icon(icon, size: 20, color: AppColors.green),
                 const SizedBox(width: 9),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
+                Expanded(
+                  child: Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
+                if (action != null) action!,
               ],
             ),
           ),
@@ -5150,6 +6533,7 @@ class _DetailListRow extends StatelessWidget {
     required this.color,
     this.badge,
     this.badgeColor,
+    this.action,
   });
 
   final String title;
@@ -5158,6 +6542,7 @@ class _DetailListRow extends StatelessWidget {
   final Color color;
   final String? badge;
   final Color? badgeColor;
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) {
@@ -5215,6 +6600,7 @@ class _DetailListRow extends StatelessWidget {
               ),
             ),
           ),
+          if (action != null) ...[const SizedBox(width: 4), action!],
         ],
       ),
     );
@@ -5348,7 +6734,7 @@ String _requirementStatusLabel(StudentRequirementStatus status) =>
       StudentRequirementStatus.complete => 'Complete',
       StudentRequirementStatus.partial => 'Partial',
       StudentRequirementStatus.outstanding => 'Outstanding',
-      StudentRequirementStatus.waived => 'Waived',
+      StudentRequirementStatus.waived => 'Exempted',
       StudentRequirementStatus.awaitingPublication => 'Awaiting publication',
       StudentRequirementStatus.inactive => 'Inactive',
     };

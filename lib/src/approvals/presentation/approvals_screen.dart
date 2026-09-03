@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import '../../theme/app_theme.dart';
 import '../data/approval_api_client.dart';
 import '../domain/approval_models.dart';
+import '../../leave/data/leave_api_client.dart';
+import '../../leave/presentation/leave_management_screen.dart';
+import '../../leave/presentation/leave_date_format.dart';
 
 class ApprovalsScreen extends StatefulWidget {
   const ApprovalsScreen({
@@ -11,12 +14,14 @@ class ApprovalsScreen extends StatefulWidget {
     required this.repository,
     this.onOpenSource,
     this.onInboxChanged,
+    this.leaveApi,
   });
 
   final String schoolId;
   final ApprovalApiClient repository;
   final ValueChanged<ApprovalItem>? onOpenSource;
   final ValueChanged<ApprovalInbox>? onInboxChanged;
+  final LeaveApiClient? leaveApi;
 
   @override
   State<ApprovalsScreen> createState() => _ApprovalsScreenState();
@@ -126,6 +131,7 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                         'All',
                         'PENDING_APPROVAL',
                         'CHANGES_REQUESTED',
+                        'NEEDS_REVISION',
                         'APPROVED',
                         'DRAFT',
                         'REJECTED',
@@ -153,6 +159,24 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
   }
 
   Future<void> _openItem(BuildContext context, ApprovalItem item) async {
+    if (item.type == 'STAFF_LEAVE') {
+      await showLeaveRequestDetails(
+        context: context,
+        requestId: item.entityId,
+        api:
+            widget.leaveApi ??
+            LeaveApiClient(
+              schoolId: widget.schoolId,
+              accessToken: widget.repository.accessToken,
+              onRefreshAccessToken: widget.repository.onRefreshAccessToken,
+            ),
+        onChanged: () {
+          if (mounted) _refresh();
+        },
+      );
+      if (mounted) _refresh();
+      return;
+    }
     final result = await showModalBottomSheet<_ApprovalPanelResult>(
       context: context,
       isScrollControlled: true,
@@ -223,7 +247,7 @@ class _Header extends StatelessWidget {
             ),
             SizedBox(height: 5),
             Text(
-              'Review requests assigned to you and follow the requests you submitted.',
+              'Review requests available to you and follow the requests you submitted.',
               style: TextStyle(color: AppColors.muted),
             ),
           ],
@@ -415,57 +439,68 @@ class _ApprovalRow extends StatelessWidget {
     onTap: onTap,
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-      child: Row(
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: _categoryColor(item.category).withValues(alpha: .12),
-              borderRadius: BorderRadius.circular(12),
+      child: LayoutBuilder(
+        builder: (context, constraints) => Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: _categoryColor(item.category).withValues(alpha: .12),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                _categoryIcon(item.category),
+                color: _categoryColor(item.category),
+              ),
             ),
-            child: Icon(
-              _categoryIcon(item.category),
-              color: _categoryColor(item.category),
+            const SizedBox(width: 14),
+            Expanded(
+              flex: 3,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.title,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    item.type == 'STAFF_LEAVE'
+                        ? formatLeaveSummaryDates(item.subtitle)
+                        : item.subtitle,
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 13,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (constraints.maxWidth < 400) ...[
+                    const SizedBox(height: 8),
+                    _StatusPill(status: item.status),
+                  ],
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            flex: 3,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.title,
-                  style: const TextStyle(fontWeight: FontWeight.w800),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  item.subtitle,
-                  style: const TextStyle(color: AppColors.muted, fontSize: 13),
+            if (MediaQuery.sizeOf(context).width > 820) ...[
+              Expanded(
+                child: Text(
+                  item.requesterName.isEmpty ? '—' : item.requesterName,
                   overflow: TextOverflow.ellipsis,
                 ),
-              ],
-            ),
-          ),
-          if (MediaQuery.sizeOf(context).width > 820) ...[
-            Expanded(
-              child: Text(
-                item.requesterName.isEmpty ? '—' : item.requesterName,
-                overflow: TextOverflow.ellipsis,
               ),
-            ),
-            Expanded(
-              child: Text(
-                _dateText(item.submittedAt ?? item.updatedAt),
-                style: const TextStyle(color: AppColors.muted),
+              Expanded(
+                child: Text(
+                  _dateText(item.submittedAt ?? item.updatedAt),
+                  style: const TextStyle(color: AppColors.muted),
+                ),
               ),
-            ),
+            ],
+            if (constraints.maxWidth >= 400) _StatusPill(status: item.status),
+            const SizedBox(width: 8),
+            const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
           ],
-          _StatusPill(status: item.status),
-          const SizedBox(width: 8),
-          const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
-        ],
+        ),
       ),
     ),
   );
@@ -487,41 +522,14 @@ class _ApprovalPanel extends StatefulWidget {
 class _ApprovalPanelState extends State<_ApprovalPanel> {
   bool _busy = false;
   Future<void> _run(String action, {bool reasonRequired = false}) async {
+    if (_busy) return;
     var reason = '';
     if (reasonRequired) {
-      final controller = TextEditingController();
       final value = await showDialog<String>(
         context: context,
-        builder: (context) => AlertDialog(
-          title: Text(
-            action == 'REJECT' ? 'Reject request' : 'Withdraw approval request',
-          ),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            maxLines: 3,
-            decoration: const InputDecoration(
-              labelText: 'Reason *',
-              hintText: 'Explain why this request is being returned.',
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                if (controller.text.trim().length >= 5) {
-                  Navigator.pop(context, controller.text.trim());
-                }
-              },
-              child: const Text('Continue'),
-            ),
-          ],
-        ),
+        builder: (context) => _DecisionReasonDialog(action: action),
       );
-      if (value == null) return;
+      if (value == null || !mounted) return;
       reason = value;
     }
     setState(() => _busy = true);
@@ -570,10 +578,14 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                 padding: const EdgeInsets.fromLTRB(24, 20, 14, 14),
                 child: Row(
                   children: [
-                    const Expanded(
+                    Expanded(
                       child: Text(
-                        'Approval details',
-                        style: TextStyle(
+                        item.type == 'STUDENT_ITEM_EXEMPTION'
+                            ? 'Item exemption'
+                            : item.type == 'STUDENT_RECORD_CHANGE'
+                            ? 'Student record change'
+                            : 'Approval details',
+                        style: const TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w800,
                         ),
@@ -593,22 +605,28 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      _RequestSummary(item: item),
-                      if (item.requesterNote.isNotEmpty) ...[
+                      if (item.type == 'STUDENT_ITEM_EXEMPTION')
+                        _ItemExemptionRequest(item: item)
+                      else if (item.type == 'STUDENT_RECORD_CHANGE')
+                        _StudentRecordChangeRequest(item: item)
+                      else ...[
+                        _RequestSummary(item: item),
+                        if (item.requesterNote.isNotEmpty) ...[
+                          const SizedBox(height: 16),
+                          _RequesterNote(item: item),
+                        ],
                         const SizedBox(height: 16),
-                        _RequesterNote(item: item),
-                      ],
-                      const SizedBox(height: 16),
-                      _DecisionDetails(item: item),
-                      if (item.detailSections.isNotEmpty) ...[
-                        const SizedBox(height: 16),
-                        _AdditionalRequestDetails(item: item),
-                      ],
-                      if (item.detailSections.isEmpty) ...[
-                        const SizedBox(height: 16),
-                        _RequestPeopleAndDates(item: item),
-                        const SizedBox(height: 16),
-                        _LegacyRequestDetails(item: item),
+                        _DecisionDetails(item: item),
+                        if (item.detailSections.isNotEmpty) ...[
+                          const SizedBox(height: 16),
+                          _AdditionalRequestDetails(item: item),
+                        ],
+                        if (item.detailSections.isEmpty) ...[
+                          const SizedBox(height: 16),
+                          _RequestPeopleAndDates(item: item),
+                          const SizedBox(height: 16),
+                          _LegacyRequestDetails(item: item),
+                        ],
                       ],
                       if (widget.onOpenSource != null) ...[
                         const SizedBox(height: 16),
@@ -673,6 +691,72 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
       ),
     );
   }
+}
+
+class _DecisionReasonDialog extends StatefulWidget {
+  const _DecisionReasonDialog({required this.action});
+  final String action;
+
+  @override
+  State<_DecisionReasonDialog> createState() => _DecisionReasonDialogState();
+}
+
+class _DecisionReasonDialogState extends State<_DecisionReasonDialog> {
+  final _controller = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text(switch (widget.action) {
+      'REJECT' => 'Reject request',
+      _ => 'Withdraw approval request',
+    }),
+    content: Form(
+      key: _formKey,
+      child: TextFormField(
+        controller: _controller,
+        autofocus: true,
+        maxLines: 3,
+        autovalidateMode: AutovalidateMode.onUserInteraction,
+        decoration: InputDecoration(
+          labelText: 'Decision reason *',
+          hintText: switch (widget.action) {
+            'REJECT' => 'Explain why you are rejecting this request.',
+            _ => 'Explain why you are withdrawing this request.',
+          },
+          helperText: '5–1000 characters. Saved in the audit trail.',
+          helperMaxLines: 2,
+          errorMaxLines: 2,
+        ),
+        validator: (value) {
+          final length = (value ?? '').trim().length;
+          return length < 5 || length > 1000
+              ? 'Enter a decision reason (5–1000 characters).'
+              : null;
+        },
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        onPressed: () {
+          if (_formKey.currentState!.validate()) {
+            Navigator.pop(context, _controller.text.trim());
+          }
+        },
+        child: const Text('Continue'),
+      ),
+    ],
+  );
 }
 
 class _ApprovalPanelResult {
@@ -853,6 +937,306 @@ class _DecisionDetails extends StatelessWidget {
   }
 }
 
+class _StudentRecordChangeRequest extends StatelessWidget {
+  const _StudentRecordChangeRequest({required this.item});
+  final ApprovalItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final reason = item.requesterNote.trim();
+    final entries = item.detailSections.expand((section) => section.entries);
+    return Container(
+      key: const Key('student-record-change-summary'),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _StatusPill(status: item.status),
+          const SizedBox(height: 12),
+          Text(
+            item.title.replaceFirst(RegExp(r'^Record change\s*·\s*'), ''),
+            style: const TextStyle(
+              fontSize: 21,
+              fontWeight: FontWeight.w800,
+              color: AppColors.navy,
+            ),
+          ),
+          const SizedBox(height: 18),
+          if (entries.isEmpty)
+            const Text('No changed fields were recorded for this request.')
+          else
+            for (final entry in entries)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      entry.title.isEmpty ? 'Requested change' : entry.title,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: _RecordChangeValue(
+                            label: 'Before',
+                            value:
+                                _fieldValue(entry, 'Before') ?? 'Not recorded',
+                          ),
+                        ),
+                        const Padding(
+                          padding: EdgeInsets.fromLTRB(8, 19, 8, 0),
+                          child: Icon(Icons.arrow_forward_rounded, size: 16),
+                        ),
+                        Expanded(
+                          child: _RecordChangeValue(
+                            label: 'Proposed',
+                            value:
+                                _fieldValue(entry, 'Proposed') ??
+                                'Not recorded',
+                            proposed: true,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+          const Text(
+            'Reason',
+            style: TextStyle(fontSize: 12, color: AppColors.muted),
+          ),
+          const SizedBox(height: 4),
+          Text(reason.isEmpty ? 'Not provided' : reason),
+          if (item.pending) ...[
+            const SizedBox(height: 12),
+            const Text(
+              'Changes take effect only after approval.',
+              style: TextStyle(fontSize: 12, color: AppColors.muted),
+            ),
+          ],
+          const SizedBox(height: 8),
+          Theme(
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              key: const Key('student-record-change-more-details'),
+              tilePadding: EdgeInsets.zero,
+              title: const Text(
+                'More details',
+                style: TextStyle(fontSize: 13, color: AppColors.muted),
+              ),
+              children: [
+                for (final detail in <String, String>{
+                  'Student ID': item.subtitle,
+                  'Requested by': item.requesterName,
+                  'Approver': item.approverName,
+                  'Submitted': _dateText(item.submittedAt ?? item.createdAt),
+                  if (item.decidedAt != null)
+                    'Decided': _dateText(item.decidedAt),
+                  if (!item.pending &&
+                      item.reason.isNotEmpty &&
+                      item.reason != reason)
+                    'Decision note': item.reason,
+                }.entries)
+                  if (detail.value.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            width: 96,
+                            child: Text(
+                              detail.key,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppColors.muted,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              detail.value,
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RecordChangeValue extends StatelessWidget {
+  const _RecordChangeValue({
+    required this.label,
+    required this.value,
+    this.proposed = false,
+  });
+  final String label;
+  final String value;
+  final bool proposed;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(label, style: const TextStyle(fontSize: 11, color: AppColors.muted)),
+      const SizedBox(height: 4),
+      Text(
+        value,
+        style: TextStyle(
+          color: proposed ? AppColors.green : AppColors.navy,
+          fontWeight: proposed ? FontWeight.w700 : FontWeight.w400,
+        ),
+      ),
+    ],
+  );
+}
+
+class _ItemExemptionRequest extends StatelessWidget {
+  const _ItemExemptionRequest({required this.item});
+  final ApprovalItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final entries =
+        _primarySection(item)?.entries ?? const <ApprovalDetailEntry>[];
+    final entry = entries.isEmpty ? null : entries.first;
+    String field(String label) =>
+        entry == null ? '' : (_fieldValue(entry, label) ?? '').trim();
+    final student = field('Student');
+    final itemName = field('Item');
+    final reason = item.requesterNote.trim().isNotEmpty
+        ? item.requesterNote.trim()
+        : field('Reason').isNotEmpty
+        ? field('Reason')
+        : item.reason;
+    final quantities = [
+      if (field('Current requirement').isNotEmpty)
+        '${field('Current requirement')} required',
+      if (field('Already received').isNotEmpty)
+        '${field('Already received')} received',
+    ].join(' · ');
+    final metadata = <String, String>{
+      'Student ID': field('Student ID'),
+      'Academic period': field('Academic period').isEmpty
+          ? item.academicPeriod
+          : field('Academic period'),
+      'Requested by': item.requesterName,
+      'Approver': item.approverName,
+      'Created': _dateText(item.createdAt),
+      'Submitted': _dateText(item.submittedAt ?? item.createdAt),
+      'Last updated': _dateText(item.updatedAt),
+      'Scope': field('Requested change'),
+      if (item.decidedAt != null) 'Decided': _dateText(item.decidedAt),
+      if (!item.pending && item.reason.isNotEmpty && item.reason != reason)
+        'Decision note': item.reason,
+    };
+    return Container(
+      key: const Key('item-exemption-summary'),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _StatusPill(status: item.status),
+          const SizedBox(height: 14),
+          Text(
+            [
+              student.isEmpty ? item.title : student,
+              field('Class'),
+            ].where((value) => value.isNotEmpty).join(' · '),
+            style: const TextStyle(
+              color: AppColors.muted,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            itemName.isEmpty
+                ? (item.subtitle.isEmpty ? 'Item not specified' : item.subtitle)
+                : itemName,
+            style: const TextStyle(
+              fontSize: 21,
+              fontWeight: FontWeight.w800,
+              color: AppColors.navy,
+            ),
+          ),
+          if (quantities.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(quantities, style: const TextStyle(color: AppColors.muted)),
+          ],
+          const SizedBox(height: 18),
+          const Text(
+            'Reason',
+            style: TextStyle(fontSize: 12, color: AppColors.muted),
+          ),
+          const SizedBox(height: 4),
+          Text(reason.isEmpty ? 'Not provided' : reason),
+          const SizedBox(height: 14),
+          Theme(
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              key: const Key('item-exemption-more-details'),
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: const EdgeInsets.only(top: 4),
+              title: const Text(
+                'More details',
+                style: TextStyle(fontSize: 13, color: AppColors.muted),
+              ),
+              children: [
+                for (final detail in metadata.entries)
+                  if (detail.value.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            width: 110,
+                            child: Text(
+                              detail.key,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppColors.muted,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              detail.value,
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _DecisionRow extends StatelessWidget {
   const _DecisionRow({required this.item, required this.entry});
   final ApprovalItem item;
@@ -873,6 +1257,10 @@ class _DecisionRow extends StatelessWidget {
       'FEE_ADJUSTMENT' => _fieldValue(entry, 'Amount'),
       'PAYMENT_REVERSAL' => _fieldValue(entry, 'Amount to reverse'),
       'STUDENT_TRANSFER' => _fieldValue(entry, 'Effective date'),
+      'SHOP_INVENTORY_ADJUSTMENT' => _fieldValue(
+        entry,
+        'Proposed unassigned quantity',
+      ),
       _ => _fieldValue(entry, 'Amount'),
     };
     final subtitleParts = switch (item.type) {
@@ -899,6 +1287,10 @@ class _DecisionRow extends StatelessWidget {
       'STUDENT_TRANSFER' => [
         _transferRoute(entry),
         _fieldValue(entry, 'Reason'),
+      ],
+      'SHOP_INVENTORY_ADJUSTMENT' => [
+        _labelledField(entry, 'Current unassigned quantity', 'Current'),
+        _labelledField(entry, 'Quantity change', 'Change'),
       ],
       'FEE_STRUCTURE' => const <String?>[],
       _ => [entry.subtitle],
@@ -988,9 +1380,11 @@ ApprovalDetailSection? _primarySection(ApprovalItem item) {
     'FEE_STRUCTURE' => 'Fee items',
     'CLASS_REQUIREMENT' => 'Required items',
     'STUDENT_REQUIREMENT' => 'Student-specific item',
+    'STUDENT_ITEM_EXEMPTION' => 'Student item exemption',
     'FEE_ADJUSTMENT' => 'Adjustment request',
     'PAYMENT_REVERSAL' => 'Payment reversal request',
     'STUDENT_TRANSFER' => 'Transfer request',
+    'SHOP_INVENTORY_ADJUSTMENT' => 'Inventory change',
     _ => '',
   };
   for (final section in item.detailSections) {
@@ -1026,9 +1420,11 @@ String _decisionSectionTitle(String type) => switch (type) {
   'FEE_STRUCTURE' => 'Fees in this request',
   'CLASS_REQUIREMENT' => 'Items in this request',
   'STUDENT_REQUIREMENT' => 'Student-specific item in this request',
+  'STUDENT_ITEM_EXEMPTION' => 'Item being exempted',
   'FEE_ADJUSTMENT' => 'Requested fee adjustment',
   'PAYMENT_REVERSAL' => 'Requested payment reversal',
   'STUDENT_TRANSFER' => 'Requested grade change',
+  'SHOP_INVENTORY_ADJUSTMENT' => 'Requested inventory change',
   _ => 'Request summary',
 };
 

@@ -3,6 +3,8 @@ import 'package:file_picker/file_picker.dart';
 
 import '../data/staff_api_client.dart';
 import '../../theme/app_theme.dart';
+import '../../leave/data/leave_api_client.dart';
+import '../../leave/presentation/leave_management_screen.dart';
 
 class StaffScreen extends StatefulWidget {
   const StaffScreen({
@@ -63,6 +65,27 @@ class _StaffScreenState extends State<StaffScreen> {
     if (_selectedStaff != null) {
       return _StaffProfilePage(
         staff: _selectedStaff!,
+        leaveContent:
+            widget.customSchoolId != null &&
+                int.tryParse(_selectedStaff!.id) != null
+            ? LeaveManagementScreen(
+                key: ValueKey('staff-leave-${_selectedStaff!.id}'),
+                embedded: true,
+                staffUserId: int.parse(_selectedStaff!.id),
+                api: LeaveApiClient(
+                  schoolId: widget.customSchoolId!,
+                  accessToken: widget.accessToken,
+                  onRefreshAccessToken: widget.onRefreshAccessToken,
+                ),
+              )
+            : const Card(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'Leave history becomes available when the staff account is active.',
+                  ),
+                ),
+              ),
         onBack: () => setState(() => _selectedStaff = null),
         onManageRoles: _selectedStaff!.userRoles.isEmpty
             ? null
@@ -1384,9 +1407,11 @@ class _StaffProfilePage extends StatefulWidget {
     this.onResendInvitation,
     this.onCancelInvitation,
     this.onDeleteInvitation,
+    required this.leaveContent,
   });
 
   final _StaffMember staff;
+  final Widget leaveContent;
   final VoidCallback onBack;
   final VoidCallback? onManageRoles;
   final VoidCallback? onResendInvitation;
@@ -1553,7 +1578,7 @@ class _StaffProfilePageState extends State<_StaffProfilePage> {
       case _StaffProfileTab.documents:
         return _DocumentsTab(staff: staff);
       case _StaffProfileTab.leave:
-        return _LeaveProfileTab(staff: staff);
+        return widget.leaveContent;
       case _StaffProfileTab.activity:
         return _ActivityTab(staff: staff);
     }
@@ -1862,33 +1887,6 @@ class _PayrollTaxProfileTab extends StatelessWidget {
           'Not configured',
           Icons.account_balance_rounded,
         ),
-      ],
-    );
-  }
-}
-
-class _LeaveProfileTab extends StatelessWidget {
-  const _LeaveProfileTab({required this.staff});
-
-  final _StaffMember staff;
-
-  @override
-  Widget build(BuildContext context) {
-    return _ProfileGrid(
-      cards: [
-        _InfoCard('Staff member', staff.fullName, Icons.person_outline_rounded),
-        _InfoCard(
-          'Leave balance',
-          'Not configured',
-          Icons.event_available_rounded,
-        ),
-        _InfoCard('Pending requests', '0', Icons.pending_actions_rounded),
-        _InfoCard(
-          'Approved this term',
-          '0',
-          Icons.check_circle_outline_rounded,
-        ),
-        _InfoCard('Last leave', 'No leave recorded', Icons.history_rounded),
       ],
     );
   }

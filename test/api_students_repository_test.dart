@@ -205,6 +205,64 @@ void main() {
     expect(student.requirementsAwaitingPublication, 1);
     expect(student.requirementsOutstanding, 0);
   });
+
+  test(
+    'loads item receipt history and combines selected receipt PDFs',
+    () async {
+      final requests = <Uri>[];
+      final client = MockClient((request) async {
+        requests.add(request.url);
+        if (request.url.path.endsWith('/requirement-collections')) {
+          return _json([
+            {
+              'receiptId': 12,
+              'receiptNumber': 'ITEM-0012',
+              'studentId': 'STU-001',
+              'studentName': 'Kojo Boateng',
+              'className': 'Creche',
+              'academicTerm': 'First Term 2026-2027',
+              'collectedAt': '2026-08-29T10:30:00',
+              'collectedBy': 'Kofi Nketia',
+              'items': [
+                {
+                  'requirementId': 91,
+                  'itemName': 'Exercise books',
+                  'unit': 'books',
+                  'quantityReceived': 2,
+                  'totalReceived': 4,
+                  'requiredQuantity': 10,
+                },
+              ],
+            },
+          ]);
+        }
+        if (request.url.path.endsWith(
+          '/requirement-collections/receipts.pdf',
+        )) {
+          return http.Response.bytes(const [37, 80, 68, 70], 200);
+        }
+        fail('Unexpected request: ${request.method} ${request.url}');
+      });
+      final repository = ApiStudentsRepository(
+        customSchoolId: 'SCH-001',
+        accessToken: 'token',
+        client: client,
+      );
+
+      final history = await repository.getStudentItemReceipts(
+        studentId: 'STU-001',
+      );
+      final pdf = await repository.downloadStudentItemReceipts(
+        studentId: 'STU-001',
+        receiptIds: const [12, 9],
+      );
+
+      expect(history.single.number, 'ITEM-0012');
+      expect(history.single.totalQuantityCollected, 2);
+      expect(pdf, const [37, 80, 68, 70]);
+      expect(requests.last.queryParameters['receiptIds'], '12,9');
+    },
+  );
 }
 
 http.Response _json(Object body) => http.Response(

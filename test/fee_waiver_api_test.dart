@@ -33,7 +33,14 @@ void main() {
     "eligibleAmount": 500,
     "waivedAmount": 250,
     "reason": "Approved bursary",
-    "status": "ACTIVE",
+    "status": "DRAFT",
+    "createdById": 12,
+    "createdByName": "Kofi Nketia",
+    "assignedApproverId": 18,
+    "assignedApproverName": "Adjoa Mensah",
+    "changeType": "NEW",
+    "creatorOwned": true,
+    "canApprove": false,
     "assessments": [
       {"assessmentId": 90, "feeName": "Tuition Fee", "amount": 500}
     ]
@@ -94,9 +101,10 @@ void main() {
       accessToken: 'token',
       client: MockClient((request) async {
         requests.add(request);
-        return request.method == 'DELETE'
-            ? http.Response('', 204)
-            : http.Response(assignmentBody, 201);
+        return http.Response(
+          assignmentBody,
+          request.method == 'POST' ? 201 : 200,
+        );
       }),
     );
 
@@ -125,5 +133,35 @@ void main() {
     expect(body['assessmentIds'], [90]);
     expect(requests.last.method, 'DELETE');
     expect(requests.last.url.path, endsWith('/waivers/71'));
+  });
+
+  test('submits a draft waiver to a different approver', () async {
+    late http.Request captured;
+    final api = FeeApiClient(
+      accessToken: 'token',
+      client: MockClient((request) async {
+        captured = request;
+        return http.Response(
+          assignmentBody.replaceFirst('"DRAFT"', '"PENDING_APPROVAL"'),
+          200,
+        );
+      }),
+    );
+
+    final result = await api.performStudentWaiverAction(
+      customSchoolId: 'SCH-001',
+      waiverId: 71,
+      action: 'SUBMIT',
+      approverId: 18,
+      reason: 'Please review this bursary',
+    );
+
+    final body = jsonDecode(captured.body) as Map<String, dynamic>;
+    expect(captured.method, 'POST');
+    expect(captured.url.path, endsWith('/student-waivers/71/actions'));
+    expect(body['action'], 'SUBMIT');
+    expect(body['approverId'], 18);
+    expect(result.status, 'PENDING_APPROVAL');
+    expect(result.createdByName, 'Kofi Nketia');
   });
 }

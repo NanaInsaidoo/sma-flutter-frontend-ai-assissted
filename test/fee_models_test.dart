@@ -81,6 +81,19 @@ void main() {
           'active': false,
         },
       ],
+      'publishedFeeItems': [
+        {
+          'itemId': 401,
+          'itemKey': 'tuition-key',
+          'feeName': 'Tuition fee',
+          'category': 'TUITION',
+          'amount': 400,
+          'active': true,
+          'lifecycleAction': 'UPDATED',
+          'lifecycleAt': '2026-08-28T14:30:00',
+          'lifecycleBy': 'Kofi Nketia',
+        },
+      ],
     });
 
     expect(structure.structureId, 91);
@@ -90,6 +103,14 @@ void main() {
     expect(structure.feeItems.first.status, 'ACTIVE');
     expect(structure.feeItems.last.feeId, 502);
     expect(structure.feeItems.last.status, 'INACTIVE');
+    expect(structure.publishedFeeItems.single.amount, 400);
+    expect(structure.publishedFeeItems.single.identityKey, 'tuition-key');
+    expect(structure.publishedFeeItems.single.lifecycleAction, 'UPDATED');
+    expect(
+      structure.publishedFeeItems.single.lifecycleAt,
+      DateTime(2026, 8, 28, 14, 30),
+    );
+    expect(structure.publishedFeeItems.single.lifecycleBy, 'Kofi Nketia');
   });
 
   test('student waiver parses its term, scope, and selected fee items', () {

@@ -132,6 +132,16 @@ class StaffAttendanceApiClient implements StaffAttendanceRepository {
       '/api/v2/staff-attendance/school/$schoolId/date/${_date(date)}',
     );
     final records = _list(response);
+    final availability = _list(
+      await _send(
+        'GET',
+        '/api/schools/${Uri.encodeComponent(schoolId)}/leave/availability?date=${_date(date)}',
+      ),
+    );
+    final leaveDates = <String, String>{
+      for (final leave in availability.whereType<Map>())
+        '${leave['staffUserId']}': '${leave['endDate']}',
+    };
     return people.map((person) {
       Map<String, dynamic>? record;
       for (final item in records.whereType<Map>()) {
@@ -141,7 +151,12 @@ class StaffAttendanceApiClient implements StaffAttendanceRepository {
           break;
         }
       }
-      if (record == null) return StaffAttendanceEntry(person: person);
+      if (record == null) {
+        return StaffAttendanceEntry(
+          person: person,
+          approvedLeaveEndDate: leaveDates[person.id],
+        );
+      }
       return StaffAttendanceEntry(
         id: _int(record['id']),
         person: person,
@@ -155,6 +170,7 @@ class StaffAttendanceApiClient implements StaffAttendanceRepository {
         absenceReason: record['absenceReason']?.toString(),
         note: record['note']?.toString() ?? '',
         registerStatus: record['registerStatus']?.toString() ?? 'DRAFT',
+        approvedLeaveEndDate: leaveDates[person.id],
       );
     }).toList();
   }

@@ -210,16 +210,39 @@ class ApiStudentsRepository implements StudentsRepository {
       try {
         final e = jsonDecode(response.body);
         throw ApiStudentsException(
-          '${e['message'] ?? e['error'] ?? 'Transfer request failed'}',
+          '${e['message'] ?? e['error'] ?? 'Request failed'}',
         );
       } catch (e) {
         if (e is ApiStudentsException) rethrow;
-        throw ApiStudentsException(
-          'Transfer request failed (${response.statusCode}).',
-        );
+        throw ApiStudentsException('Request failed (${response.statusCode}).');
       }
     }
+    if (response.body.trim().isEmpty) return null;
     return jsonDecode(response.body);
+  }
+
+  Future<List<int>> _bytes(String path) async {
+    Future<http.Response> send() => _client
+        .get(
+          Uri.parse('${ApiConfig.baseUrl}$path'),
+          headers: {
+            if (_accessToken?.isNotEmpty == true)
+              'Authorization': 'Bearer $_accessToken',
+          },
+        )
+        .timeout(const Duration(seconds: 20));
+    var response = await send();
+    if ((response.statusCode == 401 || response.statusCode == 403) &&
+        onRefreshAccessToken != null) {
+      _accessToken = await onRefreshAccessToken!();
+      response = await send();
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiStudentsException(
+        'The item receipt could not be downloaded (${response.statusCode}).',
+      );
+    }
+    return response.bodyBytes;
   }
 
   @override
@@ -475,6 +498,103 @@ class ApiStudentsRepository implements StudentsRepository {
     );
   }
 
+  @override
+  Future<StudentItemCollectionReceipt> collectStudentItems({
+    required String studentId,
+    required String idempotencyKey,
+    required List<StudentItemCollectionEntry> items,
+    String notes = '',
+  }) async {
+    final value = await _json(
+      'POST',
+      '/api/schools/$customSchoolId/students/$studentId/requirement-collections',
+      body: {
+        'idempotencyKey': idempotencyKey,
+        'items': items
+            .map(
+              (item) => {
+                'requirementId': int.parse(item.requirementId),
+                'quantityReceived': item.quantityReceived,
+              },
+            )
+            .toList(),
+        if (notes.trim().isNotEmpty) 'notes': notes.trim(),
+      },
+    );
+    return _collectionReceipt(Map<String, dynamic>.from(value as Map));
+  }
+
+  @override
+  Future<List<int>> downloadStudentItemReceipt({
+    required String studentId,
+    required int receiptId,
+  }) => _bytes(
+    '/api/schools/$customSchoolId/students/$studentId/requirement-collections/$receiptId/receipt.pdf',
+  );
+
+  @override
+  Future<List<StudentItemCollectionReceipt>> getStudentItemReceipts({
+    required String studentId,
+  }) async {
+    final value = await _json(
+      'GET',
+      '/api/schools/$customSchoolId/students/$studentId/requirement-collections',
+    );
+    return (value as List? ?? const [])
+        .whereType<Map>()
+        .map((item) => _collectionReceipt(Map<String, dynamic>.from(item)))
+        .toList();
+  }
+
+  @override
+  Future<List<int>> downloadStudentItemReceipts({
+    required String studentId,
+    required List<int> receiptIds,
+  }) {
+    if (receiptIds.isEmpty) {
+      throw const ApiStudentsException('Select at least one item receipt.');
+    }
+    return _bytes(
+      '/api/schools/$customSchoolId/students/$studentId/requirement-collections/receipts.pdf?receiptIds=${receiptIds.join(',')}',
+    );
+  }
+
+  @override
+  Future<List<FeeAdjustmentApprover>> getItemExemptionApprovers({
+    required String studentId,
+  }) async {
+    final value = await _json(
+      'GET',
+      '/api/schools/$customSchoolId/students/$studentId/requirement-collections/exemption-approvers',
+    );
+    return (value as List? ?? const [])
+        .whereType<Map>()
+        .map(
+          (item) =>
+              FeeAdjustmentApprover.fromJson(Map<String, dynamic>.from(item)),
+        )
+        .toList();
+  }
+
+  @override
+  Future<void> exemptStudentFromItem({
+    required String studentId,
+    required String requirementId,
+    required String reason,
+    int? approverId,
+    required bool submit,
+  }) async {
+    await _json(
+      'POST',
+      '/api/schools/$customSchoolId/students/$studentId/requirement-collections/items/$requirementId/exemption',
+      body: {
+        'reason': reason.trim(),
+        'submit': submit,
+        if (approverId != null) 'approverId': approverId,
+      },
+    );
+  }
+
   Future<List<StudentRequirement>> _loadRequirements({
     required String studentId,
     required int academicTermId,
@@ -513,6 +633,7 @@ class ApiStudentsRepository implements StudentsRepository {
       return approved.first.items
           .map(
             (item) => StudentRequirement(
+              id: '',
               name: item.name,
               requiredQuantity: item.quantity,
               receivedQuantity: 0,
@@ -532,17 +653,39 @@ class ApiStudentsRepository implements StudentsRepository {
     return [
       ...progress.items.map((item) {
         final definition = byId[item.itemId];
+        final adjustment = progress.adjustments[item.itemId];
+        final exemption =
+            adjustment?.type == RequirementAdjustmentType.fullWaiver &&
+                adjustment?.workflowStatus != null
+            ? adjustment
+            : null;
         return StudentRequirement(
+          id: item.obligationId,
           name: definition?.name ?? item.itemKey,
           requiredQuantity: item.requiredQuantity,
           receivedQuantity: item.receivedQuantity,
           unit: definition?.unit ?? '',
           status: _requirementStatus(item.status),
-          note: progress.adjustments[item.itemId]?.notes ?? '',
+          note: exemption?.reason ?? adjustment?.notes ?? '',
+          exemptionRequestId: exemption?.adjustmentId ?? 0,
+          exemptionStatus: switch (exemption?.workflowStatus) {
+            StudentSpecificRequirementStatus.draft =>
+              StudentItemExemptionStatus.draft,
+            StudentSpecificRequirementStatus.pendingApproval =>
+              StudentItemExemptionStatus.pendingApproval,
+            StudentSpecificRequirementStatus.changesRequested =>
+              StudentItemExemptionStatus.changesRequested,
+            StudentSpecificRequirementStatus.active =>
+              StudentItemExemptionStatus.approved,
+            _ => null,
+          },
+          exemptionApproverName: exemption?.assignedApproverName ?? '',
+          exemptionRejectionReason: exemption?.rejectionReason ?? '',
         );
       }),
       ...progress.customRequirements.map(
         (item) => StudentRequirement(
+          id: item.id,
           name: item.name,
           requiredQuantity: item.quantity,
           receivedQuantity: item.receivedQuantity,
@@ -625,7 +768,7 @@ class ApiStudentsRepository implements StudentsRepository {
     return EnrolledStudent(
       id: detail.customStudentId,
       name: detail.displayName,
-      className: _className(json, detail.gradeLevel),
+      className: detail.classAndSectionLabel,
       gender: _namedValue(json['gender'], fallback: detail.gender),
       dateOfBirth: _requiredDate(detail.dateOfBirth, 'date of birth'),
       guardianName: guardian?.displayName ?? 'Not provided',
@@ -805,22 +948,13 @@ String _namedValue(Object? value, {String fallback = ''}) {
   return fallback;
 }
 
-String _className(Map<String, dynamic> json, String fallback) {
-  final grade = '${json['gradeName'] ?? fallback}'.trim();
-  final stream = '${json['streamAlias'] ?? json['streamName'] ?? ''}'.trim();
-  if (stream.isEmpty || stream.toLowerCase().contains(grade.toLowerCase())) {
-    return grade;
-  }
-  return '$grade $stream'.trim();
-}
-
 String _address(Object? value) {
   final map = _map(value);
   if (map == null) return '';
   return [
     map['houseNumber'],
     map['streetName'],
-    _namedValue(map['city']),
+    _namedValue(map['city'] ?? map['cityName']),
     _namedValue(map['district']),
     _namedValue(map['region']),
   ].map((item) => '$item'.trim()).where((item) => item.isNotEmpty).join(', ');
@@ -999,6 +1133,38 @@ List<StudentPaymentReversal> _paymentReversals(
       ),
     )
     .toList(growable: false);
+
+StudentItemCollectionReceipt _collectionReceipt(Map<String, dynamic> json) {
+  final rawItems = json['items'];
+  return StudentItemCollectionReceipt(
+    id: _integer(json['receiptId']),
+    number: '${json['receiptNumber'] ?? ''}',
+    studentId: '${json['studentId'] ?? ''}',
+    studentName: '${json['studentName'] ?? ''}',
+    className: '${json['className'] ?? ''}',
+    academicTerm: '${json['academicTerm'] ?? ''}',
+    collectedAt:
+        _date(json['collectedAt']) ??
+        (throw const ApiStudentsException(
+          'The item receipt is missing its collection date.',
+        )),
+    collectedBy: '${json['collectedBy'] ?? ''}',
+    notes: '${json['notes'] ?? ''}',
+    lines: rawItems is List
+        ? rawItems.whereType<Map>().map((raw) {
+            final item = Map<String, dynamic>.from(raw);
+            return StudentItemCollectionReceiptLine(
+              requirementId: '${item['requirementId'] ?? ''}',
+              itemName: '${item['itemName'] ?? ''}',
+              unit: '${item['unit'] ?? ''}',
+              quantityReceived: _integer(item['quantityReceived']),
+              totalReceived: _integer(item['totalReceived']),
+              requiredQuantity: _integer(item['requiredQuantity']),
+            );
+          }).toList()
+        : const [],
+  );
+}
 
 int _studentGradeLevelId(Map<String, dynamic> json) {
   final direct = _integer(json['gradeLevelId']);

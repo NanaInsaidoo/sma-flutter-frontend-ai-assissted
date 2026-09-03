@@ -1,5 +1,31 @@
 enum RequirementStatus { published, approved, pendingApproval, draft }
 
+class RequirementCompletionSummary {
+  const RequirementCompletionSummary({
+    required this.activeObligations,
+    required this.completedObligations,
+    required this.completionPercentage,
+  });
+
+  const RequirementCompletionSummary.empty()
+    : activeObligations = 0,
+      completedObligations = 0,
+      completionPercentage = 0;
+
+  final int activeObligations;
+  final int completedObligations;
+  final double completionPercentage;
+
+  factory RequirementCompletionSummary.fromJson(Map<String, dynamic> json) =>
+      RequirementCompletionSummary(
+        activeObligations: _asInt(json['activeObligations']),
+        completedObligations: _asInt(json['completedObligations']),
+        completionPercentage: _asDouble(json['completionPercentage']),
+      );
+}
+
+enum RequirementItemChange { current, added, modified, removed }
+
 enum PriorTermRequirementStatus {
   pending,
   fulfilled,
@@ -29,7 +55,12 @@ class ClassRequirementItem {
     required this.dueDate,
     this.instructions = '',
     this.isOptional = false,
+    this.itemKey = '',
     this.updatedSincePublished = false,
+    this.changeType = RequirementItemChange.current,
+    this.lifecycleAction = '',
+    this.lifecycleAt,
+    this.lifecycleBy = '',
   });
 
   final String id;
@@ -41,7 +72,14 @@ class ClassRequirementItem {
   final DateTime dueDate;
   final String instructions;
   final bool isOptional;
+  final String itemKey;
   final bool updatedSincePublished;
+  final RequirementItemChange changeType;
+  final String lifecycleAction;
+  final DateTime? lifecycleAt;
+  final String lifecycleBy;
+
+  String get identityKey => itemKey.isEmpty ? id : itemKey;
 
   factory ClassRequirementItem.fromJson(Map<String, dynamic> json) {
     return ClassRequirementItem(
@@ -54,7 +92,17 @@ class ClassRequirementItem {
       dueDate: _requirementDate(json['dueDate']) ?? DateTime.now(),
       instructions: '${json['instructions'] ?? ''}',
       isOptional: json['optional'] == true,
+      itemKey: '${json['itemKey'] ?? ''}',
       updatedSincePublished: json['updatedSincePublished'] == true,
+      changeType: switch ('${json['changeType'] ?? ''}'.toUpperCase()) {
+        'ADDED' => RequirementItemChange.added,
+        'MODIFIED' => RequirementItemChange.modified,
+        'REMOVED' => RequirementItemChange.removed,
+        _ => RequirementItemChange.current,
+      },
+      lifecycleAction: '${json['lifecycleAction'] ?? ''}',
+      lifecycleAt: _requirementDate(json['lifecycleAt']),
+      lifecycleBy: '${json['lifecycleBy'] ?? ''}',
     );
   }
 
@@ -74,7 +122,10 @@ class ClassRequirementItem {
     };
   }
 
-  ClassRequirementItem copyWith({bool? updatedSincePublished}) {
+  ClassRequirementItem copyWith({
+    bool? updatedSincePublished,
+    RequirementItemChange? changeType,
+  }) {
     return ClassRequirementItem(
       id: id,
       name: name,
@@ -85,8 +136,13 @@ class ClassRequirementItem {
       dueDate: dueDate,
       instructions: instructions,
       isOptional: isOptional,
+      itemKey: itemKey,
       updatedSincePublished:
           updatedSincePublished ?? this.updatedSincePublished,
+      changeType: changeType ?? this.changeType,
+      lifecycleAction: lifecycleAction,
+      lifecycleAt: lifecycleAt,
+      lifecycleBy: lifecycleBy,
     );
   }
 }
@@ -112,6 +168,7 @@ class ClassRequirementGroup {
     required this.status,
     this.draftChangeCount = 0,
     this.hasPublishedVersion = false,
+    this.publishedItems = const [],
     this.gradeLevelId = 0,
     this.assignedApproverId = 0,
     this.assignedApproverName = '',
@@ -128,6 +185,7 @@ class ClassRequirementGroup {
   final RequirementStatus status;
   final int draftChangeCount;
   final bool hasPublishedVersion;
+  final List<ClassRequirementItem> publishedItems;
   final int gradeLevelId;
   final int assignedApproverId;
   final String assignedApproverName;
@@ -138,6 +196,7 @@ class ClassRequirementGroup {
 
   factory ClassRequirementGroup.fromJson(Map<String, dynamic> json) {
     final rawItems = json['items'];
+    final rawPublishedItems = json['publishedItems'];
     return ClassRequirementGroup(
       id: '${json['requirementId'] ?? ''}',
       className: '${json['className'] ?? ''}',
@@ -160,6 +219,16 @@ class ClassRequirementGroup {
       },
       draftChangeCount: _asInt(json['draftChangeCount']),
       hasPublishedVersion: json['hasPublishedVersion'] == true,
+      publishedItems: rawPublishedItems is List
+          ? rawPublishedItems
+                .whereType<Map>()
+                .map(
+                  (item) => ClassRequirementItem.fromJson(
+                    Map<String, dynamic>.from(item),
+                  ),
+                )
+                .toList()
+          : const [],
       gradeLevelId: _asInt(json['gradeLevelId']),
       assignedApproverId: _asInt(json['assignedApproverId']),
       assignedApproverName: '${json['assignedApproverName'] ?? ''}',
@@ -175,6 +244,7 @@ class ClassRequirementGroup {
     RequirementStatus? status,
     int? draftChangeCount,
     bool? hasPublishedVersion,
+    List<ClassRequirementItem>? publishedItems,
     int? gradeLevelId,
     int? assignedApproverId,
     String? assignedApproverName,
@@ -191,6 +261,7 @@ class ClassRequirementGroup {
       status: status ?? this.status,
       draftChangeCount: draftChangeCount ?? this.draftChangeCount,
       hasPublishedVersion: hasPublishedVersion ?? this.hasPublishedVersion,
+      publishedItems: publishedItems ?? this.publishedItems,
       gradeLevelId: gradeLevelId ?? this.gradeLevelId,
       assignedApproverId: assignedApproverId ?? this.assignedApproverId,
       assignedApproverName: assignedApproverName ?? this.assignedApproverName,
@@ -229,6 +300,12 @@ class StudentRequirementAdjustment {
     this.adjustedQuantity,
     this.extendedDueDate,
     this.paymentReference,
+    this.adjustmentId = 0,
+    this.workflowStatus,
+    this.assignedApproverId,
+    this.assignedApproverName = '',
+    this.rejectionReason = '',
+    this.creatorOwned = false,
   });
 
   final RequirementAdjustmentType type;
@@ -237,6 +314,12 @@ class StudentRequirementAdjustment {
   final int? adjustedQuantity;
   final DateTime? extendedDueDate;
   final String? paymentReference;
+  final int adjustmentId;
+  final StudentSpecificRequirementStatus? workflowStatus;
+  final int? assignedApproverId;
+  final String assignedApproverName;
+  final String rejectionReason;
+  final bool creatorOwned;
 
   factory StudentRequirementAdjustment.fromJson(Map<String, dynamic> json) {
     final rawType = '${json['type'] ?? ''}'.toUpperCase();
@@ -252,6 +335,14 @@ class StudentRequirementAdjustment {
           : _asInt(json['adjustedQuantity']),
       extendedDueDate: DateTime.tryParse('${json['extendedDueDate'] ?? ''}'),
       paymentReference: json['paymentReference']?.toString(),
+      adjustmentId: _asInt(json['adjustmentId']),
+      workflowStatus: json['workflowStatus'] == null
+          ? null
+          : _studentSpecificStatus('${json['workflowStatus']}'),
+      assignedApproverId: _nullableInt(json['assignedApproverId']),
+      assignedApproverName: '${json['assignedApproverName'] ?? ''}',
+      rejectionReason: '${json['rejectionReason'] ?? ''}',
+      creatorOwned: json['creatorOwned'] == true,
     );
   }
 
@@ -484,6 +575,7 @@ class StudentRequirementProgress {
 
 class StudentRequirementItemProgress {
   const StudentRequirementItemProgress({
+    required this.obligationId,
     required this.itemId,
     required this.itemKey,
     required this.baseQuantity,
@@ -493,6 +585,7 @@ class StudentRequirementItemProgress {
     required this.dueDate,
   });
 
+  final String obligationId;
   final String itemId;
   final String itemKey;
   final int baseQuantity;
@@ -503,6 +596,7 @@ class StudentRequirementItemProgress {
 
   factory StudentRequirementItemProgress.fromJson(Map<String, dynamic> json) {
     return StudentRequirementItemProgress(
+      obligationId: '${json['obligationId'] ?? ''}',
       itemId: '${json['itemId'] ?? ''}',
       itemKey: '${json['itemKey'] ?? ''}',
       baseQuantity: _asInt(json['baseQuantity']),

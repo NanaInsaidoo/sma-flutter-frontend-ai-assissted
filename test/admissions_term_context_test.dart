@@ -43,12 +43,15 @@ void main() {
       'gender': {'id': 2, 'name': 'Female'},
       'dateOfBirth': [2018, 3, 12],
       'gradeName': 'Basic 2',
+      'streamName': 'Basic 2 - Section 1',
     });
 
     expect(student.displayName, 'Ama Efua Mensah');
     expect(student.gender, 'Female');
     expect(student.dateOfBirth, '2018-03-12');
     expect(student.gradeLevel, 'Basic 2');
+    expect(student.sectionName, 'Basic 2 - Section 1');
+    expect(student.classAndSectionLabel, 'Basic 2 - Section 1');
     expect(student.admissionTermId, 2);
   });
 
@@ -63,5 +66,29 @@ void main() {
     });
 
     expect(student.gradeLevel, 'Basic 2');
+    expect(student.classAndSectionLabel, 'Basic 2 · Section pending');
+  });
+
+  test('combines grade with a section-only name from a nested stream', () {
+    final student = AdmissionStudent.fromJson({
+      'gradeLevel': {'name': 'KG1'},
+      'stream': {'name': 'Section 1'},
+    });
+    expect(student.classAndSectionLabel, 'KG1 · Section 1');
+  });
+
+  test('does not mistake a different grade prefix for the same grade', () {
+    final student = AdmissionStudent.fromJson({
+      'gradeName': 'Basic 1',
+      'streamName': 'Basic 10 - Section 2',
+    });
+    expect(student.classAndSectionLabel, 'Basic 1 · Basic 10 - Section 2');
+  });
+
+  test('missing placement is explicitly pending', () {
+    expect(
+      AdmissionStudent.fromJson({}).classAndSectionLabel,
+      'Class / section pending',
+    );
   });
 }

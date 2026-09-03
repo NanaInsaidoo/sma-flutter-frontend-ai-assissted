@@ -4,6 +4,117 @@ import '../../theme/app_theme.dart';
 import '../data/fee_api_client.dart';
 import '../domain/fee_models.dart';
 
+enum _FeeRevisionKind { added, modified, removed }
+
+class _FeeRevisionChange {
+  const _FeeRevisionChange({required this.kind, this.current, this.previous});
+
+  final _FeeRevisionKind kind;
+  final FeeStructureItem? current;
+  final FeeStructureItem? previous;
+
+  FeeStructureItem get displayItem => current ?? previous!;
+}
+
+String _publishedLifecycleText({
+  required String action,
+  required DateTime? at,
+  required String by,
+}) {
+  if (at == null || action.trim().isEmpty) return '';
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  final verb = action.toUpperCase() == 'UPDATED' ? 'Updated' : 'Added';
+  final date = '${at.day} ${months[at.month - 1]} ${at.year}';
+  return by.trim().isEmpty ? '$verb $date' : '$verb $date by ${by.trim()}';
+}
+
+List<FeeStructureItem> _publishedFeeItems(FeeClassStructure structure) {
+  if (!structure.hasPublishedVersion) return const [];
+  if (structure.publishedFeeItems.isNotEmpty) {
+    return structure.publishedFeeItems
+        .where((item) => item.status.toUpperCase() != 'INACTIVE')
+        .toList(growable: false);
+  }
+  if (structure.status.toUpperCase() == 'PUBLISHED') {
+    return structure.feeItems
+        .where((item) => item.status.toUpperCase() != 'INACTIVE')
+        .toList(growable: false);
+  }
+  return const [];
+}
+
+List<_FeeRevisionChange> _feeRevisionChanges(FeeClassStructure structure) {
+  final current = structure.feeItems
+      .where((item) => item.status.toUpperCase() != 'INACTIVE')
+      .toList(growable: false);
+  final published = _publishedFeeItems(structure);
+  if (published.isEmpty) {
+    return current
+        .map(
+          (item) =>
+              _FeeRevisionChange(kind: _FeeRevisionKind.added, current: item),
+        )
+        .toList(growable: false);
+  }
+  final publishedByKey = {for (final item in published) item.identityKey: item};
+  final currentKeys = current.map((item) => item.identityKey).toSet();
+  return [
+    ...current.expand((item) {
+      final previous = publishedByKey[item.identityKey];
+      if (previous == null) {
+        return [
+          _FeeRevisionChange(kind: _FeeRevisionKind.added, current: item),
+        ];
+      }
+      if (!_sameFeeItem(item, previous)) {
+        return [
+          _FeeRevisionChange(
+            kind: _FeeRevisionKind.modified,
+            current: item,
+            previous: previous,
+          ),
+        ];
+      }
+      return const <_FeeRevisionChange>[];
+    }),
+    ...published
+        .where((item) => !currentKeys.contains(item.identityKey))
+        .map(
+          (item) => _FeeRevisionChange(
+            kind: _FeeRevisionKind.removed,
+            previous: item,
+          ),
+        ),
+  ];
+}
+
+bool _sameFeeItem(FeeStructureItem current, FeeStructureItem previous) =>
+    current.feeName == previous.feeName &&
+    current.category == previous.category &&
+    current.amount == previous.amount &&
+    current.description == previous.description &&
+    _sameDay(current.dueDate, previous.dueDate);
+
+bool _sameDay(DateTime? first, DateTime? second) {
+  if (first == null || second == null) return first == second;
+  return first.year == second.year &&
+      first.month == second.month &&
+      first.day == second.day;
+}
+
 class FeeStructureWorkflowContent extends StatefulWidget {
   const FeeStructureWorkflowContent({
     super.key,
@@ -829,6 +940,19 @@ class _FeeStructureWorkflowContentState
             .where((item) => item.status.toUpperCase() != 'INACTIVE')
             .toList() ??
         const <FeeStructureItem>[];
+    final publishedItems = structure == null
+        ? const <FeeStructureItem>[]
+        : _publishedFeeItems(structure);
+    final changes = structure == null
+        ? const <_FeeRevisionChange>[]
+        : _feeRevisionChanges(structure);
+    final isPublished = structure?.status.toUpperCase() == 'PUBLISHED';
+    final panelActions = _structurePanelActions(
+      panelContext,
+      stream,
+      structure,
+      onWithdraw: onWithdraw,
+    );
     return Align(
       alignment: Alignment.centerRight,
       child: Material(
@@ -930,131 +1054,35 @@ class _FeeStructureWorkflowContentState
                             ],
                           ),
                         ),
-                        const SizedBox(height: 18),
-                        const Text(
-                          'ACTIONS',
-                          style: TextStyle(
-                            color: AppColors.muted,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: .5,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        Wrap(
-                          spacing: 10,
-                          runSpacing: 10,
-                          children: _structurePanelActions(
-                            panelContext,
-                            stream,
-                            structure,
-                            onWithdraw: onWithdraw,
-                          ),
-                        ),
                         const SizedBox(height: 26),
-                        Row(
-                          children: [
-                            const Expanded(
-                              child: Text(
-                                'FEE ITEMS',
-                                style: TextStyle(
-                                  color: AppColors.muted,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w900,
-                                  letterSpacing: .5,
-                                ),
-                              ),
-                            ),
-                            Text(
-                              '${feeItems.length}',
-                              style: const TextStyle(
-                                color: AppColors.muted,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        if (feeItems.isEmpty)
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(18),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF7F9F8),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: const Text(
-                              'No fees have been configured for this stream.',
-                              style: TextStyle(color: AppColors.muted),
-                            ),
-                          )
-                        else
-                          ...feeItems.map(
-                            (item) => Container(
-                              margin: const EdgeInsets.only(bottom: 8),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 13,
-                              ),
-                              decoration: BoxDecoration(
-                                border: Border.all(color: AppColors.border),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          item.feeName,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.w800,
-                                          ),
-                                        ),
-                                        if (item.category.trim().isNotEmpty)
-                                          Padding(
-                                            padding: const EdgeInsets.only(
-                                              top: 3,
-                                            ),
-                                            child: Text(
-                                              item.category,
-                                              style: const TextStyle(
-                                                color: AppColors.green,
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w700,
-                                              ),
-                                            ),
-                                          ),
-                                        if (item.description.trim().isNotEmpty)
-                                          Padding(
-                                            padding: const EdgeInsets.only(
-                                              top: 3,
-                                            ),
-                                            child: Text(
-                                              item.description,
-                                              style: const TextStyle(
-                                                color: AppColors.muted,
-                                                fontSize: 12,
-                                              ),
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Text(
-                                    widget.money(item.amount),
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
+                        if (publishedItems.isNotEmpty) ...[
+                          _feeItemsSection(
+                            key: const Key('published-fees-section'),
+                            title: 'CURRENTLY PUBLISHED FEES',
+                            subtitle:
+                                'These charges remain active on student accounts.',
+                            items: publishedItems,
+                            actions: isPublished ? panelActions : const [],
                           ),
+                          if (!isPublished) const SizedBox(height: 22),
+                        ],
+                        if (!isPublished || publishedItems.isEmpty)
+                          structure == null || !structure.hasPublishedVersion
+                              ? _feeItemsSection(
+                                  key: const Key('working-fees-section'),
+                                  title:
+                                      structure?.status.toUpperCase() == 'DRAFT'
+                                      ? 'DRAFT FEES'
+                                      : 'FEES IN THIS REQUEST',
+                                  subtitle:
+                                      'These fees are not active until approval and publication are complete.',
+                                  items: feeItems,
+                                  actions: panelActions,
+                                )
+                              : _feeChangesSection(
+                                  changes,
+                                  actions: panelActions,
+                                ),
                         if (structure?.revisionReason.isNotEmpty == true) ...[
                           const SizedBox(height: 18),
                           const Text(
@@ -1110,6 +1138,274 @@ class _FeeStructureWorkflowContentState
     );
   }
 
+  Widget _feeItemsSection({
+    Key? key,
+    required String title,
+    required String subtitle,
+    required List<FeeStructureItem> items,
+    List<Widget> actions = const [],
+  }) {
+    return Container(
+      key: key,
+      width: double.infinity,
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAF9),
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    color: AppColors.muted,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: .5,
+                  ),
+                ),
+              ),
+              Text(
+                '${items.length}',
+                style: const TextStyle(
+                  color: AppColors.muted,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            subtitle,
+            style: const TextStyle(color: AppColors.muted, fontSize: 12),
+          ),
+          if (actions.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Wrap(spacing: 9, runSpacing: 9, children: actions),
+          ],
+          const SizedBox(height: 12),
+          if (items.isEmpty)
+            const Text(
+              'No fees have been added.',
+              style: TextStyle(color: AppColors.muted),
+            )
+          else
+            ...items.map((item) => _feeItemCard(item)),
+        ],
+      ),
+    );
+  }
+
+  Widget _feeChangesSection(
+    List<_FeeRevisionChange> changes, {
+    List<Widget> actions = const [],
+  }) {
+    return Container(
+      key: const Key('working-fees-section'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: AppColors.amber.withValues(alpha: .045),
+        border: Border.all(color: AppColors.amber.withValues(alpha: .35)),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'CHANGES IN PROGRESS',
+                  style: TextStyle(
+                    color: AppColors.amber,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: .5,
+                  ),
+                ),
+              ),
+              Text(
+                '${changes.length}',
+                style: const TextStyle(
+                  color: AppColors.amber,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'These proposed changes are not active on student accounts yet.',
+            style: TextStyle(color: AppColors.muted, fontSize: 12),
+          ),
+          if (actions.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Wrap(spacing: 9, runSpacing: 9, children: actions),
+          ],
+          const SizedBox(height: 12),
+          if (changes.isEmpty)
+            const Text(
+              'No differences from the published fee structure.',
+              style: TextStyle(color: AppColors.muted),
+            )
+          else
+            ...changes.map(_feeChangeCard),
+        ],
+      ),
+    );
+  }
+
+  Widget _feeItemCard(FeeStructureItem item) {
+    final lifecycleText = _publishedLifecycleText(
+      action: item.lifecycleAction,
+      at: item.lifecycleAt,
+      by: item.lifecycleBy,
+    );
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.feeName,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                if (item.category.trim().isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Text(
+                      item.category,
+                      style: const TextStyle(
+                        color: AppColors.green,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                if (item.description.trim().isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Text(
+                      item.description,
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                if (lifecycleText.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 5),
+                    child: Text(
+                      lifecycleText,
+                      style: TextStyle(
+                        color: AppColors.muted.withValues(alpha: .85),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Text(
+            widget.money(item.amount),
+            style: const TextStyle(fontWeight: FontWeight.w900),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _feeChangeCard(_FeeRevisionChange change) {
+    final item = change.displayItem;
+    final (label, color) = switch (change.kind) {
+      _FeeRevisionKind.added => ('NEW FEE', AppColors.blue),
+      _FeeRevisionKind.modified => ('MODIFIED', AppColors.amber),
+      _FeeRevisionKind.removed => ('REMOVING', AppColors.red),
+    };
+    return Container(
+      key: Key('fee-change-${item.identityKey}'),
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: color.withValues(alpha: .35)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  item.feeName,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    decoration: change.kind == _FeeRevisionKind.removed
+                        ? TextDecoration.lineThrough
+                        : null,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: .10),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 7),
+          if (change.kind == _FeeRevisionKind.modified)
+            Text(
+              '${widget.money(change.previous!.amount)}  →  ${widget.money(change.current!.amount)}',
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            )
+          else
+            Text(
+              widget.money(item.amount),
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+          if (item.category.trim().isNotEmpty) ...[
+            const SizedBox(height: 3),
+            Text(
+              item.category,
+              style: const TextStyle(color: AppColors.muted, fontSize: 12),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   List<Widget> _structurePanelActions(
     BuildContext panelContext,
     FeeStreamOption stream,
@@ -1151,7 +1447,7 @@ class _FeeStructureWorkflowContentState
           onPressed: () =>
               _leavePanel(panelContext, () => _submitStructure(structure)),
           icon: const Icon(Icons.send_outlined),
-          label: const Text('Submit'),
+          label: const Text('Submit for approval'),
         ),
         OutlinedButton.icon(
           onPressed: () =>
@@ -1348,24 +1644,10 @@ class _FeeStructureWorkflowContentState
   }
 
   Future<void> _publishStructure(FeeClassStructure item) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Publish approved fees?'),
-        content: const Text(
-          'Parents will see these fees and student accounts will be assessed. Published fees are locked.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Publish'),
-          ),
-        ],
-      ),
+    final confirmed = await _showRightDrawer<bool>(
+      barrierLabel: 'Close fee publication review',
+      builder: (_) =>
+          _FeePublicationReviewPanel(structure: item, money: widget.money),
     );
     if (confirmed == true) {
       await _run(
@@ -1577,6 +1859,270 @@ class _StatusChip extends StatelessWidget {
           fontSize: 11,
           fontWeight: FontWeight.w900,
         ),
+      ),
+    );
+  }
+}
+
+class _FeePublicationReviewPanel extends StatelessWidget {
+  const _FeePublicationReviewPanel({
+    required this.structure,
+    required this.money,
+  });
+
+  final FeeClassStructure structure;
+  final String Function(double amount) money;
+
+  @override
+  Widget build(BuildContext context) {
+    final changes = _feeRevisionChanges(structure);
+    final finalItems = structure.feeItems
+        .where((item) => item.status.toUpperCase() != 'INACTIVE')
+        .toList(growable: false);
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final panelWidth = screenWidth < 720
+        ? screenWidth
+        : (screenWidth * .40).clamp(540.0, 680.0).toDouble();
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Material(
+        color: Colors.white,
+        elevation: 20,
+        child: SafeArea(
+          left: false,
+          child: SizedBox(
+            width: panelWidth,
+            height: double.infinity,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(22, 18, 12, 15),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Review and publish fees',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              '${structure.fullName} · ${structure.streamName}',
+                              style: const TextStyle(
+                                color: AppColors.muted,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Close',
+                        onPressed: () => Navigator.pop(context, false),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(22, 20, 22, 28),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: AppColors.green.withValues(alpha: .09),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'APPROVED REVISION',
+                                style: TextStyle(
+                                  color: AppColors.green,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: .5,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                '${changes.length} ${changes.length == 1 ? 'change' : 'changes'} · ${money(finalItems.fold(0, (sum, item) => sum + item.amount))} per term',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 22),
+                        const Text(
+                          'CHANGES IN THIS REVISION',
+                          style: TextStyle(
+                            color: AppColors.muted,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: .5,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        if (changes.isEmpty)
+                          const Text(
+                            'No differences from the currently published fees.',
+                            style: TextStyle(color: AppColors.muted),
+                          )
+                        else
+                          ...changes.map((change) => _changeCard(change)),
+                        const SizedBox(height: 18),
+                        ExpansionTile(
+                          tilePadding: EdgeInsets.zero,
+                          childrenPadding: EdgeInsets.zero,
+                          title: Text(
+                            'Final published fees (${finalItems.length})',
+                            style: const TextStyle(fontWeight: FontWeight.w900),
+                          ),
+                          subtitle: const Text(
+                            'The complete structure parents will see',
+                          ),
+                          children: finalItems
+                              .map(
+                                (item) => ListTile(
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  title: Text(
+                                    item.feeName,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  trailing: Text(
+                                    money(item.amount),
+                                    style: const TextStyle(
+                                      color: AppColors.green,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                        const SizedBox(height: 18),
+                        Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: AppColors.amber.withValues(alpha: .09),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(
+                                Icons.info_outline_rounded,
+                                color: AppColors.amber,
+                              ),
+                              SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  'Publishing activates these fees for parents and updates student accounts. The published structure is then locked.',
+                                  style: TextStyle(height: 1.4),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.fromLTRB(22, 15, 22, 18),
+                  decoration: const BoxDecoration(
+                    border: Border(top: BorderSide(color: AppColors.border)),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton.icon(
+                          key: const Key('confirm-publish-fees'),
+                          onPressed: () => Navigator.pop(context, true),
+                          icon: const Icon(Icons.publish_rounded),
+                          label: const Text('Publish changes'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _changeCard(_FeeRevisionChange change) {
+    final item = change.displayItem;
+    final (label, color) = switch (change.kind) {
+      _FeeRevisionKind.added => ('ADDED', AppColors.blue),
+      _FeeRevisionKind.modified => ('MODIFIED', AppColors.amber),
+      _FeeRevisionKind.removed => ('REMOVED', AppColors.red),
+    };
+    return Container(
+      key: Key('publish-fee-change-${item.identityKey}'),
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 9),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .045),
+        border: Border.all(color: color.withValues(alpha: .32)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  item.feeName,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+              Text(
+                label,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 7),
+          Text(
+            change.kind == _FeeRevisionKind.modified
+                ? '${money(change.previous!.amount)}  →  ${money(change.current!.amount)}'
+                : money(item.amount),
+            style: const TextStyle(fontWeight: FontWeight.w900),
+          ),
+        ],
       ),
     );
   }

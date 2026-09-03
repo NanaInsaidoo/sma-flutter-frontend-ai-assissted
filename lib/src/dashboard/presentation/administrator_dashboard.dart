@@ -5,6 +5,7 @@ import '../data/api_dashboard_repository.dart';
 import '../data/dashboard_repository.dart';
 import '../domain/dashboard_models.dart';
 import '../../admissions/presentation/admissions_screen.dart';
+import '../../admissions/data/admissions_api_client.dart';
 import '../../approvals/data/approval_api_client.dart';
 import '../../approvals/domain/approval_models.dart';
 import '../../approvals/presentation/approvals_screen.dart';
@@ -29,11 +30,15 @@ import '../../term_review/data/headmaster_term_closure_api_client.dart';
 import '../../term_review/presentation/teacher_term_closing_screen.dart';
 import '../../term_review/presentation/bursar_term_closing_screen.dart';
 import '../../staff/presentation/staff_screen.dart';
+import '../../leave/data/leave_api_client.dart';
+import '../../leave/presentation/leave_management_screen.dart';
 import '../../staff_attendance/data/staff_attendance_api_client.dart';
 import '../../staff_attendance/presentation/staff_attendance_screen.dart';
 import '../../students/data/api_students_repository.dart';
 import '../../students/domain/student_models.dart';
 import '../../students/presentation/students_screen.dart';
+import '../../shop/data/shop_api_client.dart';
+import '../../shop/presentation/school_shop_screen.dart';
 import '../../readiness/data/school_readiness_repository.dart';
 import '../../readiness/domain/school_readiness.dart';
 import '../../notifications/data/school_notification_api_client.dart';
@@ -46,6 +51,8 @@ enum _SchoolAdminPage {
   students,
   attendance,
   staffAttendance,
+  myLeave,
+  leave,
   assessments,
   evaluations,
   finalReports,
@@ -53,6 +60,7 @@ enum _SchoolAdminPage {
   staff,
   classes,
   fees,
+  shop,
   expenses,
   incidents,
   calendar,
@@ -103,6 +111,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   _SchoolAdminPage _selectedPage = _SchoolAdminPage.dashboard;
   bool _openStartAdmissionOnNextAdmissions = false;
   bool _focusStudentSearchOnNextStudents = false;
+  String? _studentProfileToOpenId;
   bool _openRecordPaymentOnNextFees = false;
   String? _recordPaymentStudentId;
   bool _openNewRequisitionOnNextExpenses = false;
@@ -264,6 +273,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
     setState(() {
       _openFeeStructureOnNextFees = false;
       _focusStudentSearchOnNextStudents = false;
+      _studentProfileToOpenId = null;
       _openNewRequisitionOnNextExpenses = false;
       _selectedPage = page;
       _feeWorkflowSummary = _loadFeeWorkflowSummary();
@@ -296,7 +306,16 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
 
   void _openFindStudent() {
     setState(() {
+      _studentProfileToOpenId = null;
       _focusStudentSearchOnNextStudents = true;
+      _selectedPage = _SchoolAdminPage.students;
+    });
+  }
+
+  void _openStudentProfile(String studentId) {
+    setState(() {
+      _focusStudentSearchOnNextStudents = false;
+      _studentProfileToOpenId = studentId;
       _selectedPage = _SchoolAdminPage.students;
     });
   }
@@ -427,6 +446,8 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                         onStartAdmission: _openStartAdmission,
                         focusStudentSearchOnNextStudents:
                             _focusStudentSearchOnNextStudents,
+                        studentProfileToOpenId: _studentProfileToOpenId,
+                        onOpenStudentProfile: _openStudentProfile,
                         onFindStudent: _openFindStudent,
                         onRecordPayment: _openRecordPayment,
                         onCollectStudentPayment: _openRecordPaymentForStudent,
@@ -506,6 +527,8 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                 onStartAdmission: _openStartAdmission,
                 focusStudentSearchOnNextStudents:
                     _focusStudentSearchOnNextStudents,
+                studentProfileToOpenId: _studentProfileToOpenId,
+                onOpenStudentProfile: _openStudentProfile,
                 onFindStudent: _openFindStudent,
                 onRecordPayment: _openRecordPayment,
                 onCollectStudentPayment: _openRecordPaymentForStudent,
@@ -583,6 +606,8 @@ class _DashboardBody extends StatelessWidget {
     required this.onAddStaffRequestConsumed,
     required this.onStartAdmission,
     required this.focusStudentSearchOnNextStudents,
+    this.studentProfileToOpenId,
+    required this.onOpenStudentProfile,
     required this.onFindStudent,
     required this.onRecordPayment,
     required this.onCollectStudentPayment,
@@ -624,6 +649,8 @@ class _DashboardBody extends StatelessWidget {
   final VoidCallback onAddStaffRequestConsumed;
   final VoidCallback onStartAdmission;
   final bool focusStudentSearchOnNextStudents;
+  final String? studentProfileToOpenId;
+  final ValueChanged<String> onOpenStudentProfile;
   final VoidCallback onFindStudent;
   final VoidCallback onRecordPayment;
   final ValueChanged<EnrolledStudent> onCollectStudentPayment;
@@ -697,6 +724,21 @@ class _DashboardBody extends StatelessWidget {
             onSelectPage(_SchoolAdminPage.fees);
           } else if (item.sourcePage == 'students') {
             onSelectPage(_SchoolAdminPage.students);
+          } else if (item.sourcePage == 'incidents') {
+            onSelectPage(_SchoolAdminPage.incidents);
+          } else if (item.sourcePage == 'shop') {
+            onSelectPage(_SchoolAdminPage.shop);
+          } else if (item.sourcePage == 'leave') {
+            showLeaveRequestDetails(
+              context: context,
+              requestId: item.entityId,
+              api: LeaveApiClient(
+                schoolId: schoolId,
+                accessToken: accessToken,
+                onRefreshAccessToken: onRefreshAccessToken,
+              ),
+              onChanged: onFeeWorkflowChanged,
+            );
           }
         },
       );
@@ -712,9 +754,15 @@ class _DashboardBody extends StatelessWidget {
 
     if (selectedPage == _SchoolAdminPage.students) {
       return StudentsScreen(
+        customSchoolId: schoolId,
+        admissionsApi: AdmissionsApiClient(
+          accessToken: accessToken,
+          onRefreshAccessToken: onRefreshAccessToken,
+        ),
         term: data.term,
         academicYear: data.academicYear,
         focusSearchOnLoad: focusStudentSearchOnNextStudents,
+        initialStudentId: studentProfileToOpenId,
         repository: ApiStudentsRepository(
           customSchoolId: schoolId,
           accessToken: accessToken,
@@ -724,6 +772,7 @@ class _DashboardBody extends StatelessWidget {
         onCollectPayment: _canSeeFinancialNotices(role)
             ? onCollectStudentPayment
             : null,
+        onApprovalChanged: onFeeWorkflowChanged,
       );
     }
 
@@ -746,6 +795,26 @@ class _DashboardBody extends StatelessWidget {
           accessToken: accessToken,
           onRefreshAccessToken: onRefreshAccessToken,
         ),
+      );
+    }
+
+    if (selectedPage == _SchoolAdminPage.myLeave ||
+        selectedPage == _SchoolAdminPage.leave) {
+      final personal = selectedPage == _SchoolAdminPage.myLeave;
+      if (!personal && !_canManageLeave(role)) {
+        return const Center(
+          child: Text('Open My Leave to view your own leave requests.'),
+        );
+      }
+      return LeaveManagementScreen(
+        key: ValueKey(personal ? 'my-leave-page' : 'leave-management-page'),
+        myLeave: personal,
+        api: LeaveApiClient(
+          schoolId: schoolId,
+          accessToken: accessToken,
+          onRefreshAccessToken: onRefreshAccessToken,
+        ),
+        onChanged: onFeeWorkflowChanged,
       );
     }
 
@@ -812,6 +881,17 @@ class _DashboardBody extends StatelessWidget {
         openFeeStructureOnLoad: openFeeStructureOnNextFees,
         onRecordPaymentRequestConsumed: onRecordPaymentRequestConsumed,
         onWorkflowChanged: onFeeWorkflowChanged,
+        onOpenStudent: onOpenStudentProfile,
+      );
+    }
+
+    if (selectedPage == _SchoolAdminPage.shop) {
+      return SchoolShopScreen(
+        api: ShopApiClient(
+          schoolId: schoolId,
+          accessToken: accessToken,
+          onRefreshAccessToken: onRefreshAccessToken,
+        ),
       );
     }
 
@@ -1935,82 +2015,144 @@ class _AttentionCard extends StatelessWidget {
   const _AttentionCard({required this.alerts});
   final List<SchoolAlert> alerts;
 
+  static const _visibleAlertCount = 3;
+
+  void _showAllAlerts(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * .8,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'All attention items',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: ListView.separated(
+                    itemCount: alerts.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) => _AttentionItem(
+                      key: ValueKey('all-attention-item-$index'),
+                      alert: alerts[index],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final visibleAlerts = alerts.take(_visibleAlertCount).toList();
+    final remainingCount = alerts.length - visibleAlerts.length;
     return _SectionCard(
       title: 'Attention required',
-      action: 'View all →',
+      action: remainingCount > 0 ? '+ $remainingCount more' : null,
+      onAction: remainingCount > 0 ? () => _showAllAlerts(context) : null,
       child: alerts.isEmpty
           ? const _DashboardEmptyState(
               icon: Icons.task_alt_rounded,
               message: 'Nothing requires attention right now.',
             )
           : Column(
-              children: alerts.map((alert) {
-                final color = switch (alert.level) {
-                  AlertLevel.critical => AppColors.red,
-                  AlertLevel.warning => AppColors.amber,
-                  AlertLevel.info => AppColors.blue,
-                };
-                return Container(
-                  width: double.infinity,
-                  margin: const EdgeInsets.only(bottom: 10),
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: .07),
-                    border: Border.all(color: color.withValues(alpha: .25)),
-                    borderRadius: BorderRadius.circular(10),
+              children: [
+                for (var index = 0; index < visibleAlerts.length; index++) ...[
+                  _AttentionItem(
+                    key: ValueKey('dashboard-attention-item-$index'),
+                    alert: visibleAlerts[index],
                   ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        width: 7,
-                        height: 7,
-                        margin: const EdgeInsets.only(top: 5),
-                        decoration: BoxDecoration(
-                          color: color,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (alert.title.isNotEmpty) ...[
-                              Text(
-                                alert.title,
-                                style: const TextStyle(
-                                  fontSize: 12.5,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              const SizedBox(height: 3),
-                            ],
-                            Text(
-                              alert.message,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: AppColors.muted,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              alert.context,
-                              style: const TextStyle(
-                                fontSize: 11,
-                                color: AppColors.muted,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }).toList(),
+                  if (index < visibleAlerts.length - 1)
+                    const SizedBox(height: 10),
+                ],
+              ],
             ),
+    );
+  }
+}
+
+class _AttentionItem extends StatelessWidget {
+  const _AttentionItem({super.key, required this.alert});
+
+  final SchoolAlert alert;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (alert.level) {
+      AlertLevel.critical => AppColors.red,
+      AlertLevel.warning => AppColors.amber,
+      AlertLevel.info => AppColors.blue,
+    };
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .07),
+        border: Border.all(color: color.withValues(alpha: .25)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 7,
+            height: 7,
+            margin: const EdgeInsets.only(top: 5),
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (alert.title.isNotEmpty) ...[
+                  Text(
+                    alert.title,
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                ],
+                Text(
+                  alert.message,
+                  style: const TextStyle(fontSize: 12, color: AppColors.muted),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  alert.context,
+                  style: const TextStyle(fontSize: 11, color: AppColors.muted),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -4383,6 +4525,17 @@ bool _isTeachingRole(String? role) {
       value == 'SUBJECT_TEACHER';
 }
 
+bool _canManageLeave(String? role) => const {
+  'ADMINISTRATOR',
+  'HEAD_TEACHER',
+  'ASSISTANT_HEAD_TEACHER',
+  'BURSAR',
+  'SECRETARY',
+  'ADMIN',
+  'HEADMASTER',
+  'OWNER',
+}.contains(role?.trim().toUpperCase());
+
 bool _canSeeFinancialNotices(String? role) {
   final normalized = role?.trim().toUpperCase() ?? '';
   return const {
@@ -4746,6 +4899,7 @@ class _Sidebar extends StatelessWidget {
                       onTap: () => onSelectPage(_SchoolAdminPage.students),
                     ),
                   if (!isBursar && !isTeacher) ...[
+                    // Review permissions are enforced by the leave API.
                     _SidebarButton(
                       icon: Icons.fact_check_outlined,
                       label: 'Attendance',
@@ -4783,6 +4937,21 @@ class _Sidebar extends StatelessWidget {
                       onTap: () => onSelectPage(_SchoolAdminPage.classes),
                     ),
                   ],
+                  _SidebarButton(
+                    icon: Icons.event_note_outlined,
+                    label: 'My Leave',
+                    collapsed: collapsed,
+                    active: selectedPage == _SchoolAdminPage.myLeave,
+                    onTap: () => onSelectPage(_SchoolAdminPage.myLeave),
+                  ),
+                  if (_canManageLeave(role))
+                    _SidebarButton(
+                      icon: Icons.event_available_outlined,
+                      label: 'Leave Management',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.leave,
+                      onTap: () => onSelectPage(_SchoolAdminPage.leave),
+                    ),
                   if (!isBursar)
                     _SidebarButton(
                       icon: Icons.assessment_outlined,
@@ -4814,6 +4983,13 @@ class _Sidebar extends StatelessWidget {
                       collapsed: collapsed,
                       active: selectedPage == _SchoolAdminPage.fees,
                       onTap: () => onSelectPage(_SchoolAdminPage.fees),
+                    ),
+                    _SidebarButton(
+                      icon: Icons.storefront_outlined,
+                      label: 'School Shop',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.shop,
+                      onTap: () => onSelectPage(_SchoolAdminPage.shop),
                     ),
                     _SidebarButton(
                       icon: Icons.receipt_long_rounded,

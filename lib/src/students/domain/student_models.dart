@@ -431,8 +431,16 @@ enum StudentRequirementStatus {
   inactive,
 }
 
+enum StudentItemExemptionStatus {
+  draft,
+  pendingApproval,
+  changesRequested,
+  approved,
+}
+
 class StudentRequirement {
   const StudentRequirement({
+    required this.id,
     required this.name,
     required this.requiredQuantity,
     required this.receivedQuantity,
@@ -442,8 +450,13 @@ class StudentRequirement {
     this.isFromPreviousTerm = false,
     this.sourceTerm = '',
     this.studentSpecific = false,
+    this.exemptionRequestId = 0,
+    this.exemptionStatus,
+    this.exemptionApproverName = '',
+    this.exemptionRejectionReason = '',
   });
 
+  final String id;
   final String name;
   final int requiredQuantity;
   final int receivedQuantity;
@@ -453,6 +466,70 @@ class StudentRequirement {
   final bool isFromPreviousTerm;
   final String sourceTerm;
   final bool studentSpecific;
+  final int exemptionRequestId;
+  final StudentItemExemptionStatus? exemptionStatus;
+  final String exemptionApproverName;
+  final String exemptionRejectionReason;
+
+  bool get hasPendingExemption =>
+      exemptionStatus == StudentItemExemptionStatus.pendingApproval;
+}
+
+class StudentItemCollectionEntry {
+  const StudentItemCollectionEntry({
+    required this.requirementId,
+    required this.quantityReceived,
+  });
+
+  final String requirementId;
+  final int quantityReceived;
+}
+
+class StudentItemCollectionReceiptLine {
+  const StudentItemCollectionReceiptLine({
+    required this.requirementId,
+    required this.itemName,
+    required this.unit,
+    required this.quantityReceived,
+    required this.totalReceived,
+    required this.requiredQuantity,
+  });
+
+  final String requirementId;
+  final String itemName;
+  final String unit;
+  final int quantityReceived;
+  final int totalReceived;
+  final int requiredQuantity;
+}
+
+class StudentItemCollectionReceipt {
+  const StudentItemCollectionReceipt({
+    required this.id,
+    required this.number,
+    required this.studentId,
+    required this.studentName,
+    required this.className,
+    required this.academicTerm,
+    required this.collectedAt,
+    required this.collectedBy,
+    required this.lines,
+    this.notes = '',
+  });
+
+  final int id;
+  final String number;
+  final String studentId;
+  final String studentName;
+  final String className;
+  final String academicTerm;
+  final DateTime collectedAt;
+  final String collectedBy;
+  final List<StudentItemCollectionReceiptLine> lines;
+  final String notes;
+
+  int get totalQuantityCollected =>
+      lines.fold(0, (total, line) => total + line.quantityReceived);
 }
 
 class StudentDocument {
@@ -485,6 +562,39 @@ abstract interface class StudentsRepository {
   Future<List<EnrolledStudent>> getEnrolledStudents();
 
   Future<EnrolledStudent> getStudent(String studentId);
+
+  Future<StudentItemCollectionReceipt> collectStudentItems({
+    required String studentId,
+    required String idempotencyKey,
+    required List<StudentItemCollectionEntry> items,
+    String notes = '',
+  });
+
+  Future<List<int>> downloadStudentItemReceipt({
+    required String studentId,
+    required int receiptId,
+  });
+
+  Future<List<StudentItemCollectionReceipt>> getStudentItemReceipts({
+    required String studentId,
+  });
+
+  Future<List<int>> downloadStudentItemReceipts({
+    required String studentId,
+    required List<int> receiptIds,
+  });
+
+  Future<List<FeeAdjustmentApprover>> getItemExemptionApprovers({
+    required String studentId,
+  });
+
+  Future<void> exemptStudentFromItem({
+    required String studentId,
+    required String requirementId,
+    required String reason,
+    int? approverId,
+    required bool submit,
+  });
 
   Future<List<FeeAdjustmentApprover>> getFeeAdjustmentApprovers();
 

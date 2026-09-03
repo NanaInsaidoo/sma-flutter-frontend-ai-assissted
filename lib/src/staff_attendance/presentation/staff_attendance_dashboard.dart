@@ -27,6 +27,7 @@ class _StaffAttendanceDashboardState extends State<StaffAttendanceDashboard> {
   String _status = 'ALL';
   int _page = 0;
   int _rowsPerPage = 10;
+  int _sortColumn = 0;
   bool _ascending = false;
 
   @override
@@ -64,8 +65,29 @@ class _StaffAttendanceDashboardState extends State<StaffAttendanceDashboard> {
         (_data?.days ?? const <StaffAttendanceDayRecord>[])
             .where((day) => _status == 'ALL' || day.status == _status)
             .toList()
-          ..sort((a, b) => a.date.compareTo(b.date));
-    return _ascending ? rows : rows.reversed.toList();
+          ..sort((a, b) {
+            final comparison = switch (_sortColumn) {
+              1 => a.expected.compareTo(b.expected),
+              2 => a.present.compareTo(b.present),
+              3 => a.late.compareTo(b.late),
+              4 => a.excused.compareTo(b.excused),
+              5 => a.unexcused.compareTo(b.unexcused),
+              6 => _statusLabel(a.status).compareTo(_statusLabel(b.status)),
+              _ => a.date.compareTo(b.date),
+            };
+            if (comparison != 0) return _ascending ? comparison : -comparison;
+            final dateComparison = a.date.compareTo(b.date);
+            return _ascending ? dateComparison : -dateComparison;
+          });
+    return rows;
+  }
+
+  void _sortRows(int column, bool ascending) {
+    setState(() {
+      _sortColumn = column;
+      _ascending = ascending;
+      _page = 0;
+    });
   }
 
   @override
@@ -204,58 +226,151 @@ class _StaffAttendanceDashboardState extends State<StaffAttendanceDashboard> {
         ),
       );
 
+  Future<void> _showAllMissingRegisters(
+    List<StaffAttendanceDayRecord> missing,
+  ) async {
+    final selected = await showModalBottomSheet<StaffAttendanceDayRecord>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * .8,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Unresolved attendance days',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: ListView.separated(
+                    itemCount: missing.length,
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (context, index) => _missingRegisterRow(
+                      missing[index],
+                      key: ValueKey('all-missing-register-$index'),
+                      onResolve: () =>
+                          Navigator.of(context).pop(missing[index]),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (selected != null && mounted) await _resolve(selected);
+  }
+
   Widget _attention(StaffAttendanceDashboardData data) {
     final missing = data.days.where((day) => day.status == 'MISSING').toList();
+    final visible = missing.take(3).toList();
+    final remainingCount = missing.length - visible.length;
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
         color: AppColors.amber.withValues(alpha: .07),
         border: Border.all(color: AppColors.amber.withValues(alpha: .35)),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Attention required · ${data.missingRegisters} ${data.missingRegisters == 1 ? 'day' : 'days'} unresolved',
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 4),
-          const Text(
-            'These were expected school days but no attendance register was submitted.',
-            style: TextStyle(color: AppColors.muted),
-          ),
-          const SizedBox(height: 12),
-          ...missing
-              .take(3)
-              .map(
-                (day) => Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.warning_amber_rounded,
-                        color: AppColors.amber,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          '${_longDate(day.date)} · Attendance not taken',
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                      OutlinedButton(
-                        onPressed: () => _resolve(day),
-                        child: const Text('Resolve'),
-                      ),
-                    ],
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Attention required · ${data.missingRegisters} ${data.missingRegisters == 1 ? 'day' : 'days'} unresolved',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
               ),
+              if (remainingCount > 0)
+                TextButton(
+                  key: const ValueKey('more-missing-registers'),
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                  ),
+                  onPressed: () => _showAllMissingRegisters(missing),
+                  child: Text('+ $remainingCount more'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          const Text(
+            'These were expected school days but no attendance register was submitted.',
+            style: TextStyle(color: AppColors.muted, fontSize: 12),
+          ),
+          const SizedBox(height: 6),
+          for (var index = 0; index < visible.length; index++)
+            _missingRegisterRow(
+              visible[index],
+              key: ValueKey('dashboard-missing-register-$index'),
+              compact: true,
+              onResolve: () => _resolve(visible[index]),
+            ),
         ],
       ),
     );
   }
+
+  Widget _missingRegisterRow(
+    StaffAttendanceDayRecord day, {
+    Key? key,
+    required VoidCallback onResolve,
+    bool compact = false,
+  }) => Padding(
+    key: key,
+    padding: EdgeInsets.symmetric(vertical: compact ? 2 : 6),
+    child: Row(
+      children: [
+        Icon(
+          Icons.warning_amber_rounded,
+          color: AppColors.amber,
+          size: compact ? 20 : 24,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            '${_longDate(day.date)} · Attendance not taken',
+            style: TextStyle(
+              fontSize: compact ? 12.5 : 14,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        TextButton(
+          style: TextButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+          ),
+          onPressed: onResolve,
+          child: const Text('Resolve'),
+        ),
+      ],
+    ),
+  );
 
   Widget _registers() {
     final rows = _filtered;
@@ -322,28 +437,48 @@ class _StaffAttendanceDashboardState extends State<StaffAttendanceDashboard> {
             ),
           ),
           const Divider(height: 1),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: DataTable(
-              sortColumnIndex: 0,
-              sortAscending: _ascending,
-              columns: [
-                DataColumn(
-                  label: const Text('Date'),
-                  onSort: (_, ascending) => setState(() {
-                    _ascending = ascending;
-                    _page = 0;
-                  }),
+          LayoutBuilder(
+            builder: (context, constraints) => SingleChildScrollView(
+              key: const ValueKey('staff-attendance-table-scroll'),
+              scrollDirection: Axis.horizontal,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                child: DataTable(
+                  key: const ValueKey('staff-attendance-register-table'),
+                  showCheckboxColumn: false,
+                  sortColumnIndex: _sortColumn,
+                  sortAscending: _ascending,
+                  headingRowHeight: 48,
+                  dataRowMinHeight: 54,
+                  dataRowMaxHeight: 58,
+                  horizontalMargin: 18,
+                  columnSpacing: 28,
+                  dividerThickness: .6,
+                  headingRowColor: const WidgetStatePropertyAll(
+                    Color(0xFFF3F7F6),
+                  ),
+                  headingTextStyle: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.muted,
+                    letterSpacing: .35,
+                  ),
+                  columns: [
+                    _sortableColumn('Date', 0),
+                    _sortableColumn('Expected', 1, numeric: true),
+                    _sortableColumn('Present', 2, numeric: true),
+                    _sortableColumn('Late', 3, numeric: true),
+                    _sortableColumn('Excused', 4, numeric: true),
+                    _sortableColumn('Unexcused', 5, numeric: true),
+                    _sortableColumn('Status', 6),
+                    const DataColumn(label: Text('ACTION')),
+                  ],
+                  rows: [
+                    for (var index = 0; index < visible.length; index++)
+                      _row(visible[index], index),
+                  ],
                 ),
-                const DataColumn(label: Text('Expected')),
-                const DataColumn(label: Text('Present')),
-                const DataColumn(label: Text('Late')),
-                const DataColumn(label: Text('Excused')),
-                const DataColumn(label: Text('Unexcused')),
-                const DataColumn(label: Text('Status')),
-                const DataColumn(label: Text('Action')),
-              ],
-              rows: visible.map(_row).toList(),
+              ),
             ),
           ),
           const Divider(height: 1),
@@ -389,7 +524,37 @@ class _StaffAttendanceDashboardState extends State<StaffAttendanceDashboard> {
     );
   }
 
-  DataRow _row(StaffAttendanceDayRecord day) => DataRow(
+  DataColumn _sortableColumn(String label, int column, {bool numeric = false}) {
+    return DataColumn(
+      numeric: numeric,
+      tooltip: 'Sort by ${label.toLowerCase()}',
+      onSort: _sortRows,
+      label: Row(
+        key: ValueKey('staff-attendance-sort-${label.toLowerCase()}'),
+        children: [
+          Text(label.toUpperCase()),
+          if (_sortColumn != column) ...[
+            const SizedBox(width: 3),
+            const Icon(
+              Icons.unfold_more_rounded,
+              size: 14,
+              color: AppColors.muted,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  DataRow _row(StaffAttendanceDayRecord day, int index) => DataRow(
+    key: ValueKey('staff-attendance-row-${day.date.toIso8601String()}'),
+    color: WidgetStateProperty.resolveWith(
+      (states) => states.contains(WidgetState.hovered)
+          ? AppColors.greenSoft
+          : index.isOdd
+          ? const Color(0xFFFAFCFC)
+          : Colors.white,
+    ),
     cells: [
       DataCell(
         Text(
@@ -425,12 +590,16 @@ class _StaffAttendanceDashboardState extends State<StaffAttendanceDashboard> {
   );
 
   Widget _statusChip(String status, String? eventName) {
-    final (label, color) = switch (status) {
-      'SUBMITTED' => ('Submitted', AppColors.green),
-      'DRAFT' => ('Draft', AppColors.amber),
-      'NON_SCHOOL_DAY' => (eventName ?? 'Non-school day', AppColors.blue),
-      _ => ('Missing', AppColors.red),
+    final color = switch (status) {
+      'SUBMITTED' => AppColors.green,
+      'DRAFT' => AppColors.amber,
+      'NON_SCHOOL_DAY' => AppColors.blue,
+      _ => AppColors.red,
     };
+    final label =
+        eventName?.trim().isNotEmpty == true && status == 'NON_SCHOOL_DAY'
+        ? eventName!
+        : _statusLabel(status);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
@@ -443,6 +612,13 @@ class _StaffAttendanceDashboardState extends State<StaffAttendanceDashboard> {
       ),
     );
   }
+
+  String _statusLabel(String status) => switch (status) {
+    'SUBMITTED' => 'Submitted',
+    'DRAFT' => 'Draft',
+    'NON_SCHOOL_DAY' => 'Non-school day',
+    _ => 'Missing',
+  };
 
   Future<void> _resolve(StaffAttendanceDayRecord day) async {
     final action = await showDialog<String>(

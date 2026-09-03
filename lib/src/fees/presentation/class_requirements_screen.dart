@@ -94,7 +94,6 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
           onSubmitStudentRequirement: _submitStudentRequirement,
           onWithdrawStudentRequirement: _withdrawStudentRequirement,
           onReviewStudentRequirement: _reviewStudentRequirement,
-          onRecordStudentRequirement: _recordStudentRequirement,
           onOpenPriorTerm: _openPriorTerm,
         );
       },
@@ -306,12 +305,24 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
   }
 
   Future<void> _showPublishDialog(ClassRequirementGroup group) async {
-    final plan = await showDialog<RequirementNotificationPlan>(
+    final plan = await showGeneralDialog<RequirementNotificationPlan>(
       context: context,
-      builder: (context) => _PublishRequirementsDialog(
-        className: group.className,
-        changeCount: widget.repository.draftChangeCountForClass(group.id),
-      ),
+      barrierColor: Colors.black.withValues(alpha: .48),
+      barrierLabel: 'Close requirements publication review',
+      barrierDismissible: false,
+      transitionDuration: const Duration(milliseconds: 240),
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final slide = Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
+            .animate(
+              CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+            );
+        return FadeTransition(
+          opacity: animation,
+          child: SlideTransition(position: slide, child: child),
+        );
+      },
+      pageBuilder: (context, animation, secondaryAnimation) =>
+          _PublishRequirementsPanel(group: group),
     );
     if (plan == null) return;
     try {
@@ -560,57 +571,11 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
           return _StudentRequirementDialog(
             group: group,
             student: updated,
-            onRecord: (item) => _recordReceived(updated, item),
-            onAdjust: (item) => _adjustRequirement(updated, item),
             onAddCustom: () => _addCustomRequirement(updated),
           );
         },
       ),
     );
-  }
-
-  Future<void> _recordReceived(
-    StudentRequirementProgress student,
-    ClassRequirementItem item,
-  ) async {
-    final quantity = await showDialog<int>(
-      context: context,
-      builder: (context) => _RecordReceivedDialog(
-        item: item,
-        current: student.receivedQuantities[item.id] ?? 0,
-        target: _targetQuantity(student, item),
-      ),
-    );
-    if (quantity == null) return;
-    try {
-      await widget.repository.recordReceived(
-        studentId: student.id,
-        requirementId: item.id,
-        quantity: quantity,
-      );
-    } catch (error) {
-      _showError(error);
-    }
-  }
-
-  Future<void> _adjustRequirement(
-    StudentRequirementProgress student,
-    ClassRequirementItem item,
-  ) async {
-    final adjustment = await showDialog<StudentRequirementAdjustment>(
-      context: context,
-      builder: (context) => _AdjustmentDialog(item: item),
-    );
-    if (adjustment == null) return;
-    try {
-      await widget.repository.adjustRequirement(
-        studentId: student.id,
-        requirementId: item.id,
-        adjustment: adjustment,
-      );
-    } catch (error) {
-      _showError(error);
-    }
   }
 
   Future<void> _addCustomRequirement(StudentRequirementProgress student) async {
@@ -778,26 +743,6 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
     }
   }
 
-  Future<void> _recordStudentRequirement(
-    StudentCustomRequirement requirement,
-  ) async {
-    final quantity = await showDialog<int>(
-      context: context,
-      builder: (context) =>
-          _StudentRequirementReceivedDialog(requirement: requirement),
-    );
-    if (quantity == null) return;
-    try {
-      await widget.repository.recordStudentRequirementReceived(
-        requirement.id,
-        quantity,
-      );
-      _showMessage('Delivered quantity updated.');
-    } catch (error) {
-      _showError(error);
-    }
-  }
-
   void _showError(Object error) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -869,7 +814,6 @@ class _RequirementsOverview extends StatelessWidget {
     required this.onSubmitStudentRequirement,
     required this.onWithdrawStudentRequirement,
     required this.onReviewStudentRequirement,
-    required this.onRecordStudentRequirement,
     required this.onOpenPriorTerm,
   });
 
@@ -885,7 +829,6 @@ class _RequirementsOverview extends StatelessWidget {
   final ValueChanged<StudentCustomRequirement> onSubmitStudentRequirement;
   final ValueChanged<StudentCustomRequirement> onWithdrawStudentRequirement;
   final ValueChanged<StudentCustomRequirement> onReviewStudentRequirement;
-  final ValueChanged<StudentCustomRequirement> onRecordStudentRequirement;
   final VoidCallback onOpenPriorTerm;
 
   @override
@@ -893,14 +836,8 @@ class _RequirementsOverview extends StatelessWidget {
     final groups = repository.groups;
     final totalStudents = groups.fold<int>(0, (sum, g) => sum + g.studentCount);
     final totalItems = groups.fold<int>(0, (sum, g) => sum + g.items.length);
-    final completion = groups.isEmpty
-        ? 0
-        : (groups
-                      .map((g) => _groupCompletion(repository, g))
-                      .reduce((a, b) => a + b) /
-                  groups.length *
-                  100)
-              .round();
+    final completionSummary = repository.completionSummary;
+    final completion = completionSummary.completionPercentage.round();
     final updatedItems = groups.fold<int>(
       0,
       (sum, g) =>
@@ -971,7 +908,9 @@ class _RequirementsOverview extends StatelessWidget {
               _SummaryCardData(
                 'Overall completion',
                 '$completion%',
-                'Items received or waived',
+                completionSummary.activeObligations == 0
+                    ? 'No active published student items'
+                    : '${completionSummary.completedObligations} of ${completionSummary.activeObligations} fully resolved · partial receipts included',
                 Icons.task_alt_rounded,
                 AppColors.green,
               ),
@@ -1049,7 +988,6 @@ class _RequirementsOverview extends StatelessWidget {
             onSubmit: onSubmitStudentRequirement,
             onWithdraw: onWithdrawStudentRequirement,
             onReview: onReviewStudentRequirement,
-            onRecord: onRecordStudentRequirement,
           ),
       ],
     );
@@ -1204,7 +1142,6 @@ class _StudentSpecificRequirementsPanel extends StatefulWidget {
     required this.onSubmit,
     required this.onWithdraw,
     required this.onReview,
-    required this.onRecord,
   });
 
   final List<StudentCustomRequirement> requirements;
@@ -1214,7 +1151,6 @@ class _StudentSpecificRequirementsPanel extends StatefulWidget {
   final ValueChanged<StudentCustomRequirement> onSubmit;
   final ValueChanged<StudentCustomRequirement> onWithdraw;
   final ValueChanged<StudentCustomRequirement> onReview;
-  final ValueChanged<StudentCustomRequirement> onRecord;
 
   @override
   State<_StudentSpecificRequirementsPanel> createState() =>
@@ -1380,8 +1316,6 @@ class _StudentSpecificRequirementsPanelState
       case 'review':
       case 'view':
         widget.onReview(item);
-      case 'record':
-        widget.onRecord(item);
     }
   }
 }
@@ -1658,10 +1592,9 @@ class _StudentRequirementActions extends StatelessWidget {
       );
     } else if (requirement.status == StudentSpecificRequirementStatus.active &&
         requirement.receivedQuantity < requirement.quantity) {
-      actions.addAll(const [
-        PopupMenuItem(value: 'record', child: Text('Record delivery')),
-        PopupMenuItem(value: 'view', child: Text('View details')),
-      ]);
+      actions.add(
+        const PopupMenuItem(value: 'view', child: Text('View details')),
+      );
     } else {
       actions.add(
         const PopupMenuItem(value: 'view', child: Text('View details')),
@@ -2011,13 +1944,9 @@ class _RequirementApprovalDialog extends StatelessWidget {
 }
 
 class _ApprovedRequirementsBanner extends StatelessWidget {
-  const _ApprovedRequirementsBanner({
-    required this.canPublish,
-    required this.onPublish,
-  });
+  const _ApprovedRequirementsBanner({required this.canPublish});
 
   final bool canPublish;
-  final VoidCallback? onPublish;
 
   @override
   Widget build(BuildContext context) {
@@ -2073,28 +2002,85 @@ class _ApprovedRequirementsBanner extends StatelessWidget {
               ),
             ],
           );
-          final button = FilledButton.icon(
-            key: const Key('publish-approved-requirements'),
-            onPressed: onPublish,
-            icon: const Icon(Icons.publish_rounded, size: 18),
-            label: const Text('Publish items'),
-          );
-          if (constraints.maxWidth < 700) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                content,
-                if (canPublish) ...[const SizedBox(height: 14), button],
-              ],
-            );
-          }
-          return Row(
-            children: [
-              Expanded(child: content),
-              if (canPublish) ...[const SizedBox(width: 18), button],
-            ],
-          );
+          return content;
         },
+      ),
+    );
+  }
+}
+
+class _UnpublishedRequirementChangesBanner extends StatelessWidget {
+  const _UnpublishedRequirementChangesBanner({
+    required this.group,
+    required this.changeCount,
+  });
+
+  final ClassRequirementGroup group;
+  final int changeCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final pending = group.status == RequirementStatus.pendingApproval;
+    final count = changeCount;
+    final changeLabel = '$count ${count == 1 ? 'change' : 'changes'}';
+    final approver = group.assignedApproverName.trim();
+    return Container(
+      key: const Key('unpublished-requirement-changes-banner'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: (pending ? AppColors.blue : AppColors.amber).withValues(
+          alpha: .09,
+        ),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: (pending ? AppColors.blue : AppColors.amber).withValues(
+            alpha: .38,
+          ),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Icon(
+              pending
+                  ? Icons.hourglass_top_rounded
+                  : Icons.notification_important_outlined,
+              color: pending ? AppColors.blue : AppColors.amber,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  pending
+                      ? 'Changes submitted — awaiting approval'
+                      : 'New or changed items are not active',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  pending
+                      ? '$changeLabel ${count == 1 ? 'is' : 'are'} waiting${approver.isEmpty ? '' : ' for $approver'} to approve. The previously published list remains active until this revision is approved and published.'
+                      : '$changeLabel ${count == 1 ? 'is' : 'are'} saved as Draft and ${count == 1 ? 'has' : 'have'} not been submitted or approved. Submit the revised list for approval. The previously published list remains active for students and guardians.',
+                  style: const TextStyle(color: AppColors.muted, height: 1.4),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2127,8 +2113,14 @@ class _ClassTracker extends StatelessWidget {
   Widget build(BuildContext context) {
     final students = repository.studentsForClass(group.id);
     final hasItems = group.items.isNotEmpty;
+    final publishedItems = _publishedRequirementItems(group);
+    final changes = _requirementChanges(group);
+    final visibleDraftChanges = group.draftChangeCount > 0
+        ? group.draftChangeCount
+        : group.items.where((item) => item.updatedSincePublished).length;
     final canEdit =
         group.status == RequirementStatus.published ||
+        (group.status == RequirementStatus.approved && group.creatorOwned) ||
         (group.status == RequirementStatus.draft && group.creatorOwned);
     final canUseWorkflow = switch (group.status) {
       RequirementStatus.draft => group.creatorOwned,
@@ -2137,6 +2129,34 @@ class _ClassTracker extends StatelessWidget {
       RequirementStatus.approved => group.creatorOwned,
       RequirementStatus.published => false,
     };
+    final workflowAction = group.status == RequirementStatus.published
+        ? null
+        : FilledButton.icon(
+            key: group.status == RequirementStatus.approved
+                ? const Key('publish-approved-requirements')
+                : const Key('requirements-workflow-action'),
+            onPressed: !hasItems || !canUseWorkflow ? null : onPublish,
+            icon: Icon(
+              group.status == RequirementStatus.approved
+                  ? Icons.publish_rounded
+                  : Icons.campaign_outlined,
+            ),
+            label: Text(
+              !hasItems
+                  ? 'Add items first'
+                  : switch (group.status) {
+                      RequirementStatus.draft => 'Submit for approval',
+                      RequirementStatus.pendingApproval =>
+                        group.creatorOwned
+                            ? 'Withdraw approval request'
+                            : group.assignedApproverId == currentUserId
+                            ? 'Review approval'
+                            : 'Pending · ${group.assignedApproverName}',
+                      RequirementStatus.approved => 'Publish items',
+                      RequirementStatus.published => 'Published',
+                    },
+            ),
+          );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2157,31 +2177,6 @@ class _ClassTracker extends StatelessWidget {
                 icon: const Icon(Icons.add_rounded),
                 label: const Text('Add class item'),
               ),
-            if (group.status != RequirementStatus.approved &&
-                group.status != RequirementStatus.published)
-              FilledButton.icon(
-                onPressed: !hasItems || !canUseWorkflow ? null : onPublish,
-                icon: Icon(
-                  hasItems
-                      ? Icons.campaign_outlined
-                      : Icons.inventory_2_outlined,
-                ),
-                label: Text(
-                  !hasItems
-                      ? 'Add items to publish'
-                      : switch (group.status) {
-                          RequirementStatus.draft => 'Submit for approval',
-                          RequirementStatus.pendingApproval =>
-                            group.creatorOwned
-                                ? 'Withdraw approval request'
-                                : group.assignedApproverId == currentUserId
-                                ? 'Review approval'
-                                : 'Pending · ${group.assignedApproverName}',
-                          RequirementStatus.approved => 'Publish items',
-                          RequirementStatus.published => 'Published',
-                        },
-                ),
-              ),
             if (!canEdit && group.status == RequirementStatus.draft)
               const Padding(
                 padding: EdgeInsets.only(left: 8),
@@ -2192,12 +2187,19 @@ class _ClassTracker extends StatelessWidget {
               ),
           ],
         ),
+        if (group.hasPublishedVersion &&
+            visibleDraftChanges > 0 &&
+            (group.status == RequirementStatus.draft ||
+                group.status == RequirementStatus.pendingApproval)) ...[
+          const SizedBox(height: 14),
+          _UnpublishedRequirementChangesBanner(
+            group: group,
+            changeCount: visibleDraftChanges,
+          ),
+        ],
         if (group.status == RequirementStatus.approved) ...[
           const SizedBox(height: 14),
-          _ApprovedRequirementsBanner(
-            canPublish: canUseWorkflow,
-            onPublish: canUseWorkflow ? onPublish : null,
-          ),
+          _ApprovedRequirementsBanner(canPublish: canUseWorkflow),
         ],
         if (group.status == RequirementStatus.draft &&
             group.rejectionReason.trim().isNotEmpty) ...[
@@ -2237,15 +2239,47 @@ class _ClassTracker extends StatelessWidget {
           _EmptyClassSetup(onAddRequirement: canEdit ? onAddRequirement : null),
           const SizedBox(height: 20),
         ],
-        _ClassChecklistTable(
-          items: group.items,
-          isRevision:
-              group.hasPublishedVersion &&
-              group.status != RequirementStatus.published,
-          status: group.status,
-          onEdit: canEdit ? onEditRequirement : null,
-          onDelete: canEdit ? onDeleteRequirement : null,
-        ),
+        if (publishedItems.isNotEmpty) ...[
+          _ClassChecklistTable(
+            key: const Key('published-requirements-section'),
+            title: 'Currently published',
+            subtitle:
+                'This published list is visible to parents, students and reports.',
+            items: publishedItems,
+            isRevision: false,
+            status: RequirementStatus.published,
+            onEdit: group.status == RequirementStatus.published && canEdit
+                ? onEditRequirement
+                : null,
+            onDelete: group.status == RequirementStatus.published && canEdit
+                ? onDeleteRequirement
+                : null,
+          ),
+          if (group.status != RequirementStatus.published)
+            const SizedBox(height: 16),
+        ],
+        if (group.status != RequirementStatus.published ||
+            publishedItems.isEmpty)
+          _ClassChecklistTable(
+            key: const Key('working-requirements-section'),
+            title: group.hasPublishedVersion
+                ? 'Changes in progress'
+                : group.status == RequirementStatus.draft
+                ? 'Draft items'
+                : 'Items in this request',
+            subtitle: group.hasPublishedVersion
+                ? 'Only these proposed changes are awaiting completion of the workflow.'
+                : 'These items are not visible to parents until they are approved and published.',
+            items: group.hasPublishedVersion ? changes : group.items,
+            isRevision: group.hasPublishedVersion,
+            status: group.status,
+            onEdit: canEdit ? onEditRequirement : null,
+            onDelete: canEdit ? onDeleteRequirement : null,
+            headerAction: workflowAction,
+            emptyMessage: group.hasPublishedVersion
+                ? 'No differences from the currently published list.'
+                : 'No class items have been added yet.',
+          ),
         const SizedBox(height: 20),
         const Text(
           'Student progress',
@@ -2316,20 +2350,124 @@ class _ClassTracker extends StatelessWidget {
   }
 }
 
+List<ClassRequirementItem> _publishedRequirementItems(
+  ClassRequirementGroup group,
+) {
+  if (!group.hasPublishedVersion) return const [];
+  if (group.publishedItems.isNotEmpty) return group.publishedItems;
+  if (group.status == RequirementStatus.published) return group.items;
+  return group.items
+      .where((item) => !item.updatedSincePublished)
+      .toList(growable: false);
+}
+
+List<ClassRequirementItem> _requirementChanges(ClassRequirementGroup group) {
+  if (!group.hasPublishedVersion) return group.items;
+  final published = _publishedRequirementItems(group);
+  final publishedByKey = {for (final item in published) item.identityKey: item};
+  final workingKeys = group.items.map((item) => item.identityKey).toSet();
+  final changes = <ClassRequirementItem>[
+    ...group.items.where((item) {
+      final previous = publishedByKey[item.identityKey];
+      return item.updatedSincePublished ||
+          previous == null ||
+          !_sameRequirementItem(item, previous);
+    }),
+    ...published
+        .where((item) => !workingKeys.contains(item.identityKey))
+        .map(
+          (item) => item.copyWith(
+            updatedSincePublished: true,
+            changeType: RequirementItemChange.removed,
+          ),
+        ),
+  ];
+  return changes;
+}
+
+bool _sameRequirementItem(
+  ClassRequirementItem current,
+  ClassRequirementItem previous,
+) =>
+    current.name == previous.name &&
+    current.category == previous.category &&
+    current.quantity == previous.quantity &&
+    current.unit == previous.unit &&
+    current.estimatedUnitPrice == previous.estimatedUnitPrice &&
+    _date(current.dueDate) == _date(previous.dueDate) &&
+    current.instructions == previous.instructions &&
+    current.isOptional == previous.isOptional;
+
+enum _RequirementPublicationKind { newItem, modified, same, removed }
+
+class _RequirementPublicationItem {
+  const _RequirementPublicationItem({
+    required this.item,
+    required this.kind,
+    this.previous,
+  });
+
+  final ClassRequirementItem item;
+  final ClassRequirementItem? previous;
+  final _RequirementPublicationKind kind;
+}
+
+List<_RequirementPublicationItem> _publicationReviewItems(
+  ClassRequirementGroup group,
+) {
+  final published = _publishedRequirementItems(group);
+  final publishedByKey = {for (final item in published) item.identityKey: item};
+  final workingKeys = group.items.map((item) => item.identityKey).toSet();
+
+  return [
+    ...group.items.map((item) {
+      final previous = publishedByKey[item.identityKey];
+      final kind = previous == null
+          ? _RequirementPublicationKind.newItem
+          : _sameRequirementItem(item, previous)
+          ? _RequirementPublicationKind.same
+          : _RequirementPublicationKind.modified;
+      return _RequirementPublicationItem(
+        item: item,
+        previous: previous,
+        kind: kind,
+      );
+    }),
+    ...published
+        .where((item) => !workingKeys.contains(item.identityKey))
+        .map(
+          (item) => _RequirementPublicationItem(
+            item: item,
+            previous: item,
+            kind: _RequirementPublicationKind.removed,
+          ),
+        ),
+  ];
+}
+
 class _ClassChecklistTable extends StatelessWidget {
   const _ClassChecklistTable({
+    super.key,
+    required this.title,
+    required this.subtitle,
     required this.items,
     required this.isRevision,
     required this.status,
     required this.onEdit,
     required this.onDelete,
+    this.headerAction,
+    this.emptyMessage = 'No class items have been added yet.',
   });
 
+  final String title;
+  final String subtitle;
   final List<ClassRequirementItem> items;
   final bool isRevision;
   final RequirementStatus status;
   final ValueChanged<ClassRequirementItem>? onEdit;
   final ValueChanged<ClassRequirementItem>? onDelete;
+  final Widget? headerAction;
+  final String emptyMessage;
 
   @override
   Widget build(BuildContext context) {
@@ -2341,21 +2479,63 @@ class _ClassChecklistTable extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(20, 18, 20, 16),
-              child: Text(
-                'Class checklist',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final details = Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  );
+                  if (headerAction == null) return details;
+                  if (constraints.maxWidth < 700) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        details,
+                        const SizedBox(height: 12),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: headerAction!,
+                        ),
+                      ],
+                    );
+                  }
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Expanded(child: details),
+                      const SizedBox(width: 16),
+                      headerAction!,
+                    ],
+                  );
+                },
               ),
             ),
             if (items.isEmpty)
-              const SizedBox(
+              SizedBox(
                 width: double.infinity,
                 child: Padding(
-                  padding: EdgeInsets.fromLTRB(20, 0, 20, 22),
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 22),
                   child: Text(
-                    'No class items have been added yet.',
-                    style: TextStyle(color: AppColors.muted),
+                    emptyMessage,
+                    style: const TextStyle(color: AppColors.muted),
                   ),
                 ),
               )
@@ -2378,10 +2558,16 @@ class _ClassChecklistTable extends StatelessWidget {
                               item,
                               isRevision: isRevision,
                               status: status,
-                              onEdit: onEdit == null
+                              onEdit:
+                                  onEdit == null ||
+                                      item.changeType ==
+                                          RequirementItemChange.removed
                                   ? null
                                   : () => onEdit!(item),
-                              onDelete: onDelete == null
+                              onDelete:
+                                  onDelete == null ||
+                                      item.changeType ==
+                                          RequirementItemChange.removed
                                   ? null
                                   : () => onDelete!(item),
                             ),
@@ -2440,10 +2626,26 @@ class _ChecklistRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isAdded =
+        isRevision &&
+        item.updatedSincePublished &&
+        item.changeType == RequirementItemChange.added;
+    final isRemoved =
+        isRevision && item.changeType == RequirementItemChange.removed;
+    final isModified =
+        isRevision && item.changeType == RequirementItemChange.modified;
+    final lifecycleText = _publishedItemAuditText(item);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: AppColors.border)),
+      decoration: BoxDecoration(
+        color: isRemoved
+            ? AppColors.red.withValues(alpha: .045)
+            : isAdded
+            ? AppColors.blue.withValues(alpha: .055)
+            : isModified
+            ? AppColors.amber.withValues(alpha: .045)
+            : null,
+        border: const Border(bottom: BorderSide(color: AppColors.border)),
       ),
       child: Row(
         children: [
@@ -2459,7 +2661,12 @@ class _ChecklistRow extends StatelessWidget {
                     children: [
                       Text(
                         item.name,
-                        style: const TextStyle(fontWeight: FontWeight.w900),
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          decoration: isRemoved
+                              ? TextDecoration.lineThrough
+                              : null,
+                        ),
                       ),
                       if (item.instructions.isNotEmpty) ...[
                         const SizedBox(height: 3),
@@ -2470,6 +2677,19 @@ class _ChecklistRow extends StatelessWidget {
                           style: const TextStyle(
                             color: AppColors.muted,
                             fontSize: 12,
+                          ),
+                        ),
+                      ],
+                      if (lifecycleText.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          lifecycleText,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: AppColors.muted.withValues(alpha: .85),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ],
@@ -2519,7 +2739,18 @@ class _ChecklistRow extends StatelessWidget {
               runSpacing: 5,
               children: [
                 if (item.updatedSincePublished && isRevision)
-                  const _SmallPill(label: 'Updated', color: AppColors.amber),
+                  _SmallPill(
+                    label: isRemoved
+                        ? 'Removing'
+                        : isAdded
+                        ? 'New item'
+                        : 'Modified',
+                    color: isRemoved
+                        ? AppColors.red
+                        : isAdded
+                        ? AppColors.blue
+                        : AppColors.amber,
+                  ),
                 if (item.isOptional)
                   const _SmallPill(label: 'Optional', color: AppColors.blue),
                 if (!item.updatedSincePublished || !isRevision)
@@ -2531,7 +2762,7 @@ class _ChecklistRow extends StatelessWidget {
                             RequirementStatus.pendingApproval =>
                               'Pending approval',
                             RequirementStatus.approved => 'Approved',
-                            RequirementStatus.published => 'Active',
+                            RequirementStatus.published => 'Published',
                           },
                     color: isRevision
                         ? AppColors.green
@@ -2934,15 +3165,11 @@ class _StudentRequirementDialog extends StatelessWidget {
   const _StudentRequirementDialog({
     required this.group,
     required this.student,
-    required this.onRecord,
-    required this.onAdjust,
     required this.onAddCustom,
   });
 
   final ClassRequirementGroup group;
   final StudentRequirementProgress student;
-  final ValueChanged<ClassRequirementItem> onRecord;
-  final ValueChanged<ClassRequirementItem> onAdjust;
   final VoidCallback onAddCustom;
 
   @override
@@ -3016,8 +3243,6 @@ class _StudentRequirementDialog extends StatelessWidget {
                     (item) => _StudentRequirementItemCard(
                       item: item,
                       student: student,
-                      onRecord: () => onRecord(item),
-                      onAdjust: () => onAdjust(item),
                     ),
                   ),
                   if (student.customRequirements.isNotEmpty) ...[
@@ -3064,14 +3289,10 @@ class _StudentRequirementItemCard extends StatelessWidget {
   const _StudentRequirementItemCard({
     required this.item,
     required this.student,
-    required this.onRecord,
-    required this.onAdjust,
   });
 
   final ClassRequirementItem item;
   final StudentRequirementProgress student;
-  final VoidCallback onRecord;
-  final VoidCallback onAdjust;
 
   @override
   Widget build(BuildContext context) {
@@ -3124,21 +3345,12 @@ class _StudentRequirementItemCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton.icon(
-                  onPressed: onAdjust,
-                  icon: const Icon(Icons.tune_rounded),
-                  label: const Text('Adjust / waive'),
-                ),
-                const SizedBox(width: 8),
-                FilledButton.icon(
-                  onPressed: onRecord,
-                  icon: const Icon(Icons.add_task_rounded),
-                  label: const Text('Record received'),
-                ),
-              ],
+            const Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                'Manage delivery and exemptions from the student profile.',
+                style: TextStyle(color: AppColors.muted, fontSize: 12),
+              ),
             ),
           ],
         ),
@@ -4467,136 +4679,190 @@ class _ReviewFact extends StatelessWidget {
   }
 }
 
-class _PublishRequirementsDialog extends StatefulWidget {
-  const _PublishRequirementsDialog({
-    required this.className,
-    required this.changeCount,
-  });
+class _PublishRequirementsPanel extends StatelessWidget {
+  const _PublishRequirementsPanel({required this.group});
 
-  final String className;
-  final int changeCount;
-
-  @override
-  State<_PublishRequirementsDialog> createState() =>
-      _PublishRequirementsDialogState();
-}
-
-class _PublishRequirementsDialogState
-    extends State<_PublishRequirementsDialog> {
-  bool _useDefault = true;
-  final Set<String> _methods = {'WhatsApp', 'Email'};
-  final _message = TextEditingController(
-    text:
-        'Your child’s class requirements have been updated. Please review the new checklist and due dates.',
-  );
-
-  @override
-  void dispose() {
-    _message.dispose();
-    super.dispose();
-  }
+  final ClassRequirementGroup group;
 
   @override
   Widget build(BuildContext context) {
-    const methods = [
-      'WhatsApp',
-      'Email',
-      'SMS',
-      'Phone call',
-      'Physical letter',
-    ];
-    return AlertDialog(
-      title: Text('Publish ${widget.className} requirements'),
-      content: SizedBox(
-        width: 620,
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: AppColors.amber.withValues(alpha: .10),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.info_outline_rounded,
-                      color: AppColors.amber,
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        '${widget.changeCount} ${widget.className} draft change${widget.changeCount == 1 ? '' : 's'} will become visible to school staff and guardians. Other classes are not affected.',
+    final reviewItems = _publicationReviewItems(group);
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final panelWidth = screenWidth < 720
+        ? screenWidth
+        : (screenWidth * .40).clamp(540.0, 680.0).toDouble();
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Material(
+        color: Colors.white,
+        elevation: 20,
+        child: SafeArea(
+          left: false,
+          child: SizedBox(
+            width: panelWidth,
+            height: double.infinity,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(22, 18, 12, 15),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Publish approved items',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              '${group.className} · ${reviewItems.length} items',
+                              style: const TextStyle(
+                                color: AppColors.muted,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
+                      IconButton(
+                        tooltip: 'Close',
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(22, 20, 22, 28),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'ITEMS TO PUBLISH',
+                          style: TextStyle(
+                            color: AppColors.muted,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: .5,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        ...reviewItems.map(_itemCard),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
-              const SizedBox(height: 18),
-              const Text(
-                'Guardian notification',
-                style: TextStyle(fontWeight: FontWeight.w900),
-              ),
-              CheckboxListTile(
-                contentPadding: EdgeInsets.zero,
-                value: _useDefault,
-                title: const Text('Use each guardian’s preferred method'),
-                subtitle: const Text(
-                  'Recommended. The saved WhatsApp, email, SMS or phone preference will be used.',
-                ),
-                onChanged: (value) => setState(() => _useDefault = value!),
-              ),
-              if (!_useDefault) ...[
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: methods.map((method) {
-                    return FilterChip(
-                      selected: _methods.contains(method),
-                      label: Text(method),
-                      onSelected: (selected) => setState(() {
-                        selected
-                            ? _methods.add(method)
-                            : _methods.remove(method);
-                      }),
-                    );
-                  }).toList(),
+                Container(
+                  padding: const EdgeInsets.fromLTRB(22, 15, 22, 18),
+                  decoration: const BoxDecoration(
+                    border: Border(top: BorderSide(color: AppColors.border)),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton.icon(
+                          key: const Key('confirm-publish-requirements'),
+                          onPressed: () => Navigator.pop(
+                            context,
+                            const RequirementNotificationPlan(
+                              useDefaultPreference: true,
+                              methods: {},
+                              message:
+                                  'Your child’s class requirements have been updated.',
+                            ),
+                          ),
+                          icon: const Icon(Icons.publish_rounded),
+                          label: const Text('Publish items'),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
-              const SizedBox(height: 18),
-              TextField(
-                controller: _message,
-                maxLines: 4,
-                decoration: const InputDecoration(labelText: 'Message'),
-              ),
-            ],
+            ),
           ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Keep as draft'),
-        ),
-        FilledButton.icon(
-          onPressed: (!_useDefault && _methods.isEmpty)
-              ? null
-              : () => Navigator.pop(
-                  context,
-                  RequirementNotificationPlan(
-                    useDefaultPreference: _useDefault,
-                    methods: Set.unmodifiable(_methods),
-                    message: _message.text.trim(),
-                  ),
+    );
+  }
+
+  Widget _itemCard(_RequirementPublicationItem reviewItem) {
+    final item = reviewItem.item;
+    final previous = reviewItem.previous;
+    final label = switch (reviewItem.kind) {
+      _RequirementPublicationKind.newItem => 'NEW',
+      _RequirementPublicationKind.modified => 'MODIFIED',
+      _RequirementPublicationKind.same => 'SAME',
+      _RequirementPublicationKind.removed => 'REMOVED',
+    };
+    final color = switch (reviewItem.kind) {
+      _RequirementPublicationKind.newItem => AppColors.blue,
+      _RequirementPublicationKind.modified => AppColors.amber,
+      _RequirementPublicationKind.same => AppColors.green,
+      _RequirementPublicationKind.removed => AppColors.red,
+    };
+    return Container(
+      key: Key('publish-item-${item.identityKey}'),
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 9),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        border: Border.all(color: color.withValues(alpha: .32)),
+        borderRadius: BorderRadius.circular(12),
+        color: color.withValues(alpha: .045),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  item.name,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
                 ),
-          icon: const Icon(Icons.campaign_outlined),
-          label: const Text('Publish & notify'),
-        ),
-      ],
+              ),
+              _SmallPill(label: label, color: color),
+            ],
+          ),
+          const SizedBox(height: 7),
+          if (previous != null &&
+              reviewItem.kind == _RequirementPublicationKind.modified)
+            Text(
+              '${previous.quantity} ${previous.unit}  →  ${item.quantity} ${item.unit}',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            )
+          else
+            Text(
+              '${item.quantity} ${item.unit}',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+          if (previous != null &&
+              reviewItem.kind == _RequirementPublicationKind.modified &&
+              previous.estimatedUnitPrice != item.estimatedUnitPrice)
+            Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Text(
+                '${_money(previous.estimatedUnitPrice)} → ${_money(item.estimatedUnitPrice)} per ${_singularUnit(item.unit)}',
+                style: const TextStyle(color: AppColors.muted, fontSize: 12),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -4813,14 +5079,46 @@ double _groupCompletion(
 ) {
   final students = repository.studentsForClass(group.id);
   if (students.isEmpty || group.items.isEmpty) return 0;
-  var completed = 0;
-  final total = students.length * group.items.length;
+  var progress = 0.0;
+  var total = 0;
   for (final student in students) {
-    for (final item in group.items) {
-      if (_isComplete(student, item)) completed++;
+    if (student.items.isNotEmpty) {
+      for (final item in student.items) {
+        total++;
+        final status = item.status.toUpperCase();
+        if (status == 'WAIVED' ||
+            status == 'CASH_EQUIVALENT' ||
+            item.requiredQuantity <= 0) {
+          progress += 1;
+        } else {
+          progress += (item.receivedQuantity / item.requiredQuantity).clamp(
+            0.0,
+            1.0,
+          );
+        }
+      }
+    } else {
+      for (final item in group.items) {
+        total++;
+        final target = _targetQuantity(student, item);
+        if (target <= 0) {
+          progress += 1;
+        } else {
+          progress += ((student.receivedQuantities[item.id] ?? 0) / target)
+              .clamp(0.0, 1.0);
+        }
+      }
+    }
+    for (final item in student.customRequirements.where(
+      (item) => item.status == StudentSpecificRequirementStatus.active,
+    )) {
+      total++;
+      progress += item.quantity <= 0
+          ? 1
+          : (item.receivedQuantity / item.quantity).clamp(0.0, 1.0);
     }
   }
-  return completed / total;
+  return total == 0 ? 0 : progress / total;
 }
 
 bool _isComplete(
@@ -4885,6 +5183,18 @@ String _date(DateTime date) {
     'Dec',
   ];
   return '${date.day} ${months[date.month - 1]} ${date.year}';
+}
+
+String _publishedItemAuditText(ClassRequirementItem item) {
+  final at = item.lifecycleAt;
+  if (at == null || item.lifecycleAction.trim().isEmpty) return '';
+  final verb = item.lifecycleAction.toUpperCase() == 'UPDATED'
+      ? 'Updated'
+      : 'Added';
+  final date = _date(at);
+  return item.lifecycleBy.trim().isEmpty
+      ? '$verb $date'
+      : '$verb $date by ${item.lifecycleBy.trim()}';
 }
 
 String _money(double amount) {

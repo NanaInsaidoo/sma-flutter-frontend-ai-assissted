@@ -12,6 +12,36 @@ class FakeClassRequirementsRepository extends ClassRequirementsRepository {
         studentCount: 38,
         status: RequirementStatus.published,
         hasPublishedVersion: true,
+        publishedItems: [
+          ClassRequirementItem(
+            id: 'b1-rolls',
+            name: 'Toilet rolls',
+            category: 'Hygiene',
+            quantity: 15,
+            unit: 'rolls',
+            estimatedUnitPrice: 4.5,
+            dueDate: now.add(const Duration(days: 18)),
+            instructions: 'White, unscented rolls preferred.',
+          ),
+          ClassRequirementItem(
+            id: 'b1-tissue',
+            name: 'Box of tissues',
+            category: 'Hygiene',
+            quantity: 2,
+            unit: 'boxes',
+            estimatedUnitPrice: 18,
+            dueDate: now.add(const Duration(days: 18)),
+          ),
+          ClassRequirementItem(
+            id: 'b1-pencil',
+            name: 'HB pencils',
+            category: 'Learning materials',
+            quantity: 6,
+            unit: 'pieces',
+            estimatedUnitPrice: 2.5,
+            dueDate: now.add(const Duration(days: 18)),
+          ),
+        ],
         items: [
           ClassRequirementItem(
             id: 'b1-rolls',
@@ -50,6 +80,26 @@ class FakeClassRequirementsRepository extends ClassRequirementsRepository {
         status: RequirementStatus.draft,
         draftChangeCount: 1,
         hasPublishedVersion: true,
+        publishedItems: [
+          ClassRequirementItem(
+            id: 'b2-soap',
+            name: 'Liquid soap',
+            category: 'Hygiene',
+            quantity: 2,
+            unit: 'bottles',
+            estimatedUnitPrice: 22,
+            dueDate: now.add(const Duration(days: 12)),
+          ),
+          ClassRequirementItem(
+            id: 'b2-books',
+            name: 'Exercise books',
+            category: 'Learning materials',
+            quantity: 10,
+            unit: 'books',
+            estimatedUnitPrice: 8,
+            dueDate: now.add(const Duration(days: 12)),
+          ),
+        ],
         items: [
           ClassRequirementItem(
             id: 'b2-soap',
@@ -69,6 +119,7 @@ class FakeClassRequirementsRepository extends ClassRequirementsRepository {
             estimatedUnitPrice: 35,
             dueDate: now.add(const Duration(days: 12)),
             updatedSincePublished: true,
+            changeType: RequirementItemChange.added,
             instructions: 'Additional health requirement.',
           ),
           ClassRequirementItem(
@@ -88,6 +139,35 @@ class FakeClassRequirementsRepository extends ClassRequirementsRepository {
         studentCount: 35,
         status: RequirementStatus.published,
         hasPublishedVersion: true,
+        publishedItems: [
+          ClassRequirementItem(
+            id: 'j1-rolls',
+            name: 'Toilet rolls',
+            category: 'Hygiene',
+            quantity: 15,
+            unit: 'rolls',
+            estimatedUnitPrice: 4.5,
+            dueDate: now.add(const Duration(days: 20)),
+          ),
+          ClassRequirementItem(
+            id: 'j1-graph',
+            name: 'Graph books',
+            category: 'Learning materials',
+            quantity: 3,
+            unit: 'books',
+            estimatedUnitPrice: 12,
+            dueDate: now.add(const Duration(days: 20)),
+          ),
+          ClassRequirementItem(
+            id: 'j1-set',
+            name: 'Mathematical set',
+            category: 'Learning materials',
+            quantity: 1,
+            unit: 'set',
+            estimatedUnitPrice: 45,
+            dueDate: now.add(const Duration(days: 20)),
+          ),
+        ],
         items: [
           ClassRequirementItem(
             id: 'j1-rolls',
@@ -246,6 +326,14 @@ class FakeClassRequirementsRepository extends ClassRequirementsRepository {
     ];
   }
 
+  @override
+  RequirementCompletionSummary get completionSummary =>
+      const RequirementCompletionSummary(
+        activeObligations: 8,
+        completedObligations: 3,
+        completionPercentage: 53.1,
+      );
+
   late List<ClassRequirementGroup> _groups;
   late Map<String, List<StudentRequirementProgress>> _students;
   int _draftChangeCount = 0;
@@ -348,7 +436,10 @@ class FakeClassRequirementsRepository extends ClassRequirementsRepository {
         items: [
           ...group.items,
           group.hasPublishedVersion
-              ? item.copyWith(updatedSincePublished: true)
+              ? item.copyWith(
+                  updatedSincePublished: true,
+                  changeType: RequirementItemChange.added,
+                )
               : item,
         ],
         status: RequirementStatus.draft,
@@ -369,7 +460,10 @@ class FakeClassRequirementsRepository extends ClassRequirementsRepository {
     _groups = _groups.map((group) {
       if (group.id != classGroupId) return group;
       final replacement = group.hasPublishedVersion
-          ? item.copyWith(updatedSincePublished: true)
+          ? item.copyWith(
+              updatedSincePublished: true,
+              changeType: RequirementItemChange.modified,
+            )
           : item;
       return group.copyWith(
         items: group.items
@@ -727,7 +821,20 @@ class FakeClassRequirementsRepository extends ClassRequirementsRepository {
         .map(
           (group) => group.copyWith(
             items: group.items
-                .map((item) => item.copyWith(updatedSincePublished: false))
+                .map(
+                  (item) => item.copyWith(
+                    updatedSincePublished: false,
+                    changeType: RequirementItemChange.current,
+                  ),
+                )
+                .toList(),
+            publishedItems: group.items
+                .map(
+                  (item) => item.copyWith(
+                    updatedSincePublished: false,
+                    changeType: RequirementItemChange.current,
+                  ),
+                )
                 .toList(),
             status: RequirementStatus.published,
             draftChangeCount: 0,
@@ -749,7 +856,20 @@ class FakeClassRequirementsRepository extends ClassRequirementsRepository {
       if (group.id != classGroupId) return group;
       return group.copyWith(
         items: group.items
-            .map((item) => item.copyWith(updatedSincePublished: false))
+            .map(
+              (item) => item.copyWith(
+                updatedSincePublished: false,
+                changeType: RequirementItemChange.current,
+              ),
+            )
+            .toList(),
+        publishedItems: group.items
+            .map(
+              (item) => item.copyWith(
+                updatedSincePublished: false,
+                changeType: RequirementItemChange.current,
+              ),
+            )
             .toList(),
         status: RequirementStatus.published,
         draftChangeCount: 0,

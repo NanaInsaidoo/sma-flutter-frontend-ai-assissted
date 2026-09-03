@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 
 import '../../config/api_config.dart';
 import '../domain/class_requirement_models.dart';
@@ -630,6 +631,19 @@ class FeeApiClient {
         .toList();
   }
 
+  Future<RequirementCompletionSummary> getRequirementCompletion({
+    required String customSchoolId,
+    required int academicTermId,
+  }) async {
+    final response = await _send(
+      'GET',
+      _withQuery('/api/schools/$customSchoolId/class-requirements/completion', {
+        'academicTermId': '$academicTermId',
+      }),
+    );
+    return RequirementCompletionSummary.fromJson(_decodeMap(response));
+  }
+
   Future<ClassRequirementGroup> createClassRequirement({
     required String customSchoolId,
     required int academicTermId,
@@ -1122,15 +1136,35 @@ class FeeApiClient {
     return FeeWaiverAssignment.fromJson(_decodeMap(response));
   }
 
-  Future<void> revokeStudentWaiver({
+  Future<FeeWaiverAssignment> revokeStudentWaiver({
     required String customSchoolId,
     required String customStudentId,
     required int waiverId,
   }) async {
-    await _send(
+    final response = await _send(
       'DELETE',
       '/api/schools/$customSchoolId/students/$customStudentId/waivers/$waiverId',
     );
+    return FeeWaiverAssignment.fromJson(_decodeMap(response));
+  }
+
+  Future<FeeWaiverAssignment> performStudentWaiverAction({
+    required String customSchoolId,
+    required int waiverId,
+    required String action,
+    String? reason,
+    int? approverId,
+  }) async {
+    final response = await _send(
+      'POST',
+      '/api/schools/$customSchoolId/student-waivers/$waiverId/actions',
+      body: {
+        'action': action.trim().toUpperCase(),
+        if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+        if (approverId != null) 'approverId': approverId,
+      },
+    );
+    return FeeWaiverAssignment.fromJson(_decodeMap(response));
   }
 
   Future<List<FeePaymentMethod>> getPaymentMethods() async {
@@ -1152,6 +1186,18 @@ class FeeApiClient {
       '/api/payments/schools/$customSchoolId/households/$householdId/allocation-options?termId=$termId',
     );
     return HouseholdPaymentOptions.fromJson(_decodeMap(response));
+  }
+
+  Future<HouseholdPaymentStudent> getStudentPaymentOptions({
+    required String customSchoolId,
+    required String customStudentId,
+    required int termId,
+  }) async {
+    final response = await _send(
+      'GET',
+      '/api/payments/schools/$customSchoolId/students/$customStudentId/allocation-options?termId=$termId',
+    );
+    return HouseholdPaymentStudent.fromJson(_decodeMap(response));
   }
 
   Future<HouseholdPaymentResult> createHouseholdSplitPayment({
@@ -1217,6 +1263,7 @@ class FeeApiClient {
           'receivedBy': request.receivedBy,
           'description': request.description,
           'termId': '${request.termId}',
+          'assessmentId': '${request.assessmentId}',
           'idempotencyKey': request.idempotencyKey,
           'overpaymentConfirmed': '${request.overpaymentConfirmed}',
           if (request.overpaymentReason?.trim().isNotEmpty == true)
@@ -1239,17 +1286,7 @@ class FeeApiClient {
     final hasReceiptPhoto =
         (request.receiptPhotoBytes?.isNotEmpty ?? false) &&
         (request.receiptPhotoFileName?.trim().isNotEmpty ?? false);
-    try {
-      return await submit(includeReceiptPhoto: hasReceiptPhoto);
-    } on FeeApiException catch (error) {
-      final message = error.message.toLowerCase();
-      if (hasReceiptPhoto &&
-          message.contains('receipt') &&
-          message.contains('photo')) {
-        return submit(includeReceiptPhoto: false);
-      }
-      rethrow;
-    }
+    return submit(includeReceiptPhoto: hasReceiptPhoto);
   }
 
   Future<FeeStudentPayment> clearPendingPayment({
@@ -1455,6 +1492,7 @@ class FeeApiClient {
             'receipts[0].photo',
             fileBytes,
             filename: fileName,
+            contentType: MediaType.parse(_receiptContentType(fileName)),
           ),
         );
       }
@@ -1494,6 +1532,22 @@ class FeeApiClient {
     final uri = Uri(path: path, queryParameters: query);
     return uri.toString();
   }
+
+  String _receiptContentType(String name) => switch (name
+      .split('.')
+      .last
+      .toLowerCase()) {
+    'jpg' || 'jpeg' => 'image/jpeg',
+    'png' => 'image/png',
+    'webp' => 'image/webp',
+    'gif' => 'image/gif',
+    'bmp' => 'image/bmp',
+    'pdf' => 'application/pdf',
+    'doc' => 'application/msword',
+    'docx' =>
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    _ => 'application/octet-stream',
+  };
 
   String _dateTimeValue(DateTime date) {
     String two(int value) => value.toString().padLeft(2, '0');

@@ -6,6 +6,26 @@ import 'package:school_management_app/src/fees/presentation/class_requirements_s
 import 'package:school_management_app/src/theme/app_theme.dart';
 
 void main() {
+  test('published item parses added or updated audit metadata', () {
+    final item = ClassRequirementItem.fromJson({
+      'itemId': 44,
+      'itemKey': 'books-key',
+      'name': 'Exercise books',
+      'category': 'Learning materials',
+      'quantity': 4,
+      'unit': 'books',
+      'estimatedUnitPrice': 12,
+      'dueDate': '2026-09-10',
+      'lifecycleAction': 'ADDED',
+      'lifecycleAt': '2026-08-28T09:45:00',
+      'lifecycleBy': 'Adjoa Mensah',
+    });
+
+    expect(item.lifecycleAction, 'ADDED');
+    expect(item.lifecycleAt, DateTime(2026, 8, 28, 9, 45));
+    expect(item.lifecycleBy, 'Adjoa Mensah');
+  });
+
   test('records received quantities and student-specific adjustments', () {
     final repository = FakeClassRequirementsRepository();
 
@@ -363,6 +383,12 @@ void main() {
     expect(find.text('Items & Supplies'), findsOneWidget);
     expect(find.text('Add class'), findsOneWidget);
     expect(find.text('Basic 1'), findsOneWidget);
+    expect(find.text('OVERALL COMPLETION'), findsOneWidget);
+    expect(find.text('53%'), findsOneWidget);
+    expect(
+      find.text('3 of 8 fully resolved · partial receipts included'),
+      findsOneWidget,
+    );
 
     await tester.ensureVisible(find.text('Basic 1'));
     await tester.pumpAndSettle();
@@ -377,10 +403,78 @@ void main() {
     expect(find.text('ACTIONS'), findsOneWidget);
     expect(find.byTooltip('Edit requirement'), findsNWidgets(3));
     expect(find.byTooltip('Delete requirement'), findsNWidgets(3));
-    expect(find.text('Active'), findsNWidgets(3));
+    expect(find.text('Published'), findsNWidgets(3));
     expect(find.text('Draft'), findsNothing);
     expect(find.text('Ama Mensah'), findsOneWidget);
     expect(find.text('Student progress'), findsOneWidget);
+  });
+
+  testWidgets('warns when a published item list has draft changes', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repository = FakeClassRequirementsRepository();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: ClassRequirementsScreen(
+                repository: repository,
+                termName: 'Term 2 · 2025/26',
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Basic 2'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('unpublished-requirement-changes-banner')),
+      findsOneWidget,
+    );
+    expect(find.text('New or changed items are not active'), findsOneWidget);
+    expect(find.text('New item'), findsOneWidget);
+    expect(find.textContaining('saved as Draft'), findsOneWidget);
+    expect(
+      find.textContaining('previously published list remains active'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('shows that revised items are awaiting approval', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repository = FakeClassRequirementsRepository();
+    await repository.submitClass('basic-2', 99);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: ClassRequirementsScreen(
+                repository: repository,
+                termName: 'Term 2 · 2025/26',
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Basic 2'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Changes submitted — awaiting approval'), findsOneWidget);
+    expect(find.textContaining('waiting for Test Headmaster'), findsOneWidget);
   });
 
   testWidgets('opens the prior-term resolution queue by student', (
@@ -521,11 +615,32 @@ void main() {
       find.byKey(const Key('publish-approved-requirements')),
       findsOneWidget,
     );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('working-requirements-section')),
+        matching: find.byKey(const Key('publish-approved-requirements')),
+      ),
+      findsOneWidget,
+    );
     expect(find.textContaining('Next step: publish'), findsOneWidget);
     expect(find.text('Publish approved items'), findsNothing);
-    expect(find.text('Add class item'), findsNothing);
-    expect(find.byTooltip('Edit requirement'), findsNothing);
-    expect(find.byTooltip('Delete requirement'), findsNothing);
+    expect(find.text('Add class item'), findsOneWidget);
+    expect(find.byTooltip('Edit requirement'), findsOneWidget);
+    expect(find.byTooltip('Delete requirement'), findsOneWidget);
+
+    await tester.ensureVisible(find.byTooltip('Edit requirement'));
+    await tester.tap(find.byTooltip('Edit requirement'));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit Colouring crayons'), findsOneWidget);
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Quantity *'),
+      '3',
+    );
+    await tester.tap(find.text('Save changes'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Submit for approval'), findsOneWidget);
+    expect(find.text('Approved — publication required'), findsNothing);
   });
 
   testWidgets('class cards preview only three items and show the remainder', (
@@ -566,6 +681,190 @@ void main() {
 
     expect(find.text('+ 1 more item'), findsOneWidget);
     expect(find.text('Colouring crayons'), findsNothing);
+  });
+
+  testWidgets(
+    'class details separate the active checklist from draft changes',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final repository = FakeClassRequirementsRepository();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: ClassRequirementsScreen(
+                  repository: repository,
+                  termName: 'Term 2 · 2025/26',
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Basic 2'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('published-requirements-section')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('working-requirements-section')),
+        findsOneWidget,
+      );
+      expect(find.text('Currently published'), findsOneWidget);
+      expect(find.text('Changes in progress'), findsOneWidget);
+      expect(find.text('Disinfectant'), findsOneWidget);
+      expect(find.text('New item'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('working-requirements-section')),
+          matching: find.byKey(const Key('requirements-workflow-action')),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('published-requirements-section')),
+          matching: find.text('Published'),
+        ),
+        findsWidgets,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('published-requirements-section')),
+          matching: find.byKey(const Key('requirements-workflow-action')),
+        ),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets('approved requirement revision opens publication review panel', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repository = FakeClassRequirementsRepository();
+    final dueDate = DateTime(2026, 9, 15);
+    await repository.addClass(
+      ClassRequirementGroup(
+        id: 'creche-review',
+        className: 'Creche review',
+        studentCount: 12,
+        status: RequirementStatus.approved,
+        creatorOwned: true,
+        hasPublishedVersion: true,
+        draftChangeCount: 2,
+        publishedItems: [
+          ClassRequirementItem(
+            id: 'pens',
+            name: 'Pens',
+            category: 'Learning materials',
+            quantity: 10,
+            unit: 'pieces',
+            estimatedUnitPrice: 2,
+            dueDate: dueDate,
+          ),
+          ClassRequirementItem(
+            id: 'books',
+            name: 'Drawing books',
+            category: 'Learning materials',
+            quantity: 2,
+            unit: 'books',
+            estimatedUnitPrice: 12,
+            dueDate: dueDate,
+          ),
+          ClassRequirementItem(
+            id: 'paint',
+            name: 'Poster paint',
+            category: 'Learning materials',
+            quantity: 1,
+            unit: 'set',
+            estimatedUnitPrice: 20,
+            dueDate: dueDate,
+          ),
+        ],
+        items: [
+          ClassRequirementItem(
+            id: 'pens',
+            name: 'Pens',
+            category: 'Learning materials',
+            quantity: 15,
+            unit: 'pieces',
+            estimatedUnitPrice: 2,
+            dueDate: dueDate,
+            updatedSincePublished: true,
+            changeType: RequirementItemChange.modified,
+          ),
+          ClassRequirementItem(
+            id: 'crayons',
+            name: 'Crayons',
+            category: 'Learning materials',
+            quantity: 2,
+            unit: 'packs',
+            estimatedUnitPrice: 15,
+            dueDate: dueDate,
+            updatedSincePublished: true,
+            changeType: RequirementItemChange.added,
+          ),
+          ClassRequirementItem(
+            id: 'paint',
+            name: 'Poster paint',
+            category: 'Learning materials',
+            quantity: 1,
+            unit: 'set',
+            estimatedUnitPrice: 20,
+            dueDate: dueDate,
+          ),
+        ],
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: ClassRequirementsScreen(
+                repository: repository,
+                termName: 'Term 2 · 2025/26',
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.ensureVisible(find.text('Creche review'));
+    await tester.tap(find.text('Creche review'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const Key('publish-approved-requirements')),
+    );
+    await tester.tap(find.byKey(const Key('publish-approved-requirements')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Publish approved items'), findsOneWidget);
+    expect(find.text('10 pieces  →  15 pieces'), findsOneWidget);
+    expect(find.text('NEW'), findsOneWidget);
+    expect(find.text('MODIFIED'), findsOneWidget);
+    expect(find.text('SAME'), findsOneWidget);
+    expect(find.text('REMOVED'), findsOneWidget);
+    expect(find.text('Guardian notification'), findsNothing);
+    expect(find.textContaining('Final published list'), findsNothing);
+    expect(
+      find.byKey(const Key('confirm-publish-requirements')),
+      findsOneWidget,
+    );
   });
 
   testWidgets(
