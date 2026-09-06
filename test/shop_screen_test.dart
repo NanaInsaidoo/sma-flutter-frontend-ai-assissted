@@ -6,9 +6,23 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:school_management_app/src/shop/data/shop_api_client.dart';
 import 'package:school_management_app/src/shop/presentation/school_shop_screen.dart';
+import 'package:school_management_app/src/shop/presentation/shop_accounting_csv_export.dart';
 import 'package:school_management_app/src/shop/presentation/shop_receipt_pdf.dart';
 
 void main() {
+  test('accounting CSV formats backend dates for spreadsheet readers', () {
+    expect(
+      formatShopAccountingCsvDate([2026, 9, 4, 21, 59, 8, 133427000]),
+      '04 Sep 2026 9:59 PM',
+    );
+    expect(
+      formatShopAccountingCsvDate('2026-09-04T09:07:00'),
+      '04 Sep 2026 9:07 AM',
+    );
+    expect(formatShopAccountingCsvDate('2026-09-04'), '04 Sep 2026');
+    expect(formatShopAccountingCsvDate(null), '');
+  });
+
   Widget appWith(
     Map<String, dynamic> context, {
     List<dynamic> consignments = const [],

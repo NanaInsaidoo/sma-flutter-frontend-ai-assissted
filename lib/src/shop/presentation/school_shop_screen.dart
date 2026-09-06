@@ -2793,7 +2793,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     ];
     for (final sale in _maps(report['accountingSales'])) {
       rows.add([
-        sale['createdAt'],
+        formatShopAccountingCsvDate(sale['createdAt']),
         'SALE',
         sale['reference'],
         sale['seller'],
@@ -2812,7 +2812,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
         continue;
       }
       rows.add([
-        refund['refundedAt'],
+        formatShopAccountingCsvDate(refund['refundedAt']),
         'REFUND',
         refund['receipt'],
         refund['requestedBy'],
@@ -2832,7 +2832,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
       final stock = (count['stockVarianceUnits'] as num?)?.toInt() ?? 0;
       if (cash != 0) {
         rows.add([
-          count['decidedAt'] ?? count['cutoff'],
+          formatShopAccountingCsvDate(count['decidedAt'] ?? count['cutoff']),
           'RECONCILIATION DIFFERENCE',
           reference,
           count['seller'],
@@ -2847,7 +2847,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
       }
       if (momo != 0) {
         rows.add([
-          count['decidedAt'] ?? count['cutoff'],
+          formatShopAccountingCsvDate(count['decidedAt'] ?? count['cutoff']),
           'RECONCILIATION DIFFERENCE',
           reference,
           count['seller'],
@@ -2862,7 +2862,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
       }
       if (stock != 0) {
         rows.add([
-          count['decidedAt'] ?? count['cutoff'],
+          formatShopAccountingCsvDate(count['decidedAt'] ?? count['cutoff']),
           'STOCK COUNT DIFFERENCE',
           reference,
           count['seller'],
@@ -2878,7 +2878,9 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     }
     for (final remittance in _maps(report['remittances'])) {
       rows.add([
-        remittance['confirmedAt'] ?? remittance['createdAt'],
+        formatShopAccountingCsvDate(
+          remittance['confirmedAt'] ?? remittance['createdAt'],
+        ),
         'CASH REMITTANCE',
         remittance['reference'],
         remittance['sender'],
@@ -2893,7 +2895,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     }
     for (final held in _maps(report['cashHeld'])) {
       rows.add([
-        report['to'],
+        formatShopAccountingCsvDate(report['to']),
         'CASH RESPONSIBILITY SNAPSHOT',
         'AS-AT-${report['to']}',
         held['person'],
@@ -2908,7 +2910,9 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     }
     for (final adjustment in _maps(report['inventoryAdjustments'])) {
       rows.add([
-        adjustment['decidedAt'] ?? adjustment['submittedAt'],
+        formatShopAccountingCsvDate(
+          adjustment['decidedAt'] ?? adjustment['submittedAt'],
+        ),
         'INVENTORY ADJUSTMENT',
         'ADJ-${adjustment['id']}',
         adjustment['requester'],
