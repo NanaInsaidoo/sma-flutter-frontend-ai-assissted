@@ -277,13 +277,16 @@ The report can include:
 - daily sales summaries;
 - item performance;
 - inventory position and cost value;
+- inventory adjustments, quantity changes, approval status, and value changes at unit cost;
 - stock held by staff;
 - customer returns and refunds;
 - reconciliation decisions and posted differences;
 - cash remittances;
 - current cash responsibility.
 
-For accounting, export a closed period and provide it with source documents such as supplier invoices, Mobile Money statements, deposit slips, and refund evidence. The accountant can use the records to prepare journals, cost of sales, inventory values, cash controls, management accounts, and final accounts. The report is source information; formal ledger posting remains an accounting responsibility.
+The **Accounting CSV** gives the accountant one dated, reference-based file containing sales, refunds, cost of sales, gross profit, reconciliation differences, approved inventory adjustments, cash remittances, and the closing cash-responsibility snapshot. A remittance is identified as an internal transfer so it is not counted again as income.
+
+For accounting, export a closed period and provide the CSV and PDF with source documents such as supplier invoices, Mobile Money statements, deposit slips, and refund evidence. The accountant can use the records to prepare journals, cost of sales, inventory values, cash controls, management accounts, and final accounts. The report is source information; formal ledger posting remains an accounting responsibility.
 
 ## 11. Audit and control rules
 

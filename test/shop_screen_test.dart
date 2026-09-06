@@ -153,6 +153,8 @@ void main() {
               'gross': 40,
               'refund': 8,
               'net': 32,
+              'costOfSales': 20,
+              'grossProfit': 12,
             },
           ],
           'itemPerformance': [
@@ -177,6 +179,25 @@ void main() {
               'totalOnHand': 18,
               'costValue': 72,
               'lowStock': false,
+            },
+          ],
+          'inventoryAdjustments': [
+            {
+              'id': 9,
+              'submittedAt': '2026-09-01T15:30:00',
+              'decidedAt': '2026-09-01T16:00:00',
+              'item': 'Exercise Book · 80 pages',
+              'unit': 'book',
+              'type': 'COUNT_CORRECTION',
+              'currentQuantity': 13,
+              'proposedQuantity': 12,
+              'difference': -1,
+              'unitCost': 6,
+              'inventoryValueChange': -6,
+              'status': 'APPROVED',
+              'reason': 'One damaged book confirmed during count',
+              'requester': 'Ama Admin',
+              'approver': 'Yaw Asante',
             },
           ],
           'staffStock': [
@@ -1779,6 +1800,10 @@ void main() {
       findsOneWidget,
     );
     expect(
+      find.byKey(const ValueKey('shop-accounting-adjustments-table')),
+      findsOneWidget,
+    );
+    expect(
       find.byKey(const ValueKey('shop-accounting-remittances-table')),
       findsOneWidget,
     );
@@ -1820,6 +1845,7 @@ void main() {
     expect(salesTable.columns.every((column) => column.onSort != null), isTrue);
     for (final key in const [
       'shop-accounting-sales-table',
+      'shop-accounting-adjustments-table',
       'shop-accounting-reconciliations-table',
       'shop-accounting-remittances-table',
       'shop-accounting-cash-held-table',

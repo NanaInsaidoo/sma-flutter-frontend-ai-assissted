@@ -67,6 +67,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     'SUMMARY',
     'SALES',
     'INVENTORY',
+    'ADJUSTMENTS',
     'STAFF_STOCK',
     'RETURNS',
     'RECONCILIATIONS',
@@ -2784,6 +2785,8 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
         'Counterparty',
         'Payment method',
         'Amount GHS',
+        'Cost of sales GHS',
+        'Gross profit GHS',
         'Status',
         'Details',
       ],
@@ -2797,6 +2800,8 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
         sale['buyer'],
         sale['paymentMethod'],
         sale['net'],
+        sale['costOfSales'],
+        sale['grossProfit'],
         sale['status'],
         '${sale['units'] ?? 0} units; gross ${_money(sale['gross'])}; refund ${_money(sale['refund'])}',
       ]);
@@ -2814,6 +2819,8 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
         refund['buyer'],
         refund['refundMethod'],
         -_reportNumber(refund['refund']),
+        -_reportNumber(refund['returnedCost']),
+        _reportNumber(refund['returnedCost']) - _reportNumber(refund['refund']),
         refund['status'],
         '${refund['items'] ?? 0} returned units',
       ]);
@@ -2832,6 +2839,8 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
           count['approver'],
           'CASH',
           cash,
+          '',
+          '',
           count['status'],
           count['decisionNote'],
         ]);
@@ -2845,6 +2854,8 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
           count['approver'],
           'MOMO',
           momo,
+          '',
+          '',
           count['status'],
           count['decisionNote'],
         ]);
@@ -2856,6 +2867,8 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
           reference,
           count['seller'],
           count['approver'],
+          '',
+          '',
           '',
           '',
           count['status'],
@@ -2872,6 +2885,8 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
         remittance['recipient'],
         'CASH',
         remittance['amount'],
+        '',
+        '',
         remittance['status'],
         'Internal transfer of cash responsibility; not additional income',
       ]);
@@ -2885,8 +2900,25 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
         '',
         'CASH',
         held['amount'],
+        '',
+        '',
         'CURRENT',
         'Recorded physical cash currently assigned to this person',
+      ]);
+    }
+    for (final adjustment in _maps(report['inventoryAdjustments'])) {
+      rows.add([
+        adjustment['decidedAt'] ?? adjustment['submittedAt'],
+        'INVENTORY ADJUSTMENT',
+        'ADJ-${adjustment['id']}',
+        adjustment['requester'],
+        adjustment['approver'],
+        '',
+        '',
+        adjustment['inventoryValueChange'],
+        '',
+        adjustment['status'],
+        '${adjustment['item']} · ${adjustment['difference']} ${adjustment['unit']} · ${adjustment['reason']}',
       ]);
     }
     return rows.map((row) => row.map(_csvValue).join(',')).join('\r\n');
@@ -2926,6 +2958,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     final daily = _maps(report['dailySales']);
     final performance = _maps(report['itemPerformance']);
     final inventory = _maps(report['inventory']);
+    final inventoryAdjustments = _maps(report['inventoryAdjustments']);
     final staffStock = _maps(report['staffStock']);
     final returns = _maps(report['returns']);
     final accountingSales = _maps(report['accountingSales']);
@@ -3032,6 +3065,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                       'SUMMARY': 'Summary',
                       'SALES': 'Sales',
                       'INVENTORY': 'Inventory',
+                      'ADJUSTMENTS': 'Inventory adjustments',
                       'STAFF_STOCK': 'Staff stock',
                       'RETURNS': 'Returns',
                       'RECONCILIATIONS': 'Reconciliations',
@@ -3188,6 +3222,92 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                           _money(row['net']),
                           style: const TextStyle(fontWeight: FontWeight.w800),
                         ),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Cost of sales',
+                        numeric: true,
+                        sortValue: (row) => row['costOfSales'],
+                        cell: (row) => Text(_money(row['costOfSales'])),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Gross profit',
+                        numeric: true,
+                        sortValue: (row) => row['grossProfit'],
+                        cell: (row) => Text(
+                          _money(row['grossProfit']),
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+          const SizedBox(height: 14),
+          _Panel(
+            title: 'Inventory adjustments',
+            subtitle:
+                'Approved and pending stock corrections, including their financial effect at unit cost.',
+            child: inventoryAdjustments.isEmpty
+                ? const _Empty('No inventory adjustments in this period.')
+                : _ModernShopTable<ShopJson>(
+                    tableKey: 'shop-accounting-adjustments-table',
+                    rows: inventoryAdjustments,
+                    initialSortColumn: 0,
+                    initialSortAscending: false,
+                    rowKey: (row) => 'shop-accounting-adjustment-${row['id']}',
+                    columns: [
+                      _ShopTableColumn(
+                        label: 'Date',
+                        sortValue: (row) =>
+                            _dateValue(row['decidedAt'] ?? row['submittedAt']),
+                        cell: (row) => Text(
+                          _dateLabel(row['decidedAt'] ?? row['submittedAt']),
+                        ),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Item',
+                        sortValue: (row) => row['item'],
+                        cell: (row) => Text('${row['item']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Type',
+                        sortValue: (row) => row['type'],
+                        cell: (row) => Text(_status(row['type'])),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Quantity change',
+                        numeric: true,
+                        sortValue: (row) => row['difference'],
+                        cell: (row) {
+                          final difference =
+                              (row['difference'] as num?)?.toInt() ?? 0;
+                          return Text(
+                            '${difference > 0 ? '+' : ''}$difference ${row['unit']}',
+                          );
+                        },
+                      ),
+                      _ShopTableColumn(
+                        label: 'Value change',
+                        numeric: true,
+                        sortValue: (row) => row['inventoryValueChange'],
+                        cell: (row) => Text(
+                          _money(row['inventoryValueChange']),
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Status',
+                        sortValue: (row) => row['status'],
+                        cell: (row) => Text(_status(row['status'])),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Requested by',
+                        sortValue: (row) => row['requester'],
+                        cell: (row) => Text('${row['requester']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Approved by',
+                        sortValue: (row) => row['approver'],
+                        cell: (row) => Text('${row['approver']}'),
                       ),
                     ],
                   ),
