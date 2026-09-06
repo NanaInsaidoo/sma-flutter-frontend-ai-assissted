@@ -331,6 +331,80 @@ void main() {
     expect(inbox.pendingTotal, 8);
   });
 
+  testWidgets(
+    'counted staff acknowledges a reconciliation without a compulsory note',
+    (tester) async {
+      await _useDesktopSurface(tester);
+      final item = _reconciliation(status: 'AWAITING_SELLER_ACK');
+      final api = _SingleApprovalApiClient(item);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: ApprovalsScreen(schoolId: 'SCH-1', repository: api),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(item.title));
+      await tester.pumpAndSettle();
+      expect(find.text('Your confirmation is required'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('shop-reconciliation-approval-details')),
+        findsOneWidget,
+      );
+      expect(find.text('Acknowledge as correct'), findsOneWidget);
+      expect(find.text('Report a problem'), findsOneWidget);
+      await tester.tap(find.text('Acknowledge as correct'));
+      await tester.pumpAndSettle();
+      expect(find.text('Acknowledge this count?'), findsOneWidget);
+      await tester.tap(
+        find.widgetWithText(FilledButton, 'Acknowledge as correct'),
+      );
+      await tester.pumpAndSettle();
+      expect(api.lastAction, 'APPROVE');
+      expect(api.lastReason, '');
+    },
+  );
+
+  testWidgets('independent resolver records a resolution before closing', (
+    tester,
+  ) async {
+    await _useDesktopSurface(tester);
+    final item = _reconciliation(status: 'PENDING_RESOLUTION');
+    final api = _SingleApprovalApiClient(item);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: ApprovalsScreen(schoolId: 'SCH-1', repository: api),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(item.title));
+    await tester.pumpAndSettle();
+    expect(find.text('Your independent decision is required'), findsOneWidget);
+    expect(find.text('Resolve differences'), findsOneWidget);
+    expect(find.text('Send for recount'), findsOneWidget);
+    await tester.tap(find.text('Resolve differences'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Confirm and continue'));
+    await tester.pumpAndSettle();
+    expect(find.text('Record the resolution'), findsOneWidget);
+    await tester.enterText(
+      find.byType(TextFormField),
+      'Verified against the physical count and supporting records.',
+    );
+    await tester.tap(find.text('Resolve and close'));
+    await tester.pumpAndSettle();
+    expect(api.lastAction, 'APPROVE');
+    expect(
+      api.lastReason,
+      'Verified against the physical count and supporting records.',
+    );
+  });
+
   test('parses structured backend timestamps for approval records', () {
     final item = ApprovalItem.fromJson({
       'key': 'FEE_STRUCTURE:35',
@@ -584,14 +658,187 @@ void main() {
       await tester.tap(find.text(item.title));
       await tester.pumpAndSettle();
 
+      expect(find.text('Remove stock · chalk · Red'), findsOneWidget);
       expect(find.text('Requested inventory change'), findsOneWidget);
       expect(find.text('chalk · Red'), findsOneWidget);
-      expect(find.text('Current 23 box · Change -1 box'), findsOneWidget);
+      expect(
+        find.text('Remove 1 box from available inventory'),
+        findsOneWidget,
+      );
+      expect(find.text('CURRENT STOCK'), findsOneWidget);
+      expect(find.text('23 box'), findsOneWidget);
+      expect(find.text('AFTER APPROVAL'), findsOneWidget);
       expect(find.text('22 box'), findsOneWidget);
+      expect(
+        find.text(
+          'The available central-store quantity changes only if this request is approved.',
+        ),
+        findsOneWidget,
+      );
       expect(find.text('Approve'), findsOneWidget);
       expect(find.text('Reject'), findsOneWidget);
     },
   );
+
+  testWidgets('stock handover is an acceptance action, not an approval', (
+    tester,
+  ) async {
+    await _useDesktopSurface(tester);
+    final item = _stockHandover();
+    final api = _SingleApprovalApiClient(item);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: ApprovalsScreen(schoolId: 'SCH-1', repository: api),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Pending Acceptance'), findsOneWidget);
+    await tester.tap(find.text(item.title));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Stock handover'), findsOneWidget);
+    expect(
+      find.text('Pending — waiting on Adjoa Mensah to confirm'),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('stock-handover-compact-details')),
+      findsOneWidget,
+    );
+    expect(find.text('Exercise Book, 80 pages'), findsOneWidget);
+    expect(find.text('Quantity'), findsOneWidget);
+    expect(find.text('6 units'), findsOneWidget);
+    expect(find.text('From'), findsOneWidget);
+    expect(find.text('Kofi Nketia'), findsOneWidget);
+    expect(find.text('To'), findsOneWidget);
+    expect(find.text('Adjoa Mensah'), findsOneWidget);
+    expect(find.text('Location'), findsOneWidget);
+    expect(find.text('Main store'), findsOneWidget);
+    expect(find.text('Stock awaiting confirmation'), findsNothing);
+    expect(find.text('Confirm receipt'), findsOneWidget);
+    expect(find.text('Report problem'), findsOneWidget);
+    expect(find.text('Approve'), findsNothing);
+
+    await tester.tap(find.text('Confirm receipt'));
+    await tester.pumpAndSettle();
+    expect(find.text('Confirm stock received?'), findsOneWidget);
+    expect(api.actions, 0);
+    await tester.tap(
+      find.byKey(const ValueKey('approval-confirm-stock-received')),
+    );
+    await tester.pumpAndSettle();
+    expect(api.actions, 1);
+    expect(api.lastAction, 'ACCEPT');
+    expect(api.lastReason, '');
+  });
+
+  testWidgets('stock issuer cancels only after affirming continued custody', (
+    tester,
+  ) async {
+    await _useDesktopSurface(tester);
+    final item = _stockHandover(requester: true);
+    final api = _SingleApprovalApiClient(item, asRequester: true);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: ApprovalsScreen(schoolId: 'SCH-1', repository: api),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('My requests'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(item.title));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Pending — waiting on Adjoa Mensah to confirm'),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('stock-handover-compact-details')),
+      findsOneWidget,
+    );
+    expect(find.text('Confirm receipt'), findsNothing);
+    expect(find.text('Report problem'), findsNothing);
+    expect(find.text('Withdraw approval request'), findsNothing);
+    expect(find.text('Cancel issuance'), findsOneWidget);
+    expect(api.actions, 0);
+
+    await tester.tap(find.text('Cancel issuance'));
+    await tester.pumpAndSettle();
+    expect(find.text('Cancel stock issuance?'), findsOneWidget);
+    expect(
+      find.text(
+        'I confirm the items are still in my custody and were not handed to Adjoa Mensah.',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(const ValueKey('confirm-stock-issuance-cancellation')),
+          )
+          .onPressed,
+      isNull,
+    );
+    tester
+        .widget<CheckboxListTile>(
+          find.byKey(const ValueKey('stock-cancellation-custody-affirmation')),
+        )
+        .onChanged!(true);
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('confirm-stock-issuance-cancellation')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(api.actions, 1);
+    expect(api.lastAction, 'CANCEL');
+    expect(api.lastItemsStillInIssuerCustody, isTrue);
+  });
+
+  testWidgets('stock recipient reports a handover problem with a reason', (
+    tester,
+  ) async {
+    await _useDesktopSurface(tester);
+    final item = _stockHandover();
+    final api = _SingleApprovalApiClient(item);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: ApprovalsScreen(schoolId: 'SCH-1', repository: api),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(item.title));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Report problem'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Report a stock problem'), findsOneWidget);
+    expect(
+      find.text('Explain what is wrong, such as the item or quantity.'),
+      findsOneWidget,
+    );
+    final reason = find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.byType(TextFormField),
+    );
+    await tester.enterText(reason, 'Two books are missing');
+    await tester.tap(find.widgetWithText(FilledButton, 'Report problem'));
+    await tester.pumpAndSettle();
+
+    expect(api.actions, 1);
+    expect(api.lastAction, 'REJECT');
+    expect(api.lastReason, 'Two books are missing');
+  });
 }
 
 Future<void> _useDesktopSurface(WidgetTester tester) async {
@@ -695,6 +942,83 @@ ApprovalItem _inventoryAdjustmentApproval() => ApprovalItem.fromJson({
     },
   ],
 });
+
+ApprovalItem _stockHandover({bool requester = false}) => ApprovalItem.fromJson({
+  'key': 'SHOP_STOCK_HANDOVER:501',
+  'type': 'SHOP_STOCK_HANDOVER',
+  'entityId': 501,
+  'category': 'Inventory',
+  'title': 'Stock handover · Exercise Book · 80 pages',
+  'subtitle': '6 units → Adjoa Mensah',
+  'status': 'PENDING_ACCEPTANCE',
+  'requesterName': 'Kofi Nketia',
+  'approverName': 'Adjoa Mensah',
+  'requesterNote': 'Count before confirming',
+  'stateToken': 'stock-handover:0',
+  'canApprove': !requester,
+  'canReject': !requester,
+  'canWithdraw': requester,
+  'sourcePage': 'shop',
+  'detailSections': [
+    {
+      'title': 'Stock handover',
+      'description':
+          'The recipient must physically receive and count this stock.',
+      'entries': [
+        {
+          'title': 'Exercise Book · 80 pages',
+          'subtitle': 'Recipient confirmation',
+          'fields': [
+            {'label': 'Quantity', 'value': '6 units', 'emphasized': true},
+            {'label': 'Issued to', 'value': 'Adjoa Mensah'},
+            {'label': 'Issued by', 'value': 'Kofi Nketia'},
+            {'label': 'Location', 'value': 'Main store'},
+            {'label': 'Issue note', 'value': 'Count before confirming'},
+          ],
+        },
+      ],
+    },
+  ],
+});
+
+ApprovalItem _reconciliation({required String status}) =>
+    ApprovalItem.fromJson({
+      'key': 'SHOP_RECONCILIATION:12',
+      'type': 'SHOP_RECONCILIATION',
+      'entityId': 12,
+      'category': 'Reconciliation',
+      'title': 'Independent count · Adjoa Mensah',
+      'subtitle': '1 Sep 2026 · 08:00 → 1 Sep 2026 · 17:00',
+      'status': status,
+      'requesterName': 'Kofi Nketia',
+      'approverName': status == 'AWAITING_SELLER_ACK'
+          ? 'Adjoa Mensah'
+          : 'Ama Manager',
+      'reason': '',
+      'requesterNote': 'Routine close-of-day count',
+      'stateToken': '4',
+      'canApprove': true,
+      'canReject': true,
+      'canWithdraw': false,
+      'sourcePage': 'shop',
+      'detailSections': [
+        {
+          'title': 'Independent stock and money count',
+          'description': 'The staff member acknowledges the count first.',
+          'entries': [
+            {
+              'title': 'Blue Ballpoint Pen',
+              'subtitle': 'Adjoa Mensah',
+              'fields': [
+                {'label': 'Expected', 'value': '10'},
+                {'label': 'Counted', 'value': '9'},
+                {'label': 'Difference', 'value': '-1', 'emphasized': true},
+              ],
+            },
+          ],
+        },
+      ],
+    });
 
 ApprovalItem _itemExemption({
   required bool requester,
@@ -908,6 +1232,7 @@ class _SingleApprovalApiClient extends ApprovalApiClient {
   int actions = 0;
   String? lastAction;
   String? lastReason;
+  bool? lastItemsStillInIssuerCustody;
 
   @override
   Future<ApprovalInbox> getInbox(String schoolId) async => ApprovalInbox(
@@ -923,10 +1248,12 @@ class _SingleApprovalApiClient extends ApprovalApiClient {
     required ApprovalItem item,
     required String action,
     String reason = '',
+    bool itemsStillInIssuerCustody = false,
   }) {
     actions++;
     lastAction = action;
     lastReason = reason;
+    lastItemsStillInIssuerCustody = itemsStillInIssuerCustody;
     return getInbox(schoolId);
   }
 }
@@ -1016,6 +1343,7 @@ class _FakeApprovalApiClient extends ApprovalApiClient {
     required ApprovalItem item,
     required String action,
     String reason = '',
+    bool itemsStillInIssuerCustody = false,
   }) async {
     lastAction = action;
     if (action == 'APPROVE') approved = true;
@@ -1038,6 +1366,7 @@ class _ConflictApprovalApiClient extends _FakeApprovalApiClient {
     required ApprovalItem item,
     required String action,
     String reason = '',
+    bool itemsStillInIssuerCustody = false,
   }) async {
     throw const ApprovalApiException(
       'This request has already been approved.',

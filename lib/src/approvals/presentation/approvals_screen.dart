@@ -130,9 +130,11 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                       values: const [
                         'All',
                         'PENDING_APPROVAL',
+                        'PENDING_ACCEPTANCE',
                         'CHANGES_REQUESTED',
                         'NEEDS_REVISION',
                         'APPROVED',
+                        'ACCEPTED',
                         'DRAFT',
                         'REJECTED',
                         'CANCELLED',
@@ -222,6 +224,8 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
       item: item,
       action: action,
       reason: reason,
+      itemsStillInIssuerCustody:
+          item.type == 'SHOP_STOCK_HANDOVER' && action == 'CANCEL',
     );
     widget.onInboxChanged?.call(inbox);
   }
@@ -281,7 +285,7 @@ class _Summary extends StatelessWidget {
         icon: Icons.approval_outlined,
         title: 'My approvals',
         count: inbox.pendingMyApproval,
-        caption: 'Waiting for your decision',
+        caption: 'Waiting for your action',
         onTap: () => onChanged(true),
       ),
       _SummaryCard(
@@ -289,7 +293,7 @@ class _Summary extends StatelessWidget {
         icon: Icons.outbox_outlined,
         title: 'My requests',
         count: inbox.pendingMyRequests,
-        caption: 'Still awaiting approval',
+        caption: 'Still awaiting completion',
         onTap: () => onChanged(false),
       ),
     ],
@@ -521,13 +525,91 @@ class _ApprovalPanel extends StatefulWidget {
 
 class _ApprovalPanelState extends State<_ApprovalPanel> {
   bool _busy = false;
-  Future<void> _run(String action, {bool reasonRequired = false}) async {
+  Future<void> _run(
+    String action, {
+    bool reasonRequired = false,
+    String? reasonPrompt,
+  }) async {
     if (_busy) return;
     var reason = '';
+    if (action == 'APPROVE' && widget.item.type == 'SHOP_RECONCILIATION') {
+      final sellerAcknowledgement = widget.item.status == 'AWAITING_SELLER_ACK';
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: Text(
+            sellerAcknowledgement
+                ? 'Acknowledge this count?'
+                : 'Confirm differences and close reconciliation?',
+          ),
+          content: Text(
+            sellerAcknowledgement
+                ? 'Confirm that you have reviewed the stock and money counted for you. If there are differences, an independent administrator will resolve them.'
+                : 'This will update the recorded balances using the confirmed differences and permanently close this reconciliation. Continue only after checking the count. This action cannot be undone.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: const Text('Back'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(c, true),
+              child: Text(
+                sellerAcknowledgement
+                    ? 'Acknowledge as correct'
+                    : 'Confirm and continue',
+              ),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    if (action == 'ACCEPT' && widget.item.type == 'SHOP_STOCK_HANDOVER') {
+      final entries = _primarySection(widget.item)?.entries;
+      final entry = entries == null || entries.isEmpty ? null : entries.first;
+      final quantity = entry == null ? null : _fieldValue(entry, 'Quantity');
+      final stockDescription = entry == null
+          ? 'this stock'
+          : quantity == null || quantity.isEmpty
+          ? entry.title
+          : '$quantity of ${entry.title}';
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Confirm stock received?'),
+          content: Text(
+            'Confirm only after you have physically received and counted $stockDescription. You will become responsible for it after confirmation.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Back'),
+            ),
+            FilledButton(
+              key: const ValueKey('approval-confirm-stock-received'),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Yes, confirm receipt'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    if (action == 'CANCEL' && widget.item.type == 'SHOP_STOCK_HANDOVER') {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => _CancelStockIssueConfirmation(
+          recipientName: widget.item.approverName,
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
     if (reasonRequired) {
       final value = await showDialog<String>(
         context: context,
-        builder: (context) => _DecisionReasonDialog(action: action),
+        builder: (context) =>
+            _DecisionReasonDialog(action: reasonPrompt ?? action),
       );
       if (value == null || !mounted) return;
       reason = value;
@@ -584,6 +666,10 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                             ? 'Item exemption'
                             : item.type == 'STUDENT_RECORD_CHANGE'
                             ? 'Student record change'
+                            : item.type == 'SHOP_STOCK_HANDOVER'
+                            ? 'Stock handover'
+                            : item.type == 'SHOP_RECONCILIATION'
+                            ? 'Reconciliation review'
                             : 'Approval details',
                         style: const TextStyle(
                           fontSize: 20,
@@ -609,6 +695,13 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                         _ItemExemptionRequest(item: item)
                       else if (item.type == 'STUDENT_RECORD_CHANGE')
                         _StudentRecordChangeRequest(item: item)
+                      else if (item.type == 'SHOP_STOCK_HANDOVER')
+                        _StockHandoverRequest(
+                          item: item,
+                          onOpenSource: widget.onOpenSource,
+                        )
+                      else if (item.type == 'SHOP_RECONCILIATION')
+                        _ShopReconciliationRequest(item: item)
                       else ...[
                         _RequestSummary(item: item),
                         if (item.requesterNote.isNotEmpty) ...[
@@ -628,7 +721,8 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                           _LegacyRequestDetails(item: item),
                         ],
                       ],
-                      if (widget.onOpenSource != null) ...[
+                      if (widget.onOpenSource != null &&
+                          item.type != 'SHOP_STOCK_HANDOVER') ...[
                         const SizedBox(height: 16),
                         OutlinedButton.icon(
                           onPressed: widget.onOpenSource,
@@ -654,21 +748,43 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                               Expanded(
                                 child: OutlinedButton(
                                   onPressed: () =>
-                                      _run('WITHDRAW', reasonRequired: true),
-                                  child: const Text(
-                                    'Withdraw approval request',
+                                      item.type == 'SHOP_STOCK_HANDOVER'
+                                      ? _run('CANCEL')
+                                      : _run('WITHDRAW', reasonRequired: true),
+                                  child: Text(
+                                    item.type == 'SHOP_STOCK_HANDOVER'
+                                        ? 'Cancel issuance'
+                                        : 'Withdraw approval request',
                                   ),
                                 ),
                               ),
                             if (item.canReject)
                               Expanded(
                                 child: OutlinedButton(
-                                  onPressed: () =>
-                                      _run('REJECT', reasonRequired: true),
+                                  onPressed: () => _run(
+                                    'REJECT',
+                                    reasonRequired: true,
+                                    reasonPrompt:
+                                        item.type == 'SHOP_STOCK_HANDOVER'
+                                        ? 'STOCK_PROBLEM'
+                                        : item.type == 'SHOP_RECONCILIATION'
+                                        ? item.status == 'AWAITING_SELLER_ACK'
+                                              ? 'DISPUTE_COUNT'
+                                              : 'RECOUNT'
+                                        : null,
+                                  ),
                                   style: OutlinedButton.styleFrom(
                                     foregroundColor: Colors.red,
                                   ),
-                                  child: const Text('Reject'),
+                                  child: Text(
+                                    item.type == 'SHOP_STOCK_HANDOVER'
+                                        ? 'Report problem'
+                                        : item.type == 'SHOP_RECONCILIATION'
+                                        ? item.status == 'AWAITING_SELLER_ACK'
+                                              ? 'Report a problem'
+                                              : 'Send for recount'
+                                        : 'Reject',
+                                  ),
                                 ),
                               ),
                             if ((item.canWithdraw || item.canReject) &&
@@ -677,9 +793,25 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                             if (item.canApprove)
                               Expanded(
                                 child: FilledButton.icon(
-                                  onPressed: () => _run('APPROVE'),
+                                  onPressed: () => _run(
+                                    item.type == 'SHOP_STOCK_HANDOVER'
+                                        ? 'ACCEPT'
+                                        : 'APPROVE',
+                                    reasonRequired:
+                                        item.type == 'SHOP_RECONCILIATION' &&
+                                        item.status != 'AWAITING_SELLER_ACK',
+                                    reasonPrompt: 'RESOLUTION',
+                                  ),
                                   icon: const Icon(Icons.check_rounded),
-                                  label: const Text('Approve'),
+                                  label: Text(
+                                    item.type == 'SHOP_STOCK_HANDOVER'
+                                        ? 'Confirm receipt'
+                                        : item.type == 'SHOP_RECONCILIATION'
+                                        ? item.status == 'AWAITING_SELLER_ACK'
+                                              ? 'Acknowledge as correct'
+                                              : 'Resolve differences'
+                                        : 'Approve',
+                                  ),
                                 ),
                               ),
                           ],
@@ -691,6 +823,61 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
       ),
     );
   }
+}
+
+class _CancelStockIssueConfirmation extends StatefulWidget {
+  const _CancelStockIssueConfirmation({required this.recipientName});
+
+  final String recipientName;
+
+  @override
+  State<_CancelStockIssueConfirmation> createState() =>
+      _CancelStockIssueConfirmationState();
+}
+
+class _CancelStockIssueConfirmationState
+    extends State<_CancelStockIssueConfirmation> {
+  bool _affirmed = false;
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Cancel stock issuance?'),
+    content: SizedBox(
+      width: 480,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Cancelling will return the full quantity to the central store.',
+          ),
+          const SizedBox(height: 14),
+          CheckboxListTile(
+            key: const ValueKey('stock-cancellation-custody-affirmation'),
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.leading,
+            value: _affirmed,
+            onChanged: (value) => setState(() => _affirmed = value == true),
+            title: Text(
+              'I confirm the items are still in my custody and were not handed to ${widget.recipientName}.',
+            ),
+          ),
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context, false),
+        child: const Text('Keep issuance'),
+      ),
+      FilledButton(
+        key: const ValueKey('confirm-stock-issuance-cancellation'),
+        onPressed: _affirmed ? () => Navigator.pop(context, true) : null,
+        style: FilledButton.styleFrom(backgroundColor: AppColors.red),
+        child: const Text('Cancel issuance'),
+      ),
+    ],
+  );
 }
 
 class _DecisionReasonDialog extends StatefulWidget {
@@ -715,6 +902,10 @@ class _DecisionReasonDialogState extends State<_DecisionReasonDialog> {
   Widget build(BuildContext context) => AlertDialog(
     title: Text(switch (widget.action) {
       'REJECT' => 'Reject request',
+      'STOCK_PROBLEM' => 'Report a stock problem',
+      'DISPUTE_COUNT' => 'Dispute this count',
+      'RECOUNT' => 'Reject and recount',
+      'RESOLUTION' => 'Record the resolution',
       _ => 'Withdraw approval request',
     }),
     content: Form(
@@ -728,6 +919,13 @@ class _DecisionReasonDialogState extends State<_DecisionReasonDialog> {
           labelText: 'Decision reason *',
           hintText: switch (widget.action) {
             'REJECT' => 'Explain why you are rejecting this request.',
+            'STOCK_PROBLEM' =>
+              'Explain what is wrong, such as the item or quantity.',
+            'DISPUTE_COUNT' =>
+              'Explain which stock or money count you disagree with.',
+            'RECOUNT' => 'Explain why a fresh count is required.',
+            'RESOLUTION' =>
+              'Explain how the differences were checked and resolved.',
             _ => 'Explain why you are withdrawing this request.',
           },
           helperText: '5–1000 characters. Saved in the audit trail.',
@@ -753,7 +951,12 @@ class _DecisionReasonDialogState extends State<_DecisionReasonDialog> {
             Navigator.pop(context, _controller.text.trim());
           }
         },
-        child: const Text('Continue'),
+        child: Text(switch (widget.action) {
+          'STOCK_PROBLEM' => 'Report problem',
+          'DISPUTE_COUNT' => 'Submit dispute',
+          'RESOLUTION' => 'Resolve and close',
+          _ => 'Continue',
+        }),
       ),
     ],
   );
@@ -763,6 +966,442 @@ class _ApprovalPanelResult {
   const _ApprovalPanelResult({this.reload = false, this.conflictMessage});
   final bool reload;
   final String? conflictMessage;
+}
+
+class _ShopReconciliationRequest extends StatelessWidget {
+  const _ShopReconciliationRequest({required this.item});
+
+  final ApprovalItem item;
+
+  double _number(String? value) =>
+      double.tryParse((value ?? '').replaceAll(RegExp(r'[^0-9.-]'), '')) ?? 0;
+
+  String _difference(String? value, {bool money = false}) {
+    final amount = _number(value);
+    if (amount == 0) return 'Matches';
+    final formatted = money
+        ? 'GHS ${amount.abs().toStringAsFixed(2)}'
+        : '${amount.abs().toInt()}';
+    return '$formatted ${amount < 0 ? 'short' : 'extra'}';
+  }
+
+  Widget _metric(String label, String value, IconData icon, Color color) =>
+      Container(
+        width: 250,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.07),
+          border: Border.all(color: color.withValues(alpha: 0.2)),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: color, size: 21),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 11,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    value,
+                    style: TextStyle(color: color, fontWeight: FontWeight.w800),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+
+  Widget _line(ApprovalDetailEntry entry) {
+    final difference = _fieldValue(entry, 'Difference');
+    final explanation = _fieldValue(entry, 'Explanation');
+    final money =
+        entry.title == 'Cash held' || entry.title == 'Mobile Money records';
+    final changed = _number(difference) != 0;
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppColors.border)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      entry.title,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    if (entry.subtitle.isNotEmpty)
+                      Text(
+                        entry.subtitle,
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 11,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                decoration: BoxDecoration(
+                  color: (changed ? AppColors.red : AppColors.green).withValues(
+                    alpha: 0.08,
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  _difference(difference, money: money),
+                  style: TextStyle(
+                    color: changed ? AppColors.red : AppColors.green,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 16,
+            runSpacing: 5,
+            children: [
+              Text('Expected: ${_fieldValue(entry, 'Expected') ?? '—'}'),
+              Text(
+                'Counted: ${_fieldValue(entry, 'Counted') ?? _fieldValue(entry, 'Verified') ?? '—'}',
+              ),
+            ],
+          ),
+          if (changed) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Explanation: ${explanation == null || explanation == 'null' || explanation.trim().isEmpty ? 'Not provided' : explanation}',
+              style: const TextStyle(color: AppColors.muted, fontSize: 12),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final entries = _primarySection(item)?.entries ?? const [];
+    final cash = entries
+        .where((entry) => entry.title == 'Cash held')
+        .firstOrNull;
+    final momo = entries
+        .where((entry) => entry.title == 'Mobile Money records')
+        .firstOrNull;
+    final stock = entries
+        .where(
+          (entry) =>
+              entry.title != 'Cash held' &&
+              entry.title != 'Mobile Money records',
+        )
+        .toList();
+    final stockDifferences = stock
+        .where((entry) => _number(_fieldValue(entry, 'Difference')) != 0)
+        .toList();
+    final cashDifference = _number(
+      cash == null ? null : _fieldValue(cash, 'Difference'),
+    );
+    final momoDifference = _number(
+      momo == null ? null : _fieldValue(momo, 'Difference'),
+    );
+    final seller = item.title.replaceFirst(
+      RegExp(r'^Independent count\s*·\s*'),
+      '',
+    );
+    final acknowledging = item.status == 'AWAITING_SELLER_ACK';
+    final attention = <ApprovalDetailEntry>[
+      ...stockDifferences,
+      if (cash != null && cashDifference != 0) cash,
+      if (momo != null && momoDifference != 0) momo,
+    ];
+
+    return Column(
+      key: const ValueKey('shop-reconciliation-approval-details'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _StatusPill(status: item.status),
+        const SizedBox(height: 14),
+        Text(
+          seller,
+          style: const TextStyle(
+            color: AppColors.navy,
+            fontSize: 22,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(item.subtitle, style: const TextStyle(color: AppColors.muted)),
+        const SizedBox(height: 14),
+        Container(
+          padding: const EdgeInsets.all(15),
+          decoration: BoxDecoration(
+            color: acknowledging
+                ? AppColors.green.withValues(alpha: 0.07)
+                : AppColors.amber.withValues(alpha: 0.09),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                acknowledging
+                    ? 'Your confirmation is required'
+                    : 'Your independent decision is required',
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 5),
+              Text(
+                acknowledging
+                    ? 'Review the count below. Acknowledge only if the figures are correct; report a problem if anything is wrong.'
+                    : 'Review every difference and explanation. Resolve only after an independent check, or send it for a recount.',
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        _StockHandoverField(label: 'Seller being reconciled', value: seller),
+        _StockHandoverField(label: 'Counted by', value: item.requesterName),
+        _StockHandoverField(
+          label: acknowledging ? 'Acknowledged by' : 'Independent approver',
+          value: item.approverName,
+        ),
+        const SizedBox(height: 16),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            _metric(
+              'Stock checked',
+              '${stock.length} item lines',
+              Icons.inventory_2_outlined,
+              AppColors.green,
+            ),
+            _metric(
+              'Stock differences',
+              stockDifferences.isEmpty
+                  ? 'None'
+                  : '${stockDifferences.length} need attention',
+              Icons.warning_amber_rounded,
+              stockDifferences.isEmpty ? AppColors.green : AppColors.red,
+            ),
+            _metric(
+              'Cash difference',
+              _difference(
+                cash == null ? null : _fieldValue(cash, 'Difference'),
+                money: true,
+              ),
+              Icons.payments_outlined,
+              cashDifference == 0 ? AppColors.green : AppColors.red,
+            ),
+            _metric(
+              'Mobile Money difference',
+              _difference(
+                momo == null ? null : _fieldValue(momo, 'Difference'),
+                money: true,
+              ),
+              Icons.phone_android_outlined,
+              momoDifference == 0 ? AppColors.green : AppColors.red,
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        _PanelCard(
+          title: 'Differences requiring attention',
+          icon: attention.isEmpty
+              ? Icons.check_circle_outline
+              : Icons.warning_amber_rounded,
+          child: attention.isEmpty
+              ? const Text('All stock and money records match the count.')
+              : Column(children: [for (final entry in attention) _line(entry)]),
+        ),
+        const SizedBox(height: 14),
+        Container(
+          decoration: BoxDecoration(
+            border: Border.all(color: AppColors.border),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: ExpansionTile(
+            key: const ValueKey('shop-reconciliation-full-count'),
+            initiallyExpanded: stock.length <= 5,
+            title: const Text(
+              'Review all stock count lines',
+              style: TextStyle(fontWeight: FontWeight.w800),
+            ),
+            subtitle: Text('${stock.length} item lines'),
+            childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            children: [for (final entry in stock) _line(entry)],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _StockHandoverRequest extends StatelessWidget {
+  const _StockHandoverRequest({required this.item, this.onOpenSource});
+
+  final ApprovalItem item;
+  final VoidCallback? onOpenSource;
+
+  @override
+  Widget build(BuildContext context) {
+    final section = _primarySection(item);
+    final entry = section == null || section.entries.isEmpty
+        ? null
+        : section.entries.first;
+    String value(String label, [String fallback = 'Not specified']) {
+      final result = entry == null ? null : _fieldValue(entry, label);
+      return result == null || result.trim().isEmpty ? fallback : result;
+    }
+
+    final itemName =
+        (entry?.title.isNotEmpty == true
+                ? entry!.title
+                : item.title.replaceFirst(
+                    RegExp(r'^Stock handover\s*·\s*'),
+                    '',
+                  ))
+            .replaceAll(' · ', ', ');
+    final status = switch (item.status) {
+      'PENDING_ACCEPTANCE' =>
+        'Pending — waiting on ${item.approverName.isEmpty ? 'recipient' : item.approverName} to confirm',
+      'ACCEPTED' => 'Receipt confirmed',
+      'REJECTED' => 'Problem reported',
+      'CANCELLED' => 'Issuance cancelled',
+      _ => _statusText(item.status),
+    };
+    final statusColor = switch (item.status) {
+      'PENDING_ACCEPTANCE' => AppColors.amber,
+      'ACCEPTED' => AppColors.green,
+      'REJECTED' || 'CANCELLED' => AppColors.red,
+      _ => AppColors.muted,
+    };
+
+    return Container(
+      key: const ValueKey('stock-handover-compact-details'),
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            status,
+            style: TextStyle(
+              color: statusColor,
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            itemName,
+            style: const TextStyle(
+              color: AppColors.navy,
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Requested ${_dateText(item.submittedAt ?? item.createdAt).replaceFirst(' · ', ', ')}',
+            style: const TextStyle(color: AppColors.muted, fontSize: 12),
+          ),
+          const SizedBox(height: 18),
+          const Divider(height: 1),
+          _StockHandoverField(
+            label: 'Quantity',
+            value: value('Quantity'),
+            emphasized: true,
+          ),
+          _StockHandoverField(
+            label: 'From',
+            value: value('Issued by', item.requesterName),
+          ),
+          _StockHandoverField(
+            label: 'To',
+            value: value('Issued to', item.approverName),
+          ),
+          _StockHandoverField(label: 'Location', value: value('Location')),
+          if (onOpenSource != null) ...[
+            const SizedBox(height: 12),
+            TextButton(
+              key: const ValueKey('stock-handover-open-source'),
+              onPressed: onOpenSource,
+              style: TextButton.styleFrom(
+                padding: EdgeInsets.zero,
+                minimumSize: const Size(0, 40),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text('Open source page →'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _StockHandoverField extends StatelessWidget {
+  const _StockHandoverField({
+    required this.label,
+    required this.value,
+    this.emphasized = false,
+  });
+
+  final String label;
+  final String value;
+  final bool emphasized;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(vertical: 12),
+    decoration: const BoxDecoration(
+      border: Border(bottom: BorderSide(color: AppColors.border)),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 110,
+          child: Text(
+            label,
+            style: const TextStyle(color: AppColors.muted, fontSize: 13),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            value,
+            textAlign: TextAlign.right,
+            style: TextStyle(
+              color: emphasized ? AppColors.green : AppColors.text,
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _RequestSummary extends StatelessWidget {
@@ -805,7 +1444,7 @@ class _RequestSummary extends StatelessWidget {
                   _StatusPill(status: item.status),
                   const SizedBox(height: 10),
                   Text(
-                    item.title,
+                    _requestSummaryTitle(item),
                     style: const TextStyle(
                       fontSize: 21,
                       fontWeight: FontWeight.w900,
@@ -874,7 +1513,11 @@ class _RequesterNote extends StatelessWidget {
             item.type == 'STUDENT_REQUIREMENT') &&
         (item.version ?? 1) > 1;
     return _PanelCard(
-      title: revised ? 'Reason for revision' : 'Requester note',
+      title: item.type == 'SHOP_STOCK_HANDOVER'
+          ? 'Issue note'
+          : revised
+          ? 'Reason for revision'
+          : 'Requester note',
       icon: Icons.notes_rounded,
       child: Text(
         item.requesterNote,
@@ -1244,6 +1887,26 @@ class _DecisionRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (item.type == 'SHOP_INVENTORY_ADJUSTMENT') {
+      return _InventoryAdjustmentDecisionRow(entry: entry);
+    }
+    if (item.type == 'SHOP_RECONCILIATION') {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            entry.title,
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+          Text(entry.subtitle, style: const TextStyle(color: AppColors.muted)),
+          for (final field in entry.fields)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text('${field.label}: ${field.value}'),
+            ),
+        ],
+      );
+    }
     final title = switch (item.type) {
       'FEE_ADJUSTMENT' ||
       'PAYMENT_REVERSAL' ||
@@ -1257,10 +1920,7 @@ class _DecisionRow extends StatelessWidget {
       'FEE_ADJUSTMENT' => _fieldValue(entry, 'Amount'),
       'PAYMENT_REVERSAL' => _fieldValue(entry, 'Amount to reverse'),
       'STUDENT_TRANSFER' => _fieldValue(entry, 'Effective date'),
-      'SHOP_INVENTORY_ADJUSTMENT' => _fieldValue(
-        entry,
-        'Proposed unassigned quantity',
-      ),
+      'SHOP_STOCK_HANDOVER' => _fieldValue(entry, 'Quantity'),
       _ => _fieldValue(entry, 'Amount'),
     };
     final subtitleParts = switch (item.type) {
@@ -1288,9 +1948,10 @@ class _DecisionRow extends StatelessWidget {
         _transferRoute(entry),
         _fieldValue(entry, 'Reason'),
       ],
-      'SHOP_INVENTORY_ADJUSTMENT' => [
-        _labelledField(entry, 'Current unassigned quantity', 'Current'),
-        _labelledField(entry, 'Quantity change', 'Change'),
+      'SHOP_STOCK_HANDOVER' => [
+        _labelledField(entry, 'Issued by', 'From'),
+        _labelledField(entry, 'Issued to', 'To'),
+        _labelledField(entry, 'Location', 'Location'),
       ],
       'FEE_STRUCTURE' => const <String?>[],
       _ => [entry.subtitle],
@@ -1346,6 +2007,137 @@ class _DecisionRow extends StatelessWidget {
   }
 }
 
+class _InventoryAdjustmentDecisionRow extends StatelessWidget {
+  const _InventoryAdjustmentDecisionRow({required this.entry});
+  final ApprovalDetailEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final current =
+        _fieldValue(entry, 'Current unassigned quantity') ?? 'Not recorded';
+    final proposed =
+        _fieldValue(entry, 'Proposed unassigned quantity') ?? 'Not recorded';
+    final rawChange = (_fieldValue(entry, 'Quantity change') ?? '').trim();
+    final reduction = rawChange.startsWith('-');
+    final increase = rawChange.startsWith('+');
+    final changedAmount = rawChange.replaceFirst(RegExp(r'^[+-]'), '').trim();
+    final action = reduction
+        ? 'Remove $changedAmount from available inventory'
+        : increase
+        ? 'Add $changedAmount to available inventory'
+        : 'Correct available inventory to $proposed';
+    final actionColor = reduction ? AppColors.red : AppColors.green;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          entry.title,
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w900,
+            color: AppColors.navy,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: actionColor.withValues(alpha: .07),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: actionColor.withValues(alpha: .24)),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                reduction
+                    ? Icons.remove_circle_outline
+                    : increase
+                    ? Icons.add_circle_outline
+                    : Icons.inventory_outlined,
+                color: actionColor,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  action,
+                  style: TextStyle(
+                    color: actionColor,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            Expanded(
+              child: _InventoryApprovalQuantity(
+                label: 'Current stock',
+                value: current,
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              child: Icon(Icons.arrow_forward_rounded, color: AppColors.muted),
+            ),
+            Expanded(
+              child: _InventoryApprovalQuantity(
+                label: 'After approval',
+                value: proposed,
+                emphasized: true,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        const Text(
+          'The available central-store quantity changes only if this request is approved.',
+          style: TextStyle(color: AppColors.muted, fontSize: 12),
+        ),
+      ],
+    );
+  }
+}
+
+class _InventoryApprovalQuantity extends StatelessWidget {
+  const _InventoryApprovalQuantity({
+    required this.label,
+    required this.value,
+    this.emphasized = false,
+  });
+  final String label;
+  final String value;
+  final bool emphasized;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        label.toUpperCase(),
+        style: const TextStyle(
+          color: AppColors.muted,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+      const SizedBox(height: 4),
+      Text(
+        value,
+        style: TextStyle(
+          color: emphasized ? AppColors.green : AppColors.navy,
+          fontSize: 17,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+    ],
+  );
+}
+
 class _AdditionalRequestDetails extends StatelessWidget {
   const _AdditionalRequestDetails({required this.item});
   final ApprovalItem item;
@@ -1367,7 +2159,7 @@ class _AdditionalRequestDetails extends StatelessWidget {
         style: TextStyle(fontWeight: FontWeight.w800, color: AppColors.navy),
       ),
       subtitle: const Text(
-        'Requester, assigned approver and request dates',
+        'Requester, assigned person and important dates',
         style: TextStyle(fontSize: 12, color: AppColors.muted),
       ),
       children: [_RequestPeopleAndDates(item: item)],
@@ -1385,6 +2177,7 @@ ApprovalDetailSection? _primarySection(ApprovalItem item) {
     'PAYMENT_REVERSAL' => 'Payment reversal request',
     'STUDENT_TRANSFER' => 'Transfer request',
     'SHOP_INVENTORY_ADJUSTMENT' => 'Inventory change',
+    'SHOP_STOCK_HANDOVER' => 'Stock handover',
     _ => '',
   };
   for (final section in item.detailSections) {
@@ -1417,6 +2210,7 @@ String? _transferRoute(ApprovalDetailEntry entry) {
 }
 
 String _decisionSectionTitle(String type) => switch (type) {
+  'SHOP_RECONCILIATION' => 'Counts and adjustments',
   'FEE_STRUCTURE' => 'Fees in this request',
   'CLASS_REQUIREMENT' => 'Items in this request',
   'STUDENT_REQUIREMENT' => 'Student-specific item in this request',
@@ -1425,8 +2219,24 @@ String _decisionSectionTitle(String type) => switch (type) {
   'PAYMENT_REVERSAL' => 'Requested payment reversal',
   'STUDENT_TRANSFER' => 'Requested grade change',
   'SHOP_INVENTORY_ADJUSTMENT' => 'Requested inventory change',
+  'SHOP_STOCK_HANDOVER' => 'Stock awaiting confirmation',
   _ => 'Request summary',
 };
+
+String _requestSummaryTitle(ApprovalItem item) {
+  if (item.type != 'SHOP_INVENTORY_ADJUSTMENT') return item.title;
+  final entries = _primarySection(item)?.entries;
+  if (entries == null || entries.isEmpty) return item.title;
+  final entry = entries.first;
+  final change = (_fieldValue(entry, 'Quantity change') ?? '').trim();
+  final type = entry.subtitle.toLowerCase();
+  final action = type.contains('reduction') || change.startsWith('-')
+      ? 'Remove stock'
+      : type.contains('increase') || change.startsWith('+')
+      ? 'Add stock'
+      : 'Correct stock count';
+  return '$action · ${entry.title}';
+}
 
 class _RequestPeopleAndDates extends StatelessWidget {
   const _RequestPeopleAndDates({required this.item});
@@ -1440,13 +2250,17 @@ class _RequestPeopleAndDates extends StatelessWidget {
       runSpacing: 18,
       children: [
         _PanelField(
-          label: 'Requested by',
+          label: item.type == 'SHOP_STOCK_HANDOVER'
+              ? 'Issued by'
+              : 'Requested by',
           value: item.requesterName.isEmpty
               ? 'Not available'
               : item.requesterName,
         ),
         _PanelField(
-          label: 'Assigned approver',
+          label: item.type == 'SHOP_STOCK_HANDOVER'
+              ? 'Recipient'
+              : 'Assigned approver',
           value: item.approverName.isEmpty ? 'Not assigned' : item.approverName,
         ),
         _PanelField(label: 'Created', value: _dateText(item.createdAt)),
@@ -1569,9 +2383,9 @@ class _StatusPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = switch (status) {
-      'PENDING_APPROVAL' => const Color(0xFFD88A00),
+      'PENDING_APPROVAL' || 'PENDING_ACCEPTANCE' => const Color(0xFFD88A00),
       'CHANGES_REQUESTED' => const Color(0xFFD88A00),
-      'APPROVED' || 'PUBLISHED' => AppColors.green,
+      'APPROVED' || 'PUBLISHED' || 'ACCEPTED' => AppColors.green,
       'REJECTED' || 'CANCELLED' => Colors.red,
       _ => AppColors.blue,
     };

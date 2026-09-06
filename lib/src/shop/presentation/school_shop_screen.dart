@@ -1,6 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:printing/printing.dart';
 import '../data/shop_api_client.dart';
 import '../../theme/app_theme.dart';
+import '../../assessments/presentation/report_pdf_download.dart';
+import 'shop_receipt_pdf.dart';
+import 'shop_reconciliation_screen.dart';
 
 enum _ShopPage {
   overview,
@@ -8,10 +14,11 @@ enum _ShopPage {
   catalog,
   consignments,
   sell,
-  cashier,
   release,
   accounts,
+  remittances,
   sales,
+  reports,
   returns,
   roles,
   audit,
@@ -35,7 +42,6 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
   List<ShopJson> _availableCustody = [];
   List<ShopJson> _receipts = [],
       _sales = [],
-      _reconciliations = [],
       _roles = [],
       _auditEvents = [],
       _stockMovements = [],
@@ -46,7 +52,21 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
   String _receiptSearch = '';
   List<ShopJson> _releaseMatches = [];
   bool _searchingReceipts = false;
+  bool _receiptSearchComplete = false;
   int? _salesDays = 30;
+  ShopJson? _report;
+  bool _reportLoading = false;
+  bool _downloadingReport = false;
+  int? _reportDays = 30;
+  late DateTime _reportFrom = DateTime.now().subtract(const Duration(days: 29));
+  late DateTime _reportTo = DateTime.now();
+  final Set<String> _reportSections = {
+    'SUMMARY',
+    'SALES',
+    'INVENTORY',
+    'STAFF_STOCK',
+    'RETURNS',
+  };
   _ShopPage _page = _ShopPage.overview;
   _InventorySection _inventorySection = _InventorySection.current;
 
@@ -105,12 +125,12 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
               context['canHoldStock'] == true
           ? await widget.api.receipts()
           : <ShopJson>[];
-      final sales = await widget.api.sales();
+      final sales = await widget.api.sales(
+        from: _salesFromDate,
+        to: _ymd(DateTime.now()),
+      );
       final customerReturns = await widget.api.customerReturns();
       final staffReturns = await widget.api.staffReturns();
-      final recs = context['isAdmin'] == true || context['canSell'] == true
-          ? await widget.api.reconciliations()
-          : <ShopJson>[];
       final roles = context['canManageRoles'] == true
           ? await widget.api.roles()
           : <ShopJson>[];
@@ -131,7 +151,6 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
         _sales = sales;
         _customerReturns = customerReturns;
         _staffReturns = staffReturns;
-        _reconciliations = recs;
         _roles = roles;
         _auditEvents = audit;
       });
@@ -148,10 +167,11 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     if (_buyer) _ShopPage.catalog,
     if (_buyer || _seller || _holder) _ShopPage.consignments,
     if (_seller) _ShopPage.sell,
-    if (_cashier) _ShopPage.cashier,
     if (_goods) _ShopPage.release,
-    if (_admin || _seller) _ShopPage.accounts,
+    _ShopPage.accounts,
+    if (_admin || _seller || _cashier) _ShopPage.remittances,
     _ShopPage.sales,
+    if (_admin || _buyer) _ShopPage.reports,
     _ShopPage.returns,
     if (_admin) _ShopPage.roles,
     if (_admin) _ShopPage.audit,
@@ -161,12 +181,13 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     _ShopPage.overview => 'Overview',
     _ShopPage.itemTypes => 'Item types',
     _ShopPage.catalog => 'Inventory',
-    _ShopPage.consignments => !_buyer ? 'My stock' : 'Issue stock',
+    _ShopPage.consignments => !_buyer ? 'My stock' : 'Stock handovers',
     _ShopPage.sell => 'Sell items',
-    _ShopPage.cashier => 'Take payment',
     _ShopPage.release => 'Release goods',
-    _ShopPage.accounts => 'Accounts',
+    _ShopPage.accounts => 'Reconciliation',
+    _ShopPage.remittances => 'Cash remittances',
     _ShopPage.sales => 'Sales',
+    _ShopPage.reports => 'Reports',
     _ShopPage.returns => 'Returns',
     _ShopPage.roles => 'Shop roles',
     _ShopPage.audit => 'Audit trail',
@@ -178,10 +199,11 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     _ShopPage.catalog => Icons.inventory_2_outlined,
     _ShopPage.consignments => Icons.move_to_inbox_outlined,
     _ShopPage.sell => Icons.point_of_sale_outlined,
-    _ShopPage.cashier => Icons.receipt_long_outlined,
     _ShopPage.release => Icons.qr_code_scanner_outlined,
     _ShopPage.accounts => Icons.balance_outlined,
+    _ShopPage.remittances => Icons.payments_outlined,
     _ShopPage.sales => Icons.analytics_outlined,
+    _ShopPage.reports => Icons.summarize_outlined,
     _ShopPage.returns => Icons.assignment_return_outlined,
     _ShopPage.roles => Icons.manage_accounts_outlined,
     _ShopPage.audit => Icons.history_outlined,
@@ -194,6 +216,11 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
       builder: (_) => child,
     );
     if (changed == true) await _load();
+  }
+
+  Future<void> _selectPage(_ShopPage page) async {
+    setState(() => _page = page);
+    if (page == _ShopPage.reports && _report == null) await _loadReport();
   }
 
   @override
@@ -261,13 +288,40 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                         avatar: Icon(_icon(page), size: 18),
                         label: Text(_label(page)),
                         selected: _page == page,
-                        onSelected: (_) => setState(() => _page = page),
+                        onSelected: (_) => _selectPage(page),
                       ),
                     ),
                   )
                   .toList(),
             ),
           ),
+          if (_context?['reconciliationInProgress'] == true)
+            Container(
+              key: const ValueKey('shop-reconciliation-freeze'),
+              margin: const EdgeInsets.only(top: 14),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                border: Border.all(color: Colors.amber.shade300),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.pause_circle_outline,
+                    color: Colors.amber.shade900,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Reconciliation in progress. ${_context?['reconciliationCounterName'] ?? 'An administrator'} is checking your stock and money. Selling, collection releases, stock handovers, returns and cash remittances are temporarily paused for you; other sellers can continue.',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           if (_loading) const LinearProgressIndicator(),
           if (_error != null)
             Padding(
@@ -284,10 +338,11 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
             _ShopPage.catalog => _catalog(),
             _ShopPage.consignments => _consignmentList(),
             _ShopPage.sell => _sell(),
-            _ShopPage.cashier => _cashierPage(),
             _ShopPage.release => _release(),
             _ShopPage.accounts => _accounts(),
+            _ShopPage.remittances => _cashRemittances(),
             _ShopPage.sales => _salesPage(),
+            _ShopPage.reports => _reportsPage(),
             _ShopPage.returns => _returnsPage(),
             _ShopPage.roles => _rolesPage(),
             _ShopPage.audit => _auditPage(),
@@ -569,9 +624,8 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
         'Reusable item definitions. Quantities are recorded separately when stock is received.',
     action: FilledButton.icon(
       key: const ValueKey('shop-add-item-type'),
-      onPressed: () => _dialog(
-        _ItemDialog(api: widget.api, contextData: _context!, items: _items),
-      ),
+      onPressed: () =>
+          _dialog(_ItemDialog(api: widget.api, contextData: _context!)),
       icon: const Icon(Icons.add),
       label: const Text('Add item type'),
     ),
@@ -608,23 +662,6 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                 cell: (item) => Text('${item['unitOfMeasure']}'),
               ),
               _ShopTableColumn(
-                label: 'Parent type',
-                sortValue: (item) => _parentItemTypeName(item),
-                cell: (item) => Text(_parentItemTypeName(item)),
-              ),
-              _ShopTableColumn(
-                label: 'Unit cost',
-                numeric: true,
-                sortValue: (item) => item['costPrice'],
-                cell: (item) => Text(_money(item['costPrice'])),
-              ),
-              _ShopTableColumn(
-                label: 'Unit selling',
-                numeric: true,
-                sortValue: (item) => item['sellingPrice'],
-                cell: (item) => Text(_money(item['sellingPrice'])),
-              ),
-              _ShopTableColumn(
                 label: 'Low-stock alert',
                 numeric: true,
                 sortValue: (item) => item['lowStockThreshold'],
@@ -655,7 +692,6 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                         _ItemDialog(
                           api: widget.api,
                           contextData: _context!,
-                          items: _items,
                           item: item,
                         ),
                       );
@@ -700,15 +736,6 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
             ],
           ),
   );
-
-  String _parentItemTypeName(ShopJson item) {
-    final parentId = item['parentItemId'];
-    if (parentId == null) return '—';
-    for (final candidate in _items) {
-      if (candidate['id'] == parentId) return '${candidate['displayName']}';
-    }
-    return 'Archived item type';
-  }
 
   ShopJson _itemTypePayload(ShopJson item, bool active) => {
     'name': item['name'],
@@ -860,6 +887,8 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
               : _ModernShopTable<ShopJson>(
                   tableKey: 'shop-inventory-table',
                   rows: _activeItems,
+                  initialSortColumn: 1,
+                  initialSortAscending: false,
                   rowKey: (item) => 'shop-item-${item['id']}',
                   onRowTap: _showInventoryDetails,
                   columns: [
@@ -878,35 +907,62 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                               ),
                             ),
                           Flexible(child: Text('${item['displayName']}')),
+                          if (_isNewInventoryItem(item)) ...[
+                            const SizedBox(width: 8),
+                            Container(
+                              key: ValueKey('shop-new-item-${item['id']}'),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppColors.blue.withValues(alpha: .12),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: const Text(
+                                'New',
+                                style: TextStyle(
+                                  color: AppColors.blue,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),
                     _ShopTableColumn(
-                      label: 'Central store',
+                      label: 'Date added',
+                      sortValue: (item) => _dateValue(item['createdAt']),
+                      cell: (item) => Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            _dateLabel(item['createdAt']),
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          if (_timeLabel(item['createdAt']).isNotEmpty)
+                            Text(
+                              _timeLabel(item['createdAt']),
+                              style: const TextStyle(
+                                color: AppColors.muted,
+                                fontSize: 12,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    _ShopTableColumn(
+                      label: 'Available to sell',
                       numeric: true,
                       sortValue: (item) =>
-                          item['unassignedQuantity'] ?? item['centralQuantity'],
+                          item['schoolAvailableQuantity'] ??
+                          item['availableQuantity'],
                       cell: (item) => Text(
-                        '${item['unassignedQuantity'] ?? item['centralQuantity'] ?? item['availableQuantity']} ${item['unitOfMeasure']}',
+                        '${item['schoolAvailableQuantity'] ?? item['availableQuantity'] ?? 0} ${item['unitOfMeasure']}',
                         style: const TextStyle(fontWeight: FontWeight.w800),
-                      ),
-                    ),
-                    _ShopTableColumn(
-                      label: 'With staff',
-                      numeric: true,
-                      sortValue: (item) => item['heldQuantity'] ?? 0,
-                      cell: (item) => Text(
-                        '${item['heldQuantity'] ?? 0} ${item['unitOfMeasure']}',
-                      ),
-                    ),
-                    _ShopTableColumn(
-                      label: 'Reserved',
-                      numeric: true,
-                      sortValue: (item) =>
-                          item['totalReservedQuantity'] ??
-                          item['reservedQuantity'],
-                      cell: (item) => Text(
-                        '${item['totalReservedQuantity'] ?? item['reservedQuantity'] ?? 0} ${item['unitOfMeasure']}',
                       ),
                     ),
                     _ShopTableColumn(
@@ -1093,6 +1149,13 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
               as num)
           .toInt();
 
+  bool _isNewInventoryItem(ShopJson item) {
+    final createdAt = _shopDate(item['createdAt']);
+    if (createdAt == null) return false;
+    final age = DateTime.now().difference(createdAt);
+    return !age.isNegative && age < const Duration(hours: 24);
+  }
+
   int _inventoryStatusRank(ShopJson item) {
     final available = _inventoryAvailable(item);
     if (available <= 0) return 0;
@@ -1132,6 +1195,20 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
             request['status'] == 'PENDING_APPROVAL',
       );
 
+  bool _canIssueInventoryItem(ShopJson item) =>
+      _buyer &&
+      item['active'] == true &&
+      item['id'] != null &&
+      ((item['availableQuantity'] as num?)?.toInt() ?? 0) > 0;
+
+  String _issueInventoryLabel(ShopJson item) {
+    if (item['active'] != true) return 'Prepare handover — item is archived';
+    if (((item['availableQuantity'] as num?)?.toInt() ?? 0) <= 0) {
+      return 'Prepare handover — none available in central store';
+    }
+    return 'Prepare handover';
+  }
+
   Widget _inventoryActions(ShopJson item) => PopupMenuButton<String>(
     key: ValueKey('shop-inventory-actions-${item['id']}'),
     tooltip: 'Inventory actions',
@@ -1141,6 +1218,16 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
         _showInventoryDetails(item);
       } else if (action == 'holders') {
         _showInventoryHolders(item);
+      } else if (action == 'issue') {
+        _dialog(
+          _ConsignmentDialog(
+            api: widget.api,
+            contextData: _context!,
+            items: _activeItems,
+            roles: _roles,
+            initialItem: item,
+          ),
+        );
       } else if (action == 'adjust') {
         _dialog(
           _InventoryAdjustmentDialog(
@@ -1153,6 +1240,12 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     },
     itemBuilder: (_) => [
       const PopupMenuItem(value: 'details', child: Text('View details')),
+      if (_buyer)
+        PopupMenuItem(
+          value: _canIssueInventoryItem(item) ? 'issue' : null,
+          enabled: _canIssueInventoryItem(item),
+          child: Text(_issueInventoryLabel(item)),
+        ),
       if (((item['heldQuantity'] as num?)?.toInt() ?? 0) > 0)
         const PopupMenuItem(
           value: 'holders',
@@ -1181,10 +1274,12 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
       final central =
           ((item['unassignedQuantity'] ?? item['centralQuantity'] ?? 0) as num)
               .toInt();
-      final reserved =
-          ((item['totalReservedQuantity'] ?? item['reservedQuantity'] ?? 0)
-                  as num)
-              .toInt();
+      final customerReserved = ((item['customerReservedQuantity'] ?? 0) as num)
+          .toInt();
+      final awaitingHandover = ((item['pendingTransferQuantity'] ?? 0) as num)
+          .toInt();
+      final awaitingReturn = ((item['pendingReturnQuantity'] ?? 0) as num)
+          .toInt();
       final quarantined = ((item['quarantinedQuantity'] ?? 0) as num).toInt();
       final pending = _inventoryAdjustments
           .where((request) => request['itemId'] == item['id'])
@@ -1224,11 +1319,19 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                       value: '$held $unit',
                     ),
                     _InventoryQuantityCard(
-                      label: 'Reserved',
-                      value: '$reserved $unit',
+                      label: 'Reserved for customers',
+                      value: '$customerReserved $unit',
                     ),
                     _InventoryQuantityCard(
-                      label: 'Quarantined',
+                      label: 'Awaiting handover',
+                      value: '$awaitingHandover $unit',
+                    ),
+                    _InventoryQuantityCard(
+                      label: 'Awaiting return',
+                      value: '$awaitingReturn $unit',
+                    ),
+                    _InventoryQuantityCard(
+                      label: 'Held for inspection',
                       value: '$quarantined $unit',
                     ),
                     _InventoryQuantityCard(
@@ -1240,6 +1343,11 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                       value: '$total $unit',
                     ),
                   ],
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Held for inspection means returned, damaged or questionable stock that cannot be sold until checked. Expected physical stock is central store plus stock confirmed with staff; reservations remain in that physical total until custody changes.',
+                  style: TextStyle(color: AppColors.muted, fontSize: 12),
                 ),
                 const SizedBox(height: 18),
                 const Text(
@@ -1417,10 +1525,17 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                       cell: (row) => Text('${row['quantity']}'),
                     ),
                     _ShopTableColumn(
-                      label: 'Reserved',
+                      label: 'Customer reserved',
                       numeric: true,
                       sortValue: (row) => row['reservedQuantity'],
                       cell: (row) => Text('${row['reservedQuantity']}'),
+                    ),
+                    _ShopTableColumn(
+                      label: 'Awaiting return',
+                      numeric: true,
+                      sortValue: (row) => row['returnReservedQuantity'] ?? 0,
+                      cell: (row) =>
+                          Text('${row['returnReservedQuantity'] ?? 0}'),
                     ),
                     _ShopTableColumn(
                       label: 'Available',
@@ -1539,14 +1654,14 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
               ),
             ),
             icon: const Icon(Icons.send_outlined),
-            label: const Text('Issue stock'),
+            label: const Text('Prepare handover'),
           ),
         ),
       const SizedBox(height: 12),
       _Panel(
-        title: !_buyer ? 'Stock assigned to me' : 'Stock custody',
+        title: !_buyer ? 'Stock assigned to me' : 'Stock handovers and custody',
         subtitle:
-            'The recipient must confirm receipt. Paid items awaiting collection remain reserved.',
+            'Preparing a handover reserves central stock. Custody changes only after the recipient physically counts and confirms it.',
         child: _consignments.isEmpty
             ? const _Empty('No stock has been issued.')
             : _ModernShopTable<ShopJson>(
@@ -1642,7 +1757,47 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
 
   Future<void> _answerIssue(ShopJson row, bool accept) async {
     String? reason;
-    if (!accept) {
+    if (accept) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Confirm stock received?'),
+          content: SizedBox(
+            width: 440,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${row['assignedQuantity']} ${row['unitOfMeasure'] ?? 'items'} · ${row['itemName']}',
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  'Confirm only after you have physically received and counted this stock. You will become responsible for it after confirmation.',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Back'),
+            ),
+            FilledButton(
+              key: const ValueKey('confirm-stock-received'),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Yes, confirm receipt'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    } else {
       final controller = TextEditingController();
       reason = await showDialog<String>(
         context: context,
@@ -1708,9 +1863,9 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
       children: [
         _ActionLanding(
           icon: Icons.shopping_bag_outlined,
-          title: 'Give items now',
+          title: 'I have the items',
           message:
-              'Use stock you personally hold. Payment and physical release are recorded together.',
+              'Use stock you personally hold. Receive payment and hand the items to the buyer immediately.',
           button: FilledButton.icon(
             onPressed: stock.isEmpty
                 ? null
@@ -1723,7 +1878,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                     ),
                   ),
             icon: const Icon(Icons.done_all),
-            label: const Text('Sell and give items'),
+            label: const Text('Sell and hand over now'),
           ),
           below: stock.isEmpty
               ? const _Empty(
@@ -1734,9 +1889,9 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
         const SizedBox(height: 14),
         _ActionLanding(
           icon: Icons.store_outlined,
-          title: 'Collect from store',
+          title: 'Another staff member has the items',
           message:
-              'Receive payment and create a receipt with a one-time token. The stock holder releases the items later.',
+              'Receive payment now and create a receipt with a one-time token. The stock holder releases the items later.',
           button: FilledButton.icon(
             onPressed: _availableCustody.isEmpty
                 ? null
@@ -1749,7 +1904,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                     ),
                   ),
             icon: const Icon(Icons.receipt_long_outlined),
-            label: const Text('Sell for store collection'),
+            label: const Text('Sell for later collection'),
           ),
           below: _availableCustody.isEmpty
               ? const _Empty('No confirmed store stock is available.')
@@ -1760,64 +1915,12 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
           title: 'My issued receipts',
           subtitle:
               'Open a receipt again to view its collection token and sale details.',
-          child:
-              _receipts
-                  .where(
-                    (r) => r['cashierName'] == _context?['currentUserName'],
-                  )
-                  .take(8)
-                  .isEmpty
-              ? const _Empty('You have not issued a receipt yet.')
-              : Column(
-                  children: _receipts
-                      .where(
-                        (r) => r['cashierName'] == _context?['currentUserName'],
-                      )
-                      .take(8)
-                      .map(_receiptTile)
-                      .toList(),
-                ),
+          child: _issuedReceiptsTable(
+            emptyMessage: 'You have not issued a receipt yet.',
+            tableKey: 'shop-seller-payments-table',
+          ),
         ),
       ],
-    );
-  }
-
-  Widget _cashierPage() {
-    final available = _availableCustody;
-    return _ActionLanding(
-      icon: Icons.receipt_long_outlined,
-      title: 'Take payment and issue receipt',
-      message:
-          'Payment reserves the goods. A goods officer releases them later using the unique receipt number.',
-      button: FilledButton.icon(
-        onPressed: available.isEmpty
-            ? null
-            : () => _dialog(
-                _SaleDialog(
-                  api: widget.api,
-                  choices: available,
-                  contextData: _context!,
-                  collectFromStore: true,
-                ),
-              ),
-        icon: const Icon(Icons.payments_outlined),
-        label: const Text('Take payment'),
-      ),
-      below:
-          _receipts
-              .where((r) => r['cashierName'] == _context?['currentUserName'])
-              .take(8)
-              .isEmpty
-          ? const _Empty('No receipts issued by you yet.')
-          : Column(
-              children: _receipts
-                  .where(
-                    (r) => r['cashierName'] == _context?['currentUserName'],
-                  )
-                  .take(8)
-                  .map(_receiptTile)
-                  .toList(),
-            ),
     );
   }
 
@@ -1830,88 +1933,166 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
               r['status'] == 'PENDING_PICKUP',
         )
         .toList();
-    return _Panel(
-      title: 'Release goods',
-      subtitle:
-          'Enter the one-time token, receipt number or buyer name. Confirm the items before handing them over.',
-      child: Column(
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return Align(
+      alignment: Alignment.topLeft,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 820),
+        child: _Panel(
+          title: 'Release goods',
+          subtitle:
+              'Find the paid order, check the items, then confirm handover.',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(
-                child: TextField(
-                  key: const ValueKey('shop-release-search'),
-                  decoration: const InputDecoration(
-                    prefixIcon: Icon(Icons.search),
-                    labelText: 'Token, receipt number or buyer name',
-                    hintText: 'e.g. 482913 or Ama Mensah',
-                  ),
-                  onChanged: (value) => setState(() {
-                    _receiptSearch = value;
-                    _releaseMatches = [];
-                  }),
-                  onSubmitted: (_) => _findReceipt(),
-                ),
-              ),
-              const SizedBox(width: 10),
-              SizedBox(
-                height: 56,
-                child: FilledButton.icon(
-                  key: const ValueKey('shop-find-order'),
-                  onPressed:
-                      _searchingReceipts || _receiptSearch.trim().length < 2
-                      ? null
-                      : _findReceipt,
-                  icon: _searchingReceipts
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Icon(Icons.search),
-                  label: Text(_searchingReceipts ? 'Finding…' : 'Find order'),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          if (_searchingReceipts)
-            const Padding(
-              padding: EdgeInsets.all(18),
-              child: CircularProgressIndicator(),
-            )
-          else if (pending.isEmpty)
-            _Empty(
-              query.isEmpty
-                  ? 'Enter the buyer’s token, receipt number or name to find a paid order.'
-                  : 'No pending pickup matches this search.',
-            )
-          else
-            Column(
-              children: pending
-                  .map(
-                    (r) => Card(
-                      child: ListTile(
-                        leading: const Icon(Icons.qr_code_2_outlined),
-                        title: Text('${r['reference']}'),
-                        subtitle: Text(
-                          '${_receiptBuyer(r)} · Receipt total ${_money(r['sale']?['totalAmount'])}\n${_receiptItems(r)}\nToken confirmed · Sold by ${r['cashierName']}',
-                        ),
-                        isThreeLine: true,
-                        trailing: FilledButton(
-                          onPressed: () => _confirmRedeem(r),
-                          child: const Text('Release'),
-                        ),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final searchField = TextField(
+                    key: const ValueKey('shop-release-search'),
+                    textInputAction: TextInputAction.search,
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search),
+                      labelText: 'Token, receipt number or buyer name',
+                      hintText: 'e.g. 482913 or Ama Mensah',
+                    ),
+                    onChanged: (value) => setState(() {
+                      _receiptSearch = value;
+                      _releaseMatches = [];
+                      _receiptSearchComplete = false;
+                    }),
+                    onSubmitted: (_) => _findReceipt(),
+                  );
+                  final findButton = SizedBox(
+                    height: 56,
+                    child: FilledButton.icon(
+                      key: const ValueKey('shop-find-order'),
+                      onPressed:
+                          _searchingReceipts || _receiptSearch.trim().length < 2
+                          ? null
+                          : _findReceipt,
+                      icon: _searchingReceipts
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.search),
+                      label: Text(
+                        _searchingReceipts ? 'Finding…' : 'Find order',
                       ),
                     ),
-                  )
-                  .toList(),
-            ),
-        ],
+                  );
+                  if (constraints.maxWidth < 560) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        searchField,
+                        const SizedBox(height: 10),
+                        findButton,
+                      ],
+                    );
+                  }
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(child: searchField),
+                      const SizedBox(width: 10),
+                      findButton,
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(height: 18),
+              if (_searchingReceipts)
+                const LinearProgressIndicator()
+              else if (pending.isEmpty)
+                _Empty(
+                  query.isEmpty
+                      ? 'Enter the buyer’s token, receipt number or name to find a paid order.'
+                      : _receiptSearchComplete
+                      ? 'No pending pickup matches this search.'
+                      : 'Select Find order or press Enter to search.',
+                )
+              else
+                Column(
+                  children: pending
+                      .map(
+                        (r) => Container(
+                          width: double.infinity,
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.all(18),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: AppColors.border),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _receiptBuyer(r),
+                                style: const TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '${r['reference']}',
+                                style: const TextStyle(color: AppColors.muted),
+                              ),
+                              const Divider(height: 24),
+                              for (final line in _maps(r['sale']?['lines']))
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 8),
+                                  child: Text(
+                                    '${line['quantity']} × ${line['itemName']}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Receipt total ${_money(r['sale']?['totalAmount'])}',
+                              ),
+                              Text(
+                                'Sold by ${r['cashierName']}',
+                                style: const TextStyle(color: AppColors.muted),
+                              ),
+                              const SizedBox(height: 16),
+                              Wrap(
+                                spacing: 16,
+                                runSpacing: 12,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  FilledButton.icon(
+                                    onPressed: () => _confirmRedeem(r),
+                                    icon: const Icon(
+                                      Icons.inventory_2_outlined,
+                                      size: 18,
+                                    ),
+                                    label: const Text('Release'),
+                                  ),
+                                  const Text(
+                                    'Paid · Awaiting collection',
+                                    style: TextStyle(
+                                      color: AppColors.green,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                      .toList(),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1921,12 +2102,16 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     if (query.length < 2 || _searchingReceipts) return;
     setState(() {
       _searchingReceipts = true;
+      _receiptSearchComplete = false;
       _releaseMatches = [];
     });
     try {
       final rows = await widget.api.receipts(query: query);
       if (mounted && _receiptSearch.trim() == query) {
-        setState(() => _releaseMatches = rows);
+        setState(() {
+          _releaseMatches = rows;
+          _receiptSearchComplete = true;
+        });
       }
     } catch (e) {
       if (mounted) _errorSnack(context, e);
@@ -1973,107 +2158,26 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     }
   }
 
-  Widget _accounts() => _Panel(
-    title: 'Seller accounts',
-    subtitle: _admin
-        ? 'Review matched accounts and investigate flagged stock or cash differences.'
-        : 'Report the stock physically remaining and the cash plus MoMo collected.',
-    child: Column(
-      children: [
-        if (_admin)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                _Metric(
-                  'Seller cash expected',
-                  _money(_dashboard?['sellerCashExpected']),
-                  Icons.request_quote_outlined,
-                  AppColors.blue,
-                ),
-                _Metric(
-                  'Cash reported by sellers',
-                  _money(_dashboard?['sellerCashReported']),
-                  Icons.fact_check_outlined,
-                  AppColors.green,
-                ),
-              ],
-            ),
-          ),
-        if (_seller)
-          for (final c in _consignments.where(
-            (c) => c['sellerId'] == _context?['currentUserId'],
-          ))
-            ListTile(
-              title: Text('${c['itemName']}'),
-              subtitle: Text(
-                '${c['soldQuantity']} sold · ${c['returnedQuantity']} returned · ${c['remainingQuantity']} expected remaining',
-              ),
-              trailing: OutlinedButton(
-                onPressed: () =>
-                    _dialog(_ReconcileDialog(api: widget.api, consignment: c)),
-                child: const Text('Prepare account'),
-              ),
-            ),
-        const Divider(),
-        if (_reconciliations.isEmpty)
-          const _Empty('No seller accounts submitted yet.')
-        else
-          for (final r in _reconciliations)
-            Card(
-              color: r['status'] == 'FLAGGED'
-                  ? AppColors.red.withValues(alpha: .05)
-                  : null,
-              child: ListTile(
-                leading: Icon(
-                  r['status'] == 'FLAGGED'
-                      ? Icons.warning_amber
-                      : Icons.check_circle_outline,
-                  color: r['status'] == 'FLAGGED'
-                      ? AppColors.red
-                      : AppColors.green,
-                ),
-                title: Text('${r['sellerName']} · ${r['itemName']}'),
-                subtitle: Text(
-                  '${_status(r['status'])} · Stock difference ${r['stockVariance']} · Cash difference ${_money(r['cashVariance'])}',
-                ),
-                trailing:
-                    _admin &&
-                        r['sellerId'] != _context?['currentUserId'] &&
-                        !{'APPROVED', 'REJECTED'}.contains(r['status'])
-                    ? Wrap(
-                        children: [
-                          TextButton(
-                            onPressed: () => _reviewAccount(r, false),
-                            child: const Text('Reject'),
-                          ),
-                          FilledButton(
-                            onPressed: () => _reviewAccount(r, true),
-                            child: const Text('Approve'),
-                          ),
-                        ],
-                      )
-                    : null,
-              ),
-            ),
-      ],
-    ),
+  Widget _accounts() => ShopReconciliationScreen(
+    api: widget.api,
+    contextData: _context!,
+    onChanged: _load,
   );
 
-  Future<void> _reviewAccount(ShopJson row, bool approve) async {
-    try {
-      await widget.api.reviewReconciliation(row['id'] as int, approve, '');
-      await _load();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('$e')));
-      }
-    }
-  }
+  Widget _cashRemittances() => ShopReconciliationScreen(
+    api: widget.api,
+    contextData: _context!,
+    onChanged: _load,
+    view: ShopReconciliationView.remittances,
+  );
+
+  String get _salesFromDate => _salesDays == null
+      ? '2020-01-01'
+      : _ymd(
+          DateTime.now().subtract(
+            Duration(days: _salesDays == 0 ? 0 : _salesDays! - 1),
+          ),
+        );
 
   Future<void> _changeSalesRange(int? days) async {
     setState(() {
@@ -2082,10 +2186,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     });
     try {
       final now = DateTime.now();
-      final from = days == null
-          ? '2020-01-01'
-          : _ymd(now.subtract(Duration(days: days == 0 ? 0 : days - 1)));
-      final rows = await widget.api.sales(from: from, to: _ymd(now));
+      final rows = await widget.api.sales(from: _salesFromDate, to: _ymd(now));
       if (mounted) setState(() => _sales = rows);
     } catch (e) {
       if (mounted) _errorSnack(context, e);
@@ -2146,6 +2247,32 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
   Widget _salesPage() => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
+      if (_cashier) ...[
+        FilledButton.icon(
+          key: const ValueKey('shop-receive-payment'),
+          onPressed: _loading || _availableCustody.isEmpty
+              ? null
+              : () => _dialog(
+                  _SaleDialog(
+                    api: widget.api,
+                    choices: _availableCustody,
+                    contextData: _context!,
+                    collectFromStore: true,
+                  ),
+                ),
+          icon: const Icon(Icons.payments_outlined),
+          label: const Text('Receive payment'),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 8, bottom: 18),
+          child: Text(
+            _availableCustody.isEmpty
+                ? 'No confirmed store stock is available to sell.'
+                : 'Receive payment and issue a receipt for collection from the store.',
+            style: const TextStyle(color: AppColors.muted),
+          ),
+        ),
+      ],
       Wrap(
         spacing: 12,
         runSpacing: 12,
@@ -2202,7 +2329,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
       ),
       const SizedBox(height: 12),
       _Panel(
-        title: 'Recent sales',
+        title: 'Sales history',
         subtitle:
             'Immediate handovers and store collections share one financial record.',
         child: _sales.isEmpty
@@ -2236,6 +2363,19 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                     ),
                   ),
                   _ShopTableColumn(
+                    label: 'Receipt',
+                    sortValue: (row) => _saleReceiptReference(row),
+                    cell: (row) => TextButton(
+                      key: ValueKey('shop-view-sale-receipt-${row['id']}'),
+                      onPressed: _saleReceiptReference(row) == null
+                          ? null
+                          : () => _viewSaleReceipt(row),
+                      child: Text(
+                        _saleReceiptReference(row) ?? 'Not available',
+                      ),
+                    ),
+                  ),
+                  _ShopTableColumn(
                     label: 'Buyer',
                     sortValue: (row) =>
                         row['buyerName'] ?? row['studentName'] ?? 'Buyer',
@@ -2244,7 +2384,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                     ),
                   ),
                   _ShopTableColumn(
-                    label: 'Model',
+                    label: 'Collection',
                     sortValue: (row) => row['modelType'],
                     cell: (row) => Text(
                       row['modelType'] == 'IMMEDIATE_RELEASE' ||
@@ -2286,7 +2426,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                     cell: (row) => TextButton(
                       key: ValueKey('shop-open-sale-${row['id']}'),
                       onPressed: () => _showSaleDetails(row),
-                      child: const Text('View'),
+                      child: const Text('Details'),
                     ),
                   ),
                 ],
@@ -2345,6 +2485,492 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
       ),
     ],
   );
+
+  Future<void> _loadReport() async {
+    setState(() => _reportLoading = true);
+    try {
+      final report = await widget.api.reportSummary(
+        from: _ymd(_reportFrom),
+        to: _ymd(_reportTo),
+      );
+      if (mounted) setState(() => _report = report);
+    } catch (error) {
+      if (mounted) _errorSnack(context, error);
+    } finally {
+      if (mounted) setState(() => _reportLoading = false);
+    }
+  }
+
+  Future<void> _changeReportRange(int? days) async {
+    final now = DateTime.now();
+    setState(() {
+      _reportDays = days;
+      _reportTo = DateTime(now.year, now.month, now.day);
+      _reportFrom = days == null
+          ? DateTime(now.year, 1, 1)
+          : _reportTo.subtract(Duration(days: days == 0 ? 0 : days - 1));
+    });
+    await _loadReport();
+  }
+
+  Future<void> _pickReportRange() async {
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(DateTime.now().year - 10),
+      lastDate: DateTime.now(),
+      initialDateRange: DateTimeRange(start: _reportFrom, end: _reportTo),
+      helpText: 'Choose report period',
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _reportDays = -1;
+      _reportFrom = picked.start;
+      _reportTo = picked.end;
+    });
+    await _loadReport();
+  }
+
+  Future<void> _downloadShopReport() async {
+    if (_reportSections.isEmpty) return;
+    setState(() => _downloadingReport = true);
+    try {
+      final bytes = await widget.api.downloadReport(
+        from: _ymd(_reportFrom),
+        to: _ymd(_reportTo),
+        sections: _reportSections,
+      );
+      final downloaded = await downloadReportPdf(
+        'shop-report-${_ymd(_reportFrom)}-to-${_ymd(_reportTo)}.pdf',
+        bytes,
+      );
+      if (!downloaded && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('PDF download is available on web.')),
+        );
+      }
+    } catch (error) {
+      if (mounted) _errorSnack(context, error);
+    } finally {
+      if (mounted) setState(() => _downloadingReport = false);
+    }
+  }
+
+  Widget _reportsPage() {
+    final report = _report ?? <String, dynamic>{};
+    final summary = Map<String, dynamic>.from(
+      (report['summary'] as Map?) ?? const {},
+    );
+    final daily = _maps(report['dailySales']);
+    final performance = _maps(report['itemPerformance']);
+    final inventory = _maps(report['inventory']);
+    final staffStock = _maps(report['staffStock']);
+    final returns = _maps(report['returns']);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _Panel(
+          title: 'Shop reports',
+          subtitle:
+              'Choose a period, review the figures, then download only the sections you need.',
+          action: FilledButton.icon(
+            key: const ValueKey('shop-download-report'),
+            onPressed: _report == null || _downloadingReport
+                ? null
+                : _downloadShopReport,
+            icon: _downloadingReport
+                ? const SizedBox.square(
+                    dimension: 17,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.download_outlined),
+            label: Text(_downloadingReport ? 'Preparing PDF…' : 'Download PDF'),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  ChoiceChip(
+                    label: const Text('Today'),
+                    selected: _reportDays == 0,
+                    onSelected: (_) => _changeReportRange(0),
+                  ),
+                  ChoiceChip(
+                    label: const Text('Last 7 days'),
+                    selected: _reportDays == 7,
+                    onSelected: (_) => _changeReportRange(7),
+                  ),
+                  ChoiceChip(
+                    label: const Text('Last 30 days'),
+                    selected: _reportDays == 30,
+                    onSelected: (_) => _changeReportRange(30),
+                  ),
+                  ChoiceChip(
+                    label: const Text('This year'),
+                    selected: _reportDays == null,
+                    onSelected: (_) => _changeReportRange(null),
+                  ),
+                  OutlinedButton.icon(
+                    key: const ValueKey('shop-custom-report-range'),
+                    onPressed: _pickReportRange,
+                    icon: const Icon(Icons.date_range_outlined, size: 18),
+                    label: Text(
+                      '${_dateLabel(_reportFrom)} – ${_dateLabel(_reportTo)}',
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                'Include in PDF',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children:
+                    const {
+                      'SUMMARY': 'Summary',
+                      'SALES': 'Sales',
+                      'INVENTORY': 'Inventory',
+                      'STAFF_STOCK': 'Staff stock',
+                      'RETURNS': 'Returns',
+                    }.entries.map((entry) {
+                      final selected = _reportSections.contains(entry.key);
+                      return FilterChip(
+                        key: ValueKey('shop-report-section-${entry.key}'),
+                        selected: selected,
+                        label: Text(entry.value),
+                        onSelected: (value) {
+                          if (!value && _reportSections.length == 1) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Keep at least one report section.',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          setState(() {
+                            if (value) {
+                              _reportSections.add(entry.key);
+                            } else {
+                              _reportSections.remove(entry.key);
+                            }
+                          });
+                        },
+                      );
+                    }).toList(),
+              ),
+            ],
+          ),
+        ),
+        if (_reportLoading) const LinearProgressIndicator(),
+        if (_report == null && !_reportLoading)
+          _MessageCard(
+            icon: Icons.summarize_outlined,
+            title: 'Report could not be loaded',
+            message: 'Try loading this report again.',
+            action: TextButton(
+              onPressed: _loadReport,
+              child: const Text('Try again'),
+            ),
+          ),
+        if (_report != null) ...[
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: [
+              _Metric(
+                'Net sales',
+                _money(summary['netSales']),
+                Icons.payments_outlined,
+                AppColors.green,
+              ),
+              _Metric(
+                'Gross profit',
+                _money(summary['grossProfit']),
+                Icons.trending_up_outlined,
+                AppColors.blue,
+              ),
+              _Metric(
+                'Refunds issued',
+                _money(summary['refunds']),
+                Icons.currency_exchange_outlined,
+                AppColors.amber,
+              ),
+              _Metric(
+                'Stock value',
+                _money(summary['stockValue']),
+                Icons.inventory_2_outlined,
+                AppColors.green,
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          _Panel(
+            title: 'Sales activity',
+            subtitle:
+                '${summary['transactions'] ?? 0} sales · ${summary['unitsSold'] ?? 0} units sold · ${summary['unitsReturned'] ?? 0} returned',
+            child: daily.isEmpty
+                ? const _Empty('No sales or refunds in this period.')
+                : _ModernShopTable<ShopJson>(
+                    tableKey: 'shop-report-sales-table',
+                    rows: daily,
+                    initialSortColumn: 0,
+                    initialSortAscending: false,
+                    rowKey: (row) => 'shop-report-day-${row['date']}',
+                    columns: [
+                      _ShopTableColumn(
+                        label: 'Date',
+                        sortValue: (row) => _dateValue(row['date']),
+                        cell: (row) => Text(_dateLabel(row['date'])),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Sales',
+                        numeric: true,
+                        sortValue: (row) => row['transactions'],
+                        cell: (row) => Text('${row['transactions']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Units',
+                        numeric: true,
+                        sortValue: (row) => row['units'],
+                        cell: (row) => Text('${row['units']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Gross sales',
+                        numeric: true,
+                        sortValue: (row) => row['grossSales'],
+                        cell: (row) => Text(_money(row['grossSales'])),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Refunds',
+                        numeric: true,
+                        sortValue: (row) => row['refunds'],
+                        cell: (row) => Text(_money(row['refunds'])),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Net sales',
+                        numeric: true,
+                        sortValue: (row) => row['netSales'],
+                        cell: (row) => Text(
+                          _money(row['netSales']),
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+          const SizedBox(height: 14),
+          _Panel(
+            title: 'Item performance',
+            subtitle: 'Net quantities and revenue for the selected period.',
+            child: performance.isEmpty
+                ? const _Empty('No item activity in this period.')
+                : _ModernShopTable<ShopJson>(
+                    tableKey: 'shop-report-performance-table',
+                    rows: performance,
+                    initialSortColumn: 4,
+                    initialSortAscending: false,
+                    rowKey: (row) => 'shop-report-item-${row['item']}',
+                    columns: [
+                      _ShopTableColumn(
+                        label: 'Item',
+                        sortValue: (row) => row['item'],
+                        cell: (row) => Text('${row['item']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Category',
+                        sortValue: (row) => row['category'],
+                        cell: (row) => Text('${row['category']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Sold',
+                        numeric: true,
+                        sortValue: (row) => row['sold'],
+                        cell: (row) => Text('${row['sold']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Returned',
+                        numeric: true,
+                        sortValue: (row) => row['returned'],
+                        cell: (row) => Text('${row['returned']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Net units',
+                        numeric: true,
+                        sortValue: (row) => row['netUnits'],
+                        cell: (row) => Text('${row['netUnits']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Net revenue',
+                        numeric: true,
+                        sortValue: (row) => row['netRevenue'],
+                        cell: (row) => Text(_money(row['netRevenue'])),
+                      ),
+                    ],
+                  ),
+          ),
+          const SizedBox(height: 14),
+          _Panel(
+            title: 'Inventory position',
+            subtitle:
+                '${summary['centralUnits'] ?? 0} central · ${summary['staffHeldUnits'] ?? 0} with staff · ${summary['reservedUnits'] ?? 0} reserved · ${summary['quarantinedUnits'] ?? 0} held for inspection',
+            child: inventory.isEmpty
+                ? const _Empty('No inventory items.')
+                : _ModernShopTable<ShopJson>(
+                    tableKey: 'shop-report-inventory-table',
+                    rows: inventory,
+                    rowKey: (row) => 'shop-report-inventory-${row['id']}',
+                    columns: [
+                      _ShopTableColumn(
+                        label: 'Item',
+                        sortValue: (row) => row['item'],
+                        cell: (row) => Row(
+                          children: [
+                            if (row['lowStock'] == true)
+                              const Padding(
+                                padding: EdgeInsets.only(right: 6),
+                                child: Icon(
+                                  Icons.warning_amber,
+                                  size: 17,
+                                  color: AppColors.amber,
+                                ),
+                              ),
+                            Text('${row['item']}'),
+                          ],
+                        ),
+                      ),
+                      for (final column in const [
+                        ('Central', 'central'),
+                        ('With staff', 'withStaff'),
+                        ('Reserved', 'reserved'),
+                        ('Held for inspection', 'quarantined'),
+                        ('Available', 'available'),
+                        ('Total', 'totalOnHand'),
+                      ])
+                        _ShopTableColumn(
+                          label: column.$1,
+                          numeric: true,
+                          sortValue: (row) => row[column.$2],
+                          cell: (row) => Text('${row[column.$2]}'),
+                        ),
+                      _ShopTableColumn(
+                        label: 'Cost value',
+                        numeric: true,
+                        sortValue: (row) => row['costValue'],
+                        cell: (row) => Text(_money(row['costValue'])),
+                      ),
+                    ],
+                  ),
+          ),
+          const SizedBox(height: 14),
+          _Panel(
+            title: 'Stock held by staff',
+            subtitle: 'Custody, availability and expected cash.',
+            child: staffStock.isEmpty
+                ? const _Empty('No stock is currently held by staff.')
+                : _ModernShopTable<ShopJson>(
+                    tableKey: 'shop-report-staff-stock-table',
+                    rows: staffStock,
+                    rowKey: (row) => 'shop-report-staff-${row['id']}',
+                    columns: [
+                      _ShopTableColumn(
+                        label: 'Staff member',
+                        sortValue: (row) => row['staff'],
+                        cell: (row) => Text('${row['staff']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Item',
+                        sortValue: (row) => row['item'],
+                        cell: (row) => Text('${row['item']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Held',
+                        numeric: true,
+                        sortValue: (row) => row['held'],
+                        cell: (row) => Text('${row['held']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Reserved',
+                        numeric: true,
+                        sortValue: (row) => row['reserved'],
+                        cell: (row) => Text('${row['reserved']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Available',
+                        numeric: true,
+                        sortValue: (row) => row['available'],
+                        cell: (row) => Text('${row['available']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Cash due',
+                        numeric: true,
+                        sortValue: (row) => row['cashExpected'],
+                        cell: (row) => Text(_money(row['cashExpected'])),
+                      ),
+                    ],
+                  ),
+          ),
+          const SizedBox(height: 14),
+          _Panel(
+            title: 'Returns and refunds',
+            subtitle:
+                '${summary['returnRequests'] ?? 0} requests · ${summary['pendingReturns'] ?? 0} still pending',
+            child: returns.isEmpty
+                ? const _Empty('No return or refund activity in this period.')
+                : _ModernShopTable<ShopJson>(
+                    tableKey: 'shop-report-returns-table',
+                    rows: returns,
+                    initialSortColumn: 0,
+                    initialSortAscending: false,
+                    rowKey: (row) => 'shop-report-return-${row['id']}',
+                    columns: [
+                      _ShopTableColumn(
+                        label: 'Requested',
+                        sortValue: (row) => _dateValue(row['requestedAt']),
+                        cell: (row) => Text(_dateLabel(row['requestedAt'])),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Receipt',
+                        sortValue: (row) => row['receipt'],
+                        cell: (row) => Text('${row['receipt']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Buyer',
+                        sortValue: (row) => row['buyer'],
+                        cell: (row) => Text('${row['buyer']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Request',
+                        sortValue: (row) => row['type'],
+                        cell: (row) => Text(_returnType(row['type'])),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Status',
+                        sortValue: (row) => row['status'],
+                        cell: (row) => _returnStatusChip('${row['status']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Refund',
+                        numeric: true,
+                        sortValue: (row) => row['refund'],
+                        cell: (row) => Text(_money(row['refund'])),
+                      ),
+                    ],
+                  ),
+          ),
+        ],
+      ],
+    );
+  }
 
   Widget _returnsPage() => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2644,6 +3270,47 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     }
   }
 
+  ShopJson? _receiptForSale(ShopJson sale) {
+    for (final receipt in _receipts) {
+      if (sale['id'] != null && receipt['sale']?['id'] == sale['id']) {
+        return receipt;
+      }
+    }
+    return null;
+  }
+
+  String? _saleReceiptReference(ShopJson sale) =>
+      (sale['receiptReference'] ?? _receiptForSale(sale)?['reference'])
+          as String?;
+
+  Future<void> _viewSaleReceipt(ShopJson sale) async {
+    try {
+      var receipt = _receiptForSale(sale);
+      if (receipt == null) {
+        final reference = _saleReceiptReference(sale);
+        if (reference == null) return;
+        final matches = await widget.api.receipts(query: reference);
+        for (final match in matches) {
+          if (match['sale']?['id'] == sale['id']) {
+            receipt = match;
+            break;
+          }
+        }
+      }
+      if (!mounted) return;
+      if (receipt == null) {
+        _errorSnack(
+          context,
+          'This receipt is unavailable. Refresh and try again.',
+        );
+        return;
+      }
+      await _showIssuedReceipt(receipt);
+    } catch (error) {
+      if (mounted) _errorSnack(context, error);
+    }
+  }
+
   Future<void> _showSaleDetails(ShopJson sale) async {
     final returnable = _maps(sale['lines'])
         .where((line) => ((line['returnableQuantity'] ?? 0) as num).toInt() > 0)
@@ -2676,6 +3343,14 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
           ),
         ),
         actions: [
+          if (_saleReceiptReference(sale) != null)
+            TextButton(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                _viewSaleReceipt(sale);
+              },
+              child: const Text('View receipt'),
+            ),
           if ({'COLLECTED', 'PARTIALLY_REFUNDED'}.contains(sale['status']) &&
               returnable.isNotEmpty)
             TextButton(
@@ -2856,78 +3531,112 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     }
   }
 
-  Widget _receiptTile(ShopJson r) => ListTile(
-    key: ValueKey('shop-issued-receipt-${r['id']}'),
-    leading: const Icon(Icons.receipt_outlined),
-    title: Text('${r['reference']}'),
-    subtitle: Text('${_status(r['status'])} · ${_receiptBuyer(r)}'),
-    trailing: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text('Receipt total ${_money(r['sale']?['totalAmount'])}'),
-        const SizedBox(width: 6),
-        const Icon(Icons.chevron_right),
+  Widget _issuedReceiptsTable({
+    required String emptyMessage,
+    required String tableKey,
+  }) {
+    final receipts = _receipts
+        .where((r) => r['cashierName'] == _context?['currentUserName'])
+        .toList();
+    if (receipts.isEmpty) return _Empty(emptyMessage);
+    return _ModernShopTable<ShopJson>(
+      tableKey: tableKey,
+      rows: receipts,
+      initialSortColumn: 0,
+      initialSortAscending: false,
+      rowKey: (row) => 'shop-issued-receipt-${row['id']}',
+      onRowTap: _showIssuedReceipt,
+      columns: [
+        _ShopTableColumn(
+          label: 'Date',
+          sortValue: (row) => _dateValue(row['issuedAt']),
+          cell: (row) => Column(
+            key: ValueKey('shop-open-receipt-row-${row['id']}'),
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _dateLabel(row['issuedAt']),
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              if (_timeLabel(row['issuedAt']).isNotEmpty)
+                Text(
+                  _timeLabel(row['issuedAt']),
+                  style: const TextStyle(color: AppColors.muted, fontSize: 12),
+                ),
+            ],
+          ),
+        ),
+        _ShopTableColumn(
+          label: 'Receipt',
+          sortValue: (row) => row['reference'],
+          cell: (row) => Text(
+            '${row['reference']}',
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ),
+        _ShopTableColumn(
+          label: 'Buyer',
+          sortValue: _receiptBuyer,
+          cell: (row) => Text(_receiptBuyer(row)),
+        ),
+        _ShopTableColumn(
+          label: 'Items',
+          sortValue: (row) => _maps(row['sale']?['lines']).length,
+          cell: (row) => Text(_receiptItemSummary(row)),
+        ),
+        _ShopTableColumn(
+          label: 'Payment',
+          sortValue: (row) => row['sale']?['paymentMethod'],
+          cell: (row) =>
+              Text(_status(row['sale']?['paymentMethod'] ?? 'Not recorded')),
+        ),
+        _ShopTableColumn(
+          label: 'Status',
+          sortValue: (row) => row['status'],
+          cell: (row) => Text(_status(row['status'])),
+        ),
+        _ShopTableColumn(
+          label: 'Amount',
+          numeric: true,
+          sortValue: (row) => row['sale']?['totalAmount'],
+          cell: (row) => Text(_money(row['sale']?['totalAmount'])),
+        ),
+        _ShopTableColumn(
+          label: 'Actions',
+          cell: (row) => TextButton(
+            key: ValueKey('shop-open-receipt-${row['id']}'),
+            onPressed: () => _showIssuedReceipt(row),
+            child: const Text('View receipt'),
+          ),
+        ),
       ],
-    ),
-    onTap: () => _showIssuedReceipt(r),
-  );
+    );
+  }
 
   String _receiptBuyer(ShopJson r) =>
       '${r['sale']?['buyerName'] ?? r['sale']?['studentName'] ?? 'Buyer'}';
 
+  String _receiptItemSummary(ShopJson receipt) {
+    final lines = _maps(receipt['sale']?['lines']);
+    final quantity = lines.fold<int>(
+      0,
+      (total, line) => total + ((line['quantity'] ?? 0) as num).toInt(),
+    );
+    final typeLabel = lines.length == 1 ? 'item type' : 'item types';
+    final unitLabel = quantity == 1 ? 'unit' : 'units';
+    return '${lines.length} $typeLabel · $quantity $unitLabel';
+  }
+
   Future<void> _showIssuedReceipt(ShopJson receipt) async {
     await showDialog<void>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Issued receipt'),
-        content: SizedBox(
-          width: 500,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Receipt number',
-                style: TextStyle(color: AppColors.muted),
-              ),
-              SelectableText(
-                '${receipt['reference']}',
-                style: const TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              const SizedBox(height: 14),
-              Text('${_receiptBuyer(receipt)} · ${_status(receipt['status'])}'),
-              const SizedBox(height: 8),
-              Text(_receiptItems(receipt)),
-              const SizedBox(height: 8),
-              Text(
-                'Receipt total ${_money(receipt['sale']?['totalAmount'])}',
-                style: const TextStyle(fontWeight: FontWeight.w800),
-              ),
-              if (receipt['pickupToken'] != null) ...[
-                const Divider(height: 28),
-                const Text(
-                  'Collection token',
-                  style: TextStyle(color: AppColors.muted),
-                ),
-                SelectableText(
-                  '${receipt['pickupToken']}',
-                  key: const ValueKey('shop-reopened-pickup-token'),
-                  style: const TextStyle(
-                    fontSize: 32,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 5,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                const Text('Give this one-time token to the buyer.'),
-              ],
-            ],
-          ),
-        ),
-        actions: [
+      builder: (dialogContext) => _ShopReceiptDialog(
+        receipt: receipt,
+        schoolName: '${_context?['schoolName'] ?? 'School shop'}',
+        title: 'Receipt',
+        onDone: () => Navigator.pop(dialogContext),
+        additionalActions: [
           if ({
                 'PENDING_COLLECTION',
                 'PENDING_PICKUP',
@@ -2947,10 +3656,6 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
               },
               child: const Text('Request cancellation'),
             ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Close'),
-          ),
         ],
       ),
     );
@@ -3462,13 +4167,20 @@ String _timeLabel(dynamic value) {
   return '$hour:${date.minute.toString().padLeft(2, '0')} $period';
 }
 
-String _status(dynamic value) => '${value ?? ''}'
-    .toLowerCase()
-    .replaceAll('_', ' ')
-    .split(' ')
-    .map((p) => p.isEmpty ? p : '${p[0].toUpperCase()}${p.substring(1)}')
-    .join(' ');
+String _status(dynamic value) {
+  final raw = '${value ?? ''}';
+  if (raw == 'PENDING_ACCEPTANCE') return 'Awaiting recipient confirmation';
+  if (raw == 'PENDING_RECEIPT') return 'Awaiting store receipt';
+  return raw
+      .toLowerCase()
+      .replaceAll('_', ' ')
+      .split(' ')
+      .map((p) => p.isEmpty ? p : '${p[0].toUpperCase()}${p.substring(1)}')
+      .join(' ');
+}
+
 String _stockSourceLabel(dynamic value) => switch ('$value') {
+  'NOT_RECORDED' => 'Source not recorded',
   'SCHOOL_TRANSFER' => 'School transfer',
   'DONATION' => 'Donation',
   'OPENING_STOCK' => 'Opening stock',
@@ -3494,13 +4206,13 @@ class _ItemDialog extends StatefulWidget {
   const _ItemDialog({
     required this.api,
     required this.contextData,
-    required this.items,
     this.item,
+    this.onSaved,
   });
   final ShopApiClient api;
   final ShopJson contextData;
-  final List<ShopJson> items;
   final ShopJson? item;
+  final ValueChanged<ShopJson>? onSaved;
   @override
   State<_ItemDialog> createState() => _ItemDialogState();
 }
@@ -3508,74 +4220,103 @@ class _ItemDialog extends StatefulWidget {
 class _ItemDialogState extends State<_ItemDialog> {
   final _form = GlobalKey<FormState>();
   late final TextEditingController _name,
-      _category,
+      _otherCategory,
       _sku,
       _variant,
-      _cost,
-      _selling,
       _threshold;
+  String? _category;
+  String? _skuError;
+  String _codeMethod = 'AUTO';
   String _unit = 'piece';
-  int? _parent;
   bool _active = true, _saving = false;
+
+  List<String> get _categoryOptions =>
+      (widget.contextData['categories'] as List? ?? [])
+          .map((value) => '$value'.trim())
+          .where(
+            (value) =>
+                value.isNotEmpty &&
+                value.toLowerCase() != 'other' &&
+                value.toLowerCase() != 'other / add new category' &&
+                value != '__OTHER__',
+          )
+          .toSet()
+          .toList();
 
   @override
   void initState() {
     super.initState();
     final i = widget.item ?? {};
+    final categories = _categoryOptions.toSet();
+    final existingCategory = '${i['category'] ?? ''}'.trim();
     _name = TextEditingController(text: '${i['name'] ?? ''}');
-    _category = TextEditingController(text: '${i['category'] ?? ''}');
+    _category = existingCategory.isEmpty
+        ? null
+        : categories.contains(existingCategory)
+        ? existingCategory
+        : '__OTHER__';
+    _otherCategory = TextEditingController(
+      text: _category == '__OTHER__' ? existingCategory : '',
+    );
     _sku = TextEditingController(text: '${i['sku'] ?? ''}');
+    _codeMethod = widget.item == null ? 'AUTO' : 'MANUAL';
+    _sku.addListener(_clearSkuError);
     _variant = TextEditingController(text: '${i['variantLabel'] ?? ''}');
-    _cost = TextEditingController(
-      text: i['costPrice'] == null ? '' : '${i['costPrice']}',
-    );
-    _selling = TextEditingController(
-      text: i['sellingPrice'] == null ? '' : '${i['sellingPrice']}',
-    );
     _threshold = TextEditingController(text: '${i['lowStockThreshold'] ?? 5}');
     _unit = '${i['unitOfMeasure'] ?? 'piece'}';
-    _parent = i['parentItemId'] as int?;
     _active = i['active'] != false;
   }
 
   @override
   void dispose() {
-    for (final c in [
-      _name,
-      _category,
-      _sku,
-      _variant,
-      _cost,
-      _selling,
-      _threshold,
-    ]) {
+    _sku.removeListener(_clearSkuError);
+    for (final c in [_name, _otherCategory, _sku, _variant, _threshold]) {
       c.dispose();
     }
     super.dispose();
+  }
+
+  void _clearSkuError() {
+    if (_skuError != null && mounted) setState(() => _skuError = null);
   }
 
   Future<void> _save() async {
     if (!_form.currentState!.validate()) return;
     setState(() => _saving = true);
     try {
-      await widget.api.saveItem({
+      final savedItem = await widget.api.saveItem({
         'name': _name.text.trim(),
-        'category': _category.text.trim(),
-        'sku': _sku.text.trim(),
+        'category': _category == '__OTHER__'
+            ? _otherCategory.text.trim()
+            : _category,
+        'sku': _codeMethod == 'AUTO' ? '' : _sku.text.trim(),
         'unitOfMeasure': _unit,
-        'parentItemId': _parent,
         'variantLabel': _variant.text.trim().isEmpty
             ? null
             : _variant.text.trim(),
-        'costPrice': double.parse(_cost.text),
-        'sellingPrice': double.parse(_selling.text),
         'lowStockThreshold': int.parse(_threshold.text),
         'active': _active,
         'version': widget.item?['version'],
       }, id: widget.item?['id'] as int?);
+      widget.onSaved?.call(savedItem);
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
-      if (mounted) _errorSnack(context, e);
+      if (mounted) {
+        final duplicateCode =
+            e is ShopApiException &&
+            e.statusCode == 409 &&
+            (e.message.toLowerCase().contains('sku') ||
+                e.message.toLowerCase().contains('item code')) &&
+            e.message.toLowerCase().contains('used');
+        if (duplicateCode) {
+          setState(
+            () => _skuError =
+                'This item code is already in use. Enter another code or choose Auto-generate.',
+          );
+        } else {
+          _errorSnack(context, e);
+        }
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -3597,11 +4338,12 @@ class _ItemDialogState extends State<_ItemDialog> {
                   icon: Icons.category_outlined,
                   title: 'Reusable item definition',
                   message:
-                      'This creates the item type with zero quantity. Use Add stock when items are received into the shop.',
+                      'Define the name, category and unit here. Enter quantity, unit cost and unit selling price when stock is added.',
                 ),
                 const SizedBox(height: 12),
               ],
               TextFormField(
+                key: const ValueKey('item-type-name'),
                 controller: _name,
                 decoration: const InputDecoration(labelText: 'Item name'),
                 validator: _required,
@@ -3610,27 +4352,89 @@ class _ItemDialogState extends State<_ItemDialog> {
               Row(
                 children: [
                   Expanded(
-                    child: TextFormField(
-                      controller: _category,
-                      decoration: const InputDecoration(
-                        labelText: 'Category',
-                        hintText: 'Select or type a category',
-                      ),
-                      validator: _required,
+                    child: DropdownButtonFormField<String>(
+                      key: const ValueKey('item-type-category'),
+                      value: _category,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: 'Category'),
+                      items: [
+                        ..._categoryOptions.map(
+                          (value) => DropdownMenuItem<String>(
+                            value: value,
+                            child: Text(value),
+                          ),
+                        ),
+                        const DropdownMenuItem<String>(
+                          value: '__OTHER__',
+                          child: Text('Other / Add new category'),
+                        ),
+                      ],
+                      onChanged: (value) => setState(() => _category = value),
+                      validator: (value) =>
+                          value == null ? 'Select a category' : null,
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: TextFormField(
-                      controller: _sku,
+                    child: DropdownButtonFormField<String>(
+                      key: const ValueKey('item-type-code-method'),
+                      value: _codeMethod,
+                      isExpanded: true,
                       decoration: const InputDecoration(
-                        labelText: 'Item code (optional)',
-                        hintText: 'Generated automatically if empty',
+                        labelText: 'Item code method',
                       ),
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'AUTO',
+                          child: Text('Auto-generate'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'MANUAL',
+                          child: Text('Enter item code'),
+                        ),
+                      ],
+                      onChanged: (value) => setState(() {
+                        _codeMethod = value ?? 'AUTO';
+                        _skuError = null;
+                      }),
                     ),
                   ),
                 ],
               ),
+              if (_codeMethod == 'AUTO') ...[
+                const SizedBox(height: 8),
+                const Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    'A unique item code will be created when you save.',
+                    style: TextStyle(color: AppColors.muted, fontSize: 12),
+                  ),
+                ),
+              ] else ...[
+                const SizedBox(height: 12),
+                TextFormField(
+                  key: const ValueKey('item-type-code'),
+                  controller: _sku,
+                  decoration: InputDecoration(
+                    labelText: 'Item code',
+                    hintText: 'Enter a unique code, e.g. EXB-80',
+                    errorText: _skuError,
+                  ),
+                  validator: (value) => _skuError ?? _required(value),
+                ),
+              ],
+              if (_category == '__OTHER__') ...[
+                const SizedBox(height: 12),
+                TextFormField(
+                  key: const ValueKey('item-type-other-category'),
+                  controller: _otherCategory,
+                  decoration: const InputDecoration(
+                    labelText: 'New category name',
+                    hintText: 'Type the category name',
+                  ),
+                  validator: _required,
+                ),
+              ],
               const SizedBox(height: 12),
               Row(
                 children: [
@@ -3678,68 +4482,11 @@ class _ItemDialogState extends State<_ItemDialog> {
                 ),
               ],
               const SizedBox(height: 12),
-              DropdownButtonFormField<int?>(
-                value: _parent,
-                isExpanded: true,
-                decoration: const InputDecoration(
-                  labelText: 'Parent item (optional)',
-                ),
-                items: [
-                  const DropdownMenuItem<int?>(
-                    value: null,
-                    child: Text('No parent item'),
-                  ),
-                  ...widget.items
-                      .where((x) => x['id'] != widget.item?['id'])
-                      .map(
-                        (x) => DropdownMenuItem<int?>(
-                          value: x['id'] as int,
-                          child: Text('${x['displayName']}'),
-                        ),
-                      ),
-                ],
-                onChanged: (v) => setState(() => _parent = v),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _cost,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'Unit cost price (GHS)',
-                      ),
-                      validator: _moneyValidator,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _selling,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'Unit selling price (GHS)',
-                      ),
-                      validator: _positiveMoneyValidator,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _threshold,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'Low-stock alert',
-                      ),
-                      validator: _wholeNumberValidator,
-                    ),
-                  ),
-                ],
+              TextFormField(
+                controller: _threshold,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Low-stock alert'),
+                validator: _wholeNumberValidator,
               ),
             ],
           ),
@@ -3762,29 +4509,16 @@ class _ItemDialogState extends State<_ItemDialog> {
 class _PurchaseLineDraft {
   _PurchaseLineDraft();
   int? itemId;
-  bool newItem = false;
   String selectedItemLabel = '';
-  String? category;
-  String unit = 'piece';
   final itemSearch = TextEditingController();
   final quantity = TextEditingController(text: '1');
   final cost = TextEditingController();
   final selling = TextEditingController();
-  final name = TextEditingController();
-  final sku = TextEditingController();
-  final otherCategory = TextEditingController();
-  final variant = TextEditingController();
-  final threshold = TextEditingController(text: '5');
   void dispose() {
     itemSearch.dispose();
     quantity.dispose();
     cost.dispose();
     selling.dispose();
-    name.dispose();
-    sku.dispose();
-    otherCategory.dispose();
-    variant.dispose();
-    threshold.dispose();
   }
 }
 
@@ -3803,16 +4537,13 @@ class _PurchaseDialog extends StatefulWidget {
 
 class _PurchaseDialogState extends State<_PurchaseDialog> {
   final _form = GlobalKey<FormState>();
-  final _sourceName = TextEditingController(),
-      _sourceReference = TextEditingController(),
+  final _sourceReference = TextEditingController(),
       _notes = TextEditingController();
   final List<_PurchaseLineDraft> _lines = [_PurchaseLineDraft()];
-  String _sourceType = 'PURCHASED_ELSEWHERE';
   DateTime _date = DateTime.now();
   bool _saving = false;
   @override
   void dispose() {
-    _sourceName.dispose();
     _sourceReference.dispose();
     _notes.dispose();
     for (final l in _lines) {
@@ -3833,7 +4564,7 @@ class _PurchaseDialogState extends State<_PurchaseDialog> {
 
   Future<void> _save() async {
     if (!_form.currentState!.validate()) return;
-    final ids = _lines.where((l) => !l.newItem).map((l) => l.itemId).toList();
+    final ids = _lines.map((l) => l.itemId).toList();
     if (ids.toSet().length != ids.length) {
       _errorSnack(context, 'Each item can appear only once.');
       return;
@@ -3841,34 +4572,16 @@ class _PurchaseDialogState extends State<_PurchaseDialog> {
     setState(() => _saving = true);
     try {
       await widget.api.recordStock({
-        'sourceType': _sourceType,
-        'sourceName': _sourceName.text.trim(),
         'sourceReference': _sourceReference.text.trim(),
         'receivedDate': _ymd(_date),
         'notes': _notes.text.trim(),
         'lines': _lines
             .map(
               (l) => {
-                'itemId': l.newItem ? null : l.itemId,
-                'name': l.newItem ? l.name.text.trim() : null,
-                'category': l.newItem
-                    ? (l.category == '__OTHER__'
-                          ? l.otherCategory.text.trim()
-                          : l.category)
-                    : null,
-                'sku': l.newItem && l.sku.text.trim().isNotEmpty
-                    ? l.sku.text.trim()
-                    : null,
-                'unitOfMeasure': l.newItem ? l.unit : null,
-                'variantLabel': l.newItem && l.variant.text.trim().isNotEmpty
-                    ? l.variant.text.trim()
-                    : null,
+                'itemId': l.itemId,
                 'quantity': int.parse(l.quantity.text),
                 'unitCost': double.parse(l.cost.text),
                 'sellingPrice': double.parse(l.selling.text),
-                'lowStockThreshold': l.newItem
-                    ? int.parse(l.threshold.text)
-                    : null,
               },
             )
             .toList(),
@@ -3882,21 +4595,10 @@ class _PurchaseDialogState extends State<_PurchaseDialog> {
   }
 
   String? _lineIncompleteMessage(_PurchaseLineDraft line) {
-    final hasSelection = line.newItem || line.itemId != null;
+    final hasSelection = line.itemId != null;
     final selectedSuggestion =
         line.itemSearch.text.trim() == line.selectedItemLabel;
     if (!hasSelection || !selectedSuggestion) return 'choose an item';
-    if (line.newItem) {
-      if (line.name.text.trim().isEmpty) return 'enter the item name';
-      if (line.category == null) return 'choose or add a category';
-      if (line.category == '__OTHER__' &&
-          line.otherCategory.text.trim().isEmpty) {
-        return 'enter the new category name';
-      }
-      if (_wholeNumberValidator(line.threshold.text) != null) {
-        return 'enter a valid low-stock alert';
-      }
-    }
     if (_positiveWholeNumberValidator(line.quantity.text) != null) {
       return 'enter the quantity received';
     }
@@ -3920,11 +4622,9 @@ class _PurchaseDialogState extends State<_PurchaseDialog> {
       );
       return;
     }
-    if (!current.newItem &&
-        _lines
-            .take(_lines.length - 1)
-            .where((line) => !line.newItem)
-            .any((line) => line.itemId == current.itemId)) {
+    if (_lines
+        .take(_lines.length - 1)
+        .any((line) => line.itemId == current.itemId)) {
       _errorSnack(
         context,
         'This item is already included in this stock entry.',
@@ -3934,15 +4634,58 @@ class _PurchaseDialogState extends State<_PurchaseDialog> {
     setState(() => _lines.add(_PurchaseLineDraft()));
   }
 
+  String _itemPickerLabel(ShopJson item) {
+    final displayName = '${item['displayName'] ?? item['name'] ?? ''}'.trim();
+    return '$displayName · ${item['sku']} · ${item['category']}';
+  }
+
+  Future<void> _createAndSelectItem(
+    int index,
+    FormFieldState<int> field,
+  ) async {
+    final line = _lines[index];
+    field.didChange(null);
+    setState(() {
+      line.itemId = null;
+      line.selectedItemLabel = '';
+      line.itemSearch.clear();
+    });
+
+    ShopJson? createdItem;
+    await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _ItemDialog(
+        api: widget.api,
+        contextData: widget.contextData,
+        onSaved: (item) => createdItem = item,
+      ),
+    );
+    if (!mounted || createdItem == null) return;
+
+    final item = createdItem!;
+    widget.items.removeWhere((existing) => existing['id'] == item['id']);
+    widget.items.add(item);
+    final label = _itemPickerLabel(item);
+    setState(() {
+      line.itemId = item['id'] as int;
+      line.selectedItemLabel = label;
+      line.itemSearch.text = label;
+      line.cost.clear();
+      line.selling.clear();
+    });
+    field.didChange(line.itemId);
+  }
+
   Widget _purchaseItemPicker(int index) => FormField<int>(
     validator: (_) {
       final line = _lines[index];
-      final hasSelection = line.newItem || line.itemId != null;
+      final hasSelection = line.itemId != null;
       final selectedSuggestion =
           line.itemSearch.text.trim() == line.selectedItemLabel;
       return hasSelection && selectedSuggestion
           ? null
-          : 'Choose a suggestion or add a new item';
+          : 'Select an existing item or choose Add a new item';
     },
     builder: (field) => DropdownMenu<int>(
       key: ValueKey('purchase-item-search-$index'),
@@ -3954,18 +4697,23 @@ class _PurchaseDialogState extends State<_PurchaseDialog> {
       requestFocusOnTap: true,
       filterCallback: (entries, filter) {
         final query = filter.trim().toLowerCase();
-        return entries
-            .where(
-              (entry) =>
-                  entry.value == -1 ||
-                  entry.label.toLowerCase().contains(query),
-            )
-            .toList();
+        final addNew = entries.where((entry) => entry.value == -1).toList();
+        if (query.length < 2) return addNew;
+        return [
+          ...addNew,
+          ...entries
+              .where(
+                (entry) =>
+                    entry.value != -1 &&
+                    entry.label.toLowerCase().contains(query),
+              )
+              .take(15),
+        ];
       },
-      label: const Text('Item'),
-      hintText: 'Search name or code',
+      label: const Text('Select item'),
+      hintText: 'Search by name or item code, then select a result',
       errorText: field.errorText,
-      initialSelection: _lines[index].newItem ? -1 : _lines[index].itemId,
+      initialSelection: _lines[index].itemId,
       dropdownMenuEntries: [
         const DropdownMenuEntry(
           value: -1,
@@ -3977,29 +4725,26 @@ class _PurchaseDialogState extends State<_PurchaseDialog> {
             .map(
               (i) => DropdownMenuEntry(
                 value: i['id'] as int,
-                label: '${i['displayName']} · ${i['sku']} · ${i['category']}',
+                label: _itemPickerLabel(i),
                 leadingIcon: const Icon(Icons.inventory_2_outlined),
               ),
             ),
       ],
       onSelected: (value) {
+        if (value == -1) {
+          _createAndSelectItem(index, field);
+          return;
+        }
         field.didChange(value);
         setState(() {
           final line = _lines[index];
-          line.newItem = value == -1;
-          line.itemId = value == -1 ? null : value;
-          if (value == -1) {
-            line.selectedItemLabel = '＋ Add a new item';
-            line.itemSearch.text = line.selectedItemLabel;
-            return;
-          }
+          line.itemId = value;
           if (value != null) {
             final item = widget.items.firstWhere((x) => x['id'] == value);
-            line.selectedItemLabel =
-                '${item['displayName']} · ${item['sku']} · ${item['category']}';
+            line.selectedItemLabel = _itemPickerLabel(item);
             line.itemSearch.text = line.selectedItemLabel;
-            line.cost.text = '${item['costPrice']}';
-            line.selling.text = '${item['sellingPrice']}';
+            line.cost.clear();
+            line.selling.clear();
           }
         });
       },
@@ -4007,6 +4752,7 @@ class _PurchaseDialogState extends State<_PurchaseDialog> {
   );
 
   Widget _purchaseQuantityField(int index) => TextFormField(
+    key: ValueKey('purchase-quantity-$index'),
     controller: _lines[index].quantity,
     keyboardType: TextInputType.number,
     decoration: const InputDecoration(labelText: 'Quantity received'),
@@ -4014,6 +4760,7 @@ class _PurchaseDialogState extends State<_PurchaseDialog> {
   );
 
   Widget _purchaseCostField(int index) => TextFormField(
+    key: ValueKey('purchase-cost-$index'),
     controller: _lines[index].cost,
     keyboardType: const TextInputType.numberWithOptions(decimal: true),
     decoration: const InputDecoration(labelText: 'Unit cost price (GHS)'),
@@ -4021,6 +4768,7 @@ class _PurchaseDialogState extends State<_PurchaseDialog> {
   );
 
   Widget _purchaseSellingField(int index) => TextFormField(
+    key: ValueKey('purchase-selling-$index'),
     controller: _lines[index].selling,
     keyboardType: const TextInputType.numberWithOptions(decimal: true),
     decoration: const InputDecoration(labelText: 'Unit selling price (GHS)'),
@@ -4067,28 +4815,50 @@ class _PurchaseDialogState extends State<_PurchaseDialog> {
     icon: const Icon(Icons.remove_circle_outline),
   );
 
-  Widget _compactPurchaseLine(int index) => SingleChildScrollView(
+  Widget _compactPurchaseLine(int index) => LayoutBuilder(
     key: ValueKey('purchase-line-$index'),
-    scrollDirection: Axis.horizontal,
-    child: SizedBox(
-      width: 980,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    builder: (context, constraints) {
+      final narrow = constraints.maxWidth < 520;
+      final fullWidth = constraints.maxWidth;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SizedBox(width: 360, child: _purchaseItemPicker(index)),
-          const SizedBox(width: 8),
-          SizedBox(width: 100, child: _purchaseQuantityField(index)),
-          const SizedBox(width: 8),
-          SizedBox(width: 150, child: _purchaseCostField(index)),
-          const SizedBox(width: 8),
-          SizedBox(width: 150, child: _purchaseSellingField(index)),
-          const SizedBox(width: 12),
-          SizedBox(height: 56, width: 120, child: _purchaseLineTotal(index)),
-          const SizedBox(width: 8),
-          SizedBox(width: 48, child: _removePurchaseLineButton(index)),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: _purchaseItemPicker(index)),
+              const SizedBox(width: 8),
+              SizedBox(width: 48, child: _removePurchaseLineButton(index)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SizedBox(
+                width: narrow ? fullWidth : 180,
+                child: _purchaseQuantityField(index),
+              ),
+              SizedBox(
+                width: narrow ? fullWidth : 220,
+                child: _purchaseCostField(index),
+              ),
+              SizedBox(
+                width: narrow ? fullWidth : 220,
+                child: _purchaseSellingField(index),
+              ),
+              SizedBox(
+                height: 56,
+                width: narrow ? fullWidth : 150,
+                child: _purchaseLineTotal(index),
+              ),
+            ],
+          ),
         ],
-      ),
-    ),
+      );
+    },
   );
 
   @override
@@ -4110,75 +4880,14 @@ class _PurchaseDialogState extends State<_PurchaseDialog> {
                     'This updates inventory only. It does not create an expense or record another payment.',
               ),
               const SizedBox(height: 14),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      key: const ValueKey('stock-source-type'),
-                      value: _sourceType,
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: 'How was the stock obtained?',
-                      ),
-                      items: const [
-                        DropdownMenuItem(
-                          value: 'PURCHASED_ELSEWHERE',
-                          child: Text('Purchased — recorded elsewhere'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'SCHOOL_TRANSFER',
-                          child: Text('Transferred from school office'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'DONATION',
-                          child: Text('Donation'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'OPENING_STOCK',
-                          child: Text('Opening stock'),
-                        ),
-                        DropdownMenuItem(value: 'OTHER', child: Text('Other')),
-                      ],
-                      onChanged: (value) => setState(
-                        () => _sourceType = value ?? 'PURCHASED_ELSEWHERE',
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      key: const ValueKey('stock-source-name'),
-                      controller: _sourceName,
-                      decoration: const InputDecoration(
-                        labelText: 'Source name (optional)',
-                        hintText: 'Supplier, office or donor',
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      key: const ValueKey('stock-source-reference'),
-                      controller: _sourceReference,
-                      decoration: const InputDecoration(
-                        labelText: 'Existing record reference (optional)',
-                        hintText: 'Expense, invoice or receipt number',
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  OutlinedButton.icon(
-                    key: const ValueKey('stock-received-date'),
-                    onPressed: _pickDate,
-                    icon: const Icon(Icons.calendar_today_outlined),
-                    label: Text('Date received · ${_ymd(_date)}'),
-                  ),
-                ],
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  key: const ValueKey('stock-received-date'),
+                  onPressed: _pickDate,
+                  icon: const Icon(Icons.calendar_today_outlined),
+                  label: Text('Date received · ${_ymd(_date)}'),
+                ),
               ),
               const SizedBox(height: 14),
               for (var index = 0; index < _lines.length; index++)
@@ -4188,150 +4897,7 @@ class _PurchaseDialogState extends State<_PurchaseDialog> {
                     padding: const EdgeInsets.all(14),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (!_lines[index].newItem)
-                          _compactPurchaseLine(index)
-                        else
-                          Row(
-                            children: [
-                              Expanded(child: _purchaseItemPicker(index)),
-                              _removePurchaseLineButton(index),
-                            ],
-                          ),
-                        if (_lines[index].newItem) ...[
-                          const SizedBox(height: 12),
-                          TextFormField(
-                            controller: _lines[index].name,
-                            decoration: const InputDecoration(
-                              labelText: 'Item name',
-                            ),
-                            validator: _required,
-                          ),
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: DropdownButtonFormField<String>(
-                                  value: _lines[index].category,
-                                  isExpanded: true,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Category',
-                                  ),
-                                  items: [
-                                    ...(widget.contextData['categories']
-                                                as List? ??
-                                            [])
-                                        .map(
-                                          (c) => DropdownMenuItem<String>(
-                                            value: '$c',
-                                            child: Text('$c'),
-                                          ),
-                                        ),
-                                    const DropdownMenuItem(
-                                      value: '__OTHER__',
-                                      child: Text('Other / Add new category'),
-                                    ),
-                                  ],
-                                  onChanged: (v) => setState(
-                                    () => _lines[index].category = v,
-                                  ),
-                                  validator: (v) => v == null
-                                      ? 'Select or add a category'
-                                      : null,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: TextFormField(
-                                  controller: _lines[index].sku,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Item code (optional)',
-                                    hintText: 'Generated automatically',
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          if (_lines[index].category == '__OTHER__') ...[
-                            const SizedBox(height: 10),
-                            TextFormField(
-                              controller: _lines[index].otherCategory,
-                              decoration: const InputDecoration(
-                                labelText: 'New category name',
-                              ),
-                              validator: _required,
-                            ),
-                          ],
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: DropdownButtonFormField<String>(
-                                  value: _lines[index].unit,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Unit',
-                                  ),
-                                  items:
-                                      (widget.contextData['units'] as List? ??
-                                              const ['piece'])
-                                          .map(
-                                            (u) => DropdownMenuItem<String>(
-                                              value: '$u',
-                                              child: Text('$u'),
-                                            ),
-                                          )
-                                          .toList(),
-                                  onChanged: (v) => setState(
-                                    () => _lines[index].unit = v ?? 'piece',
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: TextFormField(
-                                  controller: _lines[index].variant,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Variant (optional)',
-                                    hintText: 'Size 10, Blue',
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                        if (_lines[index].newItem) ...[
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              Expanded(child: _purchaseQuantityField(index)),
-                              const SizedBox(width: 8),
-                              Expanded(child: _purchaseCostField(index)),
-                              const SizedBox(width: 8),
-                              Expanded(child: _purchaseSellingField(index)),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: TextFormField(
-                                  controller: _lines[index].threshold,
-                                  keyboardType: TextInputType.number,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Low-stock alert',
-                                  ),
-                                  validator: _wholeNumberValidator,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: SizedBox(
-                              height: 52,
-                              width: 140,
-                              child: _purchaseLineTotal(index),
-                            ),
-                          ),
-                        ],
-                      ],
+                      children: [_compactPurchaseLine(index)],
                     ),
                   ),
                 ),
@@ -4349,11 +4915,31 @@ class _PurchaseDialogState extends State<_PurchaseDialog> {
                 ),
               ),
               const SizedBox(height: 8),
-              TextFormField(
-                controller: _notes,
-                maxLines: 2,
-                decoration: const InputDecoration(
-                  labelText: 'Notes (optional)',
+              Card(
+                margin: EdgeInsets.zero,
+                child: ExpansionTile(
+                  key: const ValueKey('stock-additional-details'),
+                  title: const Text('Additional details'),
+                  subtitle: const Text('Reference and notes are optional'),
+                  childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  children: [
+                    TextFormField(
+                      key: const ValueKey('stock-source-reference'),
+                      controller: _sourceReference,
+                      decoration: const InputDecoration(
+                        labelText: 'Existing record reference (optional)',
+                        hintText: 'Expense, invoice or receipt number',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextFormField(
+                      controller: _notes,
+                      maxLines: 2,
+                      decoration: const InputDecoration(
+                        labelText: 'Notes (optional)',
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -4380,10 +4966,12 @@ class _ConsignmentDialog extends StatefulWidget {
     required this.contextData,
     required this.items,
     required this.roles,
+    this.initialItem,
   });
   final ShopApiClient api;
   final ShopJson contextData;
   final List<ShopJson> items, roles;
+  final ShopJson? initialItem;
   @override
   State<_ConsignmentDialog> createState() => _ConsignmentDialogState();
 }
@@ -4396,6 +4984,22 @@ class _ConsignmentDialogState extends State<_ConsignmentDialog> {
   int? _seller, _item;
   bool _saving = false;
   String? _serverError;
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = widget.initialItem;
+    final initialId = initial?['id'];
+    final isValid =
+        initial != null &&
+        initial['active'] == true &&
+        initialId is int &&
+        ((initial['availableQuantity'] as num?)?.toInt() ?? 0) > 0 &&
+        widget.items.any(
+          (item) => item['id'] == initialId && item['active'] == true,
+        );
+    if (isValid) _item = initialId;
+  }
 
   ShopJson? get _selectedItem {
     for (final item in widget.items) {
@@ -4429,6 +5033,57 @@ class _ConsignmentDialogState extends State<_ConsignmentDialog> {
       setState(() {});
       return;
     }
+    final recipient = _maps(
+      widget.contextData['staff'],
+    ).firstWhere((person) => person['id'] == _seller);
+    final item = _selectedItem!;
+    final quantity = int.parse(_quantity.text);
+    final available = _availableQuantity ?? 0;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Prepare this handover?'),
+        content: SizedBox(
+          width: 460,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Reserve $quantity ${item['unitOfMeasure']} of ${item['displayName']} for ${recipient['name']}?',
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 12),
+              _InventoryInfo(
+                label: 'Available stock after reservation',
+                value:
+                    '$available → ${available - quantity} ${item['unitOfMeasure']}',
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'The stock remains in the central store until ${recipient['name']} physically counts and confirms receipt. Only then will custody move.',
+                style: const TextStyle(color: AppColors.muted),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Back'),
+          ),
+          FilledButton(
+            key: const ValueKey('confirm-stock-issue'),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Prepare handover'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
     setState(() {
       _saving = true;
       _serverError = null;
@@ -4437,7 +5092,7 @@ class _ConsignmentDialogState extends State<_ConsignmentDialog> {
       await widget.api.createConsignment({
         'sellerId': _seller,
         'itemId': _item,
-        'quantity': int.parse(_quantity.text),
+        'quantity': quantity,
         'locationName': _location.text.trim().isEmpty
             ? null
             : _location.text.trim(),
@@ -4455,7 +5110,7 @@ class _ConsignmentDialogState extends State<_ConsignmentDialog> {
   Widget build(BuildContext context) {
     final staff = _maps(widget.contextData['staff']);
     return AlertDialog(
-      title: const Text('Issue stock to a staff member'),
+      title: const Text('Prepare stock handover'),
       content: SizedBox(
         width: 520,
         child: staff.isEmpty
@@ -5004,11 +5659,11 @@ class _CustomerReturnDialogState extends State<_CustomerReturnDialog> {
                       ),
                       DropdownMenuItem(
                         value: 'DAMAGED',
-                        child: Text('Damaged — quarantine'),
+                        child: Text('Damaged — hold for inspection'),
                       ),
                       DropdownMenuItem(
                         value: 'UNSELLABLE',
-                        child: Text('Unsellable — quarantine'),
+                        child: Text('Unsellable — hold for inspection'),
                       ),
                     ],
                     onChanged: (value) =>
@@ -5364,11 +6019,11 @@ class _ReceiveStaffReturnDialogState extends State<_ReceiveStaffReturnDialog> {
                 DropdownMenuItem(value: 'GOOD', child: Text('Good')),
                 DropdownMenuItem(
                   value: 'DAMAGED',
-                  child: Text('Damaged — quarantine'),
+                  child: Text('Damaged — hold for inspection'),
                 ),
                 DropdownMenuItem(
                   value: 'UNSELLABLE',
-                  child: Text('Unsellable — quarantine'),
+                  child: Text('Unsellable — hold for inspection'),
                 ),
               ],
               onChanged: (value) =>
@@ -5493,130 +6148,15 @@ class _ReturnDialogState extends State<_ReturnDialog> {
   );
 }
 
-class _ReconcileDialog extends StatefulWidget {
-  const _ReconcileDialog({required this.api, required this.consignment});
-  final ShopApiClient api;
-  final ShopJson consignment;
-  @override
-  State<_ReconcileDialog> createState() => _ReconcileDialogState();
-}
-
-class _ReconcileDialogState extends State<_ReconcileDialog> {
-  final _form = GlobalKey<FormState>();
-  late final TextEditingController _stock, _cash;
-  final _note = TextEditingController();
-  bool _saving = false;
-  @override
-  void initState() {
-    super.initState();
-    _stock = TextEditingController(
-      text: '${widget.consignment['remainingQuantity']}',
-    );
-    _cash = TextEditingController(
-      text: '${widget.consignment['expectedCash']}',
-    );
-  }
-
-  @override
-  void dispose() {
-    _stock.dispose();
-    _cash.dispose();
-    _note.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    if (!_form.currentState!.validate()) return;
-    setState(() => _saving = true);
-    try {
-      await widget.api.reconcile(widget.consignment['id'] as int, {
-        'reportedRemaining': int.parse(_stock.text),
-        'reportedCash': double.parse(_cash.text),
-        'note': _note.text.trim(),
-      });
-      if (mounted) Navigator.pop(context, true);
-    } catch (e) {
-      if (mounted) _errorSnack(context, e);
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: const Text('Prepare seller account'),
-    content: SizedBox(
-      width: 520,
-      child: Form(
-        key: _form,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '${widget.consignment['itemName']} · ${widget.consignment['sellerName']}',
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'System expects ${widget.consignment['remainingQuantity']} remaining and ${_money(widget.consignment['expectedCash'])} collected.',
-              style: const TextStyle(color: AppColors.muted),
-            ),
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: _stock,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'Stock physically remaining',
-                    ),
-                    validator: _wholeNumberValidator,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextFormField(
-                    controller: _cash,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: const InputDecoration(
-                      labelText: 'Cash + MoMo collected',
-                    ),
-                    validator: _moneyValidator,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _note,
-              decoration: const InputDecoration(labelText: 'Note (optional)'),
-            ),
-          ],
-        ),
-      ),
-    ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('Cancel'),
-      ),
-      FilledButton(
-        onPressed: _saving ? null : _save,
-        child: Text(_saving ? 'Submitting…' : 'Submit account'),
-      ),
-    ],
-  );
-}
-
 class _SaleLineDraft {
   _SaleLineDraft();
   int? choiceId;
+  final itemSearch = TextEditingController();
   final quantity = TextEditingController(text: '1');
-  void dispose() => quantity.dispose();
+  void dispose() {
+    itemSearch.dispose();
+    quantity.dispose();
+  }
 }
 
 class _SaleDialog extends StatefulWidget {
@@ -5644,12 +6184,15 @@ class _SaleDialogState extends State<_SaleDialog> {
   List<ShopJson> _students = [];
   ShopJson? _student, _result;
   int? _staffBuyer;
+  Timer? _studentSearchDebounce;
+  int _studentSearchGeneration = 0;
   String _buyerType = 'STUDENT';
   String _payment = 'CASH';
   bool _saving = false, _searching = false;
 
   @override
   void dispose() {
+    _studentSearchDebounce?.cancel();
     _studentSearch.dispose();
     _buyerName.dispose();
     _buyerReference.dispose();
@@ -5667,6 +6210,34 @@ class _SaleDialogState extends State<_SaleDialog> {
   double _price(ShopJson c) => (c['sellingPrice'] as num).toDouble();
   List<ShopJson> get _staff => _maps(widget.contextData['staff']);
 
+  String _staffName(ShopJson person) =>
+      '${person['name'] ?? person['fullName'] ?? person['username'] ?? ''}';
+
+  ShopJson? _staffById(int? id) {
+    if (id == null) return null;
+    for (final person in _staff) {
+      if (person['id'] == id) return person;
+    }
+    return null;
+  }
+
+  List<ShopJson> get _staffMatches {
+    final query = _buyerName.text.trim().toLowerCase();
+    if (query.isEmpty || _staffBuyer != null) return const [];
+    return _staff
+        .where((person) {
+          final searchable = [
+            _staffName(person),
+            person['username'],
+            person['email'],
+            person['staffId'],
+          ].whereType<Object>().join(' ').toLowerCase();
+          return searchable.contains(query);
+        })
+        .take(8)
+        .toList();
+  }
+
   String get _buyerTypeLabel => switch (_buyerType) {
     'GUARDIAN' => 'Guardian or parent',
     'WALK_IN' => 'Walk-in buyer',
@@ -5681,26 +6252,77 @@ class _SaleDialogState extends State<_SaleDialog> {
     return null;
   }
 
+  List<ShopJson> _itemMatches(_SaleLineDraft line) {
+    final query = line.itemSearch.text.trim().toLowerCase();
+    if (query.isEmpty || line.choiceId != null) return const [];
+    return widget.choices
+        .where((choice) {
+          final searchable = [
+            _itemOptionText(choice),
+            _name(choice),
+            choice['sku'],
+            choice['itemCode'],
+            choice['holderName'],
+            choice['locationName'],
+          ].whereType<Object>().join(' ').toLowerCase();
+          return searchable.contains(query);
+        })
+        .take(8)
+        .toList();
+  }
+
+  String _itemOptionText(ShopJson choice) =>
+      '${_name(choice)} · ${_available(choice)} available · ${_money(choice['sellingPrice'])} each';
+
+  String _itemSuggestionDetail(ShopJson choice) {
+    final location = choice['locationName'];
+    return 'Held by ${choice['holderName']}${location == null ? '' : ' · $location'}';
+  }
+
   double get _total => _lines.fold(0, (sum, l) {
     final c = _choice(l.choiceId);
     final q = int.tryParse(l.quantity.text) ?? 0;
     return sum + (c == null ? 0 : _price(c) * q);
   });
 
-  Future<void> _searchStudent() async {
-    final q = _studentSearch.text.trim();
-    if (q.length < 2) {
-      _errorSnack(context, 'Enter at least 2 letters or a student ID.');
+  void _studentSearchChanged(String value) {
+    if (_student != null && value.trim() != '${_student!['name']}'.trim()) {
+      _student = null;
+    }
+    _studentSearchDebounce?.cancel();
+    final query = value.trim();
+    if (query.length < 2) {
+      setState(() {
+        _students = [];
+        _searching = false;
+      });
       return;
     }
+    setState(() {});
+    _studentSearchDebounce = Timer(
+      const Duration(milliseconds: 300),
+      _searchStudent,
+    );
+  }
+
+  Future<void> _searchStudent() async {
+    final q = _studentSearch.text.trim();
+    if (q.length < 2) return;
+    final generation = ++_studentSearchGeneration;
     setState(() => _searching = true);
     try {
       final rows = await widget.api.students(q);
-      if (mounted) setState(() => _students = rows);
+      if (mounted && generation == _studentSearchGeneration) {
+        setState(() => _students = rows.take(8).toList());
+      }
     } catch (e) {
-      if (mounted) _errorSnack(context, e);
+      if (mounted && generation == _studentSearchGeneration) {
+        setState(() => _students = []);
+      }
     } finally {
-      if (mounted) setState(() => _searching = false);
+      if (mounted && generation == _studentSearchGeneration) {
+        setState(() => _searching = false);
+      }
     }
   }
 
@@ -5719,9 +6341,12 @@ class _SaleDialogState extends State<_SaleDialog> {
             ? (_student == null ? null : _student!['customStudentId'])
             : null,
         'buyerUserId': _buyerType == 'STAFF' ? _staffBuyer : null,
-        'buyerName': {'GUARDIAN', 'WALK_IN', 'OTHER'}.contains(_buyerType)
-            ? _buyerName.text.trim()
-            : null,
+        'buyerName': switch (_buyerType) {
+          'STUDENT' when _student == null => _studentSearch.text.trim(),
+          'STAFF' when _staffBuyer == null => _buyerName.text.trim(),
+          'GUARDIAN' || 'WALK_IN' || 'OTHER' => _buyerName.text.trim(),
+          _ => null,
+        },
         'buyerReference': _buyerReference.text.trim().isEmpty
             ? null
             : _buyerReference.text.trim(),
@@ -5750,79 +6375,65 @@ class _SaleDialogState extends State<_SaleDialog> {
     }
   }
 
+  ShopJson _receiptData() {
+    final serverSale = _result?['sale'];
+    final sale = serverSale is Map
+        ? Map<String, dynamic>.from(serverSale)
+        : <String, dynamic>{};
+    final buyerName = _buyerType == 'STUDENT'
+        ? (_student?['name'] ?? _studentSearch.text.trim())
+        : _buyerName.text.trim();
+    final saleLines = sale['lines'] is List
+        ? sale['lines']
+        : _lines.map((line) {
+            final choice = _choice(line.choiceId)!;
+            final quantity = int.tryParse(line.quantity.text) ?? 0;
+            final unitPrice = _price(choice);
+            return {
+              'itemName': _name(choice),
+              'quantity': quantity,
+              'unitPrice': unitPrice,
+              'lineTotal': unitPrice * quantity,
+            };
+          }).toList();
+    return {
+      ...?_result,
+      'issuedAt': _result?['issuedAt'] ?? DateTime.now().toIso8601String(),
+      'cashierName':
+          _result?['cashierName'] ?? widget.contextData['currentUserName'],
+      'custodianName':
+          _result?['custodianName'] ??
+          (_lines.isEmpty
+              ? null
+              : _choice(_lines.first.choiceId)?['holderName']),
+      'sale': {
+        ...sale,
+        'buyerType': sale['buyerType'] ?? _buyerType,
+        'buyerName': sale['buyerName'] ?? buyerName,
+        'paymentMethod': sale['paymentMethod'] ?? _payment,
+        'momoReference':
+            sale['momoReference'] ??
+            (_payment == 'MOMO' ? _momo.text.trim() : null),
+        'totalAmount': sale['totalAmount'] ?? _total,
+        'lines': saleLines,
+      },
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_result != null) {
-      final reference = _result!['reference'];
-      return AlertDialog(
-        title: Text(
-          widget.collectFromStore
-              ? 'Payment received'
-              : 'Sale and release recorded',
-        ),
-        content: SizedBox(
-          width: 480,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                widget.collectFromStore
-                    ? Icons.receipt_long_outlined
-                    : Icons.check_circle_outline,
-                size: 54,
-                color: AppColors.green,
-              ),
-              const SizedBox(height: 12),
-              if (reference != null) ...[
-                const Text(
-                  'Receipt number',
-                  style: TextStyle(color: AppColors.muted),
-                ),
-                SelectableText(
-                  '$reference',
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                if (_result!['pickupToken'] != null) ...[
-                  const Text(
-                    'Collection token',
-                    style: TextStyle(color: AppColors.muted),
-                  ),
-                  SelectableText(
-                    '${_result!['pickupToken']}',
-                    style: const TextStyle(
-                      fontSize: 34,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 5,
-                    ),
-                  ),
-                  const Text(
-                    'The buyer gives this one-time token at the store.',
-                    textAlign: TextAlign.center,
-                  ),
-                ] else
-                  const Text('The items were handed to the buyer.'),
-              ] else
-                const Text('The stock and payment records were updated.'),
-            ],
-          ),
-        ),
-        actions: [
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Done'),
-          ),
-        ],
+      return _ShopReceiptDialog(
+        receipt: _receiptData(),
+        schoolName: '${widget.contextData['schoolName'] ?? 'School shop'}',
+        onDone: () => Navigator.pop(context, true),
       );
     }
     return AlertDialog(
       title: Text(
         widget.collectFromStore
-            ? 'Sell for collection from store'
-            : 'Sell and give items now',
+            ? 'Sell for later collection'
+            : 'Sell and hand over now',
       ),
       content: SizedBox(
         width: 760,
@@ -5860,6 +6471,7 @@ class _SaleDialogState extends State<_SaleDialog> {
                       _student = null;
                       _students = [];
                       _staffBuyer = null;
+                      _studentSearch.clear();
                       _buyerName.clear();
                       _buyerReference.clear();
                     });
@@ -5867,109 +6479,105 @@ class _SaleDialogState extends State<_SaleDialog> {
                 ),
                 const SizedBox(height: 12),
                 if (_buyerType == 'STUDENT')
-                  FormField<ShopJson>(
-                    validator: (_) =>
-                        _student == null ? 'Select the student buying' : null,
-                    builder: (field) => Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (_student != null)
-                          InputChip(
-                            avatar: const Icon(Icons.school_outlined, size: 18),
-                            label: Text(
-                              '${_student!['name']} · ${_student!['customStudentId']}',
-                            ),
-                            onDeleted: () => setState(() => _student = null),
-                          )
-                        else
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  key: const ValueKey(
-                                    'shop-student-buyer-search',
-                                  ),
-                                  controller: _studentSearch,
-                                  onSubmitted: (_) => _searchStudent(),
-                                  decoration: const InputDecoration(
-                                    labelText: 'Student',
-                                    hintText: 'Search name or student ID',
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              OutlinedButton.icon(
-                                onPressed: _searching ? null : _searchStudent,
-                                icon: const Icon(Icons.search),
-                                label: Text(
-                                  _searching ? 'Searching…' : 'Search',
-                                ),
-                              ),
-                            ],
-                          ),
-                        if (_student == null && _students.isNotEmpty)
-                          Container(
-                            margin: const EdgeInsets.only(top: 6),
-                            constraints: const BoxConstraints(maxHeight: 150),
-                            decoration: BoxDecoration(
-                              border: Border.all(color: AppColors.border),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: ListView(
-                              shrinkWrap: true,
-                              children: _students
-                                  .map(
-                                    (s) => ListTile(
-                                      dense: true,
-                                      title: Text('${s['name']}'),
-                                      subtitle: Text(
-                                        '${s['customStudentId']} · ${s['className'] ?? ''} ${s['section'] ?? ''}',
-                                      ),
-                                      onTap: () => setState(() {
-                                        _student = s;
-                                        _students = [];
-                                        field.didChange(s);
-                                      }),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      TextFormField(
+                        key: const ValueKey('shop-student-buyer-search'),
+                        controller: _studentSearch,
+                        onChanged: _studentSearchChanged,
+                        onFieldSubmitted: (_) => _searchStudent(),
+                        decoration: InputDecoration(
+                          labelText: 'Student name or ID',
+                          hintText: 'Start typing to find a student',
+                          helperText: _student == null
+                              ? 'Select a suggestion, or keep the typed name if the buyer is not listed.'
+                              : 'Selected · ${_student!['customStudentId']}',
+                          suffixIcon: _searching
+                              ? const Padding(
+                                  padding: EdgeInsets.all(14),
+                                  child: SizedBox.square(
+                                    dimension: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
                                     ),
-                                  )
-                                  .toList(),
-                            ),
-                          ),
-                        if (field.hasError)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 6, left: 12),
-                            child: Text(
-                              field.errorText!,
-                              style: TextStyle(
-                                color: Theme.of(context).colorScheme.error,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
+                                  ),
+                                )
+                              : _student != null
+                              ? const Icon(
+                                  Icons.check_circle,
+                                  color: AppColors.green,
+                                )
+                              : const Icon(Icons.search),
+                        ),
+                        validator: (value) =>
+                            value == null || value.trim().isEmpty
+                            ? 'Enter the student name'
+                            : null,
+                      ),
+                      if (_student == null && _students.isNotEmpty)
+                        _BuyerSuggestions(
+                          key: const ValueKey('shop-student-suggestions'),
+                          rows: _students,
+                          nameOf: (person) => '${person['name']}',
+                          detailOf: (person) =>
+                              '${person['customStudentId']} · ${person['className'] ?? ''} ${person['section'] ?? ''}'
+                                  .trim(),
+                          onSelected: (person) => setState(() {
+                            _studentSearchDebounce?.cancel();
+                            _student = person;
+                            _studentSearch.text = '${person['name']}';
+                            _students = [];
+                          }),
+                        ),
+                    ],
                   )
                 else if (_buyerType == 'STAFF')
-                  DropdownButtonFormField<int>(
-                    key: const ValueKey('shop-staff-buyer'),
-                    value: _staffBuyer,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Staff member',
-                    ),
-                    items: _staff
-                        .map(
-                          (person) => DropdownMenuItem<int>(
-                            value: person['id'] as int,
-                            child: Text(
-                              '${person['name'] ?? person['fullName'] ?? person['username']}',
-                            ),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) => setState(() => _staffBuyer = value),
-                    validator: (value) =>
-                        value == null ? 'Select the staff member buying' : null,
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      TextFormField(
+                        key: const ValueKey('shop-staff-buyer-search'),
+                        controller: _buyerName,
+                        onChanged: (value) => setState(() {
+                          if (_staffBuyer == null) return;
+                          final selected = _staffById(_staffBuyer);
+                          if (selected == null ||
+                              value.trim() != _staffName(selected).trim()) {
+                            _staffBuyer = null;
+                          }
+                        }),
+                        decoration: InputDecoration(
+                          labelText: 'Staff name',
+                          hintText: 'Start typing to find a staff member',
+                          helperText: _staffBuyer == null
+                              ? 'Select a suggestion, or keep the typed name if the buyer is not listed.'
+                              : 'Staff member selected',
+                          suffixIcon: _staffBuyer == null
+                              ? const Icon(Icons.search)
+                              : const Icon(
+                                  Icons.check_circle,
+                                  color: AppColors.green,
+                                ),
+                        ),
+                        validator: (value) =>
+                            value == null || value.trim().isEmpty
+                            ? 'Enter the staff member name'
+                            : null,
+                      ),
+                      if (_staffMatches.isNotEmpty)
+                        _BuyerSuggestions(
+                          key: const ValueKey('shop-staff-suggestions'),
+                          rows: _staffMatches,
+                          nameOf: _staffName,
+                          detailOf: (person) =>
+                              '${person['staffId'] ?? person['email'] ?? person['username'] ?? 'School staff'}',
+                          onSelected: (person) => setState(() {
+                            _staffBuyer = person['id'] as int;
+                            _buyerName.text = _staffName(person);
+                          }),
+                        ),
+                    ],
                   )
                 else
                   TextFormField(
@@ -6002,29 +6610,60 @@ class _SaleDialogState extends State<_SaleDialog> {
                   Padding(
                     padding: const EdgeInsets.only(bottom: 10),
                     child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
                           flex: 4,
-                          child: DropdownButtonFormField<int>(
-                            value: _lines[index].choiceId,
-                            isExpanded: true,
-                            decoration: const InputDecoration(
-                              labelText: 'Item',
-                            ),
-                            items: widget.choices
-                                .map(
-                                  (c) => DropdownMenuItem(
-                                    value: _id(c),
-                                    child: Text(
-                                      '${_name(c)} · ${c['holderName']}${c['locationName'] == null ? '' : ' (${c['locationName']})'} · ${_available(c)} available · Unit price ${_money(c['sellingPrice'])}',
-                                    ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              TextFormField(
+                                key: ValueKey('shop-sale-item-search-$index'),
+                                controller: _lines[index].itemSearch,
+                                onChanged: (value) => setState(() {
+                                  final selected = _choice(
+                                    _lines[index].choiceId,
+                                  );
+                                  if (selected != null &&
+                                      value.trim() !=
+                                          _itemOptionText(selected).trim()) {
+                                    _lines[index].choiceId = null;
+                                  }
+                                }),
+                                maxLines: 2,
+                                decoration: InputDecoration(
+                                  labelText: 'Item',
+                                  hintText: 'Start typing item name or code',
+                                  helperText: _lines[index].choiceId == null
+                                      ? 'Select an available stock item from the suggestions.'
+                                      : 'Selected stock · ${_itemSuggestionDetail(_choice(_lines[index].choiceId)!)}',
+                                  helperMaxLines: 2,
+                                  suffixIcon: _lines[index].choiceId == null
+                                      ? const Icon(Icons.search)
+                                      : const Icon(
+                                          Icons.check_circle,
+                                          color: AppColors.green,
+                                        ),
+                                ),
+                                validator: (_) => _lines[index].choiceId == null
+                                    ? 'Select a valid item from the suggestions'
+                                    : null,
+                              ),
+                              if (_itemMatches(_lines[index]).isNotEmpty)
+                                _ItemSuggestions(
+                                  key: ValueKey(
+                                    'shop-sale-item-suggestions-$index',
                                   ),
-                                )
-                                .toList(),
-                            onChanged: (v) =>
-                                setState(() => _lines[index].choiceId = v),
-                            validator: (v) =>
-                                v == null ? 'Select an item' : null,
+                                  rows: _itemMatches(_lines[index]),
+                                  nameOf: _itemOptionText,
+                                  detailOf: _itemSuggestionDetail,
+                                  onSelected: (choice) => setState(() {
+                                    _lines[index].choiceId = _id(choice);
+                                    _lines[index].itemSearch.text =
+                                        _itemOptionText(choice);
+                                  }),
+                                ),
+                            ],
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -6140,6 +6779,510 @@ class _SaleDialogState extends State<_SaleDialog> {
       ],
     );
   }
+}
+
+class _ShopReceiptDialog extends StatefulWidget {
+  const _ShopReceiptDialog({
+    required this.receipt,
+    required this.schoolName,
+    required this.onDone,
+    this.title = 'Payment received',
+    this.additionalActions = const [],
+  });
+
+  final ShopJson receipt;
+  final String schoolName;
+  final VoidCallback onDone;
+  final String title;
+  final List<Widget> additionalActions;
+
+  @override
+  State<_ShopReceiptDialog> createState() => _ShopReceiptDialogState();
+}
+
+class _ShopReceiptDialogState extends State<_ShopReceiptDialog> {
+  String? _working;
+
+  ShopJson get _sale => widget.receipt['sale'] is Map
+      ? Map<String, dynamic>.from(widget.receipt['sale'] as Map)
+      : <String, dynamic>{};
+  List<ShopJson> get _lines => _maps(_sale['lines']);
+  String get _reference => '${widget.receipt['reference'] ?? 'SHOP-RECEIPT'}';
+  String get _fileName =>
+      '${_reference.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '-')}.pdf';
+
+  Future<void> _runReceiptAction(String action) async {
+    setState(() => _working = action);
+    try {
+      final bytes = await buildShopReceiptPdf(
+        receipt: widget.receipt,
+        schoolName: widget.schoolName,
+      );
+      final success = switch (action) {
+        'download' => await downloadReportPdf(_fileName, bytes),
+        'print' => await Printing.layoutPdf(
+          name: _fileName,
+          onLayout: (_) async => bytes,
+        ),
+        'share' => await Printing.sharePdf(
+          bytes: bytes,
+          filename: _fileName,
+          subject: '${widget.schoolName} shop receipt',
+          body: 'Receipt $_reference',
+        ),
+        _ => false,
+      };
+      if (!success && mounted) {
+        _errorSnack(
+          context,
+          action == 'share'
+              ? 'Sharing is not available on this device. Download the receipt instead.'
+              : 'The receipt could not be ${action == 'print' ? 'opened for printing' : 'downloaded'}.',
+        );
+      }
+    } catch (error) {
+      if (mounted) _errorSnack(context, error);
+    } finally {
+      if (mounted) setState(() => _working = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final token = '${widget.receipt['pickupToken'] ?? ''}'.trim();
+    final issuedAt = widget.receipt['issuedAt'];
+    final paymentMethod = '${_sale['paymentMethod'] ?? 'CASH'}'.toUpperCase();
+    final paymentReference = '${_sale['momoReference'] ?? ''}'.trim();
+    final paymentLabel = paymentMethod == 'MOMO'
+        ? 'Mobile Money${paymentReference.isEmpty ? '' : ' · $paymentReference'}'
+        : _status(paymentMethod);
+    return AlertDialog(
+      titlePadding: const EdgeInsets.fromLTRB(24, 20, 12, 12),
+      title: Row(
+        children: [
+          const Icon(Icons.check_circle, color: AppColors.green),
+          const SizedBox(width: 10),
+          Expanded(child: Text(widget.title)),
+          IconButton(onPressed: widget.onDone, icon: const Icon(Icons.close)),
+        ],
+      ),
+      content: SizedBox(
+        width: 580,
+        child: SingleChildScrollView(
+          child: Container(
+            key: const ValueKey('shop-receipt-preview'),
+            padding: const EdgeInsets.all(22),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border.all(color: AppColors.border),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.schoolName,
+                            style: const TextStyle(
+                              color: AppColors.navy,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const Text(
+                            'SCHOOL SHOP RECEIPT',
+                            style: TextStyle(
+                              color: AppColors.green,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1.1,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    _ReceiptStatusPill(shopReceiptStatusLabel(widget.receipt)),
+                  ],
+                ),
+                const Divider(height: 30),
+                _ReceiptDetail(label: 'Receipt number', value: _reference),
+                _ReceiptDetail(
+                  label: 'Date',
+                  value:
+                      '${_dateLabel(issuedAt)}${_timeLabel(issuedAt).isEmpty ? '' : ' · ${_timeLabel(issuedAt)}'}',
+                ),
+                _ReceiptDetail(
+                  label: 'Buyer',
+                  value:
+                      '${_sale['buyerName'] ?? _sale['studentName'] ?? 'Not specified'}',
+                ),
+                _ReceiptDetail(label: 'Payment', value: paymentLabel),
+                _ReceiptDetail(
+                  label: 'Received by',
+                  value:
+                      '${widget.receipt['cashierName'] ?? _sale['processedByName'] ?? 'School shop'}',
+                ),
+                const SizedBox(height: 18),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  color: AppColors.green.withValues(alpha: .07),
+                  child: const Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'ITEM',
+                          style: TextStyle(
+                            color: AppColors.muted,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 45,
+                        child: Text(
+                          'QTY',
+                          textAlign: TextAlign.right,
+                          style: TextStyle(
+                            color: AppColors.muted,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 100,
+                        child: Text(
+                          'TOTAL',
+                          textAlign: TextAlign.right,
+                          style: TextStyle(
+                            color: AppColors.muted,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                for (final line in _lines)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 10,
+                    ),
+                    decoration: const BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(color: AppColors.border),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '${line['itemName'] ?? 'Item'}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              Text(
+                                '${_money(line['unitPrice'])} each',
+                                style: const TextStyle(
+                                  color: AppColors.muted,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        SizedBox(
+                          width: 45,
+                          child: Text(
+                            '${line['quantity'] ?? 0}',
+                            textAlign: TextAlign.right,
+                          ),
+                        ),
+                        SizedBox(
+                          width: 100,
+                          child: Text(
+                            _money(line['lineTotal']),
+                            textAlign: TextAlign.right,
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.only(top: 16),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      const Text(
+                        'TOTAL PAID',
+                        style: TextStyle(
+                          color: AppColors.muted,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(width: 18),
+                      Text(
+                        _money(_sale['totalAmount']),
+                        key: const ValueKey('shop-receipt-total'),
+                        style: const TextStyle(
+                          color: AppColors.navy,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (token.isNotEmpty &&
+                    shopReceiptAwaitingCollection(widget.receipt)) ...[
+                  const SizedBox(height: 18),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: AppColors.green.withValues(alpha: .08),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: AppColors.green.withValues(alpha: .35),
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        const Text(
+                          'COLLECTION TOKEN',
+                          style: TextStyle(
+                            color: AppColors.green,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 1,
+                          ),
+                        ),
+                        SelectableText(
+                          token,
+                          key: const ValueKey('shop-receipt-token'),
+                          style: const TextStyle(
+                            color: AppColors.navy,
+                            fontSize: 30,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 4,
+                          ),
+                        ),
+                        Text(
+                          'Present this receipt and token to ${widget.receipt['custodianName'] ?? 'the store'} to collect the items.',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: AppColors.muted),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+      actionsPadding: const EdgeInsets.fromLTRB(20, 8, 20, 18),
+      actionsAlignment: MainAxisAlignment.spaceBetween,
+      actionsOverflowAlignment: OverflowBarAlignment.end,
+      actions: [
+        ...widget.additionalActions,
+        OutlinedButton.icon(
+          key: const ValueKey('shop-share-receipt'),
+          onPressed: _working == null ? () => _runReceiptAction('share') : null,
+          icon: const Icon(Icons.ios_share_outlined),
+          label: const Text('Share'),
+        ),
+        OutlinedButton.icon(
+          key: const ValueKey('shop-download-receipt'),
+          onPressed: _working == null
+              ? () => _runReceiptAction('download')
+              : null,
+          icon: const Icon(Icons.download_outlined),
+          label: const Text('Download PDF'),
+        ),
+        OutlinedButton.icon(
+          key: const ValueKey('shop-print-receipt'),
+          onPressed: _working == null ? () => _runReceiptAction('print') : null,
+          icon: const Icon(Icons.print_outlined),
+          label: const Text('Print'),
+        ),
+        FilledButton(
+          onPressed: _working == null ? widget.onDone : null,
+          child: Text(_working == null ? 'Done' : 'Preparing…'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ReceiptDetail extends StatelessWidget {
+  const _ReceiptDetail({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 4),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 120,
+          child: Text(label, style: const TextStyle(color: AppColors.muted)),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: SelectableText(
+            value,
+            textAlign: TextAlign.right,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _ReceiptStatusPill extends StatelessWidget {
+  const _ReceiptStatusPill(this.label);
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+    decoration: BoxDecoration(
+      color: AppColors.green.withValues(alpha: .1),
+      borderRadius: BorderRadius.circular(30),
+    ),
+    child: Text(
+      label,
+      style: const TextStyle(
+        color: AppColors.green,
+        fontSize: 12,
+        fontWeight: FontWeight.w800,
+      ),
+    ),
+  );
+}
+
+class _BuyerSuggestions extends StatelessWidget {
+  const _BuyerSuggestions({
+    super.key,
+    required this.rows,
+    required this.nameOf,
+    required this.detailOf,
+    required this.onSelected,
+  });
+
+  final List<ShopJson> rows;
+  final String Function(ShopJson) nameOf;
+  final String Function(ShopJson) detailOf;
+  final ValueChanged<ShopJson> onSelected;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    margin: const EdgeInsets.only(top: 6),
+    constraints: const BoxConstraints(maxHeight: 220),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      border: Border.all(color: AppColors.border),
+      borderRadius: BorderRadius.circular(10),
+      boxShadow: const [
+        BoxShadow(
+          color: Color(0x12000000),
+          blurRadius: 10,
+          offset: Offset(0, 4),
+        ),
+      ],
+    ),
+    child: ListView.separated(
+      shrinkWrap: true,
+      padding: EdgeInsets.zero,
+      itemCount: rows.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (context, index) {
+        final person = rows[index];
+        return ListTile(
+          dense: true,
+          leading: const CircleAvatar(
+            radius: 16,
+            child: Icon(Icons.person_outline, size: 18),
+          ),
+          title: Text(nameOf(person)),
+          subtitle: Text(detailOf(person)),
+          onTap: () => onSelected(person),
+        );
+      },
+    ),
+  );
+}
+
+class _ItemSuggestions extends StatelessWidget {
+  const _ItemSuggestions({
+    super.key,
+    required this.rows,
+    required this.nameOf,
+    required this.detailOf,
+    required this.onSelected,
+  });
+
+  final List<ShopJson> rows;
+  final String Function(ShopJson) nameOf;
+  final String Function(ShopJson) detailOf;
+  final ValueChanged<ShopJson> onSelected;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    margin: const EdgeInsets.only(top: 6),
+    constraints: const BoxConstraints(maxHeight: 240),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      border: Border.all(color: AppColors.border),
+      borderRadius: BorderRadius.circular(10),
+      boxShadow: const [
+        BoxShadow(
+          color: Color(0x12000000),
+          blurRadius: 10,
+          offset: Offset(0, 4),
+        ),
+      ],
+    ),
+    child: ListView.separated(
+      shrinkWrap: true,
+      padding: EdgeInsets.zero,
+      itemCount: rows.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (context, index) {
+        final item = rows[index];
+        return ListTile(
+          dense: true,
+          leading: const CircleAvatar(
+            radius: 16,
+            child: Icon(Icons.inventory_2_outlined, size: 17),
+          ),
+          title: Text(nameOf(item)),
+          subtitle: Text(detailOf(item)),
+          onTap: () => onSelected(item),
+        );
+      },
+    ),
+  );
 }
 
 String? _required(dynamic value) =>

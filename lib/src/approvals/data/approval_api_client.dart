@@ -27,6 +27,7 @@ class ApprovalApiClient {
     required ApprovalItem item,
     required String action,
     String reason = '',
+    bool itemsStillInIssuerCustody = false,
   }) async {
     final response = await _send(
       'POST',
@@ -35,6 +36,8 @@ class ApprovalApiClient {
         'action': action,
         'reason': reason.trim(),
         'expectedStateToken': item.stateToken,
+        if (action == 'CANCEL')
+          'itemsStillInIssuerCustody': itemsStillInIssuerCustody,
       },
     );
     return ApprovalInbox.fromJson(_map(response));

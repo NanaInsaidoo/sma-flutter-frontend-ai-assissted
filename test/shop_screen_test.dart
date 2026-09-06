@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:school_management_app/src/shop/data/shop_api_client.dart';
 import 'package:school_management_app/src/shop/presentation/school_shop_screen.dart';
+import 'package:school_management_app/src/shop/presentation/shop_receipt_pdf.dart';
 
 void main() {
   Widget appWith(
@@ -14,12 +15,20 @@ void main() {
     List<dynamic> receipts = const [],
     List<dynamic> purchases = const [],
     List<dynamic>? items,
-    List<dynamic> sales = const [],
+    List<dynamic>? sales,
     List<dynamic> auditEvents = const [],
     List<dynamic> inventoryAdjustments = const [],
     List<dynamic>? stockMovements,
     List<dynamic> customerReturns = const [],
     List<dynamic> staffReturns = const [],
+    Map<String, dynamic>? report,
+    void Function(Uri uri)? onReportDownload,
+    void Function(Map<String, dynamic> input)? onItemSaved,
+    String? itemSaveError,
+    void Function(Map<String, dynamic> input)? onStockAdded,
+    void Function(Map<String, dynamic> input)? onStockIssued,
+    void Function(Map<String, dynamic> input)? onSaleSaved,
+    List<dynamic> studentDirectory = const [],
   }) {
     final itemRows =
         (items ??
@@ -44,6 +53,7 @@ void main() {
                     'lowStockThreshold': 3,
                     'lowStock': false,
                     'active': true,
+                    'createdAt': '2026-09-01T10:00:00',
                     'version': 0,
                   },
                 ])
@@ -75,6 +85,88 @@ void main() {
     final staffReturnRows = staffReturns
         .map((row) => Map<String, dynamic>.from(row as Map))
         .toList();
+    final reportPayload =
+        report ??
+        {
+          'schoolId': 'SCH-1',
+          'schoolName': 'Test School',
+          'from': '2026-08-05',
+          'to': '2026-09-03',
+          'summary': {
+            'transactions': 2,
+            'grossSales': 40,
+            'refunds': 8,
+            'netSales': 32,
+            'costOfSales': 20,
+            'grossProfit': 12,
+            'unitsSold': 5,
+            'unitsReturned': 1,
+            'returnRequests': 1,
+            'pendingReturns': 0,
+            'stockValue': 72,
+            'centralUnits': 12,
+            'staffHeldUnits': 4,
+            'reservedUnits': 1,
+            'quarantinedUnits': 2,
+            'lowStockItems': 1,
+          },
+          'dailySales': [
+            {
+              'date': '2026-09-01',
+              'transactions': 2,
+              'units': 5,
+              'grossSales': 40,
+              'refunds': 8,
+              'netSales': 32,
+            },
+          ],
+          'itemPerformance': [
+            {
+              'item': 'Exercise Book · 80 pages',
+              'category': 'Books',
+              'sold': 5,
+              'returned': 1,
+              'netUnits': 4,
+              'netRevenue': 32,
+            },
+          ],
+          'inventory': [
+            {
+              'id': 1,
+              'item': 'Exercise Book · 80 pages',
+              'central': 12,
+              'withStaff': 4,
+              'reserved': 1,
+              'quarantined': 2,
+              'available': 15,
+              'totalOnHand': 18,
+              'costValue': 72,
+              'lowStock': false,
+            },
+          ],
+          'staffStock': [
+            {
+              'id': 1,
+              'staff': 'Kofi Nketia',
+              'item': 'Exercise Book · 80 pages',
+              'held': 4,
+              'reserved': 1,
+              'available': 3,
+              'cashExpected': 16,
+            },
+          ],
+          'returns': [
+            {
+              'id': 1,
+              'requestedAt': '2026-09-01T12:00:00',
+              'receipt': 'SHOP-20260901-000001',
+              'buyer': 'Kojo Mensah',
+              'type': 'CUSTOMER_RETURN',
+              'status': 'COMPLETED',
+              'refund': 8,
+            },
+          ],
+        };
     final client = MockClient((request) async {
       final path = request.url.path;
       dynamic body;
@@ -93,6 +185,17 @@ void main() {
           'topItems': [],
           'sellerLiability': [],
         };
+      } else if (path.endsWith('/students')) {
+        body = studentDirectory;
+      } else if (path.endsWith('/reports/summary.pdf')) {
+        onReportDownload?.call(request.url);
+        return http.Response.bytes(
+          utf8.encode('%PDF-1.7 test'),
+          200,
+          headers: {'content-type': 'application/pdf'},
+        );
+      } else if (path.endsWith('/reports/summary')) {
+        body = reportPayload;
       } else if (request.method == 'PUT' && path.contains('/items/')) {
         final id = int.parse(path.split('/').last);
         final update = Map<String, dynamic>.from(jsonDecode(request.body));
@@ -107,8 +210,31 @@ void main() {
           'version': ((itemRows[index]['version'] as num?)?.toInt() ?? 0) + 1,
         };
         body = itemRows[index];
+      } else if (path.endsWith('/items') && request.method == 'POST') {
+        final input = Map<String, dynamic>.from(jsonDecode(request.body));
+        onItemSaved?.call(input);
+        if (itemSaveError != null) {
+          return http.Response(
+            jsonEncode({'message': itemSaveError}),
+            409,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        body = {
+          'id': 99,
+          ...input,
+          'costPrice': 0,
+          'sellingPrice': 0,
+          'centralQuantity': 0,
+          'availableQuantity': 0,
+          'version': 0,
+        };
       } else if (path.endsWith('/items')) {
         body = itemRows;
+      } else if (path.endsWith('/stock') && request.method == 'POST') {
+        final input = Map<String, dynamic>.from(jsonDecode(request.body));
+        onStockAdded?.call(input);
+        body = {'id': 99, ...input};
       } else if (path.endsWith('/purchases')) {
         body = purchases;
       } else if (path.endsWith('/inventory-adjustments') &&
@@ -161,7 +287,7 @@ void main() {
         body = row;
       } else if (path.endsWith('/returns') && request.method == 'POST') {
         final input = Map<String, dynamic>.from(jsonDecode(request.body));
-        final sale = sales.firstWhere(
+        final sale = (sales ?? const []).firstWhere(
           (value) => value['id'] == input['saleId'],
         );
         final approver = (context['returnApprovers'] as List).firstWhere(
@@ -238,14 +364,45 @@ void main() {
         };
         customerReturnRows.insert(0, row);
         body = row;
+      } else if (path.endsWith('/sales/consignment') &&
+          request.method == 'POST') {
+        final input = Map<String, dynamic>.from(jsonDecode(request.body));
+        onSaleSaved?.call(input);
+        body = {'reference': 'SHOP-TEST-1', 'status': 'COLLECTED'};
+      } else if (path.endsWith('/receipts') && request.method == 'POST') {
+        final input = Map<String, dynamic>.from(jsonDecode(request.body));
+        onSaleSaved?.call(input);
+        body = {
+          'reference': 'SHOP-TEST-1',
+          'pickupToken': '123456',
+          'status': 'PENDING_COLLECTION',
+        };
       } else if (path.endsWith('/sales')) {
-        body = sales;
-      } else if (path.endsWith('/reconciliations') || path.endsWith('/roles')) {
+        body =
+            sales ??
+            [
+              for (final receipt in receipts)
+                {
+                  ...Map<String, dynamic>.from(receipt['sale'] as Map),
+                  'receiptReference': receipt['reference'],
+                  'createdAt': receipt['issuedAt'],
+                  'status': receipt['status'],
+                  'processedByName': receipt['cashierName'],
+                },
+            ];
+      } else if (path.endsWith('/reconciliations') ||
+          path.endsWith('/period-reconciliations') ||
+          path.endsWith('/cash-handovers') ||
+          path.endsWith('/roles')) {
         body = [];
       } else if (path.endsWith('/audit')) {
         body = auditEvents;
       } else if (path.endsWith('/custody/available')) {
         body = consignments;
+      } else if (path.endsWith('/consignments') && request.method == 'POST') {
+        final input = Map<String, dynamic>.from(jsonDecode(request.body));
+        onStockIssued?.call(input);
+        body = {'id': 90, ...input, 'status': 'PENDING_ACCEPTANCE'};
       } else if (path.endsWith('/consignments')) {
         body = consignments;
       } else if (path.endsWith('/receipts')) {
@@ -295,6 +452,30 @@ void main() {
       expect(find.text('Item types'), findsOneWidget);
       expect(find.text('Inventory'), findsOneWidget);
       expect(find.text('Shop roles'), findsOneWidget);
+      expect(find.text('Reconciliation'), findsOneWidget);
+      expect(find.text('Cash remittances'), findsOneWidget);
+
+      tester
+          .widget<ChoiceChip>(
+            find.widgetWithText(ChoiceChip, 'Cash remittances'),
+          )
+          .onSelected!(true);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('shop-remit-cash')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('shop-start-reconciliation')),
+        findsNothing,
+      );
+
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Reconciliation'))
+          .onSelected!(true);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('shop-start-reconciliation')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('shop-remit-cash')), findsNothing);
 
       tester
           .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Item types'))
@@ -312,6 +493,10 @@ void main() {
           .onSelected!('edit');
       await tester.pumpAndSettle();
       expect(find.text('Edit item type'), findsOneWidget);
+      expect(find.byKey(const ValueKey('item-type-category')), findsOneWidget);
+      expect(find.text('Parent item (optional)'), findsNothing);
+      expect(find.text('Unit cost price (GHS)'), findsNothing);
+      expect(find.text('Unit selling price (GHS)'), findsNothing);
       await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
       await tester.pumpAndSettle();
       tester
@@ -344,12 +529,25 @@ void main() {
       expect(find.text('Record stock entering the shop'), findsOneWidget);
       expect(find.textContaining('does not create an expense'), findsOneWidget);
       expect(find.text('Quantity received'), findsOneWidget);
+      expect(find.text('Select item'), findsOneWidget);
+      expect(
+        find.text('Search by name or item code, then select a result'),
+        findsOneWidget,
+      );
       expect(find.text('Unit cost price (GHS)'), findsOneWidget);
       expect(find.text('Unit selling price (GHS)'), findsOneWidget);
       expect(find.text('LINE TOTAL'), findsOneWidget);
       expect(find.text('GHS 0.00'), findsOneWidget);
-      expect(find.text('How was the stock obtained?'), findsOneWidget);
-      expect(find.text('Source name (optional)'), findsOneWidget);
+      expect(find.text('Additional details'), findsOneWidget);
+      expect(find.text('Stock source (optional)'), findsNothing);
+      expect(find.text('Source name (optional)'), findsNothing);
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('stock-additional-details')),
+      );
+      await tester.tap(find.byKey(const ValueKey('stock-additional-details')));
+      await tester.pumpAndSettle();
+      expect(find.text('Stock source (optional)'), findsNothing);
+      expect(find.text('Source name (optional)'), findsNothing);
       expect(find.text('Existing record reference (optional)'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('purchase-item-search-1')),
@@ -369,27 +567,60 @@ void main() {
         findsWidgets,
       );
 
-      final itemSearch = find.descendant(
-        of: find.byKey(const ValueKey('purchase-item-search-0')),
-        matching: find.byType(TextField),
-      );
-      await tester.ensureVisible(itemSearch);
-      await tester.tap(itemSearch);
-      await tester.enterText(itemSearch, 'EXB-80');
+      tester
+          .widget<DropdownMenu<int>>(
+            find.byKey(const ValueKey('purchase-item-search-0')),
+          )
+          .onSelected!(1);
       await tester.pumpAndSettle();
-      expect(
-        find.text('Exercise Book · 80 pages · EXB-80 · Books'),
-        findsOneWidget,
+      final selectedSearch = tester.widget<TextField>(
+        find.descendant(
+          of: find.byKey(const ValueKey('purchase-item-search-0')),
+          matching: find.byType(TextField),
+        ),
       );
-      expect(find.text('＋ Add a new item'), findsOneWidget);
-      await tester.tap(find.text('Exercise Book · 80 pages · EXB-80 · Books'));
-      await tester.pumpAndSettle();
-      final selectedSearch = tester.widget<TextField>(itemSearch);
       expect(
         selectedSearch.controller!.text,
         contains('Exercise Book · 80 pages'),
       );
-      expect(find.text('GHS 6.00'), findsWidgets);
+      expect(
+        tester
+            .widget<TextFormField>(
+              find.byKey(const ValueKey('purchase-cost-0')),
+            )
+            .controller!
+            .text,
+        isEmpty,
+      );
+      expect(
+        tester
+            .widget<TextFormField>(
+              find.byKey(const ValueKey('purchase-selling-0')),
+            )
+            .controller!
+            .text,
+        isEmpty,
+      );
+      expect(
+        tester.getSize(find.byKey(const ValueKey('purchase-quantity-0'))).width,
+        greaterThanOrEqualTo(180),
+      );
+      expect(
+        tester.getSize(find.byKey(const ValueKey('purchase-cost-0'))).width,
+        greaterThanOrEqualTo(220),
+      );
+      expect(
+        tester.getSize(find.byKey(const ValueKey('purchase-selling-0'))).width,
+        greaterThanOrEqualTo(220),
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('purchase-cost-0')),
+        '6',
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('purchase-selling-0')),
+        '8',
+      );
       await tester.ensureVisible(
         find.byKey(const ValueKey('purchase-add-another-item')),
       );
@@ -401,6 +632,392 @@ void main() {
       );
       expect(find.byKey(const ValueKey('purchase-line-0')), findsOneWidget);
       expect(find.byKey(const ValueKey('purchase-line-1')), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'item type accepts a new typed category and leaves pricing to inventory',
+    (tester) async {
+      Map<String, dynamic>? submitted;
+      await tester.pumpWidget(
+        appWith({
+          'currentUserId': 1,
+          'currentUserName': 'Ama Admin',
+          'isAdmin': true,
+          'canBuy': true,
+          'canConsign': false,
+          'canSell': false,
+          'canTakePayment': false,
+          'canRelease': false,
+          'canHoldStock': false,
+          'canManageRoles': true,
+          'staff': <dynamic>[],
+          'roleOptions': ['BUYER'],
+          'units': ['piece', 'pack'],
+          'categories': ['Books', 'Stationery'],
+        }, onItemSaved: (input) => submitted = input),
+      );
+      await tester.pumpAndSettle();
+
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Item types'))
+          .onSelected!(true);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('shop-add-item-type')));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const ValueKey('item-type-name')),
+        'Rice portion',
+      );
+      final category = tester.widget<DropdownButtonFormField<String>>(
+        find.byKey(const ValueKey('item-type-category')),
+      );
+      expect(find.text('Other / Add new category'), findsNothing);
+      category.onChanged!('__OTHER__');
+      await tester.pumpAndSettle();
+      expect(find.text('New category name'), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const ValueKey('item-type-other-category')),
+        'Food',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Save item type'));
+      await tester.pumpAndSettle();
+
+      expect(submitted, isNotNull);
+      expect(submitted!['category'], 'Food');
+      expect(submitted!.containsKey('parentItemId'), isFalse);
+      expect(submitted!.containsKey('costPrice'), isFalse);
+      expect(submitted!.containsKey('sellingPrice'), isFalse);
+    },
+  );
+
+  testWidgets('item type requires a category and an Other category name', (
+    tester,
+  ) async {
+    Map<String, dynamic>? submitted;
+    await tester.pumpWidget(
+      appWith({
+        'currentUserId': 1,
+        'currentUserName': 'Ama Admin',
+        'isAdmin': true,
+        'canBuy': true,
+        'canConsign': false,
+        'canSell': false,
+        'canTakePayment': false,
+        'canRelease': false,
+        'canHoldStock': false,
+        'canManageRoles': true,
+        'staff': <dynamic>[],
+        'roleOptions': ['BUYER'],
+        'units': ['piece'],
+        'categories': ['Books', 'Other'],
+      }, onItemSaved: (input) => submitted = input),
+    );
+    await tester.pumpAndSettle();
+
+    tester
+        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Item types'))
+        .onSelected!(true);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shop-add-item-type')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('item-type-name')),
+      'Lunch bowl',
+    );
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Save item type'));
+    await tester.pumpAndSettle();
+    expect(find.text('Select a category'), findsOneWidget);
+    expect(submitted, isNull);
+
+    tester
+        .widget<DropdownButtonFormField<String>>(
+          find.byKey(const ValueKey('item-type-category')),
+        )
+        .onChanged!('__OTHER__');
+    final categoryDropdown = tester.widget<DropdownButton<String>>(
+      find.descendant(
+        of: find.byKey(const ValueKey('item-type-category')),
+        matching: find.byType(DropdownButton<String>),
+      ),
+    );
+    expect(
+      categoryDropdown.items!
+          .where(
+            (item) =>
+                item.child is Text &&
+                ((item.child as Text).data ?? '').startsWith('Other'),
+          )
+          .length,
+      1,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Save item type'));
+    await tester.pumpAndSettle();
+    expect(find.text('Required'), findsOneWidget);
+    expect(submitted, isNull);
+  });
+
+  testWidgets('duplicate item code is shown against the code field', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      appWith({
+        'currentUserId': 1,
+        'currentUserName': 'Ama Admin',
+        'isAdmin': true,
+        'canBuy': true,
+        'canConsign': false,
+        'canSell': false,
+        'canTakePayment': false,
+        'canRelease': false,
+        'canHoldStock': false,
+        'canManageRoles': true,
+        'staff': <dynamic>[],
+        'roleOptions': ['BUYER'],
+        'units': ['piece'],
+        'categories': ['Books'],
+      }, itemSaveError: 'This SKU is already used'),
+    );
+    await tester.pumpAndSettle();
+
+    tester
+        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Item types'))
+        .onSelected!(true);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shop-add-item-type')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('item-type-name')),
+      'Exercise Book',
+    );
+    tester
+        .widget<DropdownButtonFormField<String>>(
+          find.byKey(const ValueKey('item-type-category')),
+        )
+        .onChanged!('Books');
+    await tester.pumpAndSettle();
+    tester
+        .widget<DropdownButtonFormField<String>>(
+          find.byKey(const ValueKey('item-type-code-method')),
+        )
+        .onChanged!('MANUAL');
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('item-type-code')),
+      'EXB-80',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Save item type'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text(
+        'This item code is already in use. Enter another code or choose Auto-generate.',
+      ),
+      findsOneWidget,
+    );
+    tester
+        .widget<DropdownButtonFormField<String>>(
+          find.byKey(const ValueKey('item-type-code-method')),
+        )
+        .onChanged!('AUTO');
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'This item code is already in use. Enter another code or choose Auto-generate.',
+      ),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('item-type-code')), findsNothing);
+    expect(
+      find.text('A unique item code will be created when you save.'),
+      findsOneWidget,
+    );
+    expect(find.byType(AlertDialog), findsOneWidget);
+  });
+
+  testWidgets(
+    'stock entry searches a large catalogue and saves without a source',
+    (tester) async {
+      Map<String, dynamic>? submitted;
+      final manyItems = List.generate(
+        30,
+        (index) => {
+          'id': index + 1,
+          'name': 'Book ${index + 1}',
+          'displayName': 'Book ${index + 1}',
+          'sku': 'BOOK-${(index + 1).toString().padLeft(2, '0')}',
+          'category': 'Books',
+          'unitOfMeasure': 'book',
+          'costPrice': 5,
+          'sellingPrice': 8,
+          'centralQuantity': 2,
+          'availableQuantity': 2,
+          'totalOnHand': 2,
+          'unassignedQuantity': 2,
+          'heldQuantity': 0,
+          'totalReservedQuantity': 0,
+          'holders': <dynamic>[],
+          'lowStockThreshold': 1,
+          'lowStock': false,
+          'active': true,
+          'version': 0,
+        },
+      );
+      await tester.pumpWidget(
+        appWith(
+          {
+            'currentUserId': 1,
+            'currentUserName': 'Ama Admin',
+            'isAdmin': true,
+            'canBuy': true,
+            'canConsign': false,
+            'canSell': false,
+            'canTakePayment': false,
+            'canRelease': false,
+            'canHoldStock': false,
+            'canManageRoles': true,
+            'staff': <dynamic>[],
+            'roleOptions': ['BUYER'],
+            'units': ['piece', 'book'],
+            'categories': ['Books'],
+          },
+          items: manyItems,
+          onStockAdded: (input) => submitted = input,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Inventory'))
+          .onSelected!(true);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('shop-add-stock')));
+      await tester.pumpAndSettle();
+
+      final menu = tester.widget<DropdownMenu<int>>(
+        find.byKey(const ValueKey('purchase-item-search-0')),
+      );
+      expect(menu.filterCallback!(menu.dropdownMenuEntries, ''), hasLength(1));
+      expect(
+        menu.filterCallback!(menu.dropdownMenuEntries, 'book'),
+        hasLength(16),
+      );
+      menu.onSelected!(1);
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('purchase-cost-0')),
+        '5',
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('purchase-selling-0')),
+        '8',
+      );
+      await tester.ensureVisible(
+        find.widgetWithText(FilledButton, 'Add to inventory'),
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Add to inventory'));
+      await tester.pumpAndSettle();
+
+      expect(submitted, isNotNull);
+      expect(submitted!.containsKey('sourceType'), isFalse);
+      expect(submitted!.containsKey('sourceName'), isFalse);
+      expect(submitted!['sourceReference'], '');
+      expect((submitted!['lines'] as List), hasLength(1));
+    },
+  );
+
+  testWidgets(
+    'add new item from stock opens the item form and selects the saved item',
+    (tester) async {
+      Map<String, dynamic>? savedItem;
+      Map<String, dynamic>? submittedStock;
+      await tester.pumpWidget(
+        appWith(
+          {
+            'currentUserId': 1,
+            'currentUserName': 'Ama Admin',
+            'isAdmin': true,
+            'canBuy': true,
+            'canConsign': false,
+            'canSell': false,
+            'canTakePayment': false,
+            'canRelease': false,
+            'canHoldStock': false,
+            'canManageRoles': true,
+            'staff': <dynamic>[],
+            'roleOptions': ['BUYER'],
+            'units': ['piece', 'pack'],
+            'categories': ['Books', 'Stationery'],
+          },
+          onItemSaved: (input) => savedItem = input,
+          onStockAdded: (input) => submittedStock = input,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Inventory'))
+          .onSelected!(true);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('shop-add-stock')));
+      await tester.pumpAndSettle();
+
+      tester
+          .widget<DropdownMenu<int>>(
+            find.byKey(const ValueKey('purchase-item-search-0')),
+          )
+          .onSelected!(-1);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Add item type'), findsOneWidget);
+      expect(find.byKey(const ValueKey('item-type-name')), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const ValueKey('item-type-name')),
+        'Board eraser',
+      );
+      tester
+          .widget<DropdownButtonFormField<String>>(
+            find.byKey(const ValueKey('item-type-category')),
+          )
+          .onChanged!('Stationery');
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Save item type'));
+      await tester.pumpAndSettle();
+
+      expect(savedItem, isNotNull);
+      expect(find.byKey(const ValueKey('item-type-name')), findsNothing);
+      final itemSearch = tester.widget<TextField>(
+        find.descendant(
+          of: find.byKey(const ValueKey('purchase-item-search-0')),
+          matching: find.byType(TextField),
+        ),
+      );
+      expect(itemSearch.controller!.text, contains('Board eraser'));
+
+      await tester.enterText(
+        find.byKey(const ValueKey('purchase-cost-0')),
+        '4',
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('purchase-selling-0')),
+        '6',
+      );
+      await tester.ensureVisible(
+        find.widgetWithText(FilledButton, 'Add to inventory'),
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Add to inventory'));
+      await tester.pumpAndSettle();
+
+      expect(submittedStock, isNotNull);
+      final line = Map<String, dynamic>.from(
+        (submittedStock!['lines'] as List).single as Map,
+      );
+      expect(line['itemId'], 99);
+      expect(line.containsKey('name'), isFalse);
+      expect(line.containsKey('category'), isFalse);
     },
   );
 
@@ -662,6 +1279,13 @@ void main() {
     inventory.rows.first.cells.first.onTap!();
     await tester.pumpAndSettle();
     expect(find.text('Item information'), findsOneWidget);
+    expect(find.text('Held for inspection'), findsOneWidget);
+    expect(
+      find.textContaining(
+        'Held for inspection means returned, damaged or questionable stock',
+      ),
+      findsOneWidget,
+    );
     tester
         .widget<TextButton>(
           find.byKey(const ValueKey('shop-request-adjustment-1')),
@@ -848,6 +1472,9 @@ void main() {
         'lowStockThreshold': 3,
         'lowStock': false,
         'active': true,
+        'createdAt': DateTime.now()
+            .subtract(Duration(hours: index == 0 ? 1 : 48 + index))
+            .toIso8601String(),
         'version': 0,
       },
     );
@@ -926,10 +1553,12 @@ void main() {
     expect(inventoryFinder, findsOneWidget);
     var inventory = tester.widget<DataTable>(inventoryFinder);
     expect(
-      inventory.columns.take(6).every((column) => column.onSort != null),
+      inventory.columns.take(5).every((column) => column.onSort != null),
       isTrue,
     );
-    expect(inventory.columns, hasLength(7));
+    expect(inventory.columns, hasLength(6));
+    expect(find.text('DATE ADDED'), findsOneWidget);
+    expect(find.byKey(const ValueKey('shop-new-item-1')), findsOneWidget);
     expect(find.text('27 piece'), findsOneWidget);
     inventory.rows.first.cells.first.onTap!();
     await tester.pumpAndSettle();
@@ -968,7 +1597,7 @@ void main() {
     expect(tester.widget<DataTable>(inventoryFinder).sortColumnIndex, 1);
 
     tester
-        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Issue stock'))
+        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Stock handovers'))
         .onSelected!(true);
     await tester.pumpAndSettle();
     final custody = tester.widget<DataTable>(
@@ -1002,6 +1631,93 @@ void main() {
       find.textContaining('2 pieces returned from Kofi Nketia · Unsold'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('owner shop report is period based, sortable and configurable', (
+    tester,
+  ) async {
+    Uri? downloadedReport;
+    await tester.pumpWidget(
+      appWith({
+        'currentUserId': 1,
+        'currentUserName': 'Ama Admin',
+        'isAdmin': true,
+        'canBuy': true,
+        'canConsign': true,
+        'canSell': false,
+        'canTakePayment': false,
+        'canRelease': false,
+        'canHoldStock': false,
+        'canManageRoles': true,
+        'staff': [],
+        'roleOptions': ['BUYER'],
+        'units': ['book'],
+        'categories': ['Books'],
+      }, onReportDownload: (uri) => downloadedReport = uri),
+    );
+    await tester.pumpAndSettle();
+
+    tester
+        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Reports'))
+        .onSelected!(true);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Shop reports'), findsOneWidget);
+    expect(find.text('GHS 32.00'), findsWidgets);
+    expect(
+      find.byKey(const ValueKey('shop-report-sales-table')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('shop-report-performance-table')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('shop-report-inventory-table')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('shop-report-staff-stock-table')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('shop-report-returns-table')),
+      findsOneWidget,
+    );
+    final salesTable = tester.widget<DataTable>(
+      find.byKey(const ValueKey('shop-report-sales-table')),
+    );
+    expect(salesTable.columns.every((column) => column.onSort != null), isTrue);
+
+    tester
+        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Last 7 days'))
+        .onSelected!(true);
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Last 7 days'))
+          .selected,
+      isTrue,
+    );
+
+    tester
+        .widget<FilterChip>(
+          find.byKey(const ValueKey('shop-report-section-INVENTORY')),
+        )
+        .onSelected!(false);
+    await tester.pump();
+    tester
+        .widget<FilledButton>(
+          find.byKey(const ValueKey('shop-download-report')),
+        )
+        .onPressed!();
+    await tester.pumpAndSettle();
+    expect(downloadedReport, isNotNull);
+    expect(
+      downloadedReport!.queryParameters['sections'],
+      isNot(contains('INVENTORY')),
+    );
+    expect(downloadedReport!.queryParameters['sections'], contains('SALES'));
   });
 
   testWidgets('seller can give only stock they personally hold', (
@@ -1050,12 +1766,18 @@ void main() {
 
     await tester.tap(find.text('Sell items'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Sell and give items'));
+    await tester.tap(find.text('Sell and hand over now'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Item'));
-    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('shop-sale-item-search-0')),
+      'My Exercise',
+    );
+    await tester.pump();
 
-    expect(find.textContaining('My Exercise Book'), findsOneWidget);
+    expect(
+      find.text('My Exercise Book · 5 available · GHS 8.00 each'),
+      findsOneWidget,
+    );
     expect(find.textContaining('Other Staff Marker'), findsNothing);
   });
 
@@ -1084,10 +1806,10 @@ void main() {
     );
     await tester.pumpAndSettle();
     tester
-        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Issue stock'))
+        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Stock handovers'))
         .onSelected!(true);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Issue stock').last);
+    await tester.tap(find.text('Prepare handover').last);
     await tester.pumpAndSettle();
 
     tester
@@ -1120,6 +1842,256 @@ void main() {
           .onPressed,
       isNull,
     );
+  });
+
+  testWidgets('inventory action issues only a valid in-stock item', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      appWith(
+        {
+          'currentUserId': 1,
+          'currentUserName': 'Ama Admin',
+          'isAdmin': true,
+          'canBuy': true,
+          'canAdjustInventory': false,
+          'canConsign': true,
+          'canSell': false,
+          'canTakePayment': false,
+          'canRelease': false,
+          'canHoldStock': false,
+          'canManageRoles': true,
+          'staff': [
+            {'id': 9, 'name': 'Kofi Storekeeper'},
+          ],
+          'roleOptions': ['BUYER'],
+          'units': ['book'],
+          'categories': ['Books'],
+        },
+        items: [
+          {
+            'id': 1,
+            'name': 'Exercise Book',
+            'displayName': 'Exercise Book · 80 pages',
+            'sku': 'EXB-80',
+            'category': 'Books',
+            'unitOfMeasure': 'book',
+            'costPrice': 6,
+            'sellingPrice': 8,
+            'centralQuantity': 12,
+            'availableQuantity': 12,
+            'totalOnHand': 12,
+            'unassignedQuantity': 12,
+            'heldQuantity': 0,
+            'totalReservedQuantity': 0,
+            'lowStockThreshold': 3,
+            'active': true,
+            'version': 0,
+          },
+          {
+            'id': 2,
+            'name': 'Pencil',
+            'displayName': 'Pencil',
+            'sku': 'PEN-1',
+            'category': 'Stationery',
+            'unitOfMeasure': 'piece',
+            'costPrice': 1,
+            'sellingPrice': 2,
+            'centralQuantity': 0,
+            'availableQuantity': 0,
+            'totalOnHand': 4,
+            'unassignedQuantity': 0,
+            'heldQuantity': 4,
+            'totalReservedQuantity': 0,
+            'lowStockThreshold': 2,
+            'active': true,
+            'version': 0,
+          },
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+    tester
+        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Inventory'))
+        .onSelected!(true);
+    await tester.pumpAndSettle();
+
+    tester
+        .state<PopupMenuButtonState<String>>(
+          find.byKey(const ValueKey('shop-inventory-actions-1')),
+        )
+        .showButtonMenu();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Prepare handover').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Prepare stock handover'), findsOneWidget);
+    expect(
+      tester
+          .widget<DropdownButtonFormField<int>>(
+            find.byKey(const ValueKey('issue-stock-item')),
+          )
+          .initialValue,
+      1,
+    );
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+
+    tester
+        .state<PopupMenuButtonState<String>>(
+          find.byKey(const ValueKey('shop-inventory-actions-2')),
+        )
+        .showButtonMenu();
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Prepare handover — none available in central store'),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<PopupMenuItem<String>>(
+            find.ancestor(
+              of: find.text(
+                'Prepare handover — none available in central store',
+              ),
+              matching: find.byType(PopupMenuItem<String>),
+            ),
+          )
+          .enabled,
+      isFalse,
+    );
+  });
+
+  testWidgets('stock issue requires a final confirmation with its effect', (
+    tester,
+  ) async {
+    Map<String, dynamic>? issued;
+    await tester.pumpWidget(
+      appWith({
+        'currentUserId': 1,
+        'currentUserName': 'Ama Admin',
+        'isAdmin': true,
+        'canBuy': true,
+        'canAdjustInventory': false,
+        'canConsign': true,
+        'canSell': false,
+        'canTakePayment': false,
+        'canRelease': false,
+        'canHoldStock': false,
+        'canManageRoles': true,
+        'staff': [
+          {'id': 9, 'name': 'Kofi Storekeeper'},
+        ],
+        'roleOptions': ['BUYER'],
+        'units': ['book'],
+        'categories': ['Books'],
+      }, onStockIssued: (input) => issued = input),
+    );
+    await tester.pumpAndSettle();
+    tester
+        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Stock handovers'))
+        .onSelected!(true);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Prepare handover').last);
+    await tester.pumpAndSettle();
+
+    tester
+        .widget<DropdownButtonFormField<int>>(
+          find.byKey(const ValueKey('issue-stock-recipient')),
+        )
+        .onChanged!(9);
+    tester
+        .widget<DropdownButtonFormField<int>>(
+          find.byKey(const ValueKey('issue-stock-item')),
+        )
+        .onChanged!(1);
+    await tester.enterText(
+      find.byKey(const ValueKey('issue-stock-quantity')),
+      '3',
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('issue-stock-submit')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Prepare this handover?'), findsOneWidget);
+    expect(
+      find.text(
+        'Reserve 3 book of Exercise Book · 80 pages for Kofi Storekeeper?',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('AVAILABLE STOCK AFTER RESERVATION'), findsOneWidget);
+    expect(find.text('12 → 9 book'), findsOneWidget);
+    expect(issued, isNull);
+
+    await tester.tap(find.byKey(const ValueKey('confirm-stock-issue')));
+    await tester.pumpAndSettle();
+    expect(issued, isNotNull);
+    expect(issued!['sellerId'], 9);
+    expect(issued!['itemId'], 1);
+    expect(issued!['quantity'], 3);
+  });
+
+  testWidgets('stock recipient confirms physical receipt in a popup', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      appWith(
+        {
+          'currentUserId': 9,
+          'currentUserName': 'Kofi Storekeeper',
+          'isAdmin': false,
+          'canBuy': false,
+          'canConsign': false,
+          'canSell': false,
+          'canTakePayment': false,
+          'canRelease': false,
+          'canHoldStock': true,
+          'canManageRoles': false,
+          'staff': <dynamic>[],
+          'roleOptions': <dynamic>[],
+          'units': ['book'],
+          'categories': ['Books'],
+        },
+        consignments: [
+          {
+            'id': 5,
+            'holderId': 9,
+            'sellerName': 'Kofi Storekeeper',
+            'itemName': 'Exercise Book · 80 pages',
+            'unitOfMeasure': 'book',
+            'status': 'PENDING_ACCEPTANCE',
+            'assignedQuantity': 4,
+            'soldQuantity': 0,
+            'reservedQuantity': 0,
+            'availableQuantity': 0,
+            'remainingQuantity': 4,
+            'version': 0,
+          },
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+    tester
+        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'My stock'))
+        .onSelected!(true);
+    await tester.pumpAndSettle();
+    tester
+        .widget<FilledButton>(
+          find.widgetWithText(FilledButton, 'Confirm receipt'),
+        )
+        .onPressed!();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Confirm stock received?'), findsOneWidget);
+    expect(find.text('4 book · Exercise Book · 80 pages'), findsOneWidget);
+    expect(
+      find.textContaining('physically received and counted this stock'),
+      findsOneWidget,
+    );
+    await tester.tap(find.widgetWithText(TextButton, 'Back').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Confirm stock received?'), findsNothing);
   });
 
   testWidgets('sale accepts a staff member as the buyer', (tester) async {
@@ -1160,7 +2132,7 @@ void main() {
         .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Sell items'))
         .onSelected!(true);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Sell and give items'));
+    await tester.tap(find.text('Sell and hand over now'));
     await tester.pumpAndSettle();
 
     tester
@@ -1169,10 +2141,309 @@ void main() {
         )
         .onChanged!('STAFF');
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('shop-staff-buyer')), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('shop-staff-buyer')));
+    expect(find.byKey(const ValueKey('shop-staff-buyer')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('shop-staff-buyer-search')),
+      findsOneWidget,
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('shop-staff-buyer-search')),
+      'Yaw',
+    );
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('shop-staff-suggestions')),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Yaw Teacher'));
+    await tester.pump();
+    expect(find.text('Staff member selected'), findsOneWidget);
+  });
+
+  testWidgets('student search suggests matches as the cashier types', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      appWith(
+        {
+          'currentUserId': 7,
+          'currentUserName': 'Ama Seller',
+          'isAdmin': false,
+          'canBuy': false,
+          'canConsign': false,
+          'canSell': true,
+          'canTakePayment': false,
+          'canRelease': false,
+          'canHoldStock': true,
+          'canManageRoles': false,
+          'roles': ['SELLER'],
+          'staff': [],
+        },
+        consignments: [
+          {
+            'id': 11,
+            'holderId': 7,
+            'holderName': 'Ama Seller',
+            'itemId': 1,
+            'itemName': 'Exercise Book',
+            'status': 'ACTIVE',
+            'availableQuantity': 5,
+            'sellingPrice': 8,
+          },
+        ],
+        studentDirectory: [
+          {
+            'name': 'Ama Boateng',
+            'customStudentId': 'STU-100',
+            'className': 'Basic 3',
+            'section': 'Section 1',
+          },
+        ],
+      ),
+    );
     await tester.pumpAndSettle();
-    expect(find.text('Yaw Teacher'), findsWidgets);
+    tester
+        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Sell items'))
+        .onSelected!(true);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Sell and hand over now'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const ValueKey('shop-student-buyer-search')),
+      'Ama',
+    );
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('shop-student-suggestions')),
+      findsOneWidget,
+    );
+    expect(find.text('Ama Boateng'), findsOneWidget);
+    expect(find.textContaining('STU-100'), findsOneWidget);
+    await tester.tap(find.text('Ama Boateng'));
+    await tester.pump();
+    expect(find.text('Selected · STU-100'), findsOneWidget);
+  });
+
+  testWidgets('an unmatched typed staff name remains usable as the buyer', (
+    tester,
+  ) async {
+    Map<String, dynamic>? submitted;
+    await tester.pumpWidget(
+      appWith(
+        {
+          'currentUserId': 7,
+          'currentUserName': 'Ama Seller',
+          'isAdmin': false,
+          'canBuy': false,
+          'canConsign': false,
+          'canSell': true,
+          'canTakePayment': false,
+          'canRelease': false,
+          'canHoldStock': true,
+          'canManageRoles': false,
+          'roles': ['SELLER'],
+          'staff': [
+            {'id': 8, 'name': 'Yaw Teacher'},
+          ],
+        },
+        consignments: [
+          {
+            'id': 11,
+            'holderId': 7,
+            'holderName': 'Ama Seller',
+            'itemId': 1,
+            'itemName': 'Exercise Book',
+            'status': 'ACTIVE',
+            'availableQuantity': 5,
+            'sellingPrice': 8,
+          },
+        ],
+        onSaleSaved: (input) => submitted = input,
+      ),
+    );
+    await tester.pumpAndSettle();
+    tester
+        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Sell items'))
+        .onSelected!(true);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Sell and hand over now'));
+    await tester.pumpAndSettle();
+    tester
+        .widget<DropdownButtonFormField<String>>(
+          find.byKey(const ValueKey('shop-buyer-type')),
+        )
+        .onChanged!('STAFF');
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('shop-staff-buyer-search')),
+      'Visiting Coach',
+    );
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const ValueKey('shop-sale-item-search-0')),
+      'Exercise',
+    );
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('shop-sale-item-suggestions-0')),
+      findsOneWidget,
+    );
+    await tester.ensureVisible(
+      find.text('Exercise Book · 5 available · GHS 8.00 each'),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Exercise Book · 5 available · GHS 8.00 each'));
+    await tester.pump();
+    await tester.ensureVisible(find.text('Record payment and release'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Record payment and release'));
+    await tester.pumpAndSettle();
+
+    expect(submitted?['buyerType'], 'STAFF');
+    expect(submitted?['buyerUserId'], isNull);
+    expect(submitted?['buyerName'], 'Visiting Coach');
+  });
+
+  testWidgets(
+    'cashier receives payment from Sales and searches available items',
+    (tester) async {
+      await tester.pumpWidget(
+        appWith(
+          {
+            'currentUserId': 6,
+            'currentUserName': 'Ama Cashier',
+            'schoolName': 'Sunrise Academy',
+            'isAdmin': false,
+            'canBuy': false,
+            'canConsign': false,
+            'canSell': false,
+            'canTakePayment': true,
+            'canRelease': false,
+            'canHoldStock': false,
+            'canManageRoles': false,
+            'roles': ['CASHIER'],
+            'staff': [],
+          },
+          consignments: [
+            {
+              'id': 11,
+              'holderId': 9,
+              'holderName': 'Kofi Storekeeper',
+              'locationName': 'Main store',
+              'itemId': 1,
+              'itemName': 'Exercise Book · 80 pages',
+              'status': 'ACTIVE',
+              'availableQuantity': 25,
+              'sellingPrice': 8,
+            },
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Sales'))
+          .onSelected!(true);
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(ChoiceChip, 'Take payment'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('shop-receive-payment')));
+      await tester.pumpAndSettle();
+      expect(find.text('Sell for later collection'), findsWidgets);
+      expect(find.byType(DropdownButtonFormField<int>), findsNothing);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('shop-student-buyer-search')),
+        'Ama Customer',
+      );
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const ValueKey('shop-sale-item-search-0')),
+        '80 pages',
+      );
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('shop-sale-item-suggestions-0')),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Exercise Book · 80 pages · 25 available · GHS 8.00 each'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Held by Kofi Storekeeper · Main store'),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.text('Exercise Book · 80 pages · 25 available · GHS 8.00 each'),
+      );
+      await tester.pump();
+      expect(
+        find.text('Exercise Book · 80 pages · 25 available · GHS 8.00 each'),
+        findsOneWidget,
+      );
+      await tester.ensureVisible(find.text('Receive payment and create token'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Receive payment and create token'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Payment received'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('shop-receipt-preview')),
+        findsOneWidget,
+      );
+      expect(find.text('Sunrise Academy'), findsOneWidget);
+      expect(find.text('SHOP-TEST-1'), findsOneWidget);
+      expect(find.text('Ama Customer'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('shop-receipt-preview')),
+          matching: find.text('Exercise Book · 80 pages'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('GHS 8.00 each'), findsOneWidget);
+      expect(find.byKey(const ValueKey('shop-receipt-total')), findsOneWidget);
+      expect(find.byKey(const ValueKey('shop-receipt-token')), findsOneWidget);
+      expect(find.byKey(const ValueKey('shop-share-receipt')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('shop-download-receipt')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('shop-print-receipt')), findsOneWidget);
+    },
+  );
+
+  test('shop receipt PDF contains a complete printable document', () async {
+    final bytes = await buildShopReceiptPdf(
+      schoolName: 'Sunrise Academy',
+      receipt: {
+        'reference': 'SHOP-20260904-000101',
+        'status': 'PENDING_COLLECTION',
+        'pickupToken': '482913',
+        'issuedAt': '2026-09-04T14:41:00',
+        'cashierName': 'Ama Cashier',
+        'custodianName': 'Kofi Storekeeper',
+        'sale': {
+          'buyerName': 'Ama Customer',
+          'paymentMethod': 'CASH',
+          'totalAmount': 24,
+          'lines': [
+            {
+              'itemName': 'Exercise Book · 80 pages',
+              'quantity': 3,
+              'unitPrice': 8,
+              'lineTotal': 24,
+            },
+          ],
+        },
+      },
+    );
+
+    expect(bytes.length, greaterThan(1000));
+    expect(String.fromCharCodes(bytes.take(4)), '%PDF');
   });
 
   testWidgets('issuing cashier can reopen a receipt and its token', (
@@ -1201,13 +2472,22 @@ void main() {
             'pickupToken': '642519',
             'status': 'PENDING_COLLECTION',
             'cashierName': 'Ama Cashier',
+            'issuedAt': '2026-09-04T14:41:00',
             'version': 0,
             'sale': {
+              'id': 30,
               'buyerType': 'STAFF',
               'buyerName': 'Yaw Teacher',
+              'paymentMethod': 'CASH',
               'totalAmount': 16,
               'lines': [
-                {'itemName': 'Exercise Book', 'quantity': 2},
+                {
+                  'itemId': 1,
+                  'itemName': 'Exercise Book',
+                  'quantity': 2,
+                  'unitPrice': 8,
+                  'lineTotal': 16,
+                },
               ],
             },
           },
@@ -1216,19 +2496,50 @@ void main() {
     );
     await tester.pumpAndSettle();
     tester
-        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Take payment'))
+        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Sales'))
         .onSelected!(true);
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('shop-issued-receipt-20')));
+    expect(find.widgetWithText(ChoiceChip, 'Take payment'), findsNothing);
+    expect(find.text('Sales history'), findsOneWidget);
+    expect(find.byKey(const ValueKey('shop-receive-payment')), findsOneWidget);
+    final paymentTable = tester.widget<DataTable>(
+      find.byKey(const ValueKey('shop-sales-table')),
+    );
+    expect(paymentTable.sortColumnIndex, 0);
+    expect(paymentTable.sortAscending, isFalse);
+    expect(find.text('04 Sep 2026'), findsOneWidget);
+    expect(find.text('2:41 PM'), findsOneWidget);
+    expect(find.text('Cash'), findsOneWidget);
+    expect(find.text('SHOP-20260901-000020'), findsOneWidget);
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('shop-sales-table-sort-date')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shop-sales-table-sort-date')));
+    await tester.pump();
+    expect(
+      tester
+          .widget<DataTable>(find.byKey(const ValueKey('shop-sales-table')))
+          .sortAscending,
+      isTrue,
+    );
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('shop-view-sale-receipt-30')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shop-view-sale-receipt-30')));
     await tester.pumpAndSettle();
 
-    expect(find.text('Issued receipt'), findsOneWidget);
-    expect(find.text('Yaw Teacher · Pending Collection'), findsOneWidget);
+    expect(find.byKey(const ValueKey('shop-receipt-preview')), findsOneWidget);
+    expect(find.text('Yaw Teacher'), findsWidgets);
+    expect(find.text('Paid · Awaiting collection'), findsOneWidget);
     expect(find.text('642519'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('shop-reopened-pickup-token')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('shop-receipt-token')), findsOneWidget);
+    expect(find.byKey(const ValueKey('shop-print-receipt')), findsOneWidget);
+    expect(find.byKey(const ValueKey('shop-download-receipt')), findsOneWidget);
+    expect(find.byKey(const ValueKey('shop-share-receipt')), findsOneWidget);
   });
 
   testWidgets('customer return is requested from the original sale', (
@@ -1332,7 +2643,12 @@ void main() {
               'buyerName': 'Yaw Teacher',
               'totalAmount': 16,
               'lines': [
-                {'itemName': 'Exercise Book', 'quantity': 2, 'lineTotal': 16},
+                {
+                  'itemId': 1,
+                  'itemName': 'Exercise Book',
+                  'quantity': 2,
+                  'lineTotal': 16,
+                },
               ],
             },
           },
@@ -1341,10 +2657,14 @@ void main() {
     );
     await tester.pumpAndSettle();
     tester
-        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Take payment'))
+        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Sales'))
         .onSelected!(true);
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('shop-issued-receipt-20')));
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('shop-view-sale-receipt-30')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shop-view-sale-receipt-30')));
     await tester.pumpAndSettle();
     await tester.tap(
       find.byKey(const ValueKey('shop-request-cancellation-20')),
@@ -1353,6 +2673,8 @@ void main() {
     expect(find.text('Request order cancellation'), findsOneWidget);
     await tester.enterText(find.byType(TextFormField).first, 'Buyer cancelled');
     await tester.tap(find.widgetWithText(FilledButton, 'Submit for approval'));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(ListView).first, const Offset(0, 1000));
     await tester.pumpAndSettle();
     tester
         .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Returns'))

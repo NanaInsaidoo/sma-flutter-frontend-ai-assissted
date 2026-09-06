@@ -83,7 +83,12 @@ class ApprovalItem {
   final bool canWithdraw;
   final String sourcePage;
 
-  bool get pending => status == 'PENDING_APPROVAL';
+  bool get pending =>
+      status == 'PENDING_APPROVAL' ||
+      status == 'PENDING_ACCEPTANCE' ||
+      status == 'AWAITING_SELLER_ACK' ||
+      status == 'PENDING_RESOLUTION' ||
+      status == 'DISPUTED';
 
   factory ApprovalItem.fromJson(Map<String, dynamic> json) {
     String text(String key) => json[key]?.toString().trim() ?? '';

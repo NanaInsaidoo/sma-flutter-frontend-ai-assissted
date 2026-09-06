@@ -61,6 +61,52 @@ class ShopApiClient {
       Map<String, dynamic>.from(await _send('GET', '/context'));
   Future<ShopJson> dashboard() async =>
       Map<String, dynamic>.from(await _send('GET', '/dashboard'));
+  Future<ShopJson> reportSummary({
+    required String from,
+    required String to,
+  }) async => Map<String, dynamic>.from(
+    await _send('GET', '/reports/summary?from=$from&to=$to'),
+  );
+  Future<List<int>> downloadReport({
+    required String from,
+    required String to,
+    required Iterable<String> sections,
+  }) async {
+    final query = Uri(
+      queryParameters: {'from': from, 'to': to, 'sections': sections.join(',')},
+    ).query;
+    Future<http.Response> run() => _client
+        .get(
+          Uri.parse('$_base/reports/summary.pdf?$query'),
+          headers: {
+            if (accessToken?.isNotEmpty == true)
+              'Authorization': 'Bearer $accessToken',
+          },
+        )
+        .timeout(const Duration(seconds: 35));
+    var response = await run();
+    if (response.statusCode == 401 && onRefreshAccessToken != null) {
+      accessToken = await onRefreshAccessToken!();
+      response = await run();
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      String? message;
+      try {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map) {
+          message =
+              '${decoded['message'] ?? decoded['detail'] ?? decoded['error']}';
+        }
+      } catch (_) {}
+      throw ShopApiException(
+        message ??
+            'The shop report could not be downloaded (${response.statusCode}).',
+        response.statusCode,
+      );
+    }
+    return response.bodyBytes;
+  }
+
   Future<List<ShopJson>> students(String query) async =>
       (await _send('GET', '/students?q=${Uri.encodeQueryComponent(query)}')
               as List)
@@ -281,6 +327,58 @@ class ShopApiClient {
   Future<List<ShopJson>> audit() async => (await _send('GET', '/audit') as List)
       .map((e) => Map<String, dynamic>.from(e as Map))
       .toList();
+
+  Future<List<ShopJson>> periods() async =>
+      (await _send('GET', '/period-reconciliations') as List)
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+  Future<ShopJson> startPeriod({
+    required int staffId,
+    bool refresh = false,
+  }) async => Map<String, dynamic>.from(
+    await _send(
+      'POST',
+      '/period-reconciliations/start?staffId=$staffId&refresh=$refresh',
+    ),
+  );
+  Future<ShopJson> period(int id) async => Map<String, dynamic>.from(
+    await _send('GET', '/period-reconciliations/$id'),
+  );
+  Future<ShopJson> submitPeriod(int id, ShopJson body) async =>
+      Map<String, dynamic>.from(
+        await _send('POST', '/period-reconciliations/$id/submit', body: body),
+      );
+  Future<ShopJson> decidePeriod(
+    ShopJson row,
+    String action,
+    String note,
+  ) async => Map<String, dynamic>.from(
+    await _send(
+      'POST',
+      '/period-reconciliations/${row['id']}/decision',
+      body: {'version': row['version'], 'action': action, 'note': note},
+    ),
+  );
+  Future<List<ShopJson>> cashHandovers() async =>
+      (await _send('GET', '/period-reconciliations/cash-handovers') as List)
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+  Future<ShopJson> handOverCash(ShopJson body) async =>
+      Map<String, dynamic>.from(
+        await _send(
+          'POST',
+          '/period-reconciliations/cash-handovers',
+          body: body,
+        ),
+      );
+  Future<ShopJson> decideCashHandover(ShopJson row, String action) async =>
+      Map<String, dynamic>.from(
+        await _send(
+          'POST',
+          '/period-reconciliations/cash-handovers/${row['id']}/decision',
+          body: {'version': row['version'], 'action': action},
+        ),
+      );
 }
 
 class ShopApiException implements Exception {
