@@ -5,6 +5,7 @@ import 'package:printing/printing.dart';
 import '../data/shop_api_client.dart';
 import '../../theme/app_theme.dart';
 import '../../assessments/presentation/report_pdf_download.dart';
+import 'shop_accounting_csv_export.dart';
 import 'shop_receipt_pdf.dart';
 import 'shop_reconciliation_screen.dart';
 
@@ -54,9 +55,11 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
   bool _searchingReceipts = false;
   bool _receiptSearchComplete = false;
   int? _salesDays = 30;
+  int? _sellerScopeId;
   ShopJson? _report;
   bool _reportLoading = false;
   bool _downloadingReport = false;
+  bool _exportingAccounting = false;
   int? _reportDays = 30;
   late DateTime _reportFrom = DateTime.now().subtract(const Duration(days: 29));
   late DateTime _reportTo = DateTime.now();
@@ -66,6 +69,9 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     'INVENTORY',
     'STAFF_STOCK',
     'RETURNS',
+    'RECONCILIATIONS',
+    'REMITTANCES',
+    'CASH_HELD',
   };
   _ShopPage _page = _ShopPage.overview;
   _InventorySection _inventorySection = _InventorySection.current;
@@ -76,6 +82,76 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
   bool get _cashier => _context?['canTakePayment'] == true;
   bool get _goods => _context?['canRelease'] == true;
   bool get _holder => _context?['canHoldStock'] == true;
+  bool get _reportViewer =>
+      _context?['canViewReports'] == true || _admin || _buyer;
+  bool get _canManageSellers => _context?['canManageRoles'] == true;
+
+  List<ShopJson> get _configuredSellers =>
+      _roles.where((role) => role['roleCode'] == 'SELLER').map((role) {
+        final staff = _maps(_context?['staff']);
+        final person = staff.cast<ShopJson?>().firstWhere(
+          (value) => value?['id'] == role['userId'],
+          orElse: () => null,
+        );
+        return <String, dynamic>{
+          ...role,
+          ...?person,
+          'name': person?['name'] ?? role['userName'] ?? 'Staff',
+          'active': role['active'] != false,
+        };
+      }).toList();
+
+  ShopJson? get _scopedSeller =>
+      _configuredSellers.cast<ShopJson?>().firstWhere(
+        (seller) => seller?['userId'] == _sellerScopeId,
+        orElse: () => null,
+      );
+
+  bool get _sellerScopedPage => {
+    _ShopPage.consignments,
+    _ShopPage.accounts,
+    _ShopPage.remittances,
+    _ShopPage.sales,
+    _ShopPage.returns,
+    _ShopPage.audit,
+  }.contains(_page);
+
+  List<ShopJson> get _scopedConsignments => _sellerScopeId == null
+      ? _consignments
+      : _consignments
+            .where((row) => row['sellerId'] == _sellerScopeId)
+            .toList();
+
+  List<ShopJson> get _scopedSales => _sellerScopeId == null
+      ? _sales
+      : _sales.where((row) => row['processedBy'] == _sellerScopeId).toList();
+
+  List<ShopJson> get _scopedCustomerReturns {
+    if (_sellerScopeId == null) return _customerReturns;
+    final saleIds = _scopedSales.map((sale) => sale['id']).toSet();
+    return _customerReturns
+        .where((row) => saleIds.contains(row['saleId']))
+        .toList();
+  }
+
+  List<ShopJson> get _scopedStaffReturns => _sellerScopeId == null
+      ? _staffReturns
+      : _staffReturns
+            .where((row) => row['holderId'] == _sellerScopeId)
+            .toList();
+
+  List<ShopJson> get _scopedAuditEvents {
+    if (_sellerScopeId == null) return _auditEvents;
+    final sellerName = '${_scopedSeller?['name'] ?? ''}';
+    return _auditEvents
+        .where(
+          (row) =>
+              row['actorId'] == _sellerScopeId ||
+              (sellerName.isNotEmpty && row['actorName'] == sellerName),
+        )
+        .toList();
+  }
+
   List<ShopJson> get _activeItems =>
       _items.where((item) => item['active'] != false).toList();
 
@@ -171,9 +247,9 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     _ShopPage.accounts,
     if (_admin || _seller || _cashier) _ShopPage.remittances,
     _ShopPage.sales,
-    if (_admin || _buyer) _ShopPage.reports,
+    if (_reportViewer) _ShopPage.reports,
     _ShopPage.returns,
-    if (_admin) _ShopPage.roles,
+    if (_canManageSellers) _ShopPage.roles,
     if (_admin) _ShopPage.audit,
   ];
 
@@ -189,7 +265,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     _ShopPage.sales => 'Sales',
     _ShopPage.reports => 'Reports',
     _ShopPage.returns => 'Returns',
-    _ShopPage.roles => 'Shop roles',
+    _ShopPage.roles => 'Sellers',
     _ShopPage.audit => 'Audit trail',
   };
 
@@ -322,6 +398,10 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                 ],
               ),
             ),
+          if (_canManageSellers && _sellerScopedPage) ...[
+            const SizedBox(height: 14),
+            _sellerScopeControl(),
+          ],
           if (_loading) const LinearProgressIndicator(),
           if (_error != null)
             Padding(
@@ -350,6 +430,69 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
         ],
       ),
     );
+  }
+
+  Widget _sellerScopeControl() => Container(
+    key: const ValueKey('shop-seller-scope-bar'),
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+    decoration: BoxDecoration(
+      color: const Color(0xFFF3F7F6),
+      border: Border.all(color: AppColors.border),
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Row(
+      children: [
+        const Icon(Icons.manage_search_outlined, color: AppColors.green),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Management view',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+              Text(
+                _sellerScopeId == null
+                    ? 'Showing activity for all sellers'
+                    : 'Showing only ${_scopedSeller?['name'] ?? 'the selected seller'}',
+                style: const TextStyle(color: AppColors.muted),
+              ),
+            ],
+          ),
+        ),
+        OutlinedButton.icon(
+          key: const ValueKey('shop-choose-seller-scope'),
+          onPressed: _chooseSellerScope,
+          icon: const Icon(Icons.person_search_outlined),
+          label: Text(
+            _sellerScopeId == null
+                ? 'All sellers'
+                : '${_scopedSeller?['name'] ?? 'Selected seller'}',
+          ),
+        ),
+        if (_sellerScopeId != null) ...[
+          const SizedBox(width: 6),
+          IconButton(
+            tooltip: 'Show all sellers',
+            onPressed: () => setState(() => _sellerScopeId = null),
+            icon: const Icon(Icons.close),
+          ),
+        ],
+      ],
+    ),
+  );
+
+  Future<void> _chooseSellerScope() async {
+    final selected = await showDialog<int>(
+      context: context,
+      builder: (_) => _SellerScopeDialog(
+        sellers: _configuredSellers,
+        selectedSellerId: _sellerScopeId,
+      ),
+    );
+    if (selected == null || !mounted) return;
+    setState(() => _sellerScopeId = selected == -1 ? null : selected);
   }
 
   Widget _overview() {
@@ -1662,11 +1805,15 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
         title: !_buyer ? 'Stock assigned to me' : 'Stock handovers and custody',
         subtitle:
             'Preparing a handover reserves central stock. Custody changes only after the recipient physically counts and confirms it.',
-        child: _consignments.isEmpty
-            ? const _Empty('No stock has been issued.')
+        child: _scopedConsignments.isEmpty
+            ? _Empty(
+                _sellerScopeId == null
+                    ? 'No stock has been issued.'
+                    : 'No stock handovers were found for this seller.',
+              )
             : _ModernShopTable<ShopJson>(
                 tableKey: 'shop-stock-custody-table',
-                rows: _consignments,
+                rows: _scopedConsignments,
                 rowKey: (row) => 'shop-consignment-${row['id']}',
                 columns: [
                   _ShopTableColumn(
@@ -2162,6 +2309,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     api: widget.api,
     contextData: _context!,
     onChanged: _load,
+    sellerFilterId: _sellerScopeId,
   );
 
   Widget _cashRemittances() => ShopReconciliationScreen(
@@ -2169,6 +2317,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     contextData: _context!,
     onChanged: _load,
     view: ShopReconciliationView.remittances,
+    sellerFilterId: _sellerScopeId,
   );
 
   String get _salesFromDate => _salesDays == null
@@ -2207,7 +2356,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
         'available': item['availableQuantity'],
       };
     }
-    for (final sale in _sales.where((s) => s['status'] != 'CANCELLED')) {
+    for (final sale in _scopedSales.where((s) => s['status'] != 'CANCELLED')) {
       for (final line in _maps(sale['lines'])) {
         final item = _items.cast<ShopJson?>().firstWhere(
           (i) => i?['id'] == line['itemId'],
@@ -2244,247 +2393,277 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     return result;
   }
 
-  Widget _salesPage() => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      if (_cashier) ...[
-        FilledButton.icon(
-          key: const ValueKey('shop-receive-payment'),
-          onPressed: _loading || _availableCustody.isEmpty
-              ? null
-              : () => _dialog(
-                  _SaleDialog(
-                    api: widget.api,
-                    choices: _availableCustody,
-                    contextData: _context!,
-                    collectFromStore: true,
+  Widget _salesPage() {
+    num scopedTotal(String method) => _scopedSales
+        .where(
+          (sale) =>
+              sale['status'] != 'CANCELLED' && sale['paymentMethod'] == method,
+        )
+        .fold<num>(
+          0,
+          (sum, sale) =>
+              sum +
+              ((sale['netAmount'] as num?) ??
+                  (sale['totalAmount'] as num?) ??
+                  0),
+        );
+    Object? cashSalesTotal;
+    Object? momoSalesTotal;
+    if (_sellerScopeId == null) {
+      cashSalesTotal = _dashboard?['cashSales'];
+      momoSalesTotal = _dashboard?['momoSales'];
+    } else {
+      cashSalesTotal = scopedTotal('CASH');
+      momoSalesTotal = scopedTotal('MOMO');
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_cashier) ...[
+          FilledButton.icon(
+            key: const ValueKey('shop-receive-payment'),
+            onPressed: _loading || _availableCustody.isEmpty
+                ? null
+                : () => _dialog(
+                    _SaleDialog(
+                      api: widget.api,
+                      choices: _availableCustody,
+                      contextData: _context!,
+                      collectFromStore: true,
+                    ),
                   ),
-                ),
-          icon: const Icon(Icons.payments_outlined),
-          label: const Text('Receive payment'),
-        ),
-        Padding(
-          padding: const EdgeInsets.only(top: 8, bottom: 18),
-          child: Text(
-            _availableCustody.isEmpty
-                ? 'No confirmed store stock is available to sell.'
-                : 'Receive payment and issue a receipt for collection from the store.',
-            style: const TextStyle(color: AppColors.muted),
+            icon: const Icon(Icons.payments_outlined),
+            label: const Text('Receive payment'),
           ),
-        ),
-      ],
-      Wrap(
-        spacing: 12,
-        runSpacing: 12,
-        children: [
-          _Metric(
-            'Cash sales total',
-            _money(_dashboard?['cashSales']),
-            Icons.payments_outlined,
-            AppColors.green,
-          ),
-          _Metric(
-            'MoMo sales total',
-            _money(_dashboard?['momoSales']),
-            Icons.phone_android_outlined,
-            AppColors.blue,
-          ),
-          if (_admin || _buyer)
-            _Metric(
-              'Stock value',
-              _money(_dashboard?['stockValue']),
-              Icons.inventory_outlined,
-              AppColors.amber,
+          Padding(
+            padding: const EdgeInsets.only(top: 8, bottom: 18),
+            child: Text(
+              _availableCustody.isEmpty
+                  ? 'No confirmed store stock is available to sell.'
+                  : 'Receive payment and issue a receipt for collection from the store.',
+              style: const TextStyle(color: AppColors.muted),
             ),
+          ),
         ],
-      ),
-      const SizedBox(height: 14),
-      Align(
-        alignment: Alignment.centerLeft,
-        child: Wrap(
-          spacing: 8,
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
           children: [
-            ChoiceChip(
-              label: const Text('Today'),
-              selected: _salesDays == 0,
-              onSelected: (_) => _changeSalesRange(0),
+            _Metric(
+              'Cash sales total',
+              _money(cashSalesTotal),
+              Icons.payments_outlined,
+              AppColors.green,
             ),
-            ChoiceChip(
-              label: const Text('Last 7 days'),
-              selected: _salesDays == 7,
-              onSelected: (_) => _changeSalesRange(7),
+            _Metric(
+              'MoMo sales total',
+              _money(momoSalesTotal),
+              Icons.phone_android_outlined,
+              AppColors.blue,
             ),
-            ChoiceChip(
-              label: const Text('Last 30 days'),
-              selected: _salesDays == 30,
-              onSelected: (_) => _changeSalesRange(30),
-            ),
-            ChoiceChip(
-              label: const Text('All time'),
-              selected: _salesDays == null,
-              onSelected: (_) => _changeSalesRange(null),
-            ),
+            if (_admin || _buyer)
+              _Metric(
+                'Stock value',
+                _money(_dashboard?['stockValue']),
+                Icons.inventory_outlined,
+                AppColors.amber,
+              ),
           ],
         ),
-      ),
-      const SizedBox(height: 12),
-      _Panel(
-        title: 'Sales history',
-        subtitle:
-            'Immediate handovers and store collections share one financial record.',
-        child: _sales.isEmpty
-            ? const _Empty('No sales recorded yet.')
-            : _ModernShopTable<ShopJson>(
-                tableKey: 'shop-sales-table',
-                rows: _sales,
-                initialSortColumn: 0,
-                initialSortAscending: false,
-                rowKey: (row) => 'shop-sale-${row['id']}',
-                columns: [
-                  _ShopTableColumn(
-                    label: 'Date',
-                    sortValue: (row) => _dateValue(row['createdAt']),
-                    cell: (row) => Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          _dateLabel(row['createdAt']),
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        Text(
-                          _timeLabel(row['createdAt']),
-                          style: const TextStyle(
-                            color: AppColors.muted,
-                            fontSize: 12,
+        const SizedBox(height: 14),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Wrap(
+            spacing: 8,
+            children: [
+              ChoiceChip(
+                label: const Text('Today'),
+                selected: _salesDays == 0,
+                onSelected: (_) => _changeSalesRange(0),
+              ),
+              ChoiceChip(
+                label: const Text('Last 7 days'),
+                selected: _salesDays == 7,
+                onSelected: (_) => _changeSalesRange(7),
+              ),
+              ChoiceChip(
+                label: const Text('Last 30 days'),
+                selected: _salesDays == 30,
+                onSelected: (_) => _changeSalesRange(30),
+              ),
+              ChoiceChip(
+                label: const Text('All time'),
+                selected: _salesDays == null,
+                onSelected: (_) => _changeSalesRange(null),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _Panel(
+          title: 'Sales history',
+          subtitle:
+              'Immediate handovers and store collections share one financial record.',
+          child: _scopedSales.isEmpty
+              ? _Empty(
+                  _sellerScopeId == null
+                      ? 'No sales recorded yet.'
+                      : 'No sales were found for this seller in this period.',
+                )
+              : _ModernShopTable<ShopJson>(
+                  tableKey: 'shop-sales-table',
+                  rows: _scopedSales,
+                  initialSortColumn: 0,
+                  initialSortAscending: false,
+                  rowKey: (row) => 'shop-sale-${row['id']}',
+                  columns: [
+                    _ShopTableColumn(
+                      label: 'Date',
+                      sortValue: (row) => _dateValue(row['createdAt']),
+                      cell: (row) => Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            _dateLabel(row['createdAt']),
+                            style: const TextStyle(fontWeight: FontWeight.w700),
                           ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  _ShopTableColumn(
-                    label: 'Receipt',
-                    sortValue: (row) => _saleReceiptReference(row),
-                    cell: (row) => TextButton(
-                      key: ValueKey('shop-view-sale-receipt-${row['id']}'),
-                      onPressed: _saleReceiptReference(row) == null
-                          ? null
-                          : () => _viewSaleReceipt(row),
-                      child: Text(
-                        _saleReceiptReference(row) ?? 'Not available',
+                          Text(
+                            _timeLabel(row['createdAt']),
+                            style: const TextStyle(
+                              color: AppColors.muted,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ),
-                  _ShopTableColumn(
-                    label: 'Buyer',
-                    sortValue: (row) =>
-                        row['buyerName'] ?? row['studentName'] ?? 'Buyer',
-                    cell: (row) => Text(
-                      '${row['buyerName'] ?? row['studentName'] ?? 'Buyer'}',
-                    ),
-                  ),
-                  _ShopTableColumn(
-                    label: 'Collection',
-                    sortValue: (row) => row['modelType'],
-                    cell: (row) => Text(
-                      row['modelType'] == 'IMMEDIATE_RELEASE' ||
-                              row['modelType'] == 'CONSIGNMENT'
-                          ? 'Given immediately'
-                          : 'Store collection',
-                    ),
-                  ),
-                  _ShopTableColumn(
-                    label: 'Processed by',
-                    sortValue: (row) => row['processedByName'],
-                    cell: (row) => Text('${row['processedByName']}'),
-                  ),
-                  _ShopTableColumn(
-                    label: 'Payment',
-                    sortValue: (row) => row['paymentMethod'],
-                    cell: (row) => Text(_status(row['paymentMethod'])),
-                  ),
-                  _ShopTableColumn(
-                    label: 'Status',
-                    sortValue: (row) => row['status'],
-                    cell: (row) => Text(_status(row['status'])),
-                  ),
-                  _ShopTableColumn(
-                    label: 'Sale total',
-                    numeric: true,
-                    sortValue: (row) => row['totalAmount'],
-                    cell: (row) => Text(_money(row['totalAmount'])),
-                  ),
-                  if (_admin || _buyer)
                     _ShopTableColumn(
-                      label: 'Sale profit',
-                      numeric: true,
-                      sortValue: (row) => row['profit'],
-                      cell: (row) => Text(_money(row['profit'])),
+                      label: 'Receipt',
+                      sortValue: (row) => _saleReceiptReference(row),
+                      cell: (row) => TextButton(
+                        key: ValueKey('shop-view-sale-receipt-${row['id']}'),
+                        onPressed: _saleReceiptReference(row) == null
+                            ? null
+                            : () => _viewSaleReceipt(row),
+                        child: Text(
+                          _saleReceiptReference(row) ?? 'Not available',
+                        ),
+                      ),
                     ),
-                  _ShopTableColumn(
-                    label: 'Actions',
-                    cell: (row) => TextButton(
-                      key: ValueKey('shop-open-sale-${row['id']}'),
-                      onPressed: () => _showSaleDetails(row),
-                      child: const Text('Details'),
-                    ),
-                  ),
-                ],
-              ),
-      ),
-      const SizedBox(height: 12),
-      _Panel(
-        title: 'Item performance',
-        subtitle: 'Best sellers and slow-moving items for the selected period.',
-        child: _items.isEmpty
-            ? const _Empty('Add catalogue items to see item performance.')
-            : _ModernShopTable<ShopJson>(
-                tableKey: 'shop-item-performance-table',
-                rows: _itemPerformance,
-                initialSortColumn: 2,
-                initialSortAscending: false,
-                rowKey: (row) => 'shop-performance-${row['id'] ?? row['name']}',
-                columns: [
-                  _ShopTableColumn(
-                    label: 'Item',
-                    sortValue: (row) => row['name'],
-                    cell: (row) => Text('${row['name']}'),
-                  ),
-                  _ShopTableColumn(
-                    label: 'Category',
-                    sortValue: (row) => row['category'],
-                    cell: (row) => Text('${row['category']}'),
-                  ),
-                  _ShopTableColumn(
-                    label: 'Sold',
-                    numeric: true,
-                    sortValue: (row) => row['quantity'],
-                    cell: (row) => Text('${row['quantity']}'),
-                  ),
-                  _ShopTableColumn(
-                    label: 'Revenue total',
-                    numeric: true,
-                    sortValue: (row) => row['revenue'],
-                    cell: (row) => Text(_money(row['revenue'])),
-                  ),
-                  if (_admin || _buyer)
                     _ShopTableColumn(
-                      label: 'Gross margin total',
-                      numeric: true,
-                      sortValue: (row) => row['margin'],
-                      cell: (row) => Text(_money(row['margin'])),
+                      label: 'Buyer',
+                      sortValue: (row) =>
+                          row['buyerName'] ?? row['studentName'] ?? 'Buyer',
+                      cell: (row) => Text(
+                        '${row['buyerName'] ?? row['studentName'] ?? 'Buyer'}',
+                      ),
                     ),
-                  _ShopTableColumn(
-                    label: 'Available',
-                    numeric: true,
-                    sortValue: (row) => row['available'],
-                    cell: (row) => Text('${row['available']}'),
-                  ),
-                ],
-              ),
-      ),
-    ],
-  );
+                    _ShopTableColumn(
+                      label: 'Collection',
+                      sortValue: (row) => row['modelType'],
+                      cell: (row) => Text(
+                        row['modelType'] == 'IMMEDIATE_RELEASE' ||
+                                row['modelType'] == 'CONSIGNMENT'
+                            ? 'Given immediately'
+                            : 'Store collection',
+                      ),
+                    ),
+                    _ShopTableColumn(
+                      label: 'Processed by',
+                      sortValue: (row) => row['processedByName'],
+                      cell: (row) => Text('${row['processedByName']}'),
+                    ),
+                    _ShopTableColumn(
+                      label: 'Payment',
+                      sortValue: (row) => row['paymentMethod'],
+                      cell: (row) => Text(_status(row['paymentMethod'])),
+                    ),
+                    _ShopTableColumn(
+                      label: 'Status',
+                      sortValue: (row) => row['status'],
+                      cell: (row) => Text(_status(row['status'])),
+                    ),
+                    _ShopTableColumn(
+                      label: 'Sale total',
+                      numeric: true,
+                      sortValue: (row) => row['totalAmount'],
+                      cell: (row) => Text(_money(row['totalAmount'])),
+                    ),
+                    if (_admin || _buyer)
+                      _ShopTableColumn(
+                        label: 'Sale profit',
+                        numeric: true,
+                        sortValue: (row) => row['profit'],
+                        cell: (row) => Text(_money(row['profit'])),
+                      ),
+                    _ShopTableColumn(
+                      label: 'Actions',
+                      cell: (row) => TextButton(
+                        key: ValueKey('shop-open-sale-${row['id']}'),
+                        onPressed: () => _showSaleDetails(row),
+                        child: const Text('Details'),
+                      ),
+                    ),
+                  ],
+                ),
+        ),
+        const SizedBox(height: 12),
+        _Panel(
+          title: 'Item performance',
+          subtitle:
+              'Best sellers and slow-moving items for the selected period.',
+          child: _items.isEmpty
+              ? const _Empty('Add catalogue items to see item performance.')
+              : _ModernShopTable<ShopJson>(
+                  tableKey: 'shop-item-performance-table',
+                  rows: _itemPerformance,
+                  initialSortColumn: 2,
+                  initialSortAscending: false,
+                  rowKey: (row) =>
+                      'shop-performance-${row['id'] ?? row['name']}',
+                  columns: [
+                    _ShopTableColumn(
+                      label: 'Item',
+                      sortValue: (row) => row['name'],
+                      cell: (row) => Text('${row['name']}'),
+                    ),
+                    _ShopTableColumn(
+                      label: 'Category',
+                      sortValue: (row) => row['category'],
+                      cell: (row) => Text('${row['category']}'),
+                    ),
+                    _ShopTableColumn(
+                      label: 'Sold',
+                      numeric: true,
+                      sortValue: (row) => row['quantity'],
+                      cell: (row) => Text('${row['quantity']}'),
+                    ),
+                    _ShopTableColumn(
+                      label: 'Revenue total',
+                      numeric: true,
+                      sortValue: (row) => row['revenue'],
+                      cell: (row) => Text(_money(row['revenue'])),
+                    ),
+                    if (_admin || _buyer)
+                      _ShopTableColumn(
+                        label: 'Gross margin total',
+                        numeric: true,
+                        sortValue: (row) => row['margin'],
+                        cell: (row) => Text(_money(row['margin'])),
+                      ),
+                    _ShopTableColumn(
+                      label: 'Available',
+                      numeric: true,
+                      sortValue: (row) => row['available'],
+                      cell: (row) => Text('${row['available']}'),
+                    ),
+                  ],
+                ),
+        ),
+      ],
+    );
+  }
 
   Future<void> _loadReport() async {
     setState(() => _reportLoading = true);
@@ -2503,9 +2682,40 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
 
   Future<void> _changeReportRange(int? days) async {
     final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    if (days == -2) {
+      final termFrom = _shopDate(_report?['termFrom']);
+      final configuredTermTo = _shopDate(_report?['termTo']);
+      if (termFrom == null || configuredTermTo == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Active term dates are not available yet.'),
+            ),
+          );
+        }
+        return;
+      }
+      final termTo = configuredTermTo.isAfter(today) ? today : configuredTermTo;
+      if (termFrom.isAfter(termTo)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('This term has not started yet.')),
+          );
+        }
+        return;
+      }
+      setState(() {
+        _reportDays = -2;
+        _reportFrom = termFrom;
+        _reportTo = termTo;
+      });
+      await _loadReport();
+      return;
+    }
     setState(() {
       _reportDays = days;
-      _reportTo = DateTime(now.year, now.month, now.day);
+      _reportTo = today;
       _reportFrom = days == null
           ? DateTime(now.year, 1, 1)
           : _reportTo.subtract(Duration(days: days == 0 ? 0 : days - 1));
@@ -2555,6 +2765,159 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     }
   }
 
+  String _csvValue(Object? value) {
+    final text = value?.toString() ?? '';
+    return '"${text.replaceAll('"', '""')}"';
+  }
+
+  double _reportNumber(Object? value) => value is num
+      ? value.toDouble()
+      : double.tryParse(value?.toString() ?? '') ?? 0;
+
+  String _accountingCsv(ShopJson report) {
+    final rows = <List<Object?>>[
+      [
+        'Date',
+        'Entry type',
+        'Reference',
+        'Responsible person',
+        'Counterparty',
+        'Payment method',
+        'Amount GHS',
+        'Status',
+        'Details',
+      ],
+    ];
+    for (final sale in _maps(report['accountingSales'])) {
+      rows.add([
+        sale['createdAt'],
+        'SALE',
+        sale['reference'],
+        sale['seller'],
+        sale['buyer'],
+        sale['paymentMethod'],
+        sale['net'],
+        sale['status'],
+        '${sale['units'] ?? 0} units; gross ${_money(sale['gross'])}; refund ${_money(sale['refund'])}',
+      ]);
+    }
+    for (final refund in _maps(report['returns'])) {
+      if (refund['refundedAt'] == null ||
+          _reportNumber(refund['refund']) == 0) {
+        continue;
+      }
+      rows.add([
+        refund['refundedAt'],
+        'REFUND',
+        refund['receipt'],
+        refund['requestedBy'],
+        refund['buyer'],
+        refund['refundMethod'],
+        -_reportNumber(refund['refund']),
+        refund['status'],
+        '${refund['items'] ?? 0} returned units',
+      ]);
+    }
+    for (final count in _maps(report['reconciliations'])) {
+      final reference = 'RECON-${count['id']}';
+      final cash = _reportNumber(count['cashVariance']);
+      final momo = _reportNumber(count['momoVariance']);
+      final stock = (count['stockVarianceUnits'] as num?)?.toInt() ?? 0;
+      if (cash != 0) {
+        rows.add([
+          count['decidedAt'] ?? count['cutoff'],
+          'RECONCILIATION DIFFERENCE',
+          reference,
+          count['seller'],
+          count['approver'],
+          'CASH',
+          cash,
+          count['status'],
+          count['decisionNote'],
+        ]);
+      }
+      if (momo != 0) {
+        rows.add([
+          count['decidedAt'] ?? count['cutoff'],
+          'RECONCILIATION DIFFERENCE',
+          reference,
+          count['seller'],
+          count['approver'],
+          'MOMO',
+          momo,
+          count['status'],
+          count['decisionNote'],
+        ]);
+      }
+      if (stock != 0) {
+        rows.add([
+          count['decidedAt'] ?? count['cutoff'],
+          'STOCK COUNT DIFFERENCE',
+          reference,
+          count['seller'],
+          count['approver'],
+          '',
+          '',
+          count['status'],
+          '${stock > 0 ? '+' : ''}$stock units across ${count['stockDifferenceLines']} item lines',
+        ]);
+      }
+    }
+    for (final remittance in _maps(report['remittances'])) {
+      rows.add([
+        remittance['confirmedAt'] ?? remittance['createdAt'],
+        'CASH REMITTANCE',
+        remittance['reference'],
+        remittance['sender'],
+        remittance['recipient'],
+        'CASH',
+        remittance['amount'],
+        remittance['status'],
+        'Internal transfer of cash responsibility; not additional income',
+      ]);
+    }
+    for (final held in _maps(report['cashHeld'])) {
+      rows.add([
+        report['to'],
+        'CASH RESPONSIBILITY SNAPSHOT',
+        'AS-AT-${report['to']}',
+        held['person'],
+        '',
+        'CASH',
+        held['amount'],
+        'CURRENT',
+        'Recorded physical cash currently assigned to this person',
+      ]);
+    }
+    return rows.map((row) => row.map(_csvValue).join(',')).join('\r\n');
+  }
+
+  Future<void> _downloadAccountingCsv() async {
+    final report = _report;
+    if (report == null || _exportingAccounting) return;
+    setState(() => _exportingAccounting = true);
+    try {
+      final downloaded = await exportShopAccountingCsv(
+        'shop-accounting-${_ymd(_reportFrom)}-to-${_ymd(_reportTo)}.csv',
+        _accountingCsv(report),
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            downloaded
+                ? 'Accounting entries exported.'
+                : 'CSV download is available on web.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (mounted) _errorSnack(context, error);
+    } finally {
+      if (mounted) setState(() => _exportingAccounting = false);
+    }
+  }
+
   Widget _reportsPage() {
     final report = _report ?? <String, dynamic>{};
     final summary = Map<String, dynamic>.from(
@@ -2565,25 +2928,52 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     final inventory = _maps(report['inventory']);
     final staffStock = _maps(report['staffStock']);
     final returns = _maps(report['returns']);
+    final accountingSales = _maps(report['accountingSales']);
+    final reconciliations = _maps(report['reconciliations']);
+    final remittances = _maps(report['remittances']);
+    final cashHeld = _maps(report['cashHeld']);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _Panel(
-          title: 'Shop reports',
+          title: 'Shop accounting report',
           subtitle:
-              'Choose a period, review the figures, then download only the sections you need.',
-          action: FilledButton.icon(
-            key: const ValueKey('shop-download-report'),
-            onPressed: _report == null || _downloadingReport
-                ? null
-                : _downloadShopReport,
-            icon: _downloadingReport
-                ? const SizedBox.square(
-                    dimension: 17,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.download_outlined),
-            label: Text(_downloadingReport ? 'Preparing PDF…' : 'Download PDF'),
+              'A complete period view for the accountant: sales, refunds, count differences, cash remittances and current cash responsibility.',
+          action: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                key: const ValueKey('shop-export-accounting-csv'),
+                onPressed: _report == null || _exportingAccounting
+                    ? null
+                    : _downloadAccountingCsv,
+                icon: _exportingAccounting
+                    ? const SizedBox.square(
+                        dimension: 17,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.table_view_outlined),
+                label: Text(
+                  _exportingAccounting ? 'Exporting…' : 'Export accounting CSV',
+                ),
+              ),
+              FilledButton.icon(
+                key: const ValueKey('shop-download-report'),
+                onPressed: _report == null || _downloadingReport
+                    ? null
+                    : _downloadShopReport,
+                icon: _downloadingReport
+                    ? const SizedBox.square(
+                        dimension: 17,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.download_outlined),
+                label: Text(
+                  _downloadingReport ? 'Preparing PDF…' : 'Download PDF',
+                ),
+              ),
+            ],
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2609,6 +2999,11 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                     onSelected: (_) => _changeReportRange(30),
                   ),
                   ChoiceChip(
+                    label: const Text('This term'),
+                    selected: _reportDays == -2,
+                    onSelected: (_) => _changeReportRange(-2),
+                  ),
+                  ChoiceChip(
                     label: const Text('This year'),
                     selected: _reportDays == null,
                     onSelected: (_) => _changeReportRange(null),
@@ -2618,7 +3013,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                     onPressed: _pickReportRange,
                     icon: const Icon(Icons.date_range_outlined, size: 18),
                     label: Text(
-                      '${_dateLabel(_reportFrom)} – ${_dateLabel(_reportTo)}',
+                      'Custom dates: From ${_dateLabel(_reportFrom)} to ${_dateLabel(_reportTo)}',
                     ),
                   ),
                 ],
@@ -2639,6 +3034,9 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                       'INVENTORY': 'Inventory',
                       'STAFF_STOCK': 'Staff stock',
                       'RETURNS': 'Returns',
+                      'RECONCILIATIONS': 'Reconciliations',
+                      'REMITTANCES': 'Remittances',
+                      'CASH_HELD': 'Cash responsibility',
                     }.entries.map((entry) {
                       final selected = _reportSections.contains(entry.key);
                       return FilterChip(
@@ -2711,7 +3109,231 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                 Icons.inventory_2_outlined,
                 AppColors.green,
               ),
+              _Metric(
+                'Net cash sales',
+                _money(summary['netCashSales']),
+                Icons.payments_outlined,
+                AppColors.green,
+              ),
+              _Metric(
+                'Net Mobile Money',
+                _money(summary['netMomoSales']),
+                Icons.phone_android_outlined,
+                AppColors.blue,
+              ),
+              _Metric(
+                'Cash remitted',
+                _money(summary['confirmedRemittances']),
+                Icons.swap_horiz_outlined,
+                AppColors.blue,
+              ),
+              _Metric(
+                'Cash held by staff',
+                _money(summary['cashStillHeld']),
+                Icons.account_balance_wallet_outlined,
+                AppColors.amber,
+              ),
             ],
+          ),
+          const SizedBox(height: 14),
+          _Panel(
+            title: 'Sales and payment entries',
+            subtitle:
+                'Every sale in the selected period, including who collected it and how it was paid.',
+            child: accountingSales.isEmpty
+                ? const _Empty('No sales in this period.')
+                : _ModernShopTable<ShopJson>(
+                    tableKey: 'shop-accounting-sales-table',
+                    rows: accountingSales,
+                    initialSortColumn: 0,
+                    initialSortAscending: false,
+                    rowKey: (row) => 'shop-accounting-sale-${row['id']}',
+                    columns: [
+                      _ShopTableColumn(
+                        label: 'Date',
+                        sortValue: (row) => _dateValue(row['createdAt']),
+                        cell: (row) => Text(_dateLabel(row['createdAt'])),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Receipt',
+                        sortValue: (row) => row['reference'],
+                        cell: (row) => Text('${row['reference']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Buyer',
+                        sortValue: (row) => row['buyer'],
+                        cell: (row) =>
+                            Text('${row['buyer'] ?? 'Not recorded'}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Collected by',
+                        sortValue: (row) => row['seller'],
+                        cell: (row) => Text('${row['seller']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Payment',
+                        sortValue: (row) => row['paymentMethod'],
+                        cell: (row) => Text(_status(row['paymentMethod'])),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Status',
+                        sortValue: (row) => row['status'],
+                        cell: (row) => Text(_status(row['status'])),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Net amount',
+                        numeric: true,
+                        sortValue: (row) => row['net'],
+                        cell: (row) => Text(
+                          _money(row['net']),
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+          const SizedBox(height: 14),
+          _Panel(
+            title: 'Reconciliation decisions',
+            subtitle:
+                'Count results and approved differences that changed recorded balances.',
+            child: reconciliations.isEmpty
+                ? const _Empty('No reconciliation activity in this period.')
+                : _ModernShopTable<ShopJson>(
+                    tableKey: 'shop-accounting-reconciliations-table',
+                    rows: reconciliations,
+                    initialSortColumn: 0,
+                    initialSortAscending: false,
+                    rowKey: (row) => 'shop-accounting-recon-${row['id']}',
+                    columns: [
+                      _ShopTableColumn(
+                        label: 'Count date',
+                        sortValue: (row) => _dateValue(row['cutoff']),
+                        cell: (row) => Text(_dateLabel(row['cutoff'])),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Seller counted',
+                        sortValue: (row) => row['seller'],
+                        cell: (row) => Text('${row['seller']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Counted by',
+                        sortValue: (row) => row['counter'],
+                        cell: (row) => Text('${row['counter']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Status',
+                        sortValue: (row) => row['status'],
+                        cell: (row) => Text(_status(row['status'])),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Stock difference',
+                        numeric: true,
+                        sortValue: (row) => row['stockVarianceUnits'],
+                        cell: (row) {
+                          final value =
+                              (row['stockVarianceUnits'] as num?)?.toInt() ?? 0;
+                          return Text('${value > 0 ? '+' : ''}$value units');
+                        },
+                      ),
+                      _ShopTableColumn(
+                        label: 'Cash difference',
+                        numeric: true,
+                        sortValue: (row) => row['cashVariance'],
+                        cell: (row) => Text(_money(row['cashVariance'])),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Mobile Money difference',
+                        numeric: true,
+                        sortValue: (row) => row['momoVariance'],
+                        cell: (row) => Text(_money(row['momoVariance'])),
+                      ),
+                    ],
+                  ),
+          ),
+          const SizedBox(height: 14),
+          _Panel(
+            title: 'Cash remittances',
+            subtitle:
+                '${summary['pendingRemittances'] ?? 0} awaiting confirmation · Internal transfers, not additional sales income.',
+            child: remittances.isEmpty
+                ? const _Empty('No cash remittances in this period.')
+                : _ModernShopTable<ShopJson>(
+                    tableKey: 'shop-accounting-remittances-table',
+                    rows: remittances,
+                    initialSortColumn: 0,
+                    initialSortAscending: false,
+                    rowKey: (row) => 'shop-accounting-remittance-${row['id']}',
+                    columns: [
+                      _ShopTableColumn(
+                        label: 'Date',
+                        sortValue: (row) => _dateValue(row['createdAt']),
+                        cell: (row) => Text(_dateLabel(row['createdAt'])),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Reference',
+                        sortValue: (row) => row['reference'],
+                        cell: (row) => Text('${row['reference']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'From',
+                        sortValue: (row) => row['sender'],
+                        cell: (row) => Text('${row['sender']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'To',
+                        sortValue: (row) => row['recipient'],
+                        cell: (row) => Text('${row['recipient']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Status',
+                        sortValue: (row) => row['status'],
+                        cell: (row) => Text(_status(row['status'])),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Amount',
+                        numeric: true,
+                        sortValue: (row) => row['amount'],
+                        cell: (row) => Text(
+                          _money(row['amount']),
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+          const SizedBox(height: 14),
+          _Panel(
+            title: 'Current cash responsibility',
+            subtitle:
+                'Who currently holds the physical cash according to sales, refunds, confirmed differences and remittances.',
+            child: cashHeld.isEmpty
+                ? const _Empty(
+                    'No physical cash is currently assigned to staff.',
+                  )
+                : _ModernShopTable<ShopJson>(
+                    tableKey: 'shop-accounting-cash-held-table',
+                    rows: cashHeld,
+                    initialSortColumn: 1,
+                    initialSortAscending: false,
+                    rowKey: (row) => 'shop-accounting-cash-${row['staffId']}',
+                    columns: [
+                      _ShopTableColumn(
+                        label: 'Responsible person',
+                        sortValue: (row) => row['person'],
+                        cell: (row) => Text('${row['person']}'),
+                      ),
+                      _ShopTableColumn(
+                        label: 'Recorded cash held',
+                        numeric: true,
+                        sortValue: (row) => row['amount'],
+                        cell: (row) => Text(
+                          _money(row['amount']),
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ],
+                  ),
           ),
           const SizedBox(height: 14),
           _Panel(
@@ -2979,11 +3601,15 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
         title: 'Customer returns and refunds',
         subtitle:
             'Returned goods stay unavailable until approval. Refunds are recorded separately from the original sale.',
-        child: _customerReturns.isEmpty
-            ? const _Empty('No customer return or cancellation requests.')
+        child: _scopedCustomerReturns.isEmpty
+            ? _Empty(
+                _sellerScopeId == null
+                    ? 'No customer return or cancellation requests.'
+                    : 'No customer returns were found for this seller.',
+              )
             : _ModernShopTable<ShopJson>(
                 tableKey: 'shop-customer-returns-table',
-                rows: _customerReturns,
+                rows: _scopedCustomerReturns,
                 initialSortColumn: 0,
                 initialSortAscending: false,
                 rowKey: (row) => 'shop-customer-return-${row['id']}',
@@ -3044,11 +3670,15 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
         title: 'Staff stock hand-backs',
         subtitle:
             'Stock returns to inventory only after another store person counts and receives it.',
-        child: _staffReturns.isEmpty
-            ? const _Empty('No staff stock hand-backs have been requested.')
+        child: _scopedStaffReturns.isEmpty
+            ? _Empty(
+                _sellerScopeId == null
+                    ? 'No staff stock hand-backs have been requested.'
+                    : 'No stock hand-backs were found for this seller.',
+              )
             : _ModernShopTable<ShopJson>(
                 tableKey: 'shop-staff-returns-table',
-                rows: _staffReturns,
+                rows: _scopedStaffReturns,
                 initialSortColumn: 0,
                 initialSortAscending: false,
                 rowKey: (row) => 'shop-staff-return-${row['id']}',
@@ -3422,57 +4052,213 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
 
   Widget _rolesPage() {
     final staff = _maps(_context?['staff']);
-    final byUser = <int, Set<String>>{};
-    for (final r in _roles) {
-      byUser
-          .putIfAbsent(r['userId'] as int, () => <String>{})
-          .add('${r['roleCode']}');
-    }
+    final staffById = <int, ShopJson>{
+      for (final person in staff)
+        if (person['id'] is int) person['id'] as int: person,
+    };
+    final sellers = _roles
+        .where((role) => role['roleCode'] == 'SELLER')
+        .map(
+          (role) => <String, dynamic>{
+            ...role,
+            ...?staffById[role['userId']],
+            'name':
+                staffById[role['userId']]?['name'] ??
+                role['userName'] ??
+                'Staff',
+            'active': role['active'] != false,
+          },
+        )
+        .toList();
     return _Panel(
-      title: 'Shop responsibilities',
+      title: 'Sellers',
       subtitle:
-          'Give each person only the work they perform. One person may have multiple roles in a small school.',
-      child: Column(
-        children: staff
-            .map(
-              (u) => Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Row(
+          'Add active staff who personally sell shop items. Their normal school role does not change.',
+      action: FilledButton.icon(
+        key: const ValueKey('shop-add-seller'),
+        onPressed: () => _addSeller(staff, sellers),
+        icon: const Icon(Icons.person_add_alt_1_outlined),
+        label: const Text('Add seller'),
+      ),
+      child: sellers.isEmpty
+          ? const _MessageCard(
+              icon: Icons.storefront_outlined,
+              title: 'No sellers added',
+              message:
+                  'Add a staff member when they will personally receive stock or make shop sales.',
+            )
+          : _ModernShopTable<ShopJson>(
+              tableKey: 'shop-sellers-table',
+              rows: sellers,
+              rowKey: (row) => 'shop-seller-${row['userId']}',
+              columns: [
+                _ShopTableColumn(
+                  label: 'Seller',
+                  sortValue: (row) => row['name'],
+                  cell: (row) => Text(
+                    '${row['name']}',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+                _ShopTableColumn(
+                  label: 'School role',
+                  sortValue: (row) => row['schoolRole'],
+                  cell: (row) => Text(
+                    row['schoolRole'] == null
+                        ? 'Staff member'
+                        : _status(row['schoolRole']),
+                  ),
+                ),
+                _ShopTableColumn(
+                  label: 'Seller status',
+                  sortValue: (row) => row['active'] == true ? 1 : 0,
+                  cell: (row) => Chip(
+                    avatar: Icon(
+                      row['active'] == true
+                          ? Icons.check_circle_outline
+                          : Icons.pause_circle_outline,
+                      size: 16,
+                      color: row['active'] == true
+                          ? AppColors.green
+                          : AppColors.muted,
+                    ),
+                    label: Text(row['active'] == true ? 'Active' : 'Disabled'),
+                    backgroundColor: row['active'] == true
+                        ? const Color(0xFFE7F4F1)
+                        : const Color(0xFFF1F3F4),
+                    side: BorderSide.none,
+                  ),
+                ),
+                _ShopTableColumn(
+                  label: 'Action',
+                  cell: (row) => Wrap(
+                    spacing: 6,
                     children: [
-                      Expanded(
-                        child: Text(
-                          '${u['name']}',
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                        ),
+                      TextButton(
+                        key: ValueKey('shop-view-seller-${row['userId']}'),
+                        onPressed: () => _viewSellerProfile(row),
+                        child: const Text('View seller'),
                       ),
-                      Expanded(
-                        flex: 3,
-                        child: Wrap(
-                          spacing: 7,
-                          runSpacing: 7,
-                          children:
-                              ((_context?['roleOptions'] as List? ?? [])
-                                      .cast<String>())
-                                  .map(
-                                    (role) => FilterChip(
-                                      label: Text(_roleName(role)),
-                                      selected:
-                                          byUser[u['id']]?.contains(role) ==
-                                          true,
-                                      onSelected: (value) =>
-                                          _setRole(u, role, value),
-                                    ),
-                                  )
-                                  .toList(),
+                      if (row['active'] == true)
+                        OutlinedButton(
+                          key: ValueKey('shop-disable-seller-${row['userId']}'),
+                          onPressed: () => _changeSellerStatus(row, false),
+                          child: const Text('Disable'),
+                        )
+                      else
+                        FilledButton.tonal(
+                          key: ValueKey('shop-restore-seller-${row['userId']}'),
+                          onPressed: () => _changeSellerStatus(row, true),
+                          child: const Text('Restore'),
                         ),
-                      ),
                     ],
                   ),
                 ),
+              ],
+            ),
+    );
+  }
+
+  Future<void> _addSeller(
+    List<ShopJson> staff,
+    List<ShopJson> configuredSellers,
+  ) async {
+    final activeIds = configuredSellers
+        .where((seller) => seller['active'] == true)
+        .map((seller) => seller['userId'])
+        .toSet();
+    final selected = await showDialog<ShopJson>(
+      context: context,
+      builder: (_) =>
+          _SellerPickerDialog(staff: staff, activeSellerIds: activeIds),
+    );
+    if (selected != null && mounted) {
+      await _setRole(selected, 'SELLER', true);
+    }
+  }
+
+  Future<void> _changeSellerStatus(ShopJson seller, bool active) async {
+    if (!active) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Disable this seller?'),
+          content: Text(
+            '${seller['name']} will not be able to make new sales or receive new stock. Existing sales, stock custody and audit history will be kept.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Keep active'),
+            ),
+            FilledButton(
+              key: const ValueKey('confirm-disable-seller'),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Disable seller'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    await _setRole(
+      {'id': seller['userId'], 'name': seller['name']},
+      'SELLER',
+      active,
+    );
+  }
+
+  Future<ShopJson> _loadSellerProfileReport() async {
+    final today = DateTime.now();
+    final initial = await widget.api.reportSummary(
+      from: _ymd(today.subtract(const Duration(days: 29))),
+      to: _ymd(today),
+    );
+    final termFrom = _shopDate(initial['termFrom']);
+    if (termFrom == null || !termFrom.isBefore(today)) return initial;
+    return widget.api.reportSummary(from: _ymd(termFrom), to: _ymd(today));
+  }
+
+  Future<void> _viewSellerProfile(ShopJson seller) async {
+    final reportFuture = _loadSellerProfileReport();
+    await showDialog<void>(
+      context: context,
+      builder: (_) => FutureBuilder<ShopJson>(
+        future: reportFuture,
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return AlertDialog(
+              title: Text('${seller['name']}'),
+              content: Text(
+                'Unable to load seller activity: ${snapshot.error}',
               ),
-            )
-            .toList(),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Close'),
+                ),
+              ],
+            );
+          }
+          if (!snapshot.hasData) {
+            return const AlertDialog(
+              content: SizedBox(
+                width: 520,
+                height: 180,
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            );
+          }
+          return _SellerProfileDialog(
+            seller: seller,
+            report: snapshot.data!,
+            auditEvents: _auditEvents,
+            onShowOnlySeller: () {
+              Navigator.pop(context);
+              setState(() => _sellerScopeId = seller['userId'] as int?);
+            },
+          );
+        },
       ),
     );
   }
@@ -3481,10 +4267,14 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     title: 'Shop audit trail',
     subtitle:
         'Who changed stock, received payment, released goods or reviewed an account.',
-    child: _auditEvents.isEmpty
-        ? const _Empty('No shop activity has been recorded yet.')
+    child: _scopedAuditEvents.isEmpty
+        ? _Empty(
+            _sellerScopeId == null
+                ? 'No shop activity has been recorded yet.'
+                : 'No audit activity was found for this seller.',
+          )
         : Column(
-            children: _auditEvents
+            children: _scopedAuditEvents
                 .map(
                   (e) => ListTile(
                     dense: true,
@@ -3868,6 +4658,518 @@ class _Empty extends StatelessWidget {
   );
 }
 
+class _SellerPickerDialog extends StatefulWidget {
+  const _SellerPickerDialog({
+    required this.staff,
+    required this.activeSellerIds,
+  });
+
+  final List<ShopJson> staff;
+  final Set<Object?> activeSellerIds;
+
+  @override
+  State<_SellerPickerDialog> createState() => _SellerPickerDialogState();
+}
+
+class _SellerPickerDialogState extends State<_SellerPickerDialog> {
+  final _search = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  List<ShopJson> get _matches {
+    final query = _query.trim().toLowerCase();
+    if (query.length < 2) return const [];
+    return widget.staff
+        .where((person) {
+          if (widget.activeSellerIds.contains(person['id'])) return false;
+          final searchable = [
+            person['name'],
+            person['username'],
+            person['schoolRole'],
+          ].whereType<Object>().join(' ').toLowerCase();
+          return searchable.contains(query);
+        })
+        .take(20)
+        .toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final matches = _matches;
+    return AlertDialog(
+      title: const Text('Add seller'),
+      content: SizedBox(
+        width: 520,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Find an active staff member. This adds shop selling responsibility without changing their school role.',
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              key: const ValueKey('shop-seller-search'),
+              controller: _search,
+              autofocus: true,
+              onChanged: (value) => setState(() => _query = value),
+              decoration: const InputDecoration(
+                labelText: 'Search staff',
+                hintText: 'Type a name or sign-in name',
+                prefixIcon: Icon(Icons.search),
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (_query.trim().length < 2)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 18),
+                child: Text(
+                  'Enter at least 2 characters to find a staff member.',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+              )
+            else if (matches.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 18),
+                child: Text(
+                  'No available active staff match this search.',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+              )
+            else
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 340),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: matches.length,
+                  separatorBuilder: (_, _) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final person = matches[index];
+                    return ListTile(
+                      key: ValueKey('shop-seller-result-${person['id']}'),
+                      leading: const CircleAvatar(
+                        child: Icon(Icons.person_outline),
+                      ),
+                      title: Text(
+                        '${person['name']}',
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      subtitle: Text(
+                        [
+                          if (person['schoolRole'] != null)
+                            _status(person['schoolRole']),
+                          if ('${person['username'] ?? ''}'.isNotEmpty)
+                            '${person['username']}',
+                        ].join(' · '),
+                      ),
+                      trailing: const Text('Select'),
+                      onTap: () => Navigator.pop(context, person),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+      ],
+    );
+  }
+}
+
+class _SellerScopeDialog extends StatefulWidget {
+  const _SellerScopeDialog({
+    required this.sellers,
+    required this.selectedSellerId,
+  });
+
+  final List<ShopJson> sellers;
+  final int? selectedSellerId;
+
+  @override
+  State<_SellerScopeDialog> createState() => _SellerScopeDialogState();
+}
+
+class _SellerScopeDialogState extends State<_SellerScopeDialog> {
+  final _search = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final query = _query.trim().toLowerCase();
+    final matches = widget.sellers.where((seller) {
+      if (query.isEmpty) return true;
+      return [
+        seller['name'],
+        seller['username'],
+        seller['schoolRole'],
+      ].whereType<Object>().join(' ').toLowerCase().contains(query);
+    }).toList();
+    return AlertDialog(
+      title: const Text('Choose seller activity'),
+      content: SizedBox(
+        width: 520,
+        height: 450,
+        child: Column(
+          children: [
+            TextField(
+              key: const ValueKey('shop-seller-scope-search'),
+              controller: _search,
+              autofocus: true,
+              onChanged: (value) => setState(() => _query = value),
+              decoration: const InputDecoration(
+                labelText: 'Search sellers',
+                prefixIcon: Icon(Icons.search),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Expanded(
+              child: ListView(
+                children: [
+                  if (query.isEmpty)
+                    ListTile(
+                      key: const ValueKey('shop-scope-all-sellers'),
+                      selected: widget.selectedSellerId == null,
+                      leading: const Icon(Icons.groups_outlined),
+                      title: const Text(
+                        'All sellers',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      subtitle: const Text('Show the whole school shop'),
+                      onTap: () => Navigator.pop(context, -1),
+                    ),
+                  for (final seller in matches)
+                    ListTile(
+                      key: ValueKey('shop-scope-seller-${seller['userId']}'),
+                      selected: widget.selectedSellerId == seller['userId'],
+                      leading: CircleAvatar(
+                        child: Text(
+                          '${seller['name']}'.trim().isEmpty
+                              ? '?'
+                              : '${seller['name']}'.trim()[0].toUpperCase(),
+                        ),
+                      ),
+                      title: Text(
+                        '${seller['name']}',
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      subtitle: Text(
+                        '${seller['active'] == true ? 'Active seller' : 'Disabled seller'}${seller['schoolRole'] == null ? '' : ' · ${_status(seller['schoolRole'])}'}',
+                      ),
+                      onTap: () => Navigator.pop(context, seller['userId']),
+                    ),
+                  if (matches.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Center(
+                        child: Text('No sellers match this search.'),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+      ],
+    );
+  }
+}
+
+class _SellerProfileDialog extends StatelessWidget {
+  const _SellerProfileDialog({
+    required this.seller,
+    required this.report,
+    required this.auditEvents,
+    required this.onShowOnlySeller,
+  });
+
+  final ShopJson seller;
+  final ShopJson report;
+  final List<ShopJson> auditEvents;
+  final VoidCallback onShowOnlySeller;
+
+  Widget _metric(String label, String value, IconData icon) => Container(
+    width: 180,
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: const Color(0xFFF3F7F6),
+      border: Border.all(color: AppColors.border),
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: AppColors.green, size: 20),
+        const SizedBox(height: 8),
+        Text(label, style: const TextStyle(color: AppColors.muted)),
+        const SizedBox(height: 3),
+        Text(
+          value,
+          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+        ),
+      ],
+    ),
+  );
+
+  Widget _section(String title, String subtitle, List<Widget> children) => Card(
+    margin: const EdgeInsets.only(top: 14),
+    clipBehavior: Clip.antiAlias,
+    child: Padding(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+          ),
+          Text(subtitle, style: const TextStyle(color: AppColors.muted)),
+          const SizedBox(height: 8),
+          ...children,
+        ],
+      ),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final name = '${seller['name']}';
+    final sales = _maps(
+      report['accountingSales'],
+    ).where((row) => row['seller'] == name).toList();
+    final stock = _maps(
+      report['staffStock'],
+    ).where((row) => row['staff'] == name).toList();
+    final reconciliations = _maps(
+      report['reconciliations'],
+    ).where((row) => row['seller'] == name).toList();
+    final remittances = _maps(report['remittances'])
+        .where((row) => row['sender'] == name || row['recipient'] == name)
+        .toList();
+    final cash = _maps(
+      report['cashHeld'],
+    ).where((row) => row['person'] == name).toList();
+    final receiptReferences = sales.map((row) => row['reference']).toSet();
+    final returns = _maps(
+      report['returns'],
+    ).where((row) => receiptReferences.contains(row['receipt'])).toList();
+    final audit = auditEvents
+        .where(
+          (row) =>
+              row['actorId'] == seller['userId'] || row['actorName'] == name,
+        )
+        .take(10)
+        .toList();
+    final netSales = sales.fold<num>(
+      0,
+      (sum, row) => sum + (row['net'] as num? ?? 0),
+    );
+    final unitsSold = sales.fold<num>(
+      0,
+      (sum, row) => sum + (row['units'] as num? ?? 0),
+    );
+    final unitsHeld = stock.fold<num>(
+      0,
+      (sum, row) => sum + (row['held'] as num? ?? 0),
+    );
+    final cashHeld = cash.fold<num>(
+      0,
+      (sum, row) => sum + (row['amount'] as num? ?? 0),
+    );
+    final period =
+        '${_dateLabel(report['from'])} to ${_dateLabel(report['to'])}';
+
+    return AlertDialog(
+      title: Row(
+        children: [
+          CircleAvatar(
+            backgroundColor: const Color(0xFFE7F4F1),
+            foregroundColor: AppColors.green,
+            child: Text(name.trim().isEmpty ? '?' : name.trim()[0]),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(name),
+                Text(
+                  '${seller['active'] == true ? 'Active seller' : 'Disabled seller'} · $period',
+                  style: const TextStyle(
+                    color: AppColors.muted,
+                    fontSize: 13,
+                    fontWeight: FontWeight.normal,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 860,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  _metric(
+                    'Net sales',
+                    _money(netSales),
+                    Icons.payments_outlined,
+                  ),
+                  _metric(
+                    'Units sold',
+                    '${unitsSold.toInt()}',
+                    Icons.sell_outlined,
+                  ),
+                  _metric(
+                    'Stock held',
+                    '${unitsHeld.toInt()}',
+                    Icons.inventory_2_outlined,
+                  ),
+                  _metric(
+                    'Cash held',
+                    _money(cashHeld),
+                    Icons.account_balance_wallet_outlined,
+                  ),
+                ],
+              ),
+              _section(
+                'Current stock responsibility',
+                'Items currently recorded in this seller’s custody.',
+                stock.isEmpty
+                    ? [const Text('No stock is currently held.')]
+                    : stock
+                          .map(
+                            (row) => ListTile(
+                              dense: true,
+                              title: Text('${row['item']}'),
+                              subtitle: Text(
+                                '${row['available']} available · ${row['reserved']} reserved',
+                              ),
+                              trailing: Text('${row['held']} held'),
+                            ),
+                          )
+                          .toList(),
+              ),
+              _section(
+                'Sales and collections',
+                'Sales personally recorded by this seller during $period.',
+                sales.isEmpty
+                    ? [const Text('No sales were recorded in this period.')]
+                    : sales
+                          .take(10)
+                          .map(
+                            (row) => ListTile(
+                              dense: true,
+                              title: Text(
+                                '${row['reference']} · ${row['buyer']}',
+                              ),
+                              subtitle: Text(
+                                '${_dateLabel(row['createdAt'])} · ${_status(row['paymentMethod'])} · ${_status(row['status'])}',
+                              ),
+                              trailing: Text(_money(row['net'])),
+                            ),
+                          )
+                          .toList(),
+              ),
+              _section(
+                'Cash remittances and reconciliation',
+                'Cash custody transfers and confirmed count results.',
+                [
+                  if (remittances.isEmpty && reconciliations.isEmpty)
+                    const Text('No remittance or reconciliation activity.'),
+                  for (final row in remittances.take(6))
+                    ListTile(
+                      dense: true,
+                      title: Text(
+                        '${row['reference']} · ${row['sender']} to ${row['recipient']}',
+                      ),
+                      subtitle: Text(_status(row['status'])),
+                      trailing: Text(_money(row['amount'])),
+                    ),
+                  for (final row in reconciliations.take(6))
+                    ListTile(
+                      dense: true,
+                      title: Text('Reconciliation #${row['id']}'),
+                      subtitle: Text(
+                        '${_dateLabel(row['cutoff'])} · ${_status(row['status'])}',
+                      ),
+                      trailing: Text(
+                        'Cash ${_money(row['cashVariance'])} · Stock ${row['stockVarianceUnits']}',
+                      ),
+                    ),
+                ],
+              ),
+              _section(
+                'Returns and audit activity',
+                'Returns linked to this seller’s receipts and recent actions they performed.',
+                [
+                  if (returns.isEmpty && audit.isEmpty)
+                    const Text('No related return or audit activity.'),
+                  for (final row in returns.take(5))
+                    ListTile(
+                      dense: true,
+                      title: Text('${row['receipt']} · ${row['buyer']}'),
+                      subtitle: Text(_status(row['status'])),
+                      trailing: Text(_money(row['refund'])),
+                    ),
+                  for (final row in audit)
+                    ListTile(
+                      dense: true,
+                      title: Text(
+                        '${_status(row['action'])} · ${_status(row['entityType'])}',
+                      ),
+                      subtitle: Text('${row['details'] ?? ''}'),
+                      trailing: Text(_dateLabel(row['occurredAt'])),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+        FilledButton.icon(
+          key: const ValueKey('shop-filter-to-seller'),
+          onPressed: onShowOnlySeller,
+          icon: const Icon(Icons.manage_search_outlined),
+          label: const Text('Show only this seller'),
+        ),
+      ],
+    );
+  }
+}
+
 class _ShopTableColumn<T> {
   const _ShopTableColumn({
     required this.label,
@@ -4193,14 +5495,6 @@ String? _stockSourceName(ShopJson entry) {
       ? null
       : value;
 }
-
-String _roleName(String role) => switch (role) {
-  'BUYER' => 'Stock manager',
-  'SELLER' => 'Seller',
-  'CASHIER' => 'Cashier',
-  'GOODS_STAFF' => 'Store / goods release',
-  _ => _status(role),
-};
 
 class _ItemDialog extends StatefulWidget {
   const _ItemDialog({
@@ -5108,7 +6402,15 @@ class _ConsignmentDialogState extends State<_ConsignmentDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final staff = _maps(widget.contextData['staff']);
+    final activeSellerIds = widget.roles
+        .where(
+          (role) => role['roleCode'] == 'SELLER' && role['active'] != false,
+        )
+        .map((role) => role['userId'])
+        .toSet();
+    final staff = _maps(
+      widget.contextData['staff'],
+    ).where((person) => activeSellerIds.contains(person['id'])).toList();
     return AlertDialog(
       title: const Text('Prepare stock handover'),
       content: SizedBox(
@@ -5116,8 +6418,8 @@ class _ConsignmentDialogState extends State<_ConsignmentDialog> {
         child: staff.isEmpty
             ? const _MessageCard(
                 icon: Icons.person_add_alt,
-                title: 'No staff available',
-                message: 'Add active staff before issuing stock.',
+                title: 'No active sellers available',
+                message: 'Add a seller before preparing a stock handover.',
               )
             : Form(
                 key: _form,

@@ -17,6 +17,7 @@ void main() {
     List<dynamic>? items,
     List<dynamic>? sales,
     List<dynamic> auditEvents = const [],
+    List<dynamic> shopRoles = const [],
     List<dynamic> inventoryAdjustments = const [],
     List<dynamic>? stockMovements,
     List<dynamic> customerReturns = const [],
@@ -28,6 +29,7 @@ void main() {
     void Function(Map<String, dynamic> input)? onStockAdded,
     void Function(Map<String, dynamic> input)? onStockIssued,
     void Function(Map<String, dynamic> input)? onSaleSaved,
+    void Function(Map<String, dynamic> input)? onSellerChanged,
     List<dynamic> studentDirectory = const [],
   }) {
     final itemRows =
@@ -79,6 +81,9 @@ void main() {
               'occurredAt': purchase['purchaseDate'],
             },
         ];
+    final shopRoleRows = shopRoles
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .toList();
     final customerReturnRows = customerReturns
         .map((row) => Map<String, dynamic>.from(row as Map))
         .toList();
@@ -92,6 +97,9 @@ void main() {
           'schoolName': 'Test School',
           'from': '2026-08-05',
           'to': '2026-09-03',
+          'termName': 'First Term',
+          'termFrom': '2026-08-25',
+          'termTo': '2026-12-11',
           'summary': {
             'transactions': 2,
             'grossSales': 40,
@@ -99,6 +107,17 @@ void main() {
             'netSales': 32,
             'costOfSales': 20,
             'grossProfit': 12,
+            'cashSales': 30,
+            'momoSales': 10,
+            'cashRefunds': 8,
+            'momoRefunds': 0,
+            'netCashSales': 22,
+            'netMomoSales': 10,
+            'confirmedRemittances': 20,
+            'pendingRemittances': 0,
+            'cashDifferences': -2,
+            'momoDifferences': 0,
+            'cashStillHeld': 22,
             'unitsSold': 5,
             'unitsReturned': 1,
             'returnRequests': 1,
@@ -118,6 +137,22 @@ void main() {
               'grossSales': 40,
               'refunds': 8,
               'netSales': 32,
+            },
+          ],
+          'accountingSales': [
+            {
+              'id': 30,
+              'createdAt': '2026-09-01T09:30:00',
+              'reference': 'SHOP-20260901-000001',
+              'buyer': 'Kojo Mensah',
+              'buyerType': 'STUDENT',
+              'seller': 'Kofi Nketia',
+              'paymentMethod': 'CASH',
+              'status': 'COLLECTED',
+              'units': 5,
+              'gross': 40,
+              'refund': 8,
+              'net': 32,
             },
           ],
           'itemPerformance': [
@@ -164,7 +199,43 @@ void main() {
               'type': 'CUSTOMER_RETURN',
               'status': 'COMPLETED',
               'refund': 8,
+              'refundMethod': 'CASH',
+              'refundedAt': '2026-09-01T14:00:00',
+              'requestedBy': 'Ama Admin',
+              'items': 1,
             },
+          ],
+          'reconciliations': [
+            {
+              'id': 1,
+              'cutoff': '2026-09-01T17:00:00',
+              'decidedAt': '2026-09-01T18:00:00',
+              'seller': 'Kofi Nketia',
+              'counter': 'Ama Admin',
+              'approver': 'Yaw Asante',
+              'status': 'CLOSED_WITH_DIFFERENCES',
+              'stockDifferenceLines': 1,
+              'stockVarianceUnits': -1,
+              'cashVariance': -2,
+              'momoVariance': 0,
+              'decisionNote': 'Confirmed after recount',
+            },
+          ],
+          'remittances': [
+            {
+              'id': 1,
+              'reference': 'REM-1',
+              'createdAt': '2026-09-01T18:15:00',
+              'confirmedAt': '2026-09-01T18:20:00',
+              'sender': 'Kofi Nketia',
+              'recipient': 'Ama Admin',
+              'amount': 20,
+              'status': 'CONFIRMED',
+            },
+          ],
+          'cashHeld': [
+            {'staffId': 1, 'person': 'Ama Admin', 'amount': 20},
+            {'staffId': 2, 'person': 'Kofi Nketia', 'amount': 2},
           ],
         };
     final client = MockClient((request) async {
@@ -390,10 +461,43 @@ void main() {
                   'processedByName': receipt['cashierName'],
                 },
             ];
+      } else if (path.endsWith('/roles') && request.method == 'PUT') {
+        final changes = (jsonDecode(request.body) as List)
+            .map((row) => Map<String, dynamic>.from(row as Map))
+            .toList();
+        for (final change in changes) {
+          onSellerChanged?.call(change);
+          final index = shopRoleRows.indexWhere(
+            (row) =>
+                row['userId'] == change['userId'] &&
+                row['roleCode'] == change['roleCode'],
+          );
+          final staff = (context['staff'] as List? ?? const []).cast<Map>();
+          final person = staff.cast<Map<String, dynamic>>().firstWhere(
+            (row) => row['id'] == change['userId'],
+          );
+          final updated = <String, dynamic>{
+            if (index >= 0) ...shopRoleRows[index],
+            'id': index >= 0
+                ? shopRoleRows[index]['id']
+                : 100 + shopRoleRows.length,
+            'userId': change['userId'],
+            'userName': person['name'],
+            'roleCode': 'SELLER',
+            'active': change['active'],
+          };
+          if (index >= 0) {
+            shopRoleRows[index] = updated;
+          } else {
+            shopRoleRows.add(updated);
+          }
+        }
+        body = shopRoleRows;
+      } else if (path.endsWith('/roles')) {
+        body = shopRoleRows;
       } else if (path.endsWith('/reconciliations') ||
           path.endsWith('/period-reconciliations') ||
-          path.endsWith('/cash-handovers') ||
-          path.endsWith('/roles')) {
+          path.endsWith('/cash-handovers')) {
         body = [];
       } else if (path.endsWith('/audit')) {
         body = auditEvents;
@@ -451,7 +555,7 @@ void main() {
       expect(find.text('School Shop'), findsOneWidget);
       expect(find.text('Item types'), findsOneWidget);
       expect(find.text('Inventory'), findsOneWidget);
-      expect(find.text('Shop roles'), findsOneWidget);
+      expect(find.text('Sellers'), findsOneWidget);
       expect(find.text('Reconciliation'), findsOneWidget);
       expect(find.text('Cash remittances'), findsOneWidget);
 
@@ -1662,8 +1766,34 @@ void main() {
         .onSelected!(true);
     await tester.pumpAndSettle();
 
-    expect(find.text('Shop reports'), findsOneWidget);
+    expect(find.text('Shop accounting report'), findsOneWidget);
+    expect(find.widgetWithText(ChoiceChip, 'This term'), findsOneWidget);
+    expect(find.textContaining('Custom dates: From'), findsOneWidget);
     expect(find.text('GHS 32.00'), findsWidgets);
+    expect(
+      find.byKey(const ValueKey('shop-accounting-sales-table')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('shop-accounting-reconciliations-table')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('shop-accounting-remittances-table')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('shop-accounting-cash-held-table')),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.byKey(const ValueKey('shop-export-accounting-csv')),
+          )
+          .onPressed,
+      isNotNull,
+    );
     expect(
       find.byKey(const ValueKey('shop-report-sales-table')),
       findsOneWidget,
@@ -1688,6 +1818,15 @@ void main() {
       find.byKey(const ValueKey('shop-report-sales-table')),
     );
     expect(salesTable.columns.every((column) => column.onSort != null), isTrue);
+    for (final key in const [
+      'shop-accounting-sales-table',
+      'shop-accounting-reconciliations-table',
+      'shop-accounting-remittances-table',
+      'shop-accounting-cash-held-table',
+    ]) {
+      final table = tester.widget<DataTable>(find.byKey(ValueKey(key)));
+      expect(table.columns.every((column) => column.onSort != null), isTrue);
+    }
 
     tester
         .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Last 7 days'))
@@ -1698,6 +1837,21 @@ void main() {
           .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Last 7 days'))
           .selected,
       isTrue,
+    );
+
+    tester
+        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'This term'))
+        .onSelected!(true);
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'This term'))
+          .selected,
+      isTrue,
+    );
+    expect(
+      find.textContaining('Custom dates: From 25 Aug 2026 to'),
+      findsOneWidget,
     );
 
     tester
@@ -1718,6 +1872,33 @@ void main() {
       isNot(contains('INVENTORY')),
     );
     expect(downloadedReport!.queryParameters['sections'], contains('SALES'));
+  });
+
+  testWidgets('bursar can open reports and manage sellers', (tester) async {
+    await tester.pumpWidget(
+      appWith({
+        'currentUserId': 5,
+        'currentUserName': 'School Bursar',
+        'isAdmin': false,
+        'canViewReports': true,
+        'canBuy': false,
+        'canConsign': false,
+        'canSell': false,
+        'canTakePayment': false,
+        'canRelease': false,
+        'canHoldStock': false,
+        'canManageRoles': true,
+        'staff': [],
+        'roleOptions': [],
+        'units': ['book'],
+        'categories': ['Books'],
+      }),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(ChoiceChip, 'Reports'), findsOneWidget);
+    expect(find.widgetWithText(ChoiceChip, 'Item types'), findsNothing);
+    expect(find.widgetWithText(ChoiceChip, 'Sellers'), findsOneWidget);
   });
 
   testWidgets('seller can give only stock they personally hold', (
@@ -1785,24 +1966,35 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(
-      appWith({
-        'currentUserId': 1,
-        'currentUserName': 'Ama Admin',
-        'isAdmin': true,
-        'canBuy': true,
-        'canConsign': true,
-        'canSell': false,
-        'canTakePayment': false,
-        'canRelease': false,
-        'canHoldStock': false,
-        'canManageRoles': true,
-        'staff': [
-          {'id': 9, 'name': 'Kofi Storekeeper'},
+      appWith(
+        {
+          'currentUserId': 1,
+          'currentUserName': 'Ama Admin',
+          'isAdmin': true,
+          'canBuy': true,
+          'canConsign': true,
+          'canSell': false,
+          'canTakePayment': false,
+          'canRelease': false,
+          'canHoldStock': false,
+          'canManageRoles': true,
+          'staff': [
+            {'id': 9, 'name': 'Kofi Storekeeper'},
+          ],
+          'roleOptions': ['SELLER'],
+          'units': ['book'],
+          'categories': ['Books'],
+        },
+        shopRoles: const [
+          {
+            'id': 1,
+            'userId': 9,
+            'userName': 'Kofi Storekeeper',
+            'roleCode': 'SELLER',
+            'active': true,
+          },
         ],
-        'roleOptions': ['BUYER'],
-        'units': ['book'],
-        'categories': ['Books'],
-      }),
+      ),
     );
     await tester.pumpAndSettle();
     tester
@@ -1868,6 +2060,15 @@ void main() {
           'units': ['book'],
           'categories': ['Books'],
         },
+        shopRoles: const [
+          {
+            'id': 1,
+            'userId': 9,
+            'userName': 'Kofi Storekeeper',
+            'roleCode': 'SELLER',
+            'active': true,
+          },
+        ],
         items: [
           {
             'id': 1,
@@ -1967,25 +2168,37 @@ void main() {
   ) async {
     Map<String, dynamic>? issued;
     await tester.pumpWidget(
-      appWith({
-        'currentUserId': 1,
-        'currentUserName': 'Ama Admin',
-        'isAdmin': true,
-        'canBuy': true,
-        'canAdjustInventory': false,
-        'canConsign': true,
-        'canSell': false,
-        'canTakePayment': false,
-        'canRelease': false,
-        'canHoldStock': false,
-        'canManageRoles': true,
-        'staff': [
-          {'id': 9, 'name': 'Kofi Storekeeper'},
+      appWith(
+        {
+          'currentUserId': 1,
+          'currentUserName': 'Ama Admin',
+          'isAdmin': true,
+          'canBuy': true,
+          'canAdjustInventory': false,
+          'canConsign': true,
+          'canSell': false,
+          'canTakePayment': false,
+          'canRelease': false,
+          'canHoldStock': false,
+          'canManageRoles': true,
+          'staff': [
+            {'id': 9, 'name': 'Kofi Storekeeper'},
+          ],
+          'roleOptions': ['SELLER'],
+          'units': ['book'],
+          'categories': ['Books'],
+        },
+        shopRoles: const [
+          {
+            'id': 1,
+            'userId': 9,
+            'userName': 'Kofi Storekeeper',
+            'roleCode': 'SELLER',
+            'active': true,
+          },
         ],
-        'roleOptions': ['BUYER'],
-        'units': ['book'],
-        'categories': ['Books'],
-      }, onStockIssued: (input) => issued = input),
+        onStockIssued: (input) => issued = input,
+      ),
     );
     await tester.pumpAndSettle();
     tester
@@ -2800,5 +3013,204 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Completed'), findsOneWidget);
     expect(find.text('2'), findsWidgets);
+  });
+
+  testWidgets('manager searches for staff and manages seller access', (
+    tester,
+  ) async {
+    final changes = <Map<String, dynamic>>[];
+    await tester.pumpWidget(
+      appWith(
+        {
+          'currentUserId': 1,
+          'currentUserName': 'Ama Manager',
+          'isAdmin': true,
+          'canBuy': true,
+          'canConsign': true,
+          'canSell': false,
+          'canTakePayment': true,
+          'canRelease': true,
+          'canHoldStock': false,
+          'canManageRoles': true,
+          'staff': [
+            {
+              'id': 7,
+              'name': 'Yaw Owusu',
+              'username': 'yaw.owusu',
+              'schoolRole': 'CLASS_TEACHER',
+            },
+            {
+              'id': 8,
+              'name': 'Esi Boateng',
+              'username': 'esi.boateng',
+              'schoolRole': 'SECRETARY',
+            },
+          ],
+          'roleOptions': ['SELLER'],
+          'units': ['book'],
+          'categories': ['Books'],
+        },
+        shopRoles: const [
+          {
+            'id': 1,
+            'userId': 8,
+            'userName': 'Esi Boateng',
+            'roleCode': 'SELLER',
+            'active': true,
+          },
+        ],
+        onSellerChanged: (value) => changes.add(value),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    tester
+        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Sellers'))
+        .onSelected!(true);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('shop-sellers-table')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('shop-add-seller')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('shop-seller-search')),
+      'Yaw',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('shop-seller-result-7')));
+    await tester.pumpAndSettle();
+
+    expect(changes.last, {'userId': 7, 'roleCode': 'SELLER', 'active': true});
+    expect(find.text('Yaw Owusu'), findsOneWidget);
+
+    tester
+        .widget<OutlinedButton>(
+          find.byKey(const ValueKey('shop-disable-seller-7')),
+        )
+        .onPressed!();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('confirm-disable-seller')));
+    await tester.pumpAndSettle();
+    expect(changes.last['active'], isFalse);
+    expect(find.byKey(const ValueKey('shop-restore-seller-7')), findsOneWidget);
+
+    tester
+        .widget<FilledButton>(
+          find.byKey(const ValueKey('shop-restore-seller-7')),
+        )
+        .onPressed!();
+    await tester.pumpAndSettle();
+    expect(changes.last['active'], isTrue);
+  });
+
+  testWidgets('manager can inspect and focus the shop on one seller', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      appWith(
+        {
+          'currentUserId': 1,
+          'currentUserName': 'Ama Manager',
+          'isAdmin': true,
+          'canBuy': true,
+          'canConsign': true,
+          'canSell': false,
+          'canTakePayment': false,
+          'canRelease': true,
+          'canHoldStock': false,
+          'canManageRoles': true,
+          'staff': [
+            {
+              'id': 7,
+              'name': 'Kofi Nketia',
+              'username': 'kofi',
+              'schoolRole': 'CLASS_TEACHER',
+            },
+            {
+              'id': 8,
+              'name': 'Adjoa Mensah',
+              'username': 'adjoa',
+              'schoolRole': 'SECRETARY',
+            },
+          ],
+          'roleOptions': ['SELLER'],
+          'units': ['book'],
+          'categories': ['Books'],
+        },
+        shopRoles: const [
+          {
+            'id': 1,
+            'userId': 7,
+            'userName': 'Kofi Nketia',
+            'roleCode': 'SELLER',
+            'active': true,
+          },
+          {
+            'id': 2,
+            'userId': 8,
+            'userName': 'Adjoa Mensah',
+            'roleCode': 'SELLER',
+            'active': true,
+          },
+        ],
+        sales: const [
+          {
+            'id': 31,
+            'createdAt': '2026-09-01T09:30:00',
+            'receiptReference': 'SHOP-KOFI',
+            'buyerName': 'Kofi Buyer',
+            'modelType': 'CONSIGNMENT',
+            'processedBy': 7,
+            'processedByName': 'Kofi Nketia',
+            'paymentMethod': 'CASH',
+            'status': 'COLLECTED',
+            'totalAmount': 8,
+            'lines': [],
+          },
+          {
+            'id': 32,
+            'createdAt': '2026-09-01T10:30:00',
+            'receiptReference': 'SHOP-ADJOA',
+            'buyerName': 'Adjoa Buyer',
+            'modelType': 'CONSIGNMENT',
+            'processedBy': 8,
+            'processedByName': 'Adjoa Mensah',
+            'paymentMethod': 'MOMO',
+            'status': 'COLLECTED',
+            'totalAmount': 12,
+            'lines': [],
+          },
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    tester
+        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Sellers'))
+        .onSelected!(true);
+    await tester.pumpAndSettle();
+    tester
+        .widget<TextButton>(find.byKey(const ValueKey('shop-view-seller-7')))
+        .onPressed!();
+    await tester.pumpAndSettle();
+    expect(find.text('Current stock responsibility'), findsOneWidget);
+    expect(find.text('Sales and collections'), findsOneWidget);
+    expect(find.text('Cash remittances and reconciliation'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('shop-filter-to-seller')));
+    await tester.pumpAndSettle();
+
+    tester
+        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Sales'))
+        .onSelected!(true);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Showing only Kofi Nketia'), findsOneWidget);
+    expect(find.text('Kofi Buyer'), findsOneWidget);
+    expect(find.text('Adjoa Buyer'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('shop-choose-seller-scope')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('shop-scope-all-sellers')));
+    await tester.pumpAndSettle();
+    expect(find.text('Adjoa Buyer'), findsOneWidget);
   });
 }

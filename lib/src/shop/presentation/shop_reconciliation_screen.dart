@@ -62,12 +62,14 @@ class ShopReconciliationScreen extends StatefulWidget {
     required this.contextData,
     required this.onChanged,
     this.view = ShopReconciliationView.counts,
+    this.sellerFilterId,
     this.csvDownloader,
   });
   final ShopApiClient api;
   final ShopJson contextData;
   final VoidCallback onChanged;
   final ShopReconciliationView view;
+  final int? sellerFilterId;
   final ShopCashRemittanceCsvDownloader? csvDownloader;
   @override
   State<ShopReconciliationScreen> createState() =>
@@ -86,7 +88,9 @@ class _ShopReconciliationScreenState extends State<ShopReconciliationScreen> {
   int _remittanceSort = 0, _remittancePage = 0;
   bool _remittanceAscending = false, _exporting = false;
   int get _user => widget.contextData['currentUserId'] as int;
-  bool get _admin => widget.contextData['isAdmin'] == true;
+  bool get _admin =>
+      widget.contextData['isAdmin'] == true ||
+      widget.contextData['canManageRoles'] == true;
   List<ShopJson> get _approvers => _rows(
     widget.contextData['inventoryApprovers'] ??
         widget.contextData['returnApprovers'],
@@ -370,6 +374,11 @@ class _ShopReconciliationScreenState extends State<ShopReconciliationScreen> {
   List<ShopJson> _filteredRemittances() {
     final query = _remittanceSearch.text.trim().toLowerCase();
     final result = _handovers.where((row) {
+      if (widget.sellerFilterId != null &&
+          row['senderId'] != widget.sellerFilterId &&
+          row['recipientId'] != widget.sellerFilterId) {
+        return false;
+      }
       if (_remittanceStatus != 'ALL' && row['status'] != _remittanceStatus) {
         return false;
       }
@@ -700,16 +709,25 @@ class _ShopReconciliationScreenState extends State<ShopReconciliationScreen> {
     final filtered = _filteredRemittances();
     final lastPage = filtered.isEmpty ? 0 : (filtered.length - 1) ~/ 10;
     final page = _remittancePage.clamp(0, lastPage);
-    num amountFor(String status) => _handovers
+    final scopedHandovers = widget.sellerFilterId == null
+        ? _handovers
+        : _handovers
+              .where(
+                (row) =>
+                    row['senderId'] == widget.sellerFilterId ||
+                    row['recipientId'] == widget.sellerFilterId,
+              )
+              .toList();
+    num amountFor(String status) => scopedHandovers
         .where((row) => row['status'] == status)
         .fold<num>(0, (sum, row) => sum + (row['amount'] as num? ?? 0));
-    final pendingCount = _handovers
+    final pendingCount = scopedHandovers
         .where((row) => row['status'] == 'PENDING_RECEIPT')
         .length;
-    final rejectedCount = _handovers
+    final rejectedCount = scopedHandovers
         .where((row) => row['status'] == 'REJECTED')
         .length;
-    final cancelledCount = _handovers
+    final cancelledCount = scopedHandovers
         .where((row) => row['status'] == 'CANCELLED')
         .length;
     final rangeLabel = _remittanceRange == null
@@ -970,10 +988,15 @@ class _ShopReconciliationScreenState extends State<ShopReconciliationScreen> {
   @override
   Widget build(BuildContext context) {
     final remittances = widget.view == ShopReconciliationView.remittances;
-    final draft = _periods.any(
+    final scopedPeriods = widget.sellerFilterId == null
+        ? _periods
+        : _periods
+              .where((row) => row['staffId'] == widget.sellerFilterId)
+              .toList();
+    final draft = scopedPeriods.any(
       (r) => r['counterId'] == _user && r['status'] == 'DRAFT',
     );
-    final sorted = [..._periods]
+    final sorted = [...scopedPeriods]
       ..sort((a, b) {
         final dynamic av = switch (_sort) {
           0 => _date(a['cutoff'])?.millisecondsSinceEpoch ?? 0,
