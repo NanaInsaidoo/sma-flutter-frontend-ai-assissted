@@ -62,6 +62,21 @@ void main() {
     expect(find.text('New requisition'), findsWidgets);
     expect(find.text('Request approval before spending.'), findsOneWidget);
     expect(find.text('Submit request'), findsOneWidget);
+    for (final tab in const [
+      'Overview',
+      'Requisitions',
+      'School Expenses',
+      'Petty Cash',
+      'Approvals',
+      'Reports',
+    ]) {
+      expect(find.text(tab), findsWidgets);
+    }
+    expect(find.text('How will this purchase be funded?'), findsOneWidget);
+    expect(find.text('School funds'), findsWidgets);
+    expect(find.text('Petty cash'), findsWidgets);
+    expect(find.text('Expense register'), findsNothing);
+    expect(find.text('Financial follow-ups'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 }

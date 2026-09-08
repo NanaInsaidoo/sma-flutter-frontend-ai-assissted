@@ -16,7 +16,7 @@ Expenses, approved top-ups, and pocket transfers change the system's expected ba
 | Role | Responsibility |
 | --- | --- |
 | Administrator / Headteacher | Requests reconciliation, reviews variances, opens and closes financial follow-ups, and approves final resolution notes. |
-| Bursar / custodian | Performs the physical cash count and MoMo confirmation, attaches evidence, and adds investigation notes. |
+| Bursar / custodian | Performs the physical cash count and MoMo confirmation, records evidence references, and adds investigation notes. |
 | Staff requester | May provide evidence or explanation for a related expense, transfer, or requisition. |
 | Accountant | Can use the follow-up register and exported records as source material for accounting treatment outside this module. |
 
@@ -164,21 +164,21 @@ Anyone involved may add notes, such as a receipt number, staff explanation, supp
 
 An administrator must add a final resolution note to close a record. Closing a follow-up never deletes or rewrites the original expense, transfer, or reconciliation.
 
-## Relationship to Petty-cash Cycles
+## Relationship to the Term Finance Cycle
 
-A petty-cash cycle is the period between replenishments or scheduled closes. For most schools, a weekly cycle is appropriate.
+The implemented finance cycle is scoped to an academic term. Top-ups replenish that cycle; they do not create a new weekly or monthly system cycle. A weekly reconciliation is still the recommended operating routine.
 
-- A reconciliation may happen inside a cycle at any time.
-- A shortage does not disappear when a new cycle begins.
+- A reconciliation may happen during the term at any time.
+- A shortage does not disappear after a top-up, reconciliation, week, or reporting period.
 - The pocket balance reflects verified cash on hand after any documented adjustment.
 - Outstanding recoveries, supplier credits, missing receipts, and other exceptions persist in Financial Follow-ups until resolved.
 - Accounting can later post the appropriate accounting entries using the export/audit trail; this module retains the source operational facts.
 
 ## User Interface Expectations
 
-- The **Reconciliations** tab shows requests, in-progress counts, confirmed counts, and variances.
+- Under **Expenses & Petty Cash**, open **Petty Cash**, then **Reconciliations** to see requests, in-progress counts, confirmed counts, and variances.
 - Opening a reconciliation displays expected vs actual Cash/MoMo, variance, evidence, and the resolution status.
-- The **Financial Follow-ups** tab displays a searchable/filterable register with links to the related record.
+- Under **Petty Cash**, **Financial follow-ups** displays the exception register with links to related records.
 - Opening a follow-up displays its amount, owner, due date, status, note timeline, and closure action.
 - Only administrators see the final close action. Staff can add evidence and notes.
 - Financial records should use dedicated detail pages or dialogs rather than attempting to expose all actions directly in long lists.

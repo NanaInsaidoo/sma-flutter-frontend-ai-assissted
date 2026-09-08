@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "test:e2e": "playwright test",
+    "test:e2e:finance": "playwright test --config=playwright.finance.config.js",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:update": "playwright test --update-snapshots"
   },

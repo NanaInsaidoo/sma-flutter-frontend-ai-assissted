@@ -903,6 +903,7 @@ class _DashboardBody extends StatelessWidget {
         recordedBy: userDisplayName?.trim().isNotEmpty == true
             ? userDisplayName!.trim()
             : data.administratorName,
+        currentUserId: userId,
         role: role,
         openNewRequisitionOnLoad: openNewRequisitionOnNextExpenses,
         onNewRequisitionRequestConsumed: onNewRequisitionRequestConsumed,

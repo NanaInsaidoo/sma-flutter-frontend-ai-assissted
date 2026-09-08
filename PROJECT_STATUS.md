@@ -1,6 +1,6 @@
 # SMA Project Status
 
-Last updated: 2026-07-28
+Last updated: 2026-09-08
 
 This file is the durable source of truth for implementation and verification
 status across the Flutter frontend and Spring Boot backend.
@@ -29,49 +29,58 @@ Overall status: `VERIFIED`
 Verified against the real local backend:
 
 - Current academic context and active petty-cash cycle loading
-- Emergency requisition and actual-spend recording
-- Mandatory second-actor ratification
-- Variance review and resolution
-- Top-up request, second-actor approval, and confirmation
-- Cash-to-MoMo pocket transfer with a transfer fee
-- Reconciliation request, concurrent-request prevention, count, variance,
-  resolution, closure, and financial follow-up creation
-- Receipt omission: an actual spend succeeds without a receipt attachment
-- Final pocket balances and dashboard aggregates update from backend data
+- Petty-cash setup and initial-float lifecycle
+- Standard petty-cash requisition, approval, lower actual spend, and variance review
+- Emergency petty-cash spend, mandatory second-actor ratification, variance
+  escalation, and financial follow-up creation
+- School-funds requisition, approval, bank spend, and partial refund without
+  changing the petty-cash float
+- Top-up request, named approver, named disburser, Cash/MoMo allocation,
+  requester confirmation, cancellation, decline, approval revocation, dispute,
+  correction, and final confirmation
+- Cash-to-MoMo pocket transfer with an editable transfer fee
+- Reconciliation request, concurrent-request prevention, count, evidence,
+  shortage resolution, closure, and pocket correction
+- Manual and reconciliation-generated financial follow-ups, due dates, linked
+  references, append-only notes, and administrator closure
+- Actor restrictions for requester, selected approver, disburser, and receiver
+- Final pocket balances and dashboard aggregates updating from backend data
 
 Automated evidence:
 
-- `mvn -q -Dtest=FinanceRulesTest test` passed.
+- `flutter analyze` passed with no issues.
+- `flutter test` passed: 409 tests.
+- Live Flutter Web/Playwright finance checks passed: 2 tests against the real
+  local API, including workspace loading and requester top-up cancellation.
+- `mvn -q test` passed: 460 tests across 77 reports, with no failures, errors,
+  or skipped tests.
+- Focused `FinanceWorkflowServiceTest` actor, refund, follow-up, and
+  reconciliation tests passed.
 
 Real-data evidence:
 
-- Emergency requisition `9`, transaction `14`: moved through
-  `PENDING_RATIFICATION`, `PENDING_VARIANCE_REVIEW`, then `COMPLETE`.
-- Self-ratification was rejected; a different authorized user succeeded.
-- Top-up `15`: self-approval rejected, second actor approved, requester
-  confirmed, final status `CONFIRMED`.
-- Reconciliation `5`: a concurrent request was rejected; GHc2 shortage created
-  an open follow-up and closed as `VARIANCE_CLOSED`.
-- Transfer `17`: GHc5 cash-to-MoMo with GHc0.50 fee completed.
-- Final observed pockets: cash GHc99.50, MoMo GHc80.00, total GHc179.50.
+- A disposable school finance cycle was exercised through the UI with separate
+  requester and approver/disburser accounts.
+- A disputed top-up was corrected from the wrong split and confirmed by the
+  original requester; its event timeline remained visible.
+- A shortage reconciliation corrected the Cash pocket and created a linked
+  staff-recovery follow-up, which retained notes through closure.
+- An attempted refund beyond the remaining refundable amount was rejected and
+  did not create another refund record.
 
 Known data and cleanup notes:
 
-- Academic term `2` is named Second Term but its stored description says
-  "First Term". This is a seed/data issue, not a frontend calculation issue.
-- Legacy transaction `10` is `COMPLETE` while still carrying
-  `requiresRatification=true`. It predates this verification and should be
-  normalized or audited.
-- Test reconciliation created financial follow-up `3`, intentionally left open
-  so the follow-up workflow remains visible.
-- A temporary secondary finance operator was created for separation-of-duty
-  testing.
+- Disposable finance records for the test school are removed after the final
+  test run so the next manual journey starts at petty-cash setup.
+- Test users remain available for future separation-of-duty checks.
 
 Remaining production-hardening checks:
 
 - Upload and securely view a real S3 receipt file.
-- Run the complete Flutter UI journey manually once browser semantics are
-  enabled for reliable form automation.
+- Expand the reusable Playwright suite beyond its current workspace and top-up
+  mutation coverage; the remaining actor journeys were exercised interactively.
+- Complete and validate management reports before treating the Reports tab as
+  production-ready.
 
 ## Admissions
 
@@ -115,11 +124,11 @@ Cleanup note:
 
 ## Current Priorities
 
-1. Complete admissions approval and enrollment using the disposable application.
-2. Verify real S3 uploads for finance receipts and admission documents.
-3. Verify deletion of a student, guardian, and empty household.
-4. Enable Flutter web semantics and add Playwright journeys for critical flows.
-5. Normalize the academic-term description and legacy finance transaction.
+1. Verify real S3 uploads for finance receipts and admission documents.
+2. Expand automated Playwright coverage for the remaining finance actor flows.
+3. Complete admissions approval and enrollment using a disposable application.
+4. Verify deletion of a student, guardian, and empty household.
+5. Implement and validate the finance Reports workspace.
 
 ## Assessment Dashboard
 

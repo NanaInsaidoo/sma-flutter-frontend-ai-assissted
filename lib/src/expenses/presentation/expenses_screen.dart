@@ -15,6 +15,7 @@ class ExpensesScreen extends StatefulWidget {
     this.accessToken,
     this.onRefreshAccessToken,
     this.recordedBy,
+    this.currentUserId,
     this.role,
     this.openNewRequisitionOnLoad = false,
     this.onNewRequisitionRequestConsumed,
@@ -25,6 +26,7 @@ class ExpensesScreen extends StatefulWidget {
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
   final String? recordedBy;
+  final int? currentUserId;
   final String? role;
   final bool openNewRequisitionOnLoad;
   final VoidCallback? onNewRequisitionRequestConsumed;
@@ -44,6 +46,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   late List<_ExpenseRecord> _expenses;
   late List<_RequisitionRecord> _requisitions;
   late List<_TopUpRequest> _topUps;
+  List<_FinanceActor> _topUpApprovers = [];
+  List<_FinanceActor> _topUpDisbursers = [];
   late List<_PocketTransfer> _pocketTransfers;
   late List<_ReconciliationRecord> _reconciliations;
   late List<_FinancialFollowUp> _financialFollowUps;
@@ -57,10 +61,13 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   _ExpenseTab _tab = _ExpenseTab.overview;
   _FinanceLedgerPage? _financeLedgerPage;
   _TopUpRequest? _selectedTopUp;
+  List<_TopUpEvent> _selectedTopUpEvents = [];
   _ReconciliationRecord? _selectedReconciliation;
   String _expenseQuery = '';
   String _expenseFilter = 'All';
   String _requisitionFilter = 'All';
+  String _requisitionFundingFilter = 'All funding';
+  _PettyCashSection _pettyCashSection = _PettyCashSection.workspace;
   String _topUpQuery = '';
   String _topUpFilter = 'All';
   String _transferQuery = '';
@@ -109,6 +116,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   bool get _canApproveFinance {
     final role = widget.role?.trim().toUpperCase();
     return role == 'ADMINISTRATOR' ||
+        role == 'ADMIN' ||
+        role == 'HEADMASTER' ||
         role == 'HEAD_TEACHER' ||
         role == 'SUPER_ADMIN';
   }
@@ -130,7 +139,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           .where((item) => item.status == _ExpenseStatus.pendingRatification)
           .length;
 
-  List<_ExpenseRecord> get _visibleExpenses {
+  List<_ExpenseRecord> _visibleExpensesFor(_ExpenseSource source) {
     final query = _expenseQuery.trim().toLowerCase();
     return _expenses.where((item) {
       final matchesQuery =
@@ -141,22 +150,23 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           item.category.toLowerCase().contains(query);
       final matchesFilter =
           _expenseFilter == 'All' ||
-          (_expenseFilter == 'Petty Cash' &&
-              item.source == _ExpenseSource.pettyCash) ||
-          (_expenseFilter == 'Direct' &&
-              item.source == _ExpenseSource.direct) ||
           (_expenseFilter == 'Emergency' && item.isEmergency) ||
           (_expenseFilter == 'Refunded' &&
               (item.status == _ExpenseStatus.partiallyRefunded ||
                   item.status == _ExpenseStatus.fullyRefunded));
-      return matchesQuery && matchesFilter;
+      return item.source == source && matchesQuery && matchesFilter;
     }).toList();
   }
 
   List<_RequisitionRecord> get _visibleRequisitions {
     return _requisitions.where((item) {
-      if (_requisitionFilter == 'All') return true;
-      return item.status.label == _requisitionFilter;
+      final matchesStatus =
+          _requisitionFilter == 'All' ||
+          item.status.label == _requisitionFilter;
+      final matchesFunding =
+          _requisitionFundingFilter == 'All funding' ||
+          item.fundingSource.label == _requisitionFundingFilter;
+      return matchesStatus && matchesFunding;
     }).toList();
   }
 
@@ -164,9 +174,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     final query = _topUpQuery.trim().toLowerCase();
     return _topUps.where((item) {
       final matchesQuery =
-          query.isEmpty ||
-          item.requestId.toLowerCase().contains(query) ||
-          (item.approvalCode?.toLowerCase().contains(query) ?? false);
+          query.isEmpty || item.requestId.toLowerCase().contains(query);
       final matchesStatus =
           _topUpFilter == 'All' || item.status.label == _topUpFilter;
       return matchesQuery && matchesStatus;
@@ -270,6 +278,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           '/api/schools/${widget.customSchoolId}/finance/top-ups',
           query: termQuery,
         ),
+        _financeApi.get(
+          '/api/schools/${widget.customSchoolId}/finance/top-up-actors',
+        ),
       ]);
 
       if (!mounted) return;
@@ -277,6 +288,29 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       final cycle = _asMap(overview['cycle']);
       final pockets = _asMap(overview['pockets']);
       final transactions = _transactionRecords(results[2]);
+      final topUps = _topUpRecords(results[5]);
+      final actors = _asMap(results[6]);
+      final reconciliations = _reconciliationRecords(results[3]);
+      final selectedTopUpId = _selectedTopUp?.serverId;
+      final selectedReconciliationId = _selectedReconciliation?.serverId;
+      _TopUpRequest? refreshedTopUp;
+      _ReconciliationRecord? refreshedReconciliation;
+      if (selectedTopUpId != null) {
+        for (final item in topUps) {
+          if (item.serverId == selectedTopUpId) {
+            refreshedTopUp = item;
+            break;
+          }
+        }
+      }
+      if (selectedReconciliationId != null) {
+        for (final item in reconciliations) {
+          if (item.serverId == selectedReconciliationId) {
+            refreshedReconciliation = item;
+            break;
+          }
+        }
+      }
       setState(() {
         _academicTermId = termId;
         _settings = _settingsFromCycle(cycle);
@@ -288,8 +322,16 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         _requisitions = _requisitionRecords(results[1]);
         _expenses = transactions;
         _pocketTransfers = _transferRecords(results[2]);
-        _topUps = _topUpRecords(results[5]);
-        _reconciliations = _reconciliationRecords(results[3]);
+        _topUps = topUps;
+        _topUpApprovers = _financeActors(actors['approvers']);
+        _topUpDisbursers = _financeActors(actors['disbursers']);
+        _reconciliations = reconciliations;
+        if (selectedTopUpId != null) {
+          _selectedTopUp = refreshedTopUp;
+        }
+        if (selectedReconciliationId != null) {
+          _selectedReconciliation = refreshedReconciliation;
+        }
         _financialFollowUps = _followUpRecords(results[4]);
         _isLoadingFinance = false;
         _requiresCycleSetup = false;
@@ -379,16 +421,173 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   ),
                   const SizedBox(height: 22),
                   if (canSetUpCycle)
-                    FilledButton.icon(
-                      onPressed: _openCycleSetupDialog,
-                      icon: const Icon(Icons.settings_outlined),
-                      label: const Text('Set up cycle'),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      alignment: WrapAlignment.center,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: _openPettyCashSetupHelp,
+                          icon: const Icon(Icons.help_outline_rounded),
+                          label: const Text('Setup help'),
+                        ),
+                        FilledButton.icon(
+                          onPressed: _openCycleSetupDialog,
+                          icon: const Icon(Icons.settings_outlined),
+                          label: const Text('Set up cycle'),
+                        ),
+                      ],
                     ),
                 ],
               ),
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  void _openPettyCashSetupHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.help_outline_rounded, color: AppColors.green),
+            SizedBox(width: 10),
+            Text('Petty-cash setup help'),
+          ],
+        ),
+        content: SizedBox(
+          width: 680,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'These settings control how much the school keeps as petty cash and when replenishment is recommended.',
+                  style: TextStyle(color: AppColors.muted, height: 1.45),
+                ),
+                const SizedBox(height: 18),
+                _setupHelpItem(
+                  title: 'Approved float',
+                  description:
+                      'The total petty-cash amount authorised for the term. Cash and MoMo together should normally not exceed this amount.',
+                  example: 'Example: GH¢1,000',
+                ),
+                _setupHelpItem(
+                  title: 'Float ceiling',
+                  description:
+                      'The maximum allowed for one petty-cash transaction. Larger payments should use another payment route or receive additional authorisation.',
+                  example: 'Example: GH¢300',
+                ),
+                _setupHelpItem(
+                  title: 'Refill threshold',
+                  description:
+                      'The remaining Cash and MoMo balance at which the system warns that petty cash is running low. It recommends a top-up but does not add money automatically.',
+                  example: 'Example: GH¢250',
+                ),
+                _setupHelpItem(
+                  title: 'Variance tolerance',
+                  description:
+                      'The percentage used to classify the difference between the approved amount and actual spending. Every difference remains visible and must be reviewed.',
+                  example:
+                      'Example: approved GH¢200, actual GH¢205 = 2.5% variance',
+                ),
+                _setupHelpItem(
+                  title: 'Requisition expiry',
+                  description:
+                      'How long an approved requisition remains valid before it must be renewed or replaced.',
+                  example: 'Recommended: 7 days',
+                ),
+                _setupHelpItem(
+                  title: 'MoMo wallet number',
+                  description:
+                      'The school wallet used for the MoMo portion of petty cash. Leave it empty when the school operates with cash only.',
+                  example: 'Optional',
+                ),
+                _setupHelpItem(
+                  title: 'Capture transaction fees',
+                  description:
+                      'Records MoMo and bank charges separately so the true cost and pocket balance remain accurate.',
+                  example: 'Recommended: On',
+                ),
+                _setupHelpItem(
+                  title: 'Allow self-disbursement',
+                  description:
+                      'Allows an approved requester to release the funds themselves. Leave this off when a separate bursar or custodian controls payments.',
+                  example: 'Recommended: Off',
+                ),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: AppColors.green.withValues(alpha: .08),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: AppColors.green.withValues(alpha: .25),
+                    ),
+                  ),
+                  child: const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Recommended starting configuration',
+                        style: TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                      SizedBox(height: 8),
+                      Text(
+                        'Approved float: GH¢1,000\n'
+                        'Float ceiling: GH¢300\n'
+                        'Refill threshold: GH¢250\n'
+                        'Variance tolerance: 5%\n'
+                        'Requisition expiry: 7 days',
+                        style: TextStyle(height: 1.55),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                const Text(
+                  'After saving the cycle, record the initial funding through the first top-up so the Cash and MoMo pocket balances have a complete audit trail.',
+                  style: TextStyle(color: AppColors.muted, height: 1.45),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Got it'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _setupHelpItem({
+    required String title,
+    required String description,
+    required String example,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+          const SizedBox(height: 4),
+          Text(description, style: const TextStyle(height: 1.4)),
+          const SizedBox(height: 4),
+          Text(
+            example,
+            style: const TextStyle(
+              color: AppColors.green,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -411,7 +610,16 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         barrierDismissible: !isSaving,
         builder: (dialogContext) => StatefulBuilder(
           builder: (dialogContext, setDialogState) => AlertDialog(
-            title: const Text('Set up petty-cash cycle'),
+            title: Row(
+              children: [
+                const Expanded(child: Text('Set up petty-cash cycle')),
+                TextButton.icon(
+                  onPressed: _openPettyCashSetupHelp,
+                  icon: const Icon(Icons.help_outline_rounded, size: 18),
+                  label: const Text('Help'),
+                ),
+              ],
+            ),
             content: SizedBox(
               width: 560,
               child: SingleChildScrollView(
@@ -438,7 +646,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                           child: _cycleAmountField(
                             controller: ceilingController,
                             label: 'Float ceiling (GH¢)',
-                            hint: 'e.g. 1500',
+                            hint: 'e.g. 300',
                           ),
                         ),
                       ],
@@ -450,7 +658,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                           child: _cycleAmountField(
                             controller: thresholdController,
                             label: 'Refill threshold (GH¢)',
-                            hint: 'e.g. 400',
+                            hint: 'e.g. 250',
                           ),
                         ),
                         const SizedBox(width: 14),
@@ -612,6 +820,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         ),
       );
     } finally {
+      // Keep the controllers alive until the dialog's closing transition has
+      // finished painting. Disposing them immediately after Navigator.pop can
+      // leave the outgoing route trying to render a disposed controller.
+      await Future<void>.delayed(const Duration(milliseconds: 300));
       approvedController.dispose();
       ceilingController.dispose();
       thresholdController.dispose();
@@ -657,6 +869,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     try {
       await request();
       await _loadFinanceWorkspace(showLoading: false);
+      final selectedTopUp = _selectedTopUp;
+      if (selectedTopUp != null) {
+        await _loadTopUpEvents(selectedTopUp);
+      }
       if (mounted) _snack(successMessage);
       return true;
     } on FinanceApiException catch (error) {
@@ -725,8 +941,11 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
 
   _ExpenseRecord _expenseFromMap(Map<String, dynamic> value) {
     final status = _expenseStatus(value['status']);
-    final channel = _paymentChannel(value['paymentChannel']);
     final sourcePocket = _asText(value['sourcePocket']).toUpperCase();
+    final channel = _paymentChannel(
+      value['paymentChannel'],
+      sourcePocket: sourcePocket,
+    );
     return _ExpenseRecord(
       serverId: _nullableServerId(value['id']),
       expenseId: _asText(value['transactionCode'] ?? value['id']),
@@ -739,7 +958,12 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             value['approvedAmount'] ??
             value['requestedAmount'],
       ),
-      approvedAmount: _nullableDouble(value['approvedAmount']),
+      approvedAmount: _nullableDouble(
+        value['approvedAmount'] ??
+            (_asBool(value['requiresRatification'])
+                ? value['requestedAmount']
+                : null),
+      ),
       transactionDate: _asDate(value['transactionDate'] ?? value['createdAt']),
       source: sourcePocket.contains('CASH') || sourcePocket.contains('MOMO')
           ? _ExpenseSource.pettyCash
@@ -750,15 +974,19 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       notes: _asText(value['notes']),
       linkedExpenseId: _nullableText(value['parentTransactionId']),
       momoFee: _asDouble(value['feeAmount']),
-      isEmergency: _asBool(value['emergency']),
-      approvalStatus: _asBool(value['requiresRatification'])
+      isEmergency:
+          _asBool(value['emergency']) ||
+          _asBool(value['requiresRatification']) ||
+          status == _ExpenseStatus.pendingRatification ||
+          status == _ExpenseStatus.ratified,
+      approvalStatus: status == _ExpenseStatus.ratified
+          ? _ExpenseApprovalStatus.ratified
+          : status == _ExpenseStatus.pendingRatification
           ? _ExpenseApprovalStatus.pendingRatification
-          : status == _ExpenseStatus.ratified
+          : _asBool(value['requiresRatification'])
           ? _ExpenseApprovalStatus.ratified
           : _ExpenseApprovalStatus.approved,
-      varianceStatus:
-          _asBool(value['varianceWarning']) ||
-              status == _ExpenseStatus.pendingVarianceReview
+      varianceStatus: status == _ExpenseStatus.pendingVarianceReview
           ? _VarianceStatus.pendingReview
           : _VarianceStatus.none,
     );
@@ -774,12 +1002,12 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         category: _asText(item['category'], fallback: 'Uncategorised'),
         payee: _asText(item['vendor'], fallback: 'Not provided'),
         requestedBy: _asText(item['requestedBy'], fallback: 'Not provided'),
-        approvedAmount: _asDouble(
-          item['approvedAmount'] ?? item['requestedAmount'],
-        ),
+        requestedAmount: _asDouble(item['requestedAmount']),
+        approvedAmount: _nullableDouble(item['approvedAmount']),
         requestedAt: _asDate(item['requestedAt'] ?? item['createdAt']),
         expiresAt: _asDate(item['expiresAt']),
         status: _requisitionStatus(item['status']),
+        fundingSource: _fundingSource(item['fundingSource']),
         notes: _asText(item['notes'] ?? item['reason']),
         isEmergency: _asBool(item['emergency']),
         verbalApprover: _nullableText(item['verbalApprover']),
@@ -788,7 +1016,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   List<_TopUpRequest> _topUpRecords(dynamic response) {
-    return _pageContent(response).map((value) {
+    final records = _pageContent(response).map((value) {
       final item = _asMap(value);
       final status = _topUpStatus(item['status']);
       return _TopUpRequest(
@@ -809,15 +1037,50 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         requestedAt: _asDate(item['requestedAt'] ?? item['createdAt']),
         expensesCount: _asInt(item['expensesCount']),
         status: status,
-        approvalCode: _nullableText(item['approvalCode']),
         approvedAt: _nullableDate(item['approvedAt']),
         confirmedAt: _nullableDate(item['confirmedAt']),
-        actualReceived: _nullableDouble(
-          item['actualAmount'] ?? item['actualReceived'],
+        actualReceived:
+            status == _TopUpStatus.confirmed ||
+                status == _TopUpStatus.confirmedWithDiscrepancy
+            ? _nullableDouble(item['actualAmount'] ?? item['actualReceived'])
+            : null,
+        requester: _asText(
+          item['requesterName'] ?? item['createdBy'],
+          fallback: 'Not recorded',
         ),
+        requesterUserId: _nullableServerId(item['requesterUserId']),
+        approver: _nullableText(item['approverName']),
+        approverUserId: _nullableServerId(item['approverUserId']),
+        disburser: _nullableText(item['disburserName']),
+        disburserUserId: _nullableServerId(item['disburserUserId']),
+        receiver: _nullableText(item['receiverName']),
+        receiverUserId: _nullableServerId(item['receiverUserId']),
+        cashAmount: _nullableDouble(item['cashAmount']),
+        momoAmount: _nullableDouble(item['momoAmount']),
+        momoWalletNumber: _nullableText(item['momoWalletNumber']),
       );
     }).toList();
+    records.sort((a, b) {
+      final byDate = b.requestedAt.compareTo(a.requestedAt);
+      if (byDate != 0) return byDate;
+      return (b.serverId ?? 0).compareTo(a.serverId ?? 0);
+    });
+    return records;
   }
+
+  List<_FinanceActor> _financeActors(dynamic value) =>
+      (value is List ? value : const [])
+          .map((entry) => _asMap(entry))
+          .map(
+            (entry) => _FinanceActor(
+              id: _asInt(entry['id']),
+              name: _asText(entry['name'], fallback: 'Unnamed user'),
+              username: _asText(entry['username']),
+              role: _asText(entry['role']),
+            ),
+          )
+          .where((entry) => entry.id > 0)
+          .toList();
 
   List<_PocketTransfer> _transferRecords(dynamic response) {
     return _pageContent(response)
@@ -873,15 +1136,14 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     return _pageContent(response).map((value) {
       final item = _asMap(value);
       return _FinancialFollowUp(
+        serverId: _nullableServerId(item['id']),
         reference: _asText(item['followUpCode'] ?? item['id']),
         type: _followUpType(item['type']),
-        relatedReference: _asText(
-          item['reconciliationId'] ?? item['transactionId'],
-          fallback: 'Not linked',
-        ),
+        relatedReference: _followUpRelatedReference(item),
         owner: _asText(item['responsibleParty'], fallback: 'Not assigned'),
         amount: _asDouble(item['amount']),
         createdAt: _asDate(item['createdAt']),
+        dueDate: _nullableDate(item['dueDate']),
         summary: _asText(item['description']),
         status: _followUpStatus(item['status']),
         notes: _asText(item['resolutionNotes']).isEmpty
@@ -896,6 +1158,32 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               ],
       );
     }).toList();
+  }
+
+  String _followUpRelatedReference(Map<String, dynamic> item) {
+    final reconciliationId = _nullableServerId(item['reconciliationId']);
+    if (reconciliationId != null) {
+      for (final reconciliation in _reconciliations) {
+        if (reconciliation.serverId == reconciliationId) {
+          return reconciliation.reference;
+        }
+      }
+    }
+
+    final transactionId = _nullableServerId(item['transactionId']);
+    if (transactionId != null) {
+      for (final expense in _expenses) {
+        if (expense.serverId == transactionId) return expense.expenseId;
+      }
+      for (final topUp in _topUps) {
+        if (topUp.serverId == transactionId) return topUp.requestId;
+      }
+    }
+
+    return _asText(
+      item['reconciliationId'] ?? item['transactionId'],
+      fallback: 'Not linked',
+    );
   }
 
   @override
@@ -1071,7 +1359,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              'Rule in use: petty cash is auto-approved only when the selected pocket has balance, amount is within ${_money(_settings.floatCeiling)}, and the float cycle is active. Direct spending must start as a requisition.',
+              'Rule in use: every normal expense requires an approved requisition before payment. Emergency spending may proceed with recorded verbal authorisation and must be ratified afterward.',
               style: const TextStyle(color: _text, fontWeight: FontWeight.w600),
             ),
           ),
@@ -1107,18 +1395,14 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     switch (_tab) {
       case _ExpenseTab.overview:
         return _buildOverviewTab();
-      case _ExpenseTab.expenses:
-        return _buildExpensesTab();
       case _ExpenseTab.requisitions:
         return _buildRequisitionsTab();
+      case _ExpenseTab.schoolExpenses:
+        return _buildSchoolExpensesTab();
       case _ExpenseTab.pettyCash:
         return _buildPettyCashTab();
       case _ExpenseTab.approvals:
         return _buildApprovalsTab();
-      case _ExpenseTab.reconciliations:
-        return _buildReconciliationsTab();
-      case _ExpenseTab.followUps:
-        return _buildFinancialFollowUpsTab();
       case _ExpenseTab.reports:
         return _buildReportsTab();
     }
@@ -1150,7 +1434,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   title: 'Term spend',
                   value: _money(_totalSpend),
                   subtitle:
-                      'Petty ${_money(_pettySpend)} · Direct ${_money(_directSpend)}',
+                      'Petty cash ${_money(_pettySpend)} · School funds ${_money(_directSpend)}',
                   icon: Icons.payments_outlined,
                   color: AppColors.blue,
                 ),
@@ -1164,10 +1448,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                 ),
                 _MetricCard(
                   width: cardWidth.clamp(220, 420).toDouble(),
-                  title: 'Direct spend',
+                  title: 'School expenses',
                   value: _money(_directSpend),
-                  subtitle:
-                      '${_settings.varianceTolerancePercent}% variance tolerance',
+                  subtitle: 'Bank, cheque and direct MoMo payments',
                   icon: Icons.account_balance_outlined,
                   color: AppColors.purple,
                 ),
@@ -1184,7 +1467,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               child: _SectionCard(
                 title: 'Recent expense register',
                 trailing: TextButton(
-                  onPressed: () => setState(() => _tab = _ExpenseTab.expenses),
+                  onPressed: () =>
+                      setState(() => _tab = _ExpenseTab.schoolExpenses),
                   child: const Text('View all'),
                 ),
                 child: Column(
@@ -1242,9 +1526,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           icon: Icons.gavel_outlined,
           color: AppColors.red,
           title:
-              '$pendingRatifications spend variance waiting for ratification',
-          description:
-              'Actual spend exceeded the approved amount within tolerance.',
+              '$pendingRatifications emergency expense awaiting ratification',
+          description: 'A head teacher must formally ratify the payment.',
           targetTab: _ExpenseTab.approvals,
         ),
       );
@@ -1275,18 +1558,20 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               '$pendingReconciliations reconciliation request awaiting start',
           description:
               'An assigned staff member needs to begin the cash and MoMo count.',
-          targetTab: _ExpenseTab.reconciliations,
+          targetTab: _ExpenseTab.pettyCash,
         ),
       );
     }
-    final emergency = _expenses.where((item) => item.isEmergency).length;
-    if (emergency > 0) {
+    final pendingVariances = _expenses
+        .where((item) => item.varianceStatus == _VarianceStatus.pendingReview)
+        .length;
+    if (pendingVariances > 0) {
       items.add(
         _AttentionItem(
-          icon: Icons.emergency_outlined,
+          icon: Icons.difference_outlined,
           color: AppColors.red,
-          title: '$emergency emergency expense recorded',
-          description: 'Emergency spending requires written ratification.',
+          title: '$pendingVariances expense variance awaiting review',
+          description: 'The actual amount differs from the approved amount.',
           targetTab: _ExpenseTab.approvals,
         ),
       );
@@ -1306,14 +1591,26 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     return items;
   }
 
-  Widget _buildExpensesTab() {
+  Widget _buildSchoolExpensesTab() {
+    return _buildExpenseRegister(
+      title: 'School expenses',
+      subtitle:
+          'Payments made from school bank accounts, cheques, or the main school MoMo account.',
+      source: _ExpenseSource.direct,
+    );
+  }
+
+  Widget _buildExpenseRegister({
+    required String title,
+    required String subtitle,
+    required _ExpenseSource source,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _SectionCard(
-          title: 'Expense register',
-          subtitle:
-              'Read-only history of recorded spending. Open an entry to review its linked requisition, receipt, approval trail, or refund.',
+          title: title,
+          subtitle: subtitle,
           child: Column(
             children: [
               Row(
@@ -1332,13 +1629,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   _Dropdown<String>(
                     width: 180,
                     value: _expenseFilter,
-                    items: const [
-                      'All',
-                      'Petty Cash',
-                      'Direct',
-                      'Emergency',
-                      'Refunded',
-                    ],
+                    items: const ['All', 'Emergency', 'Refunded'],
                     onChanged: (value) =>
                         setState(() => _expenseFilter = value),
                   ),
@@ -1346,7 +1637,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               ),
               const SizedBox(height: 18),
               _ExpenseTable(
-                expenses: _visibleExpenses,
+                expenses: _visibleExpensesFor(source),
+                requisitionReference: _requisitionReference,
                 onRefund: _openRefundDialog,
                 onView: _openExpenseDetailDialog,
                 onPrint: _printExpenseRecord,
@@ -1363,7 +1655,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     return _SectionCard(
       title: 'Requisitions',
       subtitle:
-          'Requests made before direct spending. Approved requests can later be fulfilled with the actual payment amount.',
+          'All spending requests in one place. Filter by funding source or status.',
       trailing: FilledButton.icon(
         onPressed: _openCreateRequisitionDialog,
         icon: const Icon(Icons.add),
@@ -1376,10 +1668,18 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             children: [
               const Expanded(
                 child: Text(
-                  'Direct cash, bank, cheque, and MoMo spending should begin here before money leaves the school.',
+                  'Choose School funds or Petty cash when creating a request. The selected rules follow it through approval and payment.',
                   style: TextStyle(color: _muted),
                 ),
               ),
+              _Dropdown<String>(
+                width: 170,
+                value: _requisitionFundingFilter,
+                items: const ['All funding', 'School funds', 'Petty cash'],
+                onChanged: (value) =>
+                    setState(() => _requisitionFundingFilter = value),
+              ),
+              const SizedBox(width: 10),
               _Dropdown<String>(
                 width: 190,
                 value: _requisitionFilter,
@@ -1409,13 +1709,39 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   Widget _buildPettyCashTab() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final section in _PettyCashSection.values)
+              _TabPill(
+                label: section.label,
+                active: _pettyCashSection == section,
+                onTap: () => setState(() => _pettyCashSection = section),
+              ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        switch (_pettyCashSection) {
+          _PettyCashSection.workspace => _buildPettyCashWorkspace(),
+          _PettyCashSection.reconciliations => _buildReconciliationsTab(),
+          _PettyCashSection.followUps => _buildFinancialFollowUpsTab(),
+        },
+      ],
+    );
+  }
+
+  Widget _buildPettyCashWorkspace() {
     final activeTopUps = _topUps
         .where((item) => !item.status.isHistorical)
-        .take(2)
+        .take(1)
         .toList();
     final recentTopUps = _topUps
         .where((item) => item.status.isHistorical)
-        .take(2)
+        .take(1)
         .toList();
     final approvedAmount = _settings.floatApprovedAmount;
     final double balanceRatio = approvedAmount <= 0
@@ -1436,7 +1762,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       children: [
         Card(
           child: Padding(
-            padding: const EdgeInsets.all(22),
+            padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1461,7 +1787,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                             style: TextStyle(
                               color: balanceColor,
                               fontWeight: FontWeight.w900,
-                              fontSize: 34,
+                              fontSize: 28,
                             ),
                           ),
                           const SizedBox(height: 4),
@@ -1490,26 +1816,26 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(999),
                   child: LinearProgressIndicator(
                     value: balanceRatio,
-                    minHeight: 8,
+                    minHeight: 6,
                     backgroundColor: AppColors.border,
                     valueColor: AlwaysStoppedAnimation<Color>(balanceColor),
                   ),
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: 12),
                 LayoutBuilder(
                   builder: (context, constraints) {
                     final compact = constraints.maxWidth < 620;
                     final pocketWidth = compact
                         ? constraints.maxWidth
-                        : (constraints.maxWidth - 14) / 2;
+                        : (constraints.maxWidth - 10) / 2;
                     return Wrap(
-                      spacing: 14,
-                      runSpacing: 14,
+                      spacing: 10,
+                      runSpacing: 10,
                       children: [
                         SizedBox(
                           width: pocketWidth,
@@ -1539,12 +1865,12 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                     );
                   },
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 10),
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
+                    horizontal: 10,
+                    vertical: 9,
                   ),
                   decoration: BoxDecoration(
                     color: AppColors.greenSoft,
@@ -1607,73 +1933,105 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             ),
           ),
         ),
-        const SizedBox(height: 16),
-        _buildReconciliationControl(),
-        const SizedBox(height: 16),
-        _SectionCard(
-          title: 'Top-up requests',
+        const SizedBox(height: 12),
+        _buildExpenseRegister(
+          title: 'Petty cash expenses',
           subtitle:
-              'A short view of active replenishment requests. Full history is kept in its own ledger.',
-          trailing: Wrap(
-            spacing: 8,
-            children: [
-              TextButton.icon(
+              'Recorded spending paid from the controlled Cash or MoMo pocket.',
+          source: _ExpenseSource.pettyCash,
+        ),
+        const SizedBox(height: 12),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final topUps = _SectionCard(
+              title: 'Top-up requests',
+              subtitle: 'Current and recently completed requests.',
+              trailing: Wrap(
+                spacing: 8,
+                children: [
+                  TextButton.icon(
+                    onPressed: () => setState(
+                      () => _financeLedgerPage = _FinanceLedgerPage.topUps,
+                    ),
+                    icon: const Icon(Icons.arrow_forward_rounded),
+                    label: const Text('View all'),
+                  ),
+                  FilledButton.icon(
+                    onPressed: _requestTopUp,
+                    icon: const Icon(Icons.add_card_outlined),
+                    label: const Text('Request top-up'),
+                    style: _primaryButtonStyle(),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (activeTopUps.isNotEmpty) ...[
+                    const _SectionLabel('Current requests'),
+                    const SizedBox(height: 8),
+                    for (final topUp in activeTopUps) _topUpTile(topUp),
+                  ],
+                  if (recentTopUps.isNotEmpty) ...[
+                    if (activeTopUps.isNotEmpty) const SizedBox(height: 10),
+                    const _SectionLabel('Most recent completed'),
+                    const SizedBox(height: 8),
+                    for (final topUp in recentTopUps) _topUpTile(topUp),
+                  ],
+                  if (_topUps.isEmpty)
+                    const _EmptyState(
+                      icon: Icons.add_card_outlined,
+                      title: 'No top-up requests yet',
+                      subtitle:
+                          'When float needs replenishment, requests will appear here.',
+                    ),
+                ],
+              ),
+            );
+            final transfers = _SectionCard(
+              title: 'Recent pocket transfers',
+              subtitle: 'Recent movements between Cash and MoMo.',
+              trailing: TextButton.icon(
                 onPressed: () => setState(
-                  () => _financeLedgerPage = _FinanceLedgerPage.topUps,
+                  () => _financeLedgerPage = _FinanceLedgerPage.transfers,
                 ),
                 icon: const Icon(Icons.arrow_forward_rounded),
                 label: const Text('View all'),
               ),
-              FilledButton.icon(
-                onPressed: _requestTopUp,
-                icon: const Icon(Icons.add_card_outlined),
-                label: const Text('Request top-up'),
-                style: _primaryButtonStyle(),
+              child: Column(
+                children: _pocketTransfers
+                    .take(2)
+                    .map(_pocketTransferTile)
+                    .toList(),
               ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (activeTopUps.isNotEmpty) ...[
-                const _SectionLabel('Current requests'),
-                const SizedBox(height: 8),
-                for (final topUp in activeTopUps) _topUpTile(topUp),
-              ],
-              if (recentTopUps.isNotEmpty) ...[
-                if (activeTopUps.isNotEmpty) const SizedBox(height: 18),
-                const _SectionLabel('Most recent completed'),
-                const SizedBox(height: 8),
-                for (final topUp in recentTopUps) _topUpTile(topUp),
-              ],
-              if (_topUps.isEmpty)
-                const _EmptyState(
-                  icon: Icons.add_card_outlined,
-                  title: 'No top-up requests yet',
-                  subtitle:
-                      'When float needs replenishment, requests will appear here.',
+            );
+
+            if (constraints.maxWidth < 1050) {
+              return Column(
+                children: [
+                  _buildReconciliationControl(),
+                  const SizedBox(height: 12),
+                  topUps,
+                  const SizedBox(height: 12),
+                  transfers,
+                ],
+              );
+            }
+
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(flex: 6, child: _buildReconciliationControl()),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 5,
+                  child: Column(
+                    children: [topUps, const SizedBox(height: 12), transfers],
+                  ),
                 ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        _SectionCard(
-          title: 'Recent pocket transfers',
-          subtitle:
-              'Cash and MoMo movements. Transfers do not change the total float except for any recorded fee.',
-          trailing: TextButton.icon(
-            onPressed: () => setState(
-              () => _financeLedgerPage = _FinanceLedgerPage.transfers,
-            ),
-            icon: const Icon(Icons.arrow_forward_rounded),
-            label: const Text('View all'),
-          ),
-          child: Column(
-            children: _pocketTransfers
-                .take(3)
-                .map(_pocketTransferTile)
-                .toList(),
-          ),
+              ],
+            );
+          },
         ),
       ],
     );
@@ -1701,7 +2059,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       subtitle:
           'A reconciliation records the system balance against the cash and MoMo actually counted. It never changes a balance automatically.',
       trailing: FilledButton.icon(
-        onPressed: () => setState(() => _tab = _ExpenseTab.reconciliations),
+        onPressed: () => setState(
+          () => _pettyCashSection = _PettyCashSection.reconciliations,
+        ),
         icon: const Icon(Icons.arrow_forward_rounded),
         label: const Text('Open workspace'),
         style: _primaryButtonStyle(),
@@ -1753,12 +2113,14 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           title: 'Financial follow-ups',
           subtitle:
               'Operational exceptions that need evidence, recovery, correction, or an administrator decision. These are not ordinary expense entries.',
-          trailing: FilledButton.icon(
-            onPressed: _openNewFollowUpDialog,
-            icon: const Icon(Icons.add_rounded),
-            label: const Text('Record follow-up'),
-            style: _primaryButtonStyle(),
-          ),
+          trailing: _canApproveFinance
+              ? FilledButton.icon(
+                  onPressed: _openNewFollowUpDialog,
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('Record follow-up'),
+                  style: _primaryButtonStyle(),
+                )
+              : null,
           child: LayoutBuilder(
             builder: (context, constraints) {
               final compact = constraints.maxWidth < 720;
@@ -2254,7 +2616,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           onPressed: () => setState(() {
             _selectedReconciliation = null;
             _financeLedgerPage = null;
-            _tab = _ExpenseTab.reconciliations;
+            _tab = _ExpenseTab.pettyCash;
+            _pettyCashSection = _PettyCashSection.reconciliations;
           }),
         ),
         const SizedBox(height: 12),
@@ -2345,7 +2708,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                     : item.notes,
               ),
               if (item.varianceResolution.isNotEmpty)
-                _ReadOnlyRow('Variance resolution', item.varianceResolution),
+                _ReadOnlyRow(
+                  'Variance resolution',
+                  _reconciliationResolutionLabel(item.varianceResolution),
+                ),
             ],
           ),
         ),
@@ -2436,7 +2802,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   onPressed: () => setState(() {
                     _selectedReconciliation = null;
                     _financeLedgerPage = null;
-                    _tab = _ExpenseTab.followUps;
+                    _tab = _ExpenseTab.pettyCash;
+                    _pettyCashSection = _PettyCashSection.followUps;
                   }),
                   icon: const Icon(Icons.account_tree_outlined),
                   label: Text('Open ${linkedFollowUp.reference}'),
@@ -2642,8 +3009,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                         (item) => [
                           _MainCell(
                             title: item.requestId,
-                            subtitle:
-                                '${item.expensesCount} expenses in cycle${item.approvalCode == null ? '' : ' · ${item.approvalCode}'}',
+                            subtitle: '${item.expensesCount} expenses in cycle',
                             onTap: () => _openTopUpDetailPage(item),
                           ),
                           Text(_money(item.requestedAmount)),
@@ -2850,7 +3216,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                 _ActionTile(
                   icon: Icons.assignment_outlined,
                   iconColor: AppColors.amber,
-                  title: '${item.title} · ${_money(item.approvedAmount ?? 0)}',
+                  title: '${item.title} · ${_money(item.requestedAmount)}',
                   subtitle:
                       'Requested by ${item.requestedBy} for ${item.category}',
                   trailing: Row(
@@ -2983,6 +3349,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   Widget _expenseListTile(_ExpenseRecord item) {
+    final requisitionReference = _requisitionReference(item.requisitionId);
     return _ActionTile(
       icon: item.source == _ExpenseSource.pettyCash
           ? Icons.account_balance_wallet_outlined
@@ -2992,7 +3359,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           : AppColors.blue,
       title: item.description,
       subtitle:
-          '${item.category} · ${item.payee} · ${_date(item.transactionDate)}',
+          '${item.category} · ${item.payee} · ${item.channel.label}${requisitionReference == null ? '' : ' · $requisitionReference'} · ${_date(item.transactionDate)}',
       trailing: Column(
         crossAxisAlignment: CrossAxisAlignment.end,
         mainAxisSize: MainAxisSize.min,
@@ -3007,6 +3374,17 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       ),
       onTap: () => _openExpenseDetailDialog(item),
     );
+  }
+
+  String? _requisitionReference(String? value) {
+    if (value == null) return null;
+    for (final requisition in _requisitions) {
+      if (requisition.id == value ||
+          requisition.serverId?.toString() == value) {
+        return requisition.id;
+      }
+    }
+    return value;
   }
 
   Widget _topUpTile(_TopUpRequest item) {
@@ -3032,14 +3410,45 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     setState(() {
       _selectedTopUp = item;
       _financeLedgerPage = _FinanceLedgerPage.topUpDetail;
+      _selectedTopUpEvents = [];
     });
+    unawaited(_loadTopUpEvents(item));
+  }
+
+  Future<void> _loadTopUpEvents(_TopUpRequest item) async {
+    if (item.serverId == null) return;
+    try {
+      final response = await _financeApi.get(
+        '/api/schools/${widget.customSchoolId}/finance/top-ups/${item.serverId}/events',
+      );
+      final events = (response is List ? response : _pageContent(response)).map(
+        (value) {
+          final map = _asMap(value);
+          return _TopUpEvent(
+            type: _asText(map['eventType']),
+            actor: _asText(map['actor']),
+            note: _nullableText(map['note']),
+            cash: _nullableDouble(map['cashAmount']),
+            momo: _nullableDouble(map['momoAmount']),
+            wallet: _nullableText(map['momoWalletNumber']),
+            reference: _nullableText(map['reference']),
+            at: _asDate(map['createdAt']),
+          );
+        },
+      ).toList();
+      if (mounted && _selectedTopUp?.serverId == item.serverId) {
+        setState(() => _selectedTopUpEvents = events);
+      }
+    } catch (_) {}
   }
 
   Widget _buildTopUpDetailPage(_TopUpRequest item) {
     final needsAction =
         item.status == _TopUpStatus.pending ||
         item.status == _TopUpStatus.approved ||
-        item.status == _TopUpStatus.disbursed;
+        item.status == _TopUpStatus.disbursed ||
+        item.status == _TopUpStatus.disputed ||
+        item.status == _TopUpStatus.corrected;
 
     Widget metric(String label, String value, {Color? valueColor}) {
       return Container(
@@ -3133,22 +3542,72 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               const SizedBox(height: 4),
               _ReadOnlyRow('Status', item.status.label),
               _ReadOnlyRow('Requested on', _date(item.requestedAt)),
+              _ReadOnlyRow('Requester', item.requester),
+              _ReadOnlyRow('Approver', item.approver ?? 'Not selected'),
+              _ReadOnlyRow('Disburser', item.disburser ?? 'Not selected'),
               _ReadOnlyRow(
                 'Approved amount',
                 item.approvedAmount == null
                     ? 'Not approved'
                     : _money(item.approvedAmount!),
               ),
-              if (item.approvalCode != null)
-                _ReadOnlyRow('Approval code', item.approvalCode!),
               if (item.approvedAt != null)
                 _ReadOnlyRow('Approved on', _date(item.approvedAt!)),
               if (item.actualReceived != null)
                 _ReadOnlyRow('Actual received', _money(item.actualReceived!)),
+              if (item.cashAmount != null)
+                _ReadOnlyRow('Cash allocation', _money(item.cashAmount!)),
+              if (item.momoAmount != null)
+                _ReadOnlyRow('MoMo allocation', _money(item.momoAmount!)),
+              if (item.momoWalletNumber != null)
+                _ReadOnlyRow('MoMo wallet', item.momoWalletNumber!),
               if (item.confirmedAt != null)
                 _ReadOnlyRow('Confirmed on', _date(item.confirmedAt!)),
             ],
           ),
+        ),
+        const SizedBox(height: 18),
+        _SectionCard(
+          title: 'Workflow timeline',
+          subtitle: 'Permanent record of each handoff, note, and allocation.',
+          child: _selectedTopUpEvents.isEmpty
+              ? const Text(
+                  'Timeline is loading or no events have been recorded.',
+                  style: TextStyle(color: _muted),
+                )
+              : Column(
+                  children: _selectedTopUpEvents
+                      .map(
+                        (event) => ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(
+                            Icons.check_circle_outline,
+                            color: _green,
+                          ),
+                          title: Text(
+                            event.type.replaceAll('_', ' '),
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                          subtitle: Text(
+                            [
+                              event.actor,
+                              if (event.note != null) event.note!,
+                              if (event.cash != null)
+                                'Cash ${_money(event.cash!)}',
+                              if (event.momo != null)
+                                'MoMo ${_money(event.momo!)}',
+                              if (event.wallet != null) event.wallet!,
+                              if (event.reference != null) event.reference!,
+                            ].join(' · '),
+                          ),
+                          trailing: Text(
+                            _date(event.at),
+                            style: const TextStyle(color: _muted),
+                          ),
+                        ),
+                      )
+                      .toList(),
+                ),
         ),
         const SizedBox(height: 18),
         _SectionCard(
@@ -3200,47 +3659,145 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   List<Widget> _topUpActions(_TopUpRequest item) {
+    final isRequester = widget.currentUserId == item.requesterUserId;
+    final isApprover = widget.currentUserId == item.approverUserId;
+    final isDisburser = widget.currentUserId == item.disburserUserId;
+    final canManageDisburser = _canApproveFinance;
     switch (item.status) {
       case _TopUpStatus.pending:
-        if (!_canApproveFinance) {
-          return const [
-            _InlineNotice(
+        return [
+          if (isRequester)
+            OutlinedButton(
+              onPressed: () => _topUpNoteAction(
+                item,
+                'cancel',
+                'Cancel request',
+                'Why is this request being cancelled?',
+              ),
+              child: const Text('Cancel request'),
+            ),
+          if (isApprover) ...[
+            OutlinedButton(
+              onPressed: () => _declineTopUp(item),
+              style: OutlinedButton.styleFrom(foregroundColor: AppColors.red),
+              child: const Text('Decline'),
+            ),
+            FilledButton(
+              onPressed: () => _approveTopUp(item),
+              style: _primaryButtonStyle(),
+              child: const Text('Approve'),
+            ),
+          ],
+          if (!isRequester && !isApprover)
+            const _InlineNotice(
               icon: Icons.lock_outline,
               color: AppColors.amber,
               text:
-                  'An administrator or head teacher must review this request.',
+                  'This request is awaiting action from its assigned approver.',
             ),
-          ];
-        }
-        return [
-          OutlinedButton(
-            onPressed: () => _queryTopUp(item),
-            child: const Text('Query'),
-          ),
-          FilledButton(
-            onPressed: () => _approveTopUp(item),
-            style: _primaryButtonStyle(),
-            child: const Text('Approve'),
-          ),
         ];
       case _TopUpStatus.approved:
         return [
-          FilledButton(
-            onPressed: () => _openDisburseTopUpDialog(item),
-            style: _primaryButtonStyle(),
-            child: const Text('Disburse'),
-          ),
+          if (isApprover)
+            OutlinedButton(
+              onPressed: () => _topUpNoteAction(
+                item,
+                'revoke-approval',
+                'Revoke approval',
+                'Why is this approval being revoked?',
+              ),
+              style: OutlinedButton.styleFrom(foregroundColor: AppColors.red),
+              child: const Text('Revoke approval'),
+            ),
+          if (canManageDisburser)
+            OutlinedButton(
+              onPressed: () => _reassignTopUpDisburser(item),
+              child: const Text('Reassign disburser'),
+            ),
+          if (isDisburser)
+            FilledButton(
+              onPressed: () => _openDisburseTopUpDialog(item),
+              style: _primaryButtonStyle(),
+              child: const Text('Disburse'),
+            ),
         ];
       case _TopUpStatus.disbursed:
         return [
-          FilledButton(
-            onPressed: () => _openConfirmTopUpDialog(item),
-            style: _primaryButtonStyle(),
-            child: const Text('Confirm received'),
-          ),
+          if (isRequester)
+            OutlinedButton(
+              onPressed: () => _topUpNoteAction(
+                item,
+                'report-problem',
+                'Report a problem',
+                'Describe what was wrong with the cash, MoMo amount, or wallet.',
+              ),
+              style: OutlinedButton.styleFrom(foregroundColor: AppColors.red),
+              child: const Text('Report a problem'),
+            ),
+          if (isRequester)
+            FilledButton(
+              onPressed: () => _openConfirmTopUpDialog(item),
+              style: _primaryButtonStyle(),
+              child: const Text('Confirm received'),
+            ),
+          if (!isRequester)
+            const _InlineNotice(
+              icon: Icons.hourglass_top,
+              color: AppColors.amber,
+              text:
+                  'Waiting for the named receiver to confirm or report a problem.',
+            ),
+        ];
+      case _TopUpStatus.disputed:
+        return [
+          if (isRequester)
+            FilledButton(
+              onPressed: () => _openConfirmTopUpDialog(item),
+              style: _primaryButtonStyle(),
+              child: const Text('Confirm receipt now'),
+            ),
+          if (canManageDisburser)
+            OutlinedButton(
+              onPressed: () => _reassignTopUpDisburser(item),
+              child: const Text('Reassign disburser'),
+            ),
+          if (isDisburser || canManageDisburser)
+            FilledButton(
+              onPressed: () => _openDisburseTopUpDialog(item, correction: true),
+              style: _primaryButtonStyle(),
+              child: const Text('Record correction'),
+            ),
+        ];
+      case _TopUpStatus.corrected:
+        return [
+          if (isRequester)
+            OutlinedButton(
+              onPressed: () => _topUpNoteAction(
+                item,
+                'report-problem',
+                'Report another problem',
+                'Describe what is still incorrect.',
+              ),
+              style: OutlinedButton.styleFrom(foregroundColor: AppColors.red),
+              child: const Text('Report a problem'),
+            ),
+          if (isRequester)
+            FilledButton(
+              onPressed: () => _openConfirmTopUpDialog(item),
+              style: _primaryButtonStyle(),
+              child: const Text('Confirm corrected funds'),
+            ),
+          if (!isRequester)
+            const _InlineNotice(
+              icon: Icons.hourglass_top,
+              color: AppColors.amber,
+              text: 'Correction recorded. Waiting for the named receiver.',
+            ),
         ];
       case _TopUpStatus.queried:
       case _TopUpStatus.declined:
+      case _TopUpStatus.cancelled:
+      case _TopUpStatus.approvalRevoked:
       case _TopUpStatus.confirmed:
       case _TopUpStatus.confirmedWithDiscrepancy:
         return [
@@ -3265,7 +3822,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       _snack('Create and approve a requisition before recording an expense.');
       return;
     }
-    final approvedAmount = requisition.approvedAmount;
+    final approvedAmount =
+        requisition.approvedAmount ??
+        (requisition.isEmergency ? requisition.requestedAmount : null);
     if (approvedAmount == null) {
       _snack('Approve this requisition before recording actual spend.');
       return;
@@ -3277,7 +3836,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     );
     final receipt = TextEditingController();
     final notes = TextEditingController();
-    _PaymentChannel channel = _PaymentChannel.bankTransfer;
+    final availableChannels = requisition.fundingSource.allowedChannels;
+    _PaymentChannel channel = availableChannels.first;
     picker.PlatformFile? receiptAttachment;
 
     showDialog<void>(
@@ -3354,7 +3914,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                           decoration: const InputDecoration(
                             labelText: 'Payment source',
                           ),
-                          items: _PaymentChannel.values
+                          items: availableChannels
                               .map(
                                 (item) => DropdownMenuItem(
                                   value: item,
@@ -3531,10 +4091,22 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   void _openCreateRequisitionDialog() {
+    const categories = [
+      'Supplies',
+      'Teaching Materials',
+      'Repairs & Maintenance',
+      'Utilities',
+      'Transport',
+      'Food & Refreshments',
+      'Medical / Emergency',
+      'Administration',
+      'Other',
+    ];
     final title = TextEditingController();
     final payee = TextEditingController();
     final amount = TextEditingController();
-    final category = TextEditingController(text: 'Supplies');
+    _FundingSource? fundingSource;
+    String? category;
     final reason = TextEditingController();
     final verbalApprover = TextEditingController();
     bool emergencyApproval = false;
@@ -3550,8 +4122,13 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             primaryLabel: 'Submit request',
             onPrimary: () async {
               final value = _parseAmount(amount.text);
-              if (title.text.trim().isEmpty || value <= 0) {
-                _snack('Enter description and a valid estimated amount.');
+              if (fundingSource == null ||
+                  title.text.trim().isEmpty ||
+                  value <= 0 ||
+                  category == null) {
+                _snack(
+                  'Choose a funding source and enter the required request details.',
+                );
                 return;
               }
               if (emergencyApproval && verbalApprover.text.trim().isEmpty) {
@@ -3568,12 +4145,11 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   '/api/schools/${widget.customSchoolId}/finance/requisitions',
                   body: {
                     'academicTermId': termId,
+                    'fundingSource': fundingSource!.apiValue,
                     'description': title.text.trim(),
-                    'category': category.text.trim().isEmpty
-                        ? 'General'
-                        : category.text.trim(),
+                    'category': category,
                     'vendor': payee.text.trim().isEmpty
-                        ? 'Vendor not confirmed'
+                        ? null
                         : payee.text.trim(),
                     'requestedAmount': value,
                     'expenseDate': DateTime.now()
@@ -3619,6 +4195,45 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _FormSection(
+                  title: 'Funding source',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'How will this purchase be funded?',
+                        style: TextStyle(
+                          color: AppColors.text,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      RadioListTile<_FundingSource>(
+                        value: _FundingSource.schoolFunds,
+                        groupValue: fundingSource,
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('School funds'),
+                        subtitle: const Text(
+                          'Bank transfer, cheque, or the main school MoMo account.',
+                        ),
+                        onChanged: (value) =>
+                            setDialogState(() => fundingSource = value),
+                      ),
+                      RadioListTile<_FundingSource>(
+                        value: _FundingSource.pettyCash,
+                        groupValue: fundingSource,
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Petty cash'),
+                        subtitle: const Text(
+                          'The controlled Cash or MoMo float pocket.',
+                        ),
+                        onChanged: (value) =>
+                            setDialogState(() => fundingSource = value),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                _FormSection(
                   title: 'Request details',
                   child: Column(
                     children: [
@@ -3649,11 +4264,22 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                         ),
                       ),
                       const SizedBox(height: 12),
-                      TextField(
-                        controller: category,
+                      DropdownButtonFormField<String>(
+                        value: category,
                         decoration: const InputDecoration(
                           labelText: 'Category',
                         ),
+                        hint: const Text('Select category'),
+                        items: categories
+                            .map(
+                              (item) => DropdownMenuItem(
+                                value: item,
+                                child: Text(item),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) =>
+                            setDialogState(() => category = value),
                       ),
                     ],
                   ),
@@ -3680,11 +4306,20 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                       _SegmentedChoice<bool>(
                         value: emergencyApproval,
                         options: const [false, true],
-                        labelOf: (value) => value
-                            ? 'Verbal approval (emergency)'
-                            : 'Not yet - submit for approval',
+                        labelOf: (value) =>
+                            value ? 'Emergency purchase' : 'Standard approval',
                         onChanged: (value) =>
                             setDialogState(() => emergencyApproval = value),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        emergencyApproval
+                            ? 'Purchase already made or cannot wait for prior approval.'
+                            : 'Submit for approval before purchasing.',
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 13,
+                        ),
                       ),
                       if (emergencyApproval) ...[
                         const SizedBox(height: 12),
@@ -3692,7 +4327,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                           icon: Icons.emergency_outlined,
                           color: AppColors.amber,
                           text:
-                              'Emergency route: pay now, then Head Teacher ratifies within 24 hours.',
+                              'Use only when urgent circumstances prevented prior approval. The expense must still be reviewed and ratified afterward.',
                         ),
                         const SizedBox(height: 12),
                         TextField(
@@ -3725,7 +4360,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   void _openRequisitionWorkspace(_RequisitionRecord requisition) {
     _ExpenseRecord? linkedExpense;
     for (final candidate in _expenses) {
-      if (candidate.requisitionId == requisition.id) {
+      if (candidate.requisitionId == requisition.id ||
+          candidate.requisitionId == requisition.serverId?.toString()) {
         linkedExpense = candidate;
         break;
       }
@@ -3765,6 +4401,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   _InfoRow('Description', requisition.title),
                   _InfoRow('Vendor / payee', requisition.payee),
                   _InfoRow('Category', requisition.category),
+                  _InfoRow('Funding source', requisition.fundingSource.label),
                   _InfoRow(
                     'Approved amount',
                     requisition.approvedAmount == null
@@ -3790,12 +4427,22 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             ),
             const SizedBox(height: 16),
             if (linkedExpense == null &&
-                requisition.status == _RequisitionStatus.pending)
+                requisition.status == _RequisitionStatus.pending &&
+                !requisition.isEmergency)
               _InlineNotice(
                 icon: Icons.pending_actions_outlined,
                 color: AppColors.amber,
                 text:
                     'Approve this requisition before any money is recorded as spent.',
+              ),
+            if (linkedExpense == null &&
+                requisition.isEmergency &&
+                requisition.status == _RequisitionStatus.pending)
+              const _InlineNotice(
+                icon: Icons.emergency_outlined,
+                color: AppColors.amber,
+                text:
+                    'Verbal authorisation is recorded. Record the payment now; a head teacher must ratify it afterward.',
               ),
             if (linkedExpense == null &&
                 requisition.status == _RequisitionStatus.approved)
@@ -3828,7 +4475,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               runSpacing: 10,
               children: [
                 if (_canApproveFinance &&
-                    requisition.status == _RequisitionStatus.pending) ...[
+                    requisition.status == _RequisitionStatus.pending &&
+                    !requisition.isEmergency) ...[
                   FilledButton.icon(
                     onPressed: () {
                       Navigator.pop(dialogContext);
@@ -3848,7 +4496,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   ),
                 ],
                 if (linkedExpense == null &&
-                    requisition.status == _RequisitionStatus.approved)
+                    (requisition.status == _RequisitionStatus.approved ||
+                        (requisition.isEmergency &&
+                            requisition.status == _RequisitionStatus.pending)))
                   FilledButton.icon(
                     onPressed: () {
                       Navigator.pop(dialogContext);
@@ -3918,7 +4568,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     required _PaymentChannel channel,
     picker.PlatformFile? receiptAttachment,
   }) async {
-    if (requisition.status != _RequisitionStatus.approved) {
+    if (requisition.status != _RequisitionStatus.approved &&
+        !(requisition.isEmergency &&
+            requisition.status == _RequisitionStatus.pending)) {
       _snack('Only approved requisitions can be fulfilled.');
       return false;
     }
@@ -3928,7 +4580,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       return false;
     }
 
-    final approved = requisition.approvedAmount;
+    final approved =
+        requisition.approvedAmount ??
+        (requisition.isEmergency ? requisition.requestedAmount : null);
     if (approved == null) {
       _snack('Approve this requisition before recording actual spend.');
       return false;
@@ -4127,7 +4781,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       (item) =>
           item.status == _TopUpStatus.pending ||
           item.status == _TopUpStatus.approved ||
-          item.status == _TopUpStatus.disbursed,
+          item.status == _TopUpStatus.disbursed ||
+          item.status == _TopUpStatus.disputed ||
+          item.status == _TopUpStatus.corrected,
     );
     if (hasPending) {
       _snack('There is already an open top-up cycle.');
@@ -4138,7 +4794,128 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       return;
     }
 
-    final amount = _settings.floatApprovedAmount - _totalFloatBalance;
+    if (_topUpApprovers.isEmpty) {
+      _snack('No eligible approver is available for this school.');
+      return;
+    }
+    final maximum = _settings.floatApprovedAmount - _totalFloatBalance;
+    var amountText = maximum.toStringAsFixed(2);
+    var note = '';
+    int? approverId;
+    String? error;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Request petty-cash top-up'),
+          content: SizedBox(
+            width: 480,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  initialValue: amountText,
+                  keyboardType: TextInputType.number,
+                  onChanged: (v) => amountText = v,
+                  decoration: const InputDecoration(
+                    labelText: 'Amount requested',
+                    prefixText: 'GH¢ ',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<int>(
+                  value: approverId,
+                  decoration: const InputDecoration(labelText: 'Approver'),
+                  items: _topUpApprovers
+                      .map(
+                        (a) => DropdownMenuItem(
+                          value: a.id,
+                          child: Text('${a.name} · ${a.role}'),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) => setDialogState(() => approverId = v),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  minLines: 2,
+                  maxLines: 3,
+                  onChanged: (v) => note = v,
+                  decoration: InputDecoration(
+                    labelText: 'Request note',
+                    errorText: error,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'The selected approver will be notified. Money is added only after disbursement and requester confirmation.',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              style: _primaryButtonStyle(),
+              onPressed: () {
+                final amount = _parseAmount(amountText);
+                if (amount <= 0 ||
+                    amount > maximum ||
+                    approverId == null ||
+                    note.trim().isEmpty) {
+                  setDialogState(
+                    () => error =
+                        'Enter a valid amount, select an approver, and add a note.',
+                  );
+                  return;
+                }
+                Navigator.pop(context, true);
+              },
+              child: const Text('Review request'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final amount = _parseAmount(amountText);
+    final approver = _topUpApprovers.firstWhere((a) => a.id == approverId);
+    final finalConfirmation = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Confirm top-up request'),
+        content: SizedBox(
+          width: 430,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _ReadOnlyRow('Requested amount', _money(amount)),
+              _ReadOnlyRow('Approver', approver.name),
+              _ReadOnlyRow('Requester', widget.recordedBy ?? 'Current user'),
+              _ReadOnlyRow('Note', note.trim()),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Back'),
+          ),
+          FilledButton(
+            style: _primaryButtonStyle(),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Submit request'),
+          ),
+        ],
+      ),
+    );
+    if (finalConfirmation != true || !mounted) return;
+
     await _runFinanceMutation(
       request: () => _financeApi.post(
         '/api/schools/${widget.customSchoolId}/finance/top-ups',
@@ -4146,7 +4923,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           'academicTermId': _academicTermId,
           'destinationPocket': 'CASH',
           'requestedAmount': amount,
-          'notes': 'Top-up requested from Expenses & Petty Cash',
+          'approverUserId': approverId,
+          'notes': note.trim(),
         },
       ),
       successMessage: 'Top-up request created for ${_money(amount)}.',
@@ -4164,34 +4942,420 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       );
       return;
     }
+    if (_topUpDisbursers.isEmpty) {
+      _snack('No eligible disburser is available.');
+      return;
+    }
+    int? disburserId;
+    var note = '';
+    String? error;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Approve top-up request'),
+          content: SizedBox(
+            width: 460,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _ReadOnlyRow('Requested amount', _money(item.requestedAmount)),
+                DropdownButtonFormField<int>(
+                  value: disburserId,
+                  decoration: const InputDecoration(labelText: 'Disburser'),
+                  items: _topUpDisbursers
+                      .map(
+                        (a) => DropdownMenuItem(
+                          value: a.id,
+                          child: Text('${a.name} · ${a.role}'),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) => setDialogState(() => disburserId = v),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  minLines: 2,
+                  maxLines: 3,
+                  onChanged: (v) => note = v,
+                  decoration: InputDecoration(
+                    labelText: 'Approval note',
+                    errorText: error,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              style: _primaryButtonStyle(),
+              onPressed: () {
+                if (disburserId == null || note.trim().isEmpty) {
+                  setDialogState(
+                    () => error = 'Select a disburser and add a note.',
+                  );
+                  return;
+                }
+                Navigator.pop(context, true);
+              },
+              child: const Text('Approve'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) return;
     await _runFinanceMutation(
       request: () => _financeApi.post(
         '/api/schools/${widget.customSchoolId}/finance/top-ups/${item.serverId}/approve',
-        body: {
-          'approvedAmount': item.requestedAmount,
-          'notes': 'Approved from Expenses & Petty Cash',
-        },
+        body: {'disburserUserId': disburserId, 'notes': note.trim()},
       ),
       successMessage: '${item.requestId} approved.',
     );
   }
 
-  Future<void> _queryTopUp(_TopUpRequest item) async {
+  Future<void> _declineTopUp(_TopUpRequest item) async {
     if (item.serverId == null) {
-      _snack('This top-up cannot be queried because its server ID is missing.');
+      _snack(
+        'This top-up cannot be declined because its server ID is missing.',
+      );
       return;
     }
+
+    var reason = '';
+    String? errorMessage;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('Decline top-up request?'),
+          content: SizedBox(
+            width: 440,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${item.requestId} requests ${_money(item.requestedAmount)}.',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Declining closes this request without changing the petty-cash balance.',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  minLines: 3,
+                  maxLines: 4,
+                  onChanged: (value) => reason = value,
+                  decoration: InputDecoration(
+                    labelText: 'Reason for declining',
+                    hintText: 'Explain why this top-up cannot be approved',
+                    errorText: errorMessage,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (reason.trim().isEmpty) {
+                  setDialogState(
+                    () => errorMessage = 'Enter a reason for declining.',
+                  );
+                  return;
+                }
+                Navigator.pop(dialogContext, true);
+              },
+              style: FilledButton.styleFrom(backgroundColor: AppColors.red),
+              child: const Text('Decline request'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
     await _runFinanceMutation(
       request: () => _financeApi.post(
-        '/api/schools/${widget.customSchoolId}/finance/top-ups/${item.serverId}/query',
-        body: {'note': 'Returned for review from Expenses & Petty Cash'},
+        '/api/schools/${widget.customSchoolId}/finance/top-ups/${item.serverId}/decline',
+        body: {'note': reason.trim()},
       ),
-      successMessage: '${item.requestId} returned for review.',
+      successMessage: '${item.requestId} declined.',
     );
   }
 
-  void _openDisburseTopUpDialog(_TopUpRequest item) {
-    _openConfirmTopUpDialog(item);
+  Future<void> _reassignTopUpDisburser(_TopUpRequest item) async {
+    if (item.serverId == null || _topUpDisbursers.isEmpty) return;
+    int? disburserId;
+    var note = '';
+    String? error;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Reassign disburser'),
+          content: SizedBox(
+            width: 460,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<int>(
+                  value: disburserId,
+                  decoration: const InputDecoration(labelText: 'New disburser'),
+                  items: _topUpDisbursers
+                      .map(
+                        (actor) => DropdownMenuItem(
+                          value: actor.id,
+                          child: Text('${actor.name} · ${actor.role}'),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) =>
+                      setDialogState(() => disburserId = value),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  minLines: 3,
+                  maxLines: 4,
+                  onChanged: (value) => note = value,
+                  decoration: InputDecoration(
+                    labelText: 'Reason for reassignment',
+                    errorText: error,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              style: _primaryButtonStyle(),
+              onPressed: () {
+                if (disburserId == null || note.trim().isEmpty) {
+                  setDialogState(
+                    () => error = 'Select a disburser and enter a reason.',
+                  );
+                  return;
+                }
+                Navigator.pop(context, true);
+              },
+              child: const Text('Reassign'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _runFinanceMutation(
+      request: () => _financeApi.post(
+        '/api/schools/${widget.customSchoolId}/finance/top-ups/${item.serverId}/reassign-disburser',
+        body: {'disburserUserId': disburserId, 'note': note.trim()},
+      ),
+      successMessage: '${item.requestId} reassigned.',
+    );
+  }
+
+  void _openDisburseTopUpDialog(_TopUpRequest item, {bool correction = false}) {
+    final approvedAmount = item.approvedAmount;
+    if (approvedAmount == null || item.serverId == null) {
+      _snack('This top-up is not ready for disbursement.');
+      return;
+    }
+    final requestDate = DateTime(
+      item.requestedAt.year,
+      item.requestedAt.month,
+      item.requestedAt.day,
+    );
+    var selectedDate = DateTime.now();
+    var reference = '';
+    var notes = '';
+    var cashText = approvedAmount.toStringAsFixed(2);
+    var momoText = '0';
+    var wallet = _settings.momoWalletNumber;
+    int? selectedReceiverId;
+    String? error;
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => _ExpenseDialogShell(
+          title: correction
+              ? 'Record corrected disbursement'
+              : 'Record disbursement',
+          subtitle: correction
+              ? 'Record the allocation after the problem was corrected.'
+              : 'Issue the exact amount approved for this top-up.',
+          primaryLabel: correction ? 'Save correction' : 'Confirm disbursement',
+          width: 500,
+          onPrimary: () async {
+            final cash = _parseAmount(cashText);
+            final momo = _parseAmount(momoText);
+            if (selectedReceiverId != item.requesterUserId ||
+                (cash + momo - approvedAmount).abs() > .009 ||
+                notes.trim().isEmpty ||
+                (momo > 0 && wallet.trim().isEmpty)) {
+              setDialogState(
+                () => error =
+                    'Cash and MoMo must total the approved amount. Add a note and MoMo wallet when used.',
+              );
+              return;
+            }
+            Navigator.pop(dialogContext);
+            await _runFinanceMutation(
+              request: () => _financeApi.post(
+                '/api/schools/${widget.customSchoolId}/finance/top-ups/${item.serverId}/${correction ? 'correct' : 'disburse'}',
+                body: {
+                  'cashAmount': cash,
+                  'momoAmount': momo,
+                  'receiverUserId': selectedReceiverId,
+                  'momoWalletNumber': wallet.trim(),
+                  'disbursementDate': selectedDate
+                      .toIso8601String()
+                      .split('T')
+                      .first,
+                  'reference': reference.trim(),
+                  'notes': notes.trim(),
+                },
+              ),
+              successMessage:
+                  '${_money(approvedAmount)} disbursed. Awaiting recipient confirmation.',
+            );
+          },
+          child: Column(
+            children: [
+              _DialogSummary(
+                title: 'Amount to disburse',
+                value: _money(approvedAmount),
+                subtitle: item.requestId,
+                color: AppColors.blue,
+              ),
+              const SizedBox(height: 14),
+              _FormSection(
+                title: 'Disbursement record',
+                child: Column(
+                  children: [
+                    DropdownButtonFormField<int>(
+                      value: selectedReceiverId,
+                      decoration: const InputDecoration(
+                        labelText: 'Select receiver of funds',
+                      ),
+                      items: item.requesterUserId == null
+                          ? const []
+                          : [
+                              DropdownMenuItem(
+                                value: item.requesterUserId,
+                                child: Text(
+                                  '${item.receiver ?? item.requester} · Requester',
+                                ),
+                              ),
+                            ],
+                      onChanged: (value) =>
+                          setDialogState(() => selectedReceiverId = value),
+                    ),
+                    const SizedBox(height: 12),
+                    InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () async {
+                        final picked = await showDatePicker(
+                          context: dialogContext,
+                          initialDate: selectedDate,
+                          firstDate: requestDate,
+                          lastDate: DateTime.now(),
+                        );
+                        if (picked != null) {
+                          setDialogState(() => selectedDate = picked);
+                        }
+                      },
+                      child: InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Disbursement date',
+                          suffixIcon: Icon(Icons.calendar_today_outlined),
+                        ),
+                        child: Text(_date(selectedDate)),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            initialValue: cashText,
+                            keyboardType: TextInputType.number,
+                            onChanged: (v) {
+                              cashText = v;
+                              setDialogState(() {});
+                            },
+                            decoration: const InputDecoration(
+                              labelText: 'Cash amount',
+                              prefixText: 'GH¢ ',
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: TextFormField(
+                            initialValue: momoText,
+                            keyboardType: TextInputType.number,
+                            onChanged: (v) {
+                              momoText = v;
+                              setDialogState(() {});
+                            },
+                            decoration: const InputDecoration(
+                              labelText: 'MoMo amount',
+                              prefixText: 'GH¢ ',
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (_parseAmount(momoText) > 0) ...[
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        initialValue: wallet,
+                        onChanged: (v) => wallet = v,
+                        decoration: const InputDecoration(
+                          labelText: 'MoMo wallet number',
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    TextField(
+                      onChanged: (value) => reference = value,
+                      decoration: const InputDecoration(
+                        labelText: 'Payment reference (optional)',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      onChanged: (value) => notes = value,
+                      minLines: 2,
+                      maxLines: 3,
+                      decoration: InputDecoration(
+                        labelText: 'Disbursement note',
+                        errorText: error,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   void _openConfirmTopUpDialog(_TopUpRequest item) {
@@ -4200,25 +5364,20 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       _snack('This top-up does not have an approved amount.');
       return;
     }
-    final code = TextEditingController(text: item.approvalCode ?? '');
-    final actual = TextEditingController(
-      text: approvedAmount.toStringAsFixed(0),
-    );
+    var note = '';
+    String? error;
     showDialog<void>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
-          final value = _parseAmount(actual.text);
-          final difference = value - approvedAmount;
           return _ExpenseDialogShell(
             title: 'Confirm amount received',
-            subtitle: 'Confirm the cash actually received into the float.',
+            subtitle: 'Confirm the exact allocation recorded by the disburser.',
             primaryLabel: 'Confirm received',
             width: 500,
             onPrimary: () async {
-              final value = _parseAmount(actual.text);
-              if (code.text.trim() != item.approvalCode || value <= 0) {
-                _snack('Enter valid approval code and amount.');
+              if (note.trim().isEmpty) {
+                setDialogState(() => error = 'Add a confirmation note.');
                 return;
               }
               Navigator.pop(context);
@@ -4226,15 +5385,13 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                 request: () => _financeApi.post(
                   '/api/schools/${widget.customSchoolId}/finance/top-ups/${item.serverId}/confirm',
                   body: {
-                    'approvalCode': code.text.trim(),
-                    'actualAmount': value,
-                    'reference': 'Confirmed in Expenses & Petty Cash',
-                    'notes': 'Physical receipt confirmed in the application',
+                    'cashAmount': item.cashAmount ?? 0,
+                    'momoAmount': item.momoAmount ?? 0,
+                    'momoWalletNumber': item.momoWalletNumber,
+                    'notes': note.trim(),
                   },
                 ),
-                successMessage: value == approvedAmount
-                    ? 'Top-up confirmed and float restored.'
-                    : 'Top-up confirmed with discrepancy for review.',
+                successMessage: 'Top-up confirmed and float restored.',
               );
               if (saved && mounted) {
                 setState(() {
@@ -4248,47 +5405,101 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                 _DialogSummary(
                   title: 'Approved amount',
                   value: _money(approvedAmount),
-                  subtitle: '${item.requestId} · confirm physical receipt',
+                  subtitle: '${item.requestId} · confirm funds received',
                   color: AppColors.blue,
                 ),
                 const SizedBox(height: 14),
                 _FormSection(
-                  title: 'Receipt confirmation',
+                  title: 'Recipient confirmation',
                   child: Column(
                     children: [
-                      TextField(
-                        controller: code,
-                        decoration: const InputDecoration(
-                          labelText: 'Approval code',
-                        ),
+                      _ReadOnlyRow(
+                        'Cash received',
+                        _money(item.cashAmount ?? 0),
                       ),
+                      _ReadOnlyRow(
+                        'MoMo received',
+                        _money(item.momoAmount ?? 0),
+                      ),
+                      if (item.momoWalletNumber != null)
+                        _ReadOnlyRow('MoMo wallet', item.momoWalletNumber!),
                       const SizedBox(height: 12),
                       TextField(
-                        controller: actual,
-                        keyboardType: TextInputType.number,
-                        onChanged: (_) => setDialogState(() {}),
-                        decoration: const InputDecoration(
-                          labelText: 'Actual amount received',
-                          prefixText: 'GH¢ ',
+                        minLines: 2,
+                        maxLines: 3,
+                        onChanged: (value) => note = value,
+                        decoration: InputDecoration(
+                          labelText: 'Confirmation note',
+                          errorText: error,
                         ),
                       ),
                     ],
                   ),
-                ),
-                const SizedBox(height: 14),
-                _DialogSummary(
-                  title: difference == 0 ? 'No discrepancy' : 'Difference',
-                  value: _money(difference.abs()),
-                  subtitle: difference == 0
-                      ? 'The received amount matches the approval.'
-                      : 'A mismatch will be flagged for review.',
-                  color: difference == 0 ? _green : AppColors.amber,
                 ),
               ],
             ),
           );
         },
       ),
+    );
+  }
+
+  Future<void> _topUpNoteAction(
+    _TopUpRequest item,
+    String action,
+    String title,
+    String prompt,
+  ) async {
+    if (item.serverId == null) return;
+    var note = '';
+    String? error;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(title),
+          content: SizedBox(
+            width: 440,
+            child: TextField(
+              minLines: 3,
+              maxLines: 5,
+              onChanged: (v) => note = v,
+              decoration: InputDecoration(
+                labelText: 'Required note',
+                hintText: prompt,
+                errorText: error,
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Back'),
+            ),
+            FilledButton(
+              style: action == 'report-problem'
+                  ? FilledButton.styleFrom(backgroundColor: AppColors.red)
+                  : _primaryButtonStyle(),
+              onPressed: () {
+                if (note.trim().isEmpty) {
+                  setDialogState(() => error = 'A note is required.');
+                  return;
+                }
+                Navigator.pop(context, true);
+              },
+              child: Text(title),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _runFinanceMutation(
+      request: () => _financeApi.post(
+        '/api/schools/${widget.customSchoolId}/finance/top-ups/${item.serverId}/$action',
+        body: {'note': note.trim()},
+      ),
+      successMessage: '$title recorded.',
     );
   }
 
@@ -4616,7 +5827,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     _RequisitionRecord? linkedRequisition;
     if (item.requisitionId != null) {
       for (final requisition in _requisitions) {
-        if (requisition.id == item.requisitionId) {
+        if (requisition.id == item.requisitionId ||
+            requisition.serverId?.toString() == item.requisitionId) {
           linkedRequisition = requisition;
           break;
         }
@@ -4638,7 +5850,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               _InfoRow('Payment channel', item.channel.label),
               _InfoRow('Amount', _money(item.amount)),
               if (item.approvedAmount != null) ...[
-                _InfoRow('Approved amount', _money(item.approvedAmount!)),
+                _InfoRow(
+                  item.isEmergency ? 'Verbal estimate' : 'Approved amount',
+                  _money(item.approvedAmount!),
+                ),
                 _InfoRow('Variance', item.varianceLabel),
                 _InfoRow('Variance review', item.varianceStatus.label),
               ],
@@ -4647,7 +5862,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                 _InfoRow('Emergency approval', item.approvalStatus.label),
               if (item.momoFee > 0) _InfoRow('MoMo fee', _money(item.momoFee)),
               if (item.requisitionId != null)
-                _InfoRow('Requisition', item.requisitionId!),
+                _InfoRow(
+                  'Requisition',
+                  _requisitionReference(item.requisitionId)!,
+                ),
               if (item.linkedExpenseId != null)
                 _InfoRow('Linked expense', item.linkedExpenseId!),
               _InfoRow(
@@ -5031,51 +6249,41 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               '${item.reference} has a ${item.totalVariance > 0 ? 'surplus' : 'shortfall'} of ${_money(item.totalVariance.abs())}.',
           primaryLabel: 'Close variance',
           width: 560,
-          onPrimary: () {
+          onPrimary: () async {
             final note = resolution.text.trim();
             if (note.isEmpty) {
               _snack('Add a resolution note before closing the variance.');
               return;
             }
-            final resolvedBy = widget.recordedBy?.trim().isNotEmpty == true
-                ? widget.recordedBy!.trim()
-                : 'Administrator';
-            setState(() {
-              item.varianceResolution = note;
-              item.varianceResolvedAt = DateTime.now();
-              item.varianceResolvedBy = resolvedBy;
-              item.status = _ReconciliationStatus.varianceClosed;
-              if (!_financialFollowUps.any(
-                (followUp) => followUp.relatedReference == item.reference,
-              )) {
-                _financialFollowUps.add(
-                  _FinancialFollowUp(
-                    reference: _nextId('FF'),
-                    type: followUpType,
-                    relatedReference: item.reference,
-                    owner: item.assignedTo,
-                    amount: item.totalVariance.abs(),
-                    createdAt: DateTime.now(),
-                    dueDate: DateTime.now().add(const Duration(days: 7)),
-                    summary:
-                        'Created from ${item.reference}: ${item.totalVariance > 0 ? 'cash surplus' : 'cash shortfall'} requires follow-up.',
-                    status: _FollowUpStatus.open,
-                    notes: [
-                      _FollowUpNote(
-                        author: resolvedBy,
-                        createdAt: DateTime.now(),
-                        text: note,
-                        isResolution: true,
-                      ),
-                    ],
-                  ),
+            if (item.serverId == null) {
+              _snack('This reconciliation is missing its server ID.');
+              return;
+            }
+            final resolutionType = switch (followUpType) {
+              _FollowUpType.staffRecovery => 'RECOVER_FROM_STAFF',
+              _FollowUpType.cashSurplus => 'EXCESS_RETURN',
+              _FollowUpType.unconfirmedTransfer => 'CORRECT_ENTRY',
+              _ => 'WRITE_OFF',
+            };
+            final resolved = await _runFinanceMutation(
+              request: () async {
+                await _financeApi.post(
+                  '/api/schools/${widget.customSchoolId}/finance/reconciliations/${item.serverId}/resolve',
+                  body: {
+                    'resolutionType': resolutionType,
+                    'responsibleParty': item.assignedTo,
+                    'notes': note,
+                  },
                 );
-              }
-            });
-            Navigator.pop(context);
-            _snack(
-              'Variance closed and a linked financial follow-up was created.',
+                return _financeApi.post(
+                  '/api/schools/${widget.customSchoolId}/finance/reconciliations/${item.serverId}/close',
+                  body: const {},
+                );
+              },
+              successMessage:
+                  'Variance closed and the linked financial follow-up was recorded.',
             );
+            if (resolved && context.mounted) Navigator.pop(context);
           },
           child: Column(
             children: [
@@ -5145,7 +6353,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           subtitle:
               'Create an exception record for accountant review and closure.',
           primaryLabel: 'Create follow-up',
-          onPrimary: () {
+          onPrimary: () async {
             final relatedReference = related.text.trim();
             final assignedOwner = owner.text.trim();
             final value = _parseAmount(amount.text);
@@ -5156,34 +6364,43 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               _snack('Add the related record, owner, and amount.');
               return;
             }
-            setState(() {
-              _financialFollowUps.add(
-                _FinancialFollowUp(
-                  reference: _nextId('FF'),
-                  type: type,
-                  relatedReference: relatedReference,
-                  owner: assignedOwner,
-                  amount: value,
-                  createdAt: DateTime.now(),
-                  dueDate: DateTime.now().add(const Duration(days: 7)),
-                  summary: description.isEmpty
+            final termId = _academicTermId;
+            if (termId == null) {
+              _snack('The current academic term is not available.');
+              return;
+            }
+            final apiType = switch (type) {
+              _FollowUpType.staffRecovery => 'RECOVER_FROM_STAFF',
+              _FollowUpType.missingReceipt => 'MISSING_RECEIPT',
+              _FollowUpType.vendorRefund => 'VENDOR_REFUND',
+              _FollowUpType.cashShortage => 'CASH_SHORTAGE',
+              _FollowUpType.unconfirmedTransfer => 'UNCONFIRMED_TRANSFER',
+              _FollowUpType.cashSurplus => 'CASH_SURPLUS',
+              _FollowUpType.expenseVariance => 'EXPENSE_VARIANCE',
+            };
+            final saved = await _runFinanceMutation(
+              request: () => _financeApi.post(
+                '/api/schools/${widget.customSchoolId}/finance/follow-ups',
+                body: {
+                  'academicTermId': termId,
+                  'type': apiType,
+                  'relatedReference': relatedReference,
+                  'responsibleParty': assignedOwner,
+                  'amount': value,
+                  'description': description.isEmpty
                       ? 'Manual follow-up recorded for $relatedReference.'
                       : description,
-                  status: _FollowUpStatus.open,
-                  notes: [
-                    _FollowUpNote(
-                      author: widget.recordedBy?.trim().isNotEmpty == true
-                          ? widget.recordedBy!.trim()
-                          : 'Administrator',
-                      createdAt: DateTime.now(),
-                      text: 'Follow-up opened manually.',
-                    ),
-                  ],
-                ),
-              );
-            });
-            Navigator.pop(context);
-            _snack('Financial follow-up created.');
+                  'dueDate': DateTime.now()
+                      .add(const Duration(days: 7))
+                      .toIso8601String()
+                      .split('T')
+                      .first,
+                  'note': 'Follow-up opened manually.',
+                },
+              ),
+              successMessage: 'Financial follow-up created.',
+            );
+            if (saved && context.mounted) Navigator.pop(context);
           },
           child: Column(
             children: [
@@ -5243,16 +6460,32 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     );
   }
 
-  void _openFollowUpDetailDialog(_FinancialFollowUp item) {
+  Future<void> _openFollowUpDetailDialog(_FinancialFollowUp item) async {
+    if (item.serverId != null) {
+      try {
+        final response = await _financeApi.get(
+          '/api/schools/${widget.customSchoolId}/finance/notes',
+          query: {'parentType': 'FOLLOW_UP', 'parentId': '${item.serverId}'},
+        );
+        item.notes
+          ..clear()
+          ..addAll(_financeNotes(response));
+      } on FinanceApiException catch (error) {
+        if (mounted) _snack(error.message);
+      }
+    }
+    if (!mounted) return;
     final note = TextEditingController();
     showDialog<void>(
       context: context,
       builder: (context) => _ExpenseDialogShell(
         title: item.reference,
         subtitle: '${item.type.label} · linked to ${item.relatedReference}',
-        primaryLabel: item.isClosed ? 'Done' : 'Close follow-up',
+        primaryLabel: item.isClosed || !_canApproveFinance
+            ? 'Done'
+            : 'Close follow-up',
         onPrimary: () {
-          if (item.isClosed) {
+          if (item.isClosed || !_canApproveFinance) {
             Navigator.pop(context);
             return;
           }
@@ -5303,25 +6536,24 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               ),
               const SizedBox(height: 10),
               OutlinedButton.icon(
-                onPressed: () {
+                onPressed: () async {
                   final text = note.text.trim();
                   if (text.isEmpty) {
                     _snack('Add a note before saving.');
                     return;
                   }
-                  setState(() {
-                    item.notes.add(
-                      _FollowUpNote(
-                        author: widget.recordedBy?.trim().isNotEmpty == true
-                            ? widget.recordedBy!.trim()
-                            : 'Administrator',
-                        createdAt: DateTime.now(),
-                        text: text,
-                      ),
-                    );
-                  });
-                  Navigator.pop(context);
-                  _snack('Follow-up note added.');
+                  if (item.serverId == null) {
+                    _snack('This follow-up is missing its server ID.');
+                    return;
+                  }
+                  final saved = await _runFinanceMutation(
+                    request: () => _financeApi.post(
+                      '/api/schools/${widget.customSchoolId}/finance/follow-ups/${item.serverId}/notes',
+                      body: {'note': text},
+                    ),
+                    successMessage: 'Follow-up note added.',
+                  );
+                  if (saved && context.mounted) Navigator.pop(context);
                 },
                 icon: const Icon(Icons.add_comment_outlined),
                 label: const Text('Add note'),
@@ -5344,28 +6576,28 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         title: 'Close ${item.reference}',
         subtitle: 'Administrator resolution is required to close this record.',
         primaryLabel: 'Close follow-up',
-        onPrimary: () {
+        onPrimary: () async {
           final text = resolution.text.trim();
           if (text.isEmpty) {
             _snack('Add a resolution note before closing this follow-up.');
             return;
           }
-          setState(() {
-            item.status = _FollowUpStatus.closed;
-            item.notes.add(
-              _FollowUpNote(
-                author: widget.recordedBy?.trim().isNotEmpty == true
-                    ? widget.recordedBy!.trim()
-                    : 'Administrator',
-                createdAt: DateTime.now(),
-                text: text,
-                isResolution: true,
-              ),
-            );
-          });
-          Navigator.pop(context);
-          Navigator.pop(parentContext);
-          _snack('${item.reference} closed with an administrator resolution.');
+          if (item.serverId == null) {
+            _snack('This follow-up is missing its server ID.');
+            return;
+          }
+          final closed = await _runFinanceMutation(
+            request: () => _financeApi.post(
+              '/api/schools/${widget.customSchoolId}/finance/follow-ups/${item.serverId}/close',
+              body: {'note': text},
+            ),
+            successMessage:
+                '${item.reference} closed with an administrator resolution.',
+          );
+          if (closed && context.mounted) {
+            Navigator.pop(context);
+            if (parentContext.mounted) Navigator.pop(parentContext);
+          }
         },
         child: Column(
           children: [
@@ -5396,13 +6628,57 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       _snack('Your role cannot ratify expenses.');
       return;
     }
-    setState(() {
-      item.approvalStatus = _ExpenseApprovalStatus.ratified;
-      item.status = item.varianceStatus == _VarianceStatus.pendingReview
-          ? _ExpenseStatus.pendingVarianceReview
-          : _ExpenseStatus.ratified;
-    });
-    _snack('${item.expenseId} ratified.');
+    if (item.serverId == null) {
+      _snack(
+        'This expense cannot be ratified because its server ID is missing.',
+      );
+      return;
+    }
+    final note = TextEditingController();
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => _ExpenseDialogShell(
+        title: 'Ratify emergency expense',
+        subtitle:
+            'Confirm that the completed emergency payment is a legitimate school expense.',
+        primaryLabel: 'Ratify expense',
+        onPrimary: () async {
+          final value = note.text.trim();
+          if (value.isEmpty) {
+            _snack('Add a ratification note before continuing.');
+            return;
+          }
+          Navigator.pop(dialogContext);
+          await _runFinanceMutation(
+            request: () => _financeApi.post(
+              '/api/schools/${widget.customSchoolId}/finance/transactions/${item.serverId}/ratify',
+              body: {'note': value},
+            ),
+            successMessage: '${item.expenseId} ratified.',
+          );
+        },
+        child: Column(
+          children: [
+            const _InlineNotice(
+              icon: Icons.gavel_outlined,
+              color: AppColors.amber,
+              text:
+                  'Ratification adds an after-the-fact approval to the permanent audit trail. It does not replace the original verbal authorisation.',
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: note,
+              minLines: 3,
+              maxLines: 5,
+              decoration: const InputDecoration(
+                labelText: 'Ratification note',
+                hintText: 'Explain why this emergency payment is accepted.',
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _openVarianceReviewDialog(_ExpenseRecord item) {
@@ -5410,10 +6686,15 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       _snack('Your role cannot review expense variances.');
       return;
     }
+    if (item.serverId == null) {
+      _snack(
+        'This variance cannot be reviewed because its server ID is missing.',
+      );
+      return;
+    }
     final reviewNotes = TextEditingController(text: item.varianceReviewNotes);
     var outcome = _VarianceOutcome.accept;
     final approved = item.approvedAmount ?? 0;
-    final difference = item.amount - approved;
     showDialog<void>(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -5423,53 +6704,24 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               'Approved ${_money(approved)} · actual ${_money(item.amount)} · ${item.varianceLabel}',
           primaryLabel: 'Save review',
           width: 600,
-          onPrimary: () {
+          onPrimary: () async {
             final note = reviewNotes.text.trim();
             if (note.isEmpty) {
               _snack('Add a review note to keep the decision auditable.');
               return;
             }
-            setState(() {
-              item.varianceStatus = outcome == _VarianceOutcome.accept
-                  ? _VarianceStatus.resolved
-                  : outcome == _VarianceOutcome.requestCorrection
-                  ? _VarianceStatus.correctionRequested
-                  : _VarianceStatus.escalated;
-              item.varianceOutcome = outcome.label;
-              item.varianceReviewNotes = note;
-              item.varianceReviewedAt = DateTime.now();
-              item.status = item.varianceStatus == _VarianceStatus.resolved
-                  ? (item.approvalStatus ==
-                            _ExpenseApprovalStatus.pendingRatification
-                        ? _ExpenseStatus.pendingRatification
-                        : _ExpenseStatus.complete)
-                  : _ExpenseStatus.pendingVarianceReview;
-              if (outcome == _VarianceOutcome.escalate) {
-                _financialFollowUps.insert(
-                  0,
-                  _FinancialFollowUp(
-                    reference: _nextId('FF'),
-                    type: _FollowUpType.expenseVariance,
-                    relatedReference: item.expenseId,
-                    owner: 'Administrator / Accounts',
-                    amount: difference.abs(),
-                    createdAt: DateTime.now(),
-                    status: _FollowUpStatus.open,
-                    summary: 'Expense variance escalated for follow-up.',
-                    notes: [
-                      _FollowUpNote(
-                        author: 'Administrator',
-                        createdAt: DateTime.now(),
-                        text: note,
-                      ),
-                    ],
-                  ),
-                );
-              }
-            });
             Navigator.pop(context);
-            _snack(
-              outcome == _VarianceOutcome.accept
+            final apiOutcome = switch (outcome) {
+              _VarianceOutcome.accept => 'ACCEPT',
+              _VarianceOutcome.requestCorrection => 'REQUEST_CORRECTION',
+              _VarianceOutcome.escalate => 'ESCALATE',
+            };
+            await _runFinanceMutation(
+              request: () => _financeApi.post(
+                '/api/schools/${widget.customSchoolId}/finance/transactions/${item.serverId}/resolve-variance',
+                body: {'outcome': apiOutcome, 'note': note},
+              ),
+              successMessage: outcome == _VarianceOutcome.accept
                   ? '${item.expenseId} variance accepted.'
                   : outcome == _VarianceOutcome.requestCorrection
                   ? 'Correction requested for ${item.expenseId}.'
@@ -5535,7 +6787,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
 
   String _varianceMessage(_RequisitionRecord requisition, double actual) {
     if (actual <= 0) return 'Enter actual spend to see variance handling.';
-    final approvedAmount = requisition.approvedAmount;
+    final approvedAmount =
+        requisition.approvedAmount ??
+        (requisition.isEmergency ? requisition.requestedAmount : null);
     if (approvedAmount == null) {
       return 'Approve this requisition before recording actual spend.';
     }
@@ -5544,11 +6798,6 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       return 'Actual matches the approved amount. It will be recorded normally.';
     }
     return 'Difference of ${_money(difference.abs())} ${difference > 0 ? 'above' : 'below'} approval. It will be recorded and sent for variance review.';
-  }
-
-  String _nextId(String prefix) {
-    final value = DateTime.now().millisecondsSinceEpoch.toString();
-    return '$prefix-${value.substring(value.length - 6)}';
   }
 
   double _parseAmount(String value) =>
@@ -5580,6 +6829,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
 class _ExpenseTable extends StatelessWidget {
   const _ExpenseTable({
     required this.expenses,
+    required this.requisitionReference,
     required this.onRefund,
     required this.onView,
     required this.onPrint,
@@ -5587,6 +6837,7 @@ class _ExpenseTable extends StatelessWidget {
   });
 
   final List<_ExpenseRecord> expenses;
+  final String? Function(String?) requisitionReference;
   final ValueChanged<_ExpenseRecord> onRefund;
   final ValueChanged<_ExpenseRecord> onView;
   final ValueChanged<_ExpenseRecord> onPrint;
@@ -5604,7 +6855,8 @@ class _ExpenseTable extends StatelessWidget {
     return _TableShell(
       columns: const [
         'Expense',
-        'Source',
+        'Funding / channel',
+        'Requisition',
         'Amount',
         'Status',
         'Receipt',
@@ -5619,7 +6871,8 @@ class _ExpenseTable extends StatelessWidget {
                 subtitle: '${item.expenseId} · ${item.payee}',
                 onTap: () => onView(item),
               ),
-              Text(item.source.label),
+              _MainCell(title: item.source.label, subtitle: item.channel.label),
+              Text(requisitionReference(item.requisitionId) ?? 'Not linked'),
               Text(
                 _money(item.netAmount),
                 style: const TextStyle(fontWeight: FontWeight.w800),
@@ -5694,7 +6947,8 @@ class _RequisitionTable extends StatelessWidget {
     return _TableShell(
       columns: const [
         'Request',
-        'Amount',
+        'Funding',
+        'Requested / approved',
         'Status',
         'Requested',
         'Expires',
@@ -5713,11 +6967,14 @@ class _RequisitionTable extends StatelessWidget {
                     'Approved by ${item.verbalApprover}',
                 ].join(' · '),
               ),
-              Text(
-                item.approvedAmount == null
-                    ? 'Not approved'
-                    : _money(item.approvedAmount!),
-                style: const TextStyle(fontWeight: FontWeight.w800),
+              Text(item.fundingSource.label),
+              _MainCell(
+                title: _money(item.requestedAmount),
+                subtitle: item.approvedAmount == null
+                    ? item.isEmergency
+                          ? 'Verbal approval recorded'
+                          : 'Awaiting approval'
+                    : 'Approved ${_money(item.approvedAmount!)}',
               ),
               Wrap(
                 spacing: 6,
@@ -6291,47 +7548,56 @@ class _FloatPocketCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(13),
       decoration: BoxDecoration(
         color: background,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: borderColor),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
           Container(
-            width: 38,
-            height: 38,
+            width: 36,
+            height: 36,
             decoration: BoxDecoration(
               color: accent.withValues(alpha: .12),
               borderRadius: BorderRadius.circular(10),
             ),
             child: Icon(icon, color: accent),
           ),
-          const SizedBox(height: 16),
-          Text(
-            title,
-            style: const TextStyle(
-              color: AppColors.muted,
-              fontSize: 12,
-              letterSpacing: .6,
-              fontWeight: FontWeight.w900,
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: AppColors.muted,
+                    fontSize: 11,
+                    letterSpacing: .4,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: AppColors.muted, fontSize: 11),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 5),
+          const SizedBox(width: 10),
           Text(
             _money(amount),
             style: TextStyle(
               color: accent,
-              fontSize: 27,
+              fontSize: 20,
               fontWeight: FontWeight.w900,
             ),
-          ),
-          const SizedBox(height: 5),
-          Text(
-            subtitle,
-            style: const TextStyle(color: AppColors.muted, fontSize: 12),
           ),
         ],
       ),
@@ -7164,10 +8430,12 @@ class _RequisitionRecord {
     required this.category,
     required this.payee,
     required this.requestedBy,
+    required this.requestedAmount,
     this.approvedAmount,
     required this.requestedAt,
     required this.expiresAt,
     required this.status,
+    required this.fundingSource,
     this.notes = '',
     this.isEmergency = false,
     this.verbalApprover,
@@ -7179,10 +8447,12 @@ class _RequisitionRecord {
   final String category;
   final String payee;
   final String requestedBy;
+  final double requestedAmount;
   double? approvedAmount;
   final DateTime requestedAt;
   final DateTime expiresAt;
   _RequisitionStatus status;
+  final _FundingSource fundingSource;
   final String notes;
   final bool isEmergency;
   final String? verbalApprover;
@@ -7197,11 +8467,21 @@ class _TopUpRequest {
     required this.requestedAt,
     required this.expensesCount,
     required this.status,
-    this.approvalCode,
     this.approvedAt,
     this.confirmedAt,
     this.actualReceived,
     this.transactions = const [],
+    required this.requester,
+    this.requesterUserId,
+    this.approver,
+    this.approverUserId,
+    this.disburser,
+    this.disburserUserId,
+    this.receiver,
+    this.receiverUserId,
+    this.cashAmount,
+    this.momoAmount,
+    this.momoWalletNumber,
   });
 
   final int? serverId;
@@ -7211,11 +8491,55 @@ class _TopUpRequest {
   final DateTime requestedAt;
   final int expensesCount;
   _TopUpStatus status;
-  String? approvalCode;
   DateTime? approvedAt;
   DateTime? confirmedAt;
   double? actualReceived;
   final List<_TopUpTransaction> transactions;
+  final String requester;
+  final int? requesterUserId;
+  final String? approver;
+  final int? approverUserId;
+  final String? disburser;
+  final int? disburserUserId;
+  final String? receiver;
+  final int? receiverUserId;
+  final double? cashAmount;
+  final double? momoAmount;
+  final String? momoWalletNumber;
+}
+
+class _FinanceActor {
+  const _FinanceActor({
+    required this.id,
+    required this.name,
+    required this.username,
+    required this.role,
+  });
+  final int id;
+  final String name;
+  final String username;
+  final String role;
+}
+
+class _TopUpEvent {
+  const _TopUpEvent({
+    required this.type,
+    required this.actor,
+    required this.at,
+    this.note,
+    this.cash,
+    this.momo,
+    this.wallet,
+    this.reference,
+  });
+  final String type;
+  final String actor;
+  final DateTime at;
+  final String? note;
+  final double? cash;
+  final double? momo;
+  final String? wallet;
+  final String? reference;
 }
 
 class _TopUpTransaction {
@@ -7314,6 +8638,7 @@ class _ReconciliationRecord {
 
 class _FinancialFollowUp {
   _FinancialFollowUp({
+    this.serverId,
     required this.reference,
     required this.type,
     required this.relatedReference,
@@ -7326,6 +8651,7 @@ class _FinancialFollowUp {
     List<_FollowUpNote>? notes,
   }) : notes = notes ?? [];
 
+  final int? serverId;
   final String reference;
   final _FollowUpType type;
   final String relatedReference;
@@ -7391,11 +8717,9 @@ class _ReportCardData {
 
 enum _ExpenseTab {
   overview('Overview'),
-  expenses('Expense register'),
   requisitions('Requisitions'),
+  schoolExpenses('School Expenses'),
   pettyCash('Petty Cash'),
-  reconciliations('Reconciliations'),
-  followUps('Financial follow-ups'),
   approvals('Approvals'),
   reports('Reports');
 
@@ -7403,14 +8727,44 @@ enum _ExpenseTab {
   final String label;
 }
 
+enum _PettyCashSection {
+  workspace('Float & expenses'),
+  reconciliations('Reconciliations'),
+  followUps('Financial follow-ups');
+
+  const _PettyCashSection(this.label);
+  final String label;
+}
+
 enum _FinanceLedgerPage { topUps, topUpDetail, transfers, reconciliationDetail }
 
 enum _ExpenseSource {
   pettyCash('Petty cash'),
-  direct('Direct');
+  direct('School funds');
 
   const _ExpenseSource(this.label);
   final String label;
+}
+
+enum _FundingSource {
+  schoolFunds('School funds', 'SCHOOL_FUNDS'),
+  pettyCash('Petty cash', 'PETTY_CASH');
+
+  const _FundingSource(this.label, this.apiValue);
+  final String label;
+  final String apiValue;
+
+  List<_PaymentChannel> get allowedChannels => switch (this) {
+    _FundingSource.schoolFunds => const [
+      _PaymentChannel.bankTransfer,
+      _PaymentChannel.cheque,
+      _PaymentChannel.directMomo,
+    ],
+    _FundingSource.pettyCash => const [
+      _PaymentChannel.floatCash,
+      _PaymentChannel.floatMomo,
+    ],
+  };
 }
 
 enum _PaymentChannel {
@@ -7512,6 +8866,10 @@ enum _TopUpStatus {
   declined('Declined', AppColors.red),
   approved('Approved', AppColors.green),
   disbursed('Disbursed', AppColors.purple),
+  disputed('Problem reported', AppColors.red),
+  corrected('Correction awaiting confirmation', AppColors.amber),
+  cancelled('Cancelled', AppColors.muted),
+  approvalRevoked('Approval revoked', AppColors.red),
   confirmed('Confirmed', AppColors.green),
   confirmedWithDiscrepancy('Confirmed with discrepancy', AppColors.red);
 
@@ -7520,7 +8878,11 @@ enum _TopUpStatus {
   final Color color;
 
   bool get isHistorical =>
-      this == confirmed || this == confirmedWithDiscrepancy || this == declined;
+      this == confirmed ||
+      this == confirmedWithDiscrepancy ||
+      this == declined ||
+      this == cancelled ||
+      this == approvalRevoked;
 }
 
 enum _ReconciliationStatus {
@@ -7654,6 +9016,17 @@ List<dynamic> _pageContent(dynamic value) {
   return const [];
 }
 
+List<_FollowUpNote> _financeNotes(dynamic response) {
+  return _pageContent(response).map((value) {
+    final item = _asMap(value);
+    return _FollowUpNote(
+      author: _asText(item['author'], fallback: 'System'),
+      createdAt: _asDate(item['createdAt']),
+      text: _asText(item['note']),
+    );
+  }).toList();
+}
+
 String _asText(dynamic value, {String fallback = ''}) {
   if (value == null) return fallback;
   final text = '$value'.trim();
@@ -7748,15 +9121,23 @@ _ExpenseStatus _expenseStatus(dynamic value) {
   return _ExpenseStatus.approved;
 }
 
-_PaymentChannel _paymentChannel(dynamic value) {
+_PaymentChannel _paymentChannel(dynamic value, {String sourcePocket = ''}) {
   final channel = _asText(value).toUpperCase();
   if (channel.contains('CASH')) return _PaymentChannel.floatCash;
-  if (channel.contains('FLOAT') && channel.contains('MOMO')) {
+  if (channel.contains('MOMO') &&
+      (channel.contains('FLOAT') || sourcePocket.contains('MOMO'))) {
     return _PaymentChannel.floatMomo;
   }
   if (channel.contains('MOMO')) return _PaymentChannel.directMomo;
   if (channel.contains('CHEQUE')) return _PaymentChannel.cheque;
   return _PaymentChannel.bankTransfer;
+}
+
+_FundingSource _fundingSource(dynamic value) {
+  final source = _asText(value).toUpperCase();
+  return source.contains('PETTY')
+      ? _FundingSource.pettyCash
+      : _FundingSource.schoolFunds;
 }
 
 _RequisitionStatus _requisitionStatus(dynamic value) {
@@ -7776,6 +9157,10 @@ _RequisitionStatus _requisitionStatus(dynamic value) {
 
 _TopUpStatus _topUpStatus(dynamic value) {
   final status = _asText(value).toUpperCase();
+  if (status.contains('DISPUT')) return _TopUpStatus.disputed;
+  if (status.contains('CORRECTION')) return _TopUpStatus.corrected;
+  if (status.contains('CANCEL')) return _TopUpStatus.cancelled;
+  if (status.contains('REVOK')) return _TopUpStatus.approvalRevoked;
   if (status.contains('DISCREP')) return _TopUpStatus.confirmedWithDiscrepancy;
   if (status.contains('CONFIRM')) return _TopUpStatus.confirmed;
   if (status.contains('DISBURS')) return _TopUpStatus.disbursed;
@@ -7822,4 +9207,14 @@ _FollowUpStatus _followUpStatus(dynamic value) {
   if (status.contains('INVEST')) return _FollowUpStatus.investigating;
   if (status.contains('EVIDENCE')) return _FollowUpStatus.awaitingEvidence;
   return _FollowUpStatus.open;
+}
+
+String _reconciliationResolutionLabel(String value) {
+  return switch (value.trim().toUpperCase()) {
+    'RECOVER_FROM_STAFF' => 'Recover from staff / custodian',
+    'WRITE_OFF' => 'Approved write-off',
+    'CORRECT_ENTRY' => 'Correct the recorded entry',
+    'EXCESS_RETURN' => 'Return excess funds',
+    _ => value,
+  };
 }
