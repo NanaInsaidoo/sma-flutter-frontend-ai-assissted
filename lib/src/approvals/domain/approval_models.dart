@@ -88,7 +88,10 @@ class ApprovalItem {
       status == 'PENDING_ACCEPTANCE' ||
       status == 'AWAITING_SELLER_ACK' ||
       status == 'PENDING_RESOLUTION' ||
-      status == 'DISPUTED';
+      status == 'DISPUTED' ||
+      status == 'PENDING_DISBURSEMENT' ||
+      status == 'AWAITING_RECIPIENT_CONFIRMATION' ||
+      status == 'PENDING_CORRECTION';
 
   factory ApprovalItem.fromJson(Map<String, dynamic> json) {
     String text(String key) => json[key]?.toString().trim() ?? '';

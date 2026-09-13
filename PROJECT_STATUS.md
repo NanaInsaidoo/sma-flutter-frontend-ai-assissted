@@ -1,6 +1,6 @@
 # SMA Project Status
 
-Last updated: 2026-09-08
+Last updated: 2026-09-12
 
 This file is the durable source of truth for implementation and verification
 status across the Flutter frontend and Spring Boot backend.
@@ -45,14 +45,99 @@ Verified against the real local backend:
   references, append-only notes, and administrator closure
 - Actor restrictions for requester, selected approver, disburser, and receiver
 - Final pocket balances and dashboard aggregates updating from backend data
+- Petty-cash requests and approvals enforce the configured single-expense
+  limit without depending on the current pocket balance
+- Actual spending enforces the selected Cash or MoMo pocket balance and can
+  never make either pocket negative
+- Actual spending blocks a Cash or MoMo pocket from becoming negative. Higher
+  or lower actual amounts are retained for audit, but only differences above
+  the administrator-configured variance percentage require variance review
+- Expense variance review has two final administrator outcomes: accept the
+  variance or escalate it to a Financial follow-up. Both require an audit note;
+  correcting a posted expense uses the separate reversal workflow
+- Petty Cash and its Top-up, Reconciliation, and Financial follow-up workspaces
+  show red counts for active records; completed history is excluded
+- Funds awaiting receiver confirmation for more than 15 minutes show a
+  persistent reminder with the live overdue duration
+- Confirmed incoming money is never hidden or rejected because capacity changed:
+  refunds, reversals, and already-disbursed top-ups are recorded, and any newly
+  created excess above the approved float opens an urgent, manager-notified
+  Float overage follow-up. Closing that case requires the exact Cash/MoMo return
+  allocation, a transfer or deposit reference, and a resolution note; the
+  resulting Float return transaction reduces the pockets and preserves the audit
+  trail. Existing active cycles already above their approved float receive one
+  non-duplicating backfilled overage case
+- Requisitions expire after the administrator-configured validity period;
+  expiry dates and days remaining are visible in the register and details
+- Administrator-controlled small-request auto-approval, with an independent
+  limit, settings validation, notifications, and an append-only audit history
+- Requester-only requisition cancellation with a mandatory note and a distinct
+  cancellation event in the audit history
+- Requester-only editing of unspent petty-cash requisitions: pressing Edit
+  immediately returns the request to Draft, invalidates any previous approval,
+  records the transition, and requires the updated draft to be resubmitted;
+  the requester may change the funding source in Draft, with the route change
+  audited and the newly selected route's business rules applied on resubmission
+- Requisition forms show validation beside the affected fields instead of using
+  a bottom notification; backend submission errors remain visible inside the form
+- Petty-cash setup, top-up, disbursement, transfer, refund, reconciliation,
+  follow-up, ratification, and variance-review forms show validation beside the
+  affected fields instead of reporting form errors on the main screen
+- Requester Edit and Cancel requisition actions remain fixed in the requisition
+  detail footer while the request and approval history scroll independently
+- Financial follow-up details use a readable field layout, retain the linked
+  transaction ID, and open the related expense detail from its expense reference
+- Administrator, headmaster/head teacher, bursar, and platform-admin finance
+  workspaces show school-wide dashboards and registers; ordinary staff see their
+  own requisitions plus a read-only My Expenses register containing only expenses
+  produced from those requisitions, and cannot load another user's expense detail
+- Class and subject teachers can open Expenses & Petty Cash from the main menu,
+  but receive only requester-level Finance VIEW/EDIT access. They cannot approve
+  finance work unless a separate authorised role or override grants that action
+- Requisition approval requires a written approval note, which is validated in
+  the confirmation form, enforced by the backend, and retained in approval history
+- The actual-spend form gives ordinary requesters the current Cash and MoMo pocket
+  balances needed to choose a valid payment method without exposing the wider
+  school finance dashboard
+- The overview's five most recent expenses are sorted newest first, clearly label
+  School funds, Cash pocket, or MoMo pocket, and link separately to the School
+  Expenses and Petty Cash registers
+- School Expenses and Petty Cash use the same modern expense register with
+  searchable and filterable results, sortable Expense, Amount, Status, and Date
+  headings, eight records per page, result counts, and Previous/Next controls
+- Finance registers preserve readable column widths on narrow screens and scroll
+  horizontally; section actions and requisition filters stack without overflow
+- Ordinary staff load requisition policy, their own requisitions and resulting
+  expenses, and eligible approvers; float balances, school totals, reconciliations,
+  follow-ups, top-ups, reports, and manager actions are not loaded into their workspace
+
+Implemented and automated; live role-separated verification is pending:
+
+- Full expense reversal flow for erroneous, duplicate, unpaid, wrong-amount, or
+  wrong-source entries: requester selects an independent approver and supplies
+  evidence; the approver affirms, approves, or declines with a note; the requester
+  may cancel while pending; approval preserves the original, creates a linked
+  reversal, restores the original petty-cash pocket where applicable, updates
+  school-spend totals, and appears in notifications and approval history
+- Refund and reversal are mutually exclusive for one expense, preventing duplicate
+  credits; reversals are full-only and approved reversals cannot be cancelled
+- Expense-reversal approvals now lead with the original expense ID, description,
+  amount, funding source, payment channel, payee, receipt, reason, and financial
+  effect; secondary request metadata is kept compact below the decision facts
+- The shared Approvals drawer now performs the assigned reversal decision directly:
+  the approver reviews the summary first, clicks Approve, and must enter an audited
+  decision comment before the backend posts the reversal
 
 Automated evidence:
 
 - `flutter analyze` passed with no issues.
-- `flutter test` passed: 409 tests.
+- The focused Expenses & Petty Cash and Approvals widget suites passed all 45 tests,
+  including requester-scoped expense visibility, sorting, pagination, reversal
+  submission, reversal approval affirmation, and compact approval evidence.
+- `flutter test` passed: 425 tests.
 - Live Flutter Web/Playwright finance checks passed: 2 tests against the real
   local API, including workspace loading and requester top-up cancellation.
-- `mvn -q test` passed: 460 tests across 77 reports, with no failures, errors,
+- `mvn -q test` passed: 497 tests, with no failures, errors,
   or skipped tests.
 - Focused `FinanceWorkflowServiceTest` actor, refund, follow-up, and
   reconciliation tests passed.
@@ -67,6 +152,24 @@ Real-data evidence:
   staff-recovery follow-up, which retained notes through closure.
 - An attempted refund beyond the remaining refundable amount was rejected and
   did not create another refund record.
+- A GH¢20,000 petty-cash request was blocked by the configured GH¢900
+  single-expense limit and no request was created.
+- A GH¢800 request was accepted while the current float was GH¢720, confirming
+  that request and approval stages do not reserve or require current funds.
+- Actual spend against a MoMo pocket with GH¢0 was blocked and did not mutate
+  either pocket balance.
+- A GH¢10 request was automatically approved under a temporary GH¢50 policy;
+  its history identified automatic approval, and the policy was restored to off.
+- A pending test requisition was cancelled by its requester with a required
+  note; its register status and event history both show cancellation.
+- A fresh teacher-requester requisition was created through the UI, assigned to a
+  head-teacher approver, approved only after a required note was entered, and its
+  approval history retained the requester, approver, amount, dates, and note.
+- The approved request's live actual-spend form showed the locked description and
+  vendor plus the current Cash balance of GH¢3,969 next to the payment method.
+  The form was inspected without posting a fictitious payment or changing balances.
+- Petty-cash settings were restored to a GH¢1,000 ceiling, GH¢500
+  single-expense limit, GH¢250 refill threshold, and auto-approval off.
 
 Known data and cleanup notes:
 
@@ -76,6 +179,8 @@ Known data and cleanup notes:
 
 Remaining production-hardening checks:
 
+- Verify one complete requester-to-approver expense reversal against the local
+  backend after working administrator credentials are available.
 - Upload and securely view a real S3 receipt file.
 - Expand the reusable Playwright suite beyond its current workspace and top-up
   mutation coverage; the remaining actor journeys were exercised interactively.

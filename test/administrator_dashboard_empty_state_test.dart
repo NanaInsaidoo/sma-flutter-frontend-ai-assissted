@@ -136,6 +136,7 @@ void main() {
       expect(find.text('Open term review'), findsOneWidget);
       expect(find.text('Staff Management'), findsNothing);
       expect(find.text('Fees & Requirements'), findsNothing);
+      expect(find.text('Expenses & Petty Cash'), findsOneWidget);
       expect(find.text('Final Report Management'), findsNothing);
       expect(find.text('Evaluation Management'), findsNothing);
       expect(find.text('Dashboard data is not available yet.'), findsNothing);
@@ -222,7 +223,7 @@ void main() {
 
     expect(find.text('Workspace'), findsNothing);
     expect(find.text('Open assessments'), findsOneWidget);
-    expect(find.text('Expenses & Petty Cash'), findsNothing);
+    expect(find.text('Expenses & Petty Cash'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

@@ -11,6 +11,7 @@ import 'shop_reconciliation_screen.dart';
 
 enum _ShopPage {
   overview,
+  storefront,
   itemTypes,
   catalog,
   consignments,
@@ -28,8 +29,9 @@ enum _ShopPage {
 enum _InventorySection { current, adjustments, history }
 
 class SchoolShopScreen extends StatefulWidget {
-  const SchoolShopScreen({super.key, required this.api});
+  const SchoolShopScreen({super.key, required this.api, this.role});
   final ShopApiClient api;
+  final String? role;
   @override
   State<SchoolShopScreen> createState() => _SchoolShopScreenState();
 }
@@ -76,6 +78,8 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
   };
   _ShopPage _page = _ShopPage.overview;
   _InventorySection _inventorySection = _InventorySection.current;
+  bool _storefrontGrid = true;
+  String _storefrontSearch = '';
 
   bool get _admin => _context?['isAdmin'] == true;
   bool get _buyer => _context?['canBuy'] == true;
@@ -83,9 +87,32 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
   bool get _cashier => _context?['canTakePayment'] == true;
   bool get _goods => _context?['canRelease'] == true;
   bool get _holder => _context?['canHoldStock'] == true;
+  bool get _returnsOfficer =>
+      _context?['canReceiveStaffReturns'] == true ||
+      _context?['canIssueRefunds'] == true;
   bool get _reportViewer =>
-      _context?['canViewReports'] == true || _admin || _buyer;
+      _context?['canViewReports'] == true || _shopManagement || _buyer;
   bool get _canManageSellers => _context?['canManageRoles'] == true;
+  String get _schoolRole => widget.role?.trim().toUpperCase() ?? '';
+  bool get _managementRole => const {
+    'ADMIN',
+    'ADMINISTRATOR',
+    'HEADMASTER',
+    'HEAD_TEACHER',
+    'BURSAR',
+  }.contains(_schoolRole);
+  bool get _shopManagement => _admin || _managementRole;
+  bool get _sensitiveFinancials =>
+      _admin ||
+      const {'ADMIN', 'ADMINISTRATOR', 'HEADMASTER'}.contains(_schoolRole);
+  bool get _customerOnly =>
+      !_shopManagement &&
+      !_seller &&
+      !_cashier &&
+      !_goods &&
+      !_holder &&
+      !_buyer &&
+      !_returnsOfficer;
 
   List<ShopJson> get _configuredSellers =>
       _roles.where((role) => role['roleCode'] == 'SELLER').map((role) {
@@ -156,6 +183,22 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
   List<ShopJson> get _activeItems =>
       _items.where((item) => item['active'] != false).toList();
 
+  List<ShopJson> get _storefrontItems {
+    final query = _storefrontSearch.trim().toLowerCase();
+    if (query.isEmpty) return _activeItems;
+    return _activeItems.where((item) {
+      final searchable = [
+        item['displayName'],
+        item['name'],
+        item['code'],
+        item['itemCode'],
+        item['category'],
+        item['categoryName'],
+      ].whereType<Object>().join(' ').toLowerCase();
+      return searchable.contains(query);
+    }).toList();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -169,7 +212,19 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
     });
     try {
       final context = await widget.api.context();
-      final dashboard = await widget.api.dashboard();
+      final management = context['isAdmin'] == true || _managementRole;
+      final operational =
+          management ||
+          context['canSell'] == true ||
+          context['canTakePayment'] == true ||
+          context['canRelease'] == true ||
+          context['canHoldStock'] == true ||
+          context['canBuy'] == true ||
+          context['canReceiveStaffReturns'] == true ||
+          context['canIssueRefunds'] == true;
+      final dashboard = operational
+          ? await widget.api.dashboard()
+          : <String, dynamic>{};
       final items = await widget.api.items(
         includeInactive: context['canBuy'] == true,
       );
@@ -202,12 +257,18 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
               context['canHoldStock'] == true
           ? await widget.api.receipts()
           : <ShopJson>[];
-      final sales = await widget.api.sales(
-        from: _salesFromDate,
-        to: _ymd(DateTime.now()),
-      );
-      final customerReturns = await widget.api.customerReturns();
-      final staffReturns = await widget.api.staffReturns();
+      final sales = operational
+          ? await widget.api.sales(
+              from: _salesFromDate,
+              to: _ymd(DateTime.now()),
+            )
+          : <ShopJson>[];
+      final customerReturns = operational
+          ? await widget.api.customerReturns()
+          : <ShopJson>[];
+      final staffReturns = operational
+          ? await widget.api.staffReturns()
+          : <ShopJson>[];
       final roles = context['canManageRoles'] == true
           ? await widget.api.roles()
           : <ShopJson>[];
@@ -230,6 +291,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
         _staffReturns = staffReturns;
         _roles = roles;
         _auditEvents = audit;
+        if (_customerOnly) _page = _ShopPage.storefront;
       });
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
@@ -239,31 +301,35 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
   }
 
   List<_ShopPage> get _pages => [
-    _ShopPage.overview,
-    if (_buyer) _ShopPage.itemTypes,
-    if (_buyer) _ShopPage.catalog,
-    if (_buyer || _seller || _holder) _ShopPage.consignments,
+    if (!_customerOnly) _ShopPage.overview,
+    _ShopPage.storefront,
+    if (_buyer || _shopManagement) _ShopPage.itemTypes,
+    if (_buyer || _shopManagement) _ShopPage.catalog,
+    if (_buyer || _seller || _holder || _shopManagement) _ShopPage.consignments,
     if (_seller) _ShopPage.sell,
     if (_goods) _ShopPage.release,
-    _ShopPage.accounts,
+    if (_shopManagement) _ShopPage.accounts,
     if (_admin || _seller || _cashier) _ShopPage.remittances,
-    _ShopPage.sales,
+    if (_shopManagement || _seller || _cashier) _ShopPage.sales,
     if (_reportViewer) _ShopPage.reports,
-    _ShopPage.returns,
-    if (_canManageSellers) _ShopPage.roles,
-    if (_admin) _ShopPage.audit,
+    if (_shopManagement || _seller || _cashier || _goods || _returnsOfficer)
+      _ShopPage.returns,
+    if (_canManageSellers || _shopManagement) _ShopPage.roles,
+    if (_shopManagement) _ShopPage.audit,
   ];
 
   String _label(_ShopPage page) => switch (page) {
     _ShopPage.overview => 'Overview',
+    _ShopPage.storefront => 'Items for sale',
     _ShopPage.itemTypes => 'Item types',
     _ShopPage.catalog => 'Inventory',
-    _ShopPage.consignments => !_buyer ? 'My stock' : 'Stock handovers',
+    _ShopPage.consignments =>
+      !_buyer && !_shopManagement ? 'My stock' : 'Stock handovers',
     _ShopPage.sell => 'Sell items',
     _ShopPage.release => 'Release goods',
     _ShopPage.accounts => 'Reconciliation',
     _ShopPage.remittances => 'Cash remittances',
-    _ShopPage.sales => 'Sales',
+    _ShopPage.sales => _seller && !_shopManagement ? 'My sales' : 'Sales',
     _ShopPage.reports => 'Reports',
     _ShopPage.returns => 'Returns',
     _ShopPage.roles => 'Sellers',
@@ -272,6 +338,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
 
   IconData _icon(_ShopPage page) => switch (page) {
     _ShopPage.overview => Icons.dashboard_outlined,
+    _ShopPage.storefront => Icons.storefront_outlined,
     _ShopPage.itemTypes => Icons.category_outlined,
     _ShopPage.catalog => Icons.inventory_2_outlined,
     _ShopPage.consignments => Icons.move_to_inbox_outlined,
@@ -415,6 +482,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
           const SizedBox(height: 18),
           switch (_page) {
             _ShopPage.overview => _overview(),
+            _ShopPage.storefront => _storefront(),
             _ShopPage.itemTypes => _itemTypesPage(),
             _ShopPage.catalog => _catalog(),
             _ShopPage.consignments => _consignmentList(),
@@ -526,7 +594,7 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
                 Icons.payments_outlined,
                 AppColors.green,
               ),
-            if (_admin || _buyer)
+            if (_sensitiveFinancials)
               _Metric(
                 'Profit total',
                 _money(d['profit']),
@@ -957,6 +1025,197 @@ class _SchoolShopScreenState extends State<SchoolShopScreen> {
       if (mounted) _errorSnack(context, e);
     }
   }
+
+  Widget _storefront() => _Panel(
+    title: 'Items available for sale',
+    subtitle: 'Browse the school shop catalogue and current selling prices.',
+    action: SegmentedButton<bool>(
+      segments: const [
+        ButtonSegment(
+          value: true,
+          icon: Icon(Icons.grid_view_rounded),
+          label: Text('Grid'),
+        ),
+        ButtonSegment(
+          value: false,
+          icon: Icon(Icons.view_list_rounded),
+          label: Text('List'),
+        ),
+      ],
+      selected: {_storefrontGrid},
+      onSelectionChanged: (value) =>
+          setState(() => _storefrontGrid = value.first),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          key: const ValueKey('shop-storefront-search'),
+          onChanged: (value) => setState(() => _storefrontSearch = value),
+          decoration: const InputDecoration(
+            hintText: 'Search items by name, code, or category',
+            prefixIcon: Icon(Icons.search_rounded),
+          ),
+        ),
+        const SizedBox(height: 14),
+        if (_activeItems.isEmpty)
+          const _Empty('No items are currently available for sale.')
+        else if (_storefrontItems.isEmpty)
+          const _Empty('No items match your search.')
+        else if (_storefrontGrid)
+          _storefrontTiles()
+        else
+          _ModernShopTable<ShopJson>(
+            tableKey: 'shop-storefront-table',
+            rows: _storefrontItems,
+            initialSortColumn: 0,
+            rowKey: (item) => 'shop-storefront-item-${item['id']}',
+            columns: [
+              _ShopTableColumn(
+                label: 'Item',
+                sortValue: (item) => item['displayName'] ?? item['name'],
+                cell: (item) => Text(
+                  '${item['displayName'] ?? item['name'] ?? 'Shop item'}',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+              _ShopTableColumn(
+                label: 'Price',
+                numeric: true,
+                sortValue: (item) => item['sellingPrice'] ?? 0,
+                cell: (item) => Text(
+                  _money(item['sellingPrice']),
+                  style: const TextStyle(
+                    color: AppColors.green,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              _ShopTableColumn(
+                label: 'Availability',
+                sortValue: _inventoryAvailable,
+                cell: (item) {
+                  final available = _inventoryAvailable(item);
+                  final inStock = available > 0;
+                  return Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        inStock
+                            ? Icons.check_circle_outline
+                            : Icons.cancel_outlined,
+                        size: 17,
+                        color: inStock ? AppColors.green : AppColors.red,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        inStock ? '$available available' : 'Out of stock',
+                        style: TextStyle(
+                          color: inStock ? AppColors.green : AppColors.red,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
+      ],
+    ),
+  );
+
+  Widget _storefrontTiles() => LayoutBuilder(
+    builder: (context, constraints) {
+      final columns = constraints.maxWidth >= 1050
+          ? 4
+          : constraints.maxWidth >= 720
+          ? 3
+          : constraints.maxWidth >= 460
+          ? 2
+          : 1;
+      final width = (constraints.maxWidth - ((columns - 1) * 12)) / columns;
+      return Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        children: _storefrontItems.map((item) {
+          final available = _inventoryAvailable(item);
+          final inStock = available > 0;
+          return Container(
+            key: ValueKey('shop-storefront-tile-${item['id']}'),
+            width: width,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border.all(color: AppColors.border),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  height: 120,
+                  width: double.infinity,
+                  color: AppColors.green.withValues(alpha: .08),
+                  child: const Icon(
+                    Icons.shopping_bag_outlined,
+                    size: 42,
+                    color: AppColors.green,
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(15),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${item['displayName'] ?? item['name'] ?? 'Shop item'}',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _money(item['sellingPrice']),
+                        style: const TextStyle(
+                          color: AppColors.green,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Icon(
+                            inStock
+                                ? Icons.check_circle_outline
+                                : Icons.cancel_outlined,
+                            size: 17,
+                            color: inStock ? AppColors.green : AppColors.red,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            inStock ? '$available available' : 'Out of stock',
+                            style: TextStyle(
+                              color: inStock ? AppColors.green : AppColors.red,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        }).toList(),
+      );
+    },
+  );
 
   Widget _catalog() => Column(
     crossAxisAlignment: CrossAxisAlignment.start,

@@ -667,7 +667,7 @@ class _DashboardBody extends StatelessWidget {
       builder: (context, snapshot) {
         final summary = snapshot.data;
         final showNotice =
-            selectedPage != _SchoolAdminPage.fees &&
+            selectedPage == _SchoolAdminPage.dashboard &&
             _canSeeFinancialNotices(role) &&
             summary != null &&
             (summary.streamsWithoutActiveFees > 0 ||
@@ -728,6 +728,8 @@ class _DashboardBody extends StatelessWidget {
             onSelectPage(_SchoolAdminPage.incidents);
           } else if (item.sourcePage == 'shop') {
             onSelectPage(_SchoolAdminPage.shop);
+          } else if (item.sourcePage == 'expenses') {
+            onSelectPage(_SchoolAdminPage.expenses);
           } else if (item.sourcePage == 'leave') {
             showLeaveRequestDetails(
               context: context,
@@ -887,6 +889,7 @@ class _DashboardBody extends StatelessWidget {
 
     if (selectedPage == _SchoolAdminPage.shop) {
       return SchoolShopScreen(
+        role: role,
         api: ShopApiClient(
           schoolId: schoolId,
           accessToken: accessToken,
@@ -4865,9 +4868,7 @@ class _Sidebar extends StatelessWidget {
                         final inbox = snapshot.data;
                         return _SidebarButton(
                           icon: Icons.approval_outlined,
-                          label:
-                              inbox?.navigationLabel ??
-                              'Requests (0) & Approvals (0)',
+                          label: 'Requests & Approvals',
                           collapsed: collapsed,
                           collapsedBadgeCount: inbox?.pendingTotal ?? 0,
                           active: selectedPage == _SchoolAdminPage.approvals,
@@ -4977,7 +4978,7 @@ class _Sidebar extends StatelessWidget {
                       active: selectedPage == _SchoolAdminPage.finalReports,
                       onTap: () => onSelectPage(_SchoolAdminPage.finalReports),
                     ),
-                  if (!isTeacher) ...[
+                  if (!isTeacher)
                     _SidebarButton(
                       icon: Icons.account_balance_wallet_rounded,
                       label: 'Fees & Requirements',
@@ -4985,21 +4986,20 @@ class _Sidebar extends StatelessWidget {
                       active: selectedPage == _SchoolAdminPage.fees,
                       onTap: () => onSelectPage(_SchoolAdminPage.fees),
                     ),
-                    _SidebarButton(
-                      icon: Icons.storefront_outlined,
-                      label: 'School Shop',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.shop,
-                      onTap: () => onSelectPage(_SchoolAdminPage.shop),
-                    ),
-                    _SidebarButton(
-                      icon: Icons.receipt_long_rounded,
-                      label: 'Expenses & Petty Cash',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.expenses,
-                      onTap: () => onSelectPage(_SchoolAdminPage.expenses),
-                    ),
-                  ],
+                  _SidebarButton(
+                    icon: Icons.storefront_outlined,
+                    label: 'School Shop',
+                    collapsed: collapsed,
+                    active: selectedPage == _SchoolAdminPage.shop,
+                    onTap: () => onSelectPage(_SchoolAdminPage.shop),
+                  ),
+                  _SidebarButton(
+                    icon: Icons.receipt_long_rounded,
+                    label: 'Expenses & Petty Cash',
+                    collapsed: collapsed,
+                    active: selectedPage == _SchoolAdminPage.expenses,
+                    onTap: () => onSelectPage(_SchoolAdminPage.expenses),
+                  ),
                   if (!isBursar) ...[
                     _SidebarButton(
                       icon: Icons.warning_amber_rounded,
@@ -5136,6 +5136,21 @@ class _SidebarButton extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (collapsedBadgeCount > 0) ...[
+                      const SizedBox(width: 8),
+                      Badge.count(
+                        key: const ValueKey(
+                          'requests-approvals-navigation-badge',
+                        ),
+                        count: collapsedBadgeCount,
+                        backgroundColor: AppColors.red,
+                        textColor: Colors.white,
+                        textStyle: const TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
                     if (label != 'Dashboard' &&
                         label != 'Log out' &&
                         label != 'Collapse')

@@ -839,6 +839,73 @@ void main() {
     expect(api.lastAction, 'REJECT');
     expect(api.lastReason, 'Two books are missing');
   });
+
+  testWidgets(
+    'expense reversal approval shows decision-critical expense facts',
+    (tester) async {
+      await _useDesktopSurface(tester);
+      final item = _expenseReversalApproval();
+      final api = _SingleApprovalApiClient(item);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: ApprovalsScreen(schoolId: 'SCH-1', repository: api),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(item.title));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Expense reversal'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('expense-reversal-compact-details')),
+        findsOneWidget,
+      );
+      for (final text in [
+        'Reverse EXP-2026-D6CB5C27',
+        'Monitor repair',
+        'GH₵ 500.00',
+        'Float - Cash',
+        'Cash',
+        'Mr. Tech',
+        'RCT-1002',
+        'Recording error',
+        'Return GH₵ 500.00 to the Cash petty-cash pocket.',
+        'Expense was recorded mistakenly.',
+      ]) {
+        expect(find.text(text), findsWidgets);
+      }
+      expect(find.text('Request summary'), findsNothing);
+      expect(find.text('View additional details'), findsNothing);
+      expect(find.text('Approve').hitTestable(), findsOneWidget);
+      await tester.tap(find.text('Approve').hitTestable());
+      await tester.pumpAndSettle();
+      expect(find.text('Approve expense reversal'), findsOneWidget);
+      expect(
+        find.text('Explain why reversing this expense is correct.'),
+        findsOneWidget,
+      );
+      expect(api.actions, 0);
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.byType(TextFormField),
+        ),
+        'The original expense and evidence were verified.',
+      );
+      await tester.tap(find.text('Approve reversal'));
+      await tester.pumpAndSettle();
+      expect(api.actions, 1);
+      expect(api.lastAction, 'APPROVE');
+      expect(
+        api.lastReason,
+        'The original expense and evidence were verified.',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
 
 Future<void> _useDesktopSurface(WidgetTester tester) async {
@@ -904,6 +971,51 @@ ApprovalItem _recordChange({
           },
         ],
       },
+  ],
+});
+
+ApprovalItem _expenseReversalApproval() => ApprovalItem.fromJson({
+  'key': 'FINANCE_EXPENSE_REVERSAL:29',
+  'type': 'FINANCE_EXPENSE_REVERSAL',
+  'entityId': 29,
+  'category': 'Expenses',
+  'title': 'Expense reversal · REV-2026-22997BF1',
+  'subtitle': 'EXP-2026-D6CB5C27',
+  'status': 'PENDING_APPROVAL',
+  'amount': 500,
+  'requesterName': 'Kofi Nketia',
+  'approverName': 'Adjoa Mensah',
+  'requesterNote': 'Expense was recorded mistakenly.',
+  'submittedAt': '2026-09-12T14:17:00',
+  'canApprove': true,
+  'canReject': true,
+  'sourcePage': 'expenses',
+  'detailSections': [
+    {
+      'title': 'Expense reversal request',
+      'entries': [
+        {
+          'title': 'REV-2026-22997BF1',
+          'fields': [
+            {'label': 'Expense ID', 'value': 'EXP-2026-D6CB5C27'},
+            {'label': 'Description', 'value': 'Monitor repair'},
+            {'label': 'Recorded amount', 'value': 'GH₵ 500.00'},
+            {'label': 'Amount to reverse', 'value': 'GH₵ 500.00'},
+            {'label': 'Funding source', 'value': 'Float - Cash'},
+            {'label': 'Payment channel', 'value': 'Cash'},
+            {'label': 'Payee', 'value': 'Mr. Tech'},
+            {'label': 'Receipt', 'value': 'RCT-1002'},
+            {'label': 'Reason type', 'value': 'Recording error'},
+            {
+              'label': 'Financial effect',
+              'value': 'Return GH₵ 500.00 to the Cash petty-cash pocket.',
+            },
+            {'label': 'Requester', 'value': 'Kofi Nketia'},
+            {'label': 'Approver', 'value': 'Adjoa Mensah'},
+          ],
+        },
+      ],
+    },
   ],
 });
 

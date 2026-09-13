@@ -134,7 +134,7 @@ The recovery record remains open and visible even after the float is restored.
 
 ## Financial Follow-ups Register
 
-Financial Follow-ups is a dedicated tab in **Expenses & Imprest**. It is the operational exception register for items that need action beyond the original transaction.
+Financial Follow-ups is a dedicated section under **Expenses & Petty Cash**. It is the operational exception register for items that need action beyond the original transaction.
 
 ### Required record fields
 

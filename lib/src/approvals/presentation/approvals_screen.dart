@@ -7,6 +7,53 @@ import '../../leave/data/leave_api_client.dart';
 import '../../leave/presentation/leave_management_screen.dart';
 import '../../leave/presentation/leave_date_format.dart';
 
+Future<bool> showApprovalItemPanel({
+  required BuildContext context,
+  required ApprovalItem item,
+  required Future<void> Function(String action, String reason) onAction,
+  VoidCallback? onOpenSource,
+  VoidCallback? onReload,
+}) async {
+  final result = await showModalBottomSheet<_ApprovalPanelResult>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (panelContext) => Align(
+      alignment: Alignment.centerRight,
+      child: _ApprovalPanel(
+        item: item,
+        onOpenSource: onOpenSource == null
+            ? null
+            : () {
+                Navigator.pop(panelContext, const _ApprovalPanelResult());
+                onOpenSource();
+              },
+        onAction: onAction,
+      ),
+    ),
+  );
+  if (!context.mounted) return result?.reload == true;
+  if (result?.reload == true) onReload?.call();
+  if (result?.conflictMessage != null) {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Request updated'),
+        content: Text(
+          '${result!.conflictMessage}\n\nThe approvals list has been refreshed.',
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+  return result?.reload == true;
+}
+
 class ApprovalsScreen extends StatefulWidget {
   const ApprovalsScreen({
     super.key,
@@ -179,43 +226,16 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
       if (mounted) _refresh();
       return;
     }
-    final result = await showModalBottomSheet<_ApprovalPanelResult>(
+    await showApprovalItemPanel(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => Align(
-        alignment: Alignment.centerRight,
-        child: _ApprovalPanel(
-          item: item,
-          onOpenSource: widget.onOpenSource == null
-              ? null
-              : () {
-                  Navigator.pop(context, const _ApprovalPanelResult());
-                  widget.onOpenSource!.call(item);
-                },
-          onAction: (action, reason) => _act(item, action, reason),
-        ),
-      ),
+      item: item,
+      onOpenSource: widget.onOpenSource == null
+          ? null
+          : () => widget.onOpenSource!.call(item),
+      onAction: (action, reason) => _act(item, action, reason),
+      onReload: _refresh,
     );
     if (!mounted || !context.mounted) return;
-    if (result?.reload == true) _refresh();
-    if (result?.conflictMessage != null) {
-      await showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Request updated'),
-          content: Text(
-            '${result!.conflictMessage}\n\nThe approvals list has been refreshed.',
-          ),
-          actions: [
-            FilledButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-    }
   }
 
   Future<void> _act(ApprovalItem item, String action, String reason) async {
@@ -670,6 +690,8 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                             ? 'Stock handover'
                             : item.type == 'SHOP_RECONCILIATION'
                             ? 'Reconciliation review'
+                            : item.type == 'FINANCE_EXPENSE_REVERSAL'
+                            ? 'Expense reversal'
                             : 'Approval details',
                         style: const TextStyle(
                           fontSize: 20,
@@ -702,6 +724,11 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                         )
                       else if (item.type == 'SHOP_RECONCILIATION')
                         _ShopReconciliationRequest(item: item)
+                      else if (item.type == 'FINANCE_EXPENSE_REVERSAL')
+                        _ExpenseReversalRequest(
+                          item: item,
+                          onOpenSource: widget.onOpenSource,
+                        )
                       else ...[
                         _RequestSummary(item: item),
                         if (item.requesterNote.isNotEmpty) ...[
@@ -722,7 +749,8 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                         ],
                       ],
                       if (widget.onOpenSource != null &&
-                          item.type != 'SHOP_STOCK_HANDOVER') ...[
+                          item.type != 'SHOP_STOCK_HANDOVER' &&
+                          item.type != 'FINANCE_EXPENSE_REVERSAL') ...[
                         const SizedBox(height: 16),
                         OutlinedButton.icon(
                           onPressed: widget.onOpenSource,
@@ -771,6 +799,9 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                                         ? item.status == 'AWAITING_SELLER_ACK'
                                               ? 'DISPUTE_COUNT'
                                               : 'RECOUNT'
+                                        : item.type ==
+                                              'FINANCE_EXPENSE_REVERSAL'
+                                        ? 'EXPENSE_REVERSAL_DECLINE'
                                         : null,
                                   ),
                                   style: OutlinedButton.styleFrom(
@@ -783,6 +814,9 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                                         ? item.status == 'AWAITING_SELLER_ACK'
                                               ? 'Report a problem'
                                               : 'Send for recount'
+                                        : item.type ==
+                                              'FINANCE_EXPENSE_REVERSAL'
+                                        ? 'Decline'
                                         : 'Reject',
                                   ),
                                 ),
@@ -798,9 +832,14 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                                         ? 'ACCEPT'
                                         : 'APPROVE',
                                     reasonRequired:
-                                        item.type == 'SHOP_RECONCILIATION' &&
-                                        item.status != 'AWAITING_SELLER_ACK',
-                                    reasonPrompt: 'RESOLUTION',
+                                        (item.type == 'SHOP_RECONCILIATION' &&
+                                            item.status !=
+                                                'AWAITING_SELLER_ACK') ||
+                                        item.type == 'FINANCE_EXPENSE_REVERSAL',
+                                    reasonPrompt:
+                                        item.type == 'FINANCE_EXPENSE_REVERSAL'
+                                        ? 'EXPENSE_REVERSAL_APPROVAL'
+                                        : 'RESOLUTION',
                                   ),
                                   icon: const Icon(Icons.check_rounded),
                                   label: Text(
@@ -906,6 +945,8 @@ class _DecisionReasonDialogState extends State<_DecisionReasonDialog> {
       'DISPUTE_COUNT' => 'Dispute this count',
       'RECOUNT' => 'Reject and recount',
       'RESOLUTION' => 'Record the resolution',
+      'EXPENSE_REVERSAL_APPROVAL' => 'Approve expense reversal',
+      'EXPENSE_REVERSAL_DECLINE' => 'Decline expense reversal',
       _ => 'Withdraw approval request',
     }),
     content: Form(
@@ -926,6 +967,10 @@ class _DecisionReasonDialogState extends State<_DecisionReasonDialog> {
             'RECOUNT' => 'Explain why a fresh count is required.',
             'RESOLUTION' =>
               'Explain how the differences were checked and resolved.',
+            'EXPENSE_REVERSAL_APPROVAL' =>
+              'Explain why reversing this expense is correct.',
+            'EXPENSE_REVERSAL_DECLINE' =>
+              'Explain why this expense should not be reversed.',
             _ => 'Explain why you are withdrawing this request.',
           },
           helperText: '5–1000 characters. Saved in the audit trail.',
@@ -955,6 +1000,8 @@ class _DecisionReasonDialogState extends State<_DecisionReasonDialog> {
           'STOCK_PROBLEM' => 'Report problem',
           'DISPUTE_COUNT' => 'Submit dispute',
           'RESOLUTION' => 'Resolve and close',
+          'EXPENSE_REVERSAL_APPROVAL' => 'Approve reversal',
+          'EXPENSE_REVERSAL_DECLINE' => 'Decline reversal',
           _ => 'Continue',
         }),
       ),
@@ -1253,6 +1300,219 @@ class _ShopReconciliationRequest extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _ExpenseReversalRequest extends StatelessWidget {
+  const _ExpenseReversalRequest({
+    required this.item,
+    required this.onOpenSource,
+  });
+
+  final ApprovalItem item;
+  final VoidCallback? onOpenSource;
+
+  @override
+  Widget build(BuildContext context) {
+    final entries = item.detailSections.expand((section) => section.entries);
+    final entry = entries.isEmpty ? null : entries.first;
+    String value(String label, [String fallback = 'Not provided']) {
+      if (entry == null) return fallback;
+      final result = _fieldValue(entry, label)?.trim();
+      return result == null || result.isEmpty ? fallback : result;
+    }
+
+    final expenseId = value('Expense ID', item.subtitle);
+    final description = value('Description', 'Expense record');
+    final amount = value(
+      'Amount to reverse',
+      item.amount == null
+          ? 'Not provided'
+          : 'GH₵ ${item.amount!.toStringAsFixed(2)}',
+    );
+
+    return Container(
+      key: const ValueKey('expense-reversal-compact-details'),
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _StatusPill(status: item.status),
+          const SizedBox(height: 16),
+          Text(
+            'Reverse $expenseId',
+            style: const TextStyle(
+              color: AppColors.navy,
+              fontSize: 21,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            description,
+            style: const TextStyle(
+              color: AppColors.text,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: AppColors.green.withValues(alpha: .08),
+              border: Border.all(color: AppColors.green.withValues(alpha: .25)),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'FULL AMOUNT TO REVERSE',
+                    style: TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                Text(
+                  amount,
+                  style: const TextStyle(
+                    color: AppColors.green,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          _PanelCard(
+            title: 'Original expense',
+            icon: Icons.receipt_long_outlined,
+            child: Column(
+              children: [
+                _StockHandoverField(label: 'Expense ID', value: expenseId),
+                _StockHandoverField(
+                  label: 'Recorded amount',
+                  value: value('Recorded amount', amount),
+                  emphasized: true,
+                ),
+                _StockHandoverField(
+                  label: 'Funding source',
+                  value: value('Funding source'),
+                ),
+                _StockHandoverField(
+                  label: 'Payment channel',
+                  value: value('Payment channel'),
+                ),
+                _StockHandoverField(label: 'Payee', value: value('Payee')),
+                _StockHandoverField(label: 'Receipt', value: value('Receipt')),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          _PanelCard(
+            title: 'Why this is requested',
+            icon: Icons.notes_rounded,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _StockHandoverField(
+                  label: 'Reason type',
+                  value: value('Reason type'),
+                ),
+                if (item.requesterNote.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    item.requesterNote,
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontWeight: FontWeight.w600,
+                      height: 1.45,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.amber.withValues(alpha: .08),
+              border: Border.all(color: AppColors.amber.withValues(alpha: .25)),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(
+                  Icons.account_balance_wallet_outlined,
+                  color: AppColors.amber,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Financial effect if approved',
+                        style: TextStyle(
+                          color: AppColors.navy,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        value('Financial effect'),
+                        style: const TextStyle(
+                          color: AppColors.text,
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          _PanelCard(
+            title: 'Request information',
+            icon: Icons.assignment_ind_outlined,
+            child: Wrap(
+              spacing: 18,
+              runSpacing: 18,
+              children: [
+                _PanelField(
+                  label: 'Requested by',
+                  value: value('Requester', item.requesterName),
+                ),
+                _PanelField(
+                  label: 'Assigned approver',
+                  value: value('Approver', item.approverName),
+                ),
+                _PanelField(
+                  label: 'Requested',
+                  value: _dateText(item.submittedAt ?? item.createdAt),
+                ),
+              ],
+            ),
+          ),
+          if (onOpenSource != null) ...[
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              key: const ValueKey('expense-reversal-open-source'),
+              onPressed: onOpenSource,
+              icon: const Icon(Icons.open_in_new_rounded),
+              label: const Text('Open expense record'),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -2178,6 +2438,7 @@ ApprovalDetailSection? _primarySection(ApprovalItem item) {
     'STUDENT_TRANSFER' => 'Transfer request',
     'SHOP_INVENTORY_ADJUSTMENT' => 'Inventory change',
     'SHOP_STOCK_HANDOVER' => 'Stock handover',
+    'FINANCE_EXPENSE_REVERSAL' => 'Expense reversal request',
     _ => '',
   };
   for (final section in item.detailSections) {
@@ -2220,6 +2481,7 @@ String _decisionSectionTitle(String type) => switch (type) {
   'STUDENT_TRANSFER' => 'Requested grade change',
   'SHOP_INVENTORY_ADJUSTMENT' => 'Requested inventory change',
   'SHOP_STOCK_HANDOVER' => 'Stock awaiting confirmation',
+  'FINANCE_EXPENSE_REVERSAL' => 'Expense reversal request',
   _ => 'Request summary',
 };
 
