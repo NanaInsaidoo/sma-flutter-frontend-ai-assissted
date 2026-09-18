@@ -8,8 +8,15 @@ import 'package:flutter/material.dart';
 import '../../approvals/data/approval_api_client.dart';
 import '../../approvals/domain/approval_models.dart';
 import '../../approvals/presentation/approvals_screen.dart';
+import '../../assessments/presentation/report_pdf_download.dart';
+import '../../platform/presentation/document_opener.dart';
 import '../../theme/app_theme.dart';
 import '../data/finance_api_client.dart';
+import 'finance_audit_pack_pdf.dart';
+import 'finance_report_export.dart';
+
+typedef FinancePdfDownloader =
+    Future<bool> Function(String fileName, List<int> bytes);
 
 class ExpensesScreen extends StatefulWidget {
   const ExpensesScreen({
@@ -24,6 +31,8 @@ class ExpensesScreen extends StatefulWidget {
     this.onNewRequisitionRequestConsumed,
     this.financeApi,
     this.approvalApi,
+    this.financeCsvDownloader,
+    this.financePdfDownloader,
   });
 
   final String customSchoolId;
@@ -36,6 +45,8 @@ class ExpensesScreen extends StatefulWidget {
   final VoidCallback? onNewRequisitionRequestConsumed;
   final FinanceApiClient? financeApi;
   final ApprovalApiClient? approvalApi;
+  final FinanceCsvDownloader? financeCsvDownloader;
+  final FinancePdfDownloader? financePdfDownloader;
 
   @override
   State<ExpensesScreen> createState() => _ExpensesScreenState();
@@ -49,6 +60,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   late _SchoolExpenseSettings _settings;
   late _PettyCashFloat _float;
   late List<_ExpenseRecord> _expenses;
+  late List<_ExpenseRecord> _refundExpenseHistory;
+  late List<_RefundRecord> _refunds;
   late List<_ExpenseReversal> _expenseReversals;
   late List<_RequisitionRecord> _requisitions;
   late List<_TopUpRequest> _topUps;
@@ -91,6 +104,11 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   int _myExpensePage = 0;
   int _topUpPage = 0;
   int _transferPage = 0;
+  int _refundPage = 0;
+  String _refundQuery = '';
+  String _refundPeriodFilter = 'All dates';
+  bool _isLoadingRefundRegister = false;
+  String? _refundRegisterError;
 
   static const _expensePageSize = 8;
   static const _ledgerPageSize = 8;
@@ -101,6 +119,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     _settings = _SchoolExpenseSettings.empty();
     _float = _PettyCashFloat.empty();
     _expenses = [];
+    _refundExpenseHistory = [];
+    _refunds = [];
     _expenseReversals = [];
     _requisitions = [];
     _topUps = [];
@@ -257,6 +277,33 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
 
   int get _pettyCashPendingCount =>
       _activeTopUpCount + _openReconciliationCount + _openFollowUpCount;
+
+  String _pendingItemLabel(int count, String singular, String plural) =>
+      '$count ${count == 1 ? singular : plural} pending';
+
+  String get _pettyCashBadgeMessage {
+    final parts = <String>[
+      if (_activeTopUpCount > 0)
+        _pendingItemLabel(
+          _activeTopUpCount,
+          'top-up request',
+          'top-up requests',
+        ),
+      if (_openReconciliationCount > 0)
+        _pendingItemLabel(
+          _openReconciliationCount,
+          'reconciliation',
+          'reconciliations',
+        ),
+      if (_openFollowUpCount > 0)
+        _pendingItemLabel(
+          _openFollowUpCount,
+          'financial follow-up',
+          'financial follow-ups',
+        ),
+    ];
+    return parts.join(', ');
+  }
 
   List<_TopUpRequest> get _overdueFundsConfirmations {
     final now = DateTime.now();
@@ -460,6 +507,41 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     return records;
   }
 
+  List<_RefundRecord> get _visibleRefunds {
+    final query = _refundQuery.trim().toLowerCase();
+    final now = DateTime.now();
+    final records = _refunds.where((item) {
+      final matchesQuery =
+          query.isEmpty ||
+          item.refundId.toLowerCase().contains(query) ||
+          item.originalExpenseId.toLowerCase().contains(query) ||
+          item.originalDescription.toLowerCase().contains(query) ||
+          item.payee.toLowerCase().contains(query) ||
+          item.reference.toLowerCase().contains(query);
+      final matchesPeriod = switch (_refundPeriodFilter) {
+        'This month' =>
+          item.receivedDate.year == now.year &&
+              item.receivedDate.month == now.month,
+        'This term' => item.academicTermId == _academicTermId,
+        _ => true,
+      };
+      return matchesQuery && matchesPeriod;
+    }).toList()..sort((a, b) => b.receivedDate.compareTo(a.receivedDate));
+    return records;
+  }
+
+  double _refundTotal(Iterable<_RefundRecord> records) =>
+      records.fold(0, (total, item) => total + item.amount);
+
+  List<_FinancialFollowUp> get _expectedRefundFollowUps => _financialFollowUps
+      .where(
+        (item) => item.type == _FollowUpType.vendorRefund && !item.isClosed,
+      )
+      .toList();
+
+  double get _expectedRefundAmount =>
+      _expectedRefundFollowUps.fold(0, (total, item) => total + item.amount);
+
   _ReconciliationRecord? get _activeReconciliation {
     for (final record in _reconciliations) {
       if (record.status == _ReconciliationStatus.inProgress) {
@@ -541,6 +623,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       final overview = _asMap(baseResults[0]);
       final cycle = _canViewAllFinance ? _asMap(overview['cycle']) : overview;
       final pockets = _asMap(overview['pockets']);
+      if (_canViewAllFinance) {
+        _parseRefundRegister(managerResults[0]);
+      }
       final transactions = _canViewAllFinance
           ? _transactionRecords(managerResults[0])
           : _transactionRecords(requesterTransactions);
@@ -1376,9 +1461,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     final records = transactions
         .where(
           (value) =>
-              _isExpenseTransaction(value) &&
-              _asText(value['transactionType']).toUpperCase() !=
-                  'EXPENSE_REVERSAL',
+              _asText(value['transactionType']).toUpperCase() == 'EXPENSE',
         )
         .map(_expenseFromMap)
         .toList();
@@ -1386,11 +1469,13 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       for (final record in records)
         if (record.serverId != null) record.serverId!: record,
     };
-    for (final refund in records.where((item) => item.amount < 0)) {
-      final parentId = int.tryParse(refund.linkedExpenseId ?? '');
-      final original = parentId == null ? null : byServerId[parentId];
+    for (final refund in transactions.where(
+      (value) =>
+          _asText(value['transactionType']).toUpperCase() == 'EXPENSE_REFUND',
+    )) {
+      final original = byServerId[_asInt(refund['parentTransactionId'])];
       if (original != null) {
-        original.refundedAmount += refund.amount.abs();
+        original.refundedAmount += _asDouble(refund['actualAmount']).abs();
         original.status = original.refundableAmount == 0
             ? _ExpenseStatus.fullyRefunded
             : _ExpenseStatus.partiallyRefunded;
@@ -1410,6 +1495,98 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       }
     }
     return records;
+  }
+
+  void _parseRefundRegister(dynamic response) {
+    final transactions = _pageContent(response).map(_asMap).toList();
+    final expenseMaps = transactions
+        .where(
+          (item) => _asText(item['transactionType']).toUpperCase() == 'EXPENSE',
+        )
+        .toList();
+    final refundMaps = transactions
+        .where(
+          (item) =>
+              _asText(item['transactionType']).toUpperCase() ==
+              'EXPENSE_REFUND',
+        )
+        .toList();
+    final reversalMaps = transactions
+        .where(
+          (item) =>
+              _asText(item['transactionType']).toUpperCase() ==
+              'EXPENSE_REVERSAL',
+        )
+        .toList();
+    final expenses = expenseMaps.map(_expenseFromMap).toList();
+    final byId = <int, _ExpenseRecord>{
+      for (final expense in expenses)
+        if (expense.serverId != null) expense.serverId!: expense,
+    };
+    for (final refund in refundMaps) {
+      final original = byId[_asInt(refund['parentTransactionId'])];
+      if (original == null) continue;
+      original.refundedAmount += _asDouble(refund['actualAmount']).abs();
+      original.status = original.refundableAmount == 0
+          ? _ExpenseStatus.fullyRefunded
+          : _ExpenseStatus.partiallyRefunded;
+    }
+    for (final reversalMap in reversalMaps) {
+      final reversal = _expenseReversalFromMap(reversalMap);
+      final original = byId[reversal.parentTransactionId];
+      if (original == null) continue;
+      if (reversal.status == _ExpenseReversalStatus.pending ||
+          reversal.status == _ExpenseReversalStatus.approved) {
+        original.reversal = reversal;
+      }
+      if (reversal.status == _ExpenseReversalStatus.approved) {
+        original.status = _ExpenseStatus.reversed;
+      } else if (reversal.status == _ExpenseReversalStatus.pending) {
+        original.status = _ExpenseStatus.pendingReversal;
+      }
+    }
+    _refundExpenseHistory = expenses;
+    _refunds = refundMaps.map((item) {
+      final parentId = _asInt(item['parentTransactionId']);
+      final original = byId[parentId];
+      return _RefundRecord(
+        serverId: _nullableServerId(item['id']),
+        refundId: _asText(item['transactionCode'] ?? item['id']),
+        originalTransactionId: parentId,
+        originalExpenseId: original?.expenseId ?? 'Expense #$parentId',
+        originalDescription:
+            original?.description ?? _asText(item['description']),
+        payee: original?.payee ?? _asText(item['vendor']),
+        amount: _asDouble(item['actualAmount']).abs(),
+        receivedDate: _asDate(item['transactionDate'] ?? item['createdAt']),
+        academicTermId: _nullableServerId(item['academicTermId']),
+        paymentMethod: _refundPaymentMethodLabel(
+          _asText(item['paymentChannel']),
+        ),
+        destination: _refundDestinationLabel(item),
+        reference: _asText(item['receiptNumber']),
+        reason: _asText(item['notes']),
+        recordedBy: _asText(item['createdBy'], fallback: 'Not recorded'),
+      );
+    }).toList();
+  }
+
+  String _refundPaymentMethodLabel(String value) =>
+      switch (value.toUpperCase()) {
+        'BANK_TRANSFER' => 'Bank transfer',
+        'CHEQUE' => 'Cheque',
+        'CASH_DEPOSIT' => 'Cash deposit',
+        'DIRECT_MOMO' => 'School MoMo',
+        _ => value.isEmpty ? 'Not recorded' : value,
+      };
+
+  String _refundDestinationLabel(Map<String, dynamic> value) {
+    final destination = _asText(value['destinationPocket']).toUpperCase();
+    if (destination == 'SCHOOL_FUNDS') return 'School funds';
+    final legacyPocket = _asText(value['sourcePocket']).toUpperCase();
+    if (legacyPocket == 'CASH') return 'Petty cash · Cash (legacy)';
+    if (legacyPocket == 'MOMO') return 'Petty cash · MoMo (legacy)';
+    return 'School funds';
   }
 
   _ExpenseReversal _expenseReversalFromMap(Map<String, dynamic> value) {
@@ -1435,16 +1612,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     );
   }
 
-  bool _isExpenseTransaction(Map<String, dynamic> value) {
-    final type = _asText(value['transactionType']).toUpperCase();
-    return type.contains('EXPENSE') ||
-        type.contains('SPEND') ||
-        type.contains('DIRECT');
-  }
-
   _ExpenseRecord _expenseFromMap(Map<String, dynamic> value) {
     final status = _expenseStatus(value['status']);
     final sourcePocket = _asText(value['sourcePocket']).toUpperCase();
+    final receiptFileName = _asText(value['receiptFileName']);
     final channel = _paymentChannel(
       value['paymentChannel'],
       sourcePocket: sourcePocket,
@@ -1461,6 +1632,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             value['approvedAmount'] ??
             value['requestedAmount'],
       ),
+      requestedAmount: _nullableDouble(value['requestedAmount']),
       approvedAmount: _nullableDouble(
         value['approvedAmount'] ??
             (_asBool(value['requiresRatification'])
@@ -1474,6 +1646,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       channel: channel,
       status: status,
       receiptNumber: _asText(value['receiptNumber']),
+      receiptFileName: receiptFileName,
+      hasReceiptAttachment:
+          receiptFileName.isNotEmpty ||
+          _asText(value['receiptStorageKey']).isNotEmpty,
       notes: _asText(value['notes']),
       linkedExpenseId: _nullableText(value['parentTransactionId']),
       momoFee: _asDouble(value['feeAmount']),
@@ -1599,6 +1775,16 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           )
           .where((entry) => entry.id > 0)
           .toList();
+
+  List<_FinanceActor> get _reconciliationAssignees {
+    final actorsById = <int, _FinanceActor>{};
+    for (final actor in [..._topUpApprovers, ..._topUpDisbursers]) {
+      actorsById[actor.id] = actor;
+    }
+    final actors = actorsById.values.toList()
+      ..sort((left, right) => left.name.compareTo(right.name));
+    return actors;
+  }
 
   List<_FinanceHistoryEntry> _financeHistoryEntries(dynamic value) =>
       (value is List ? value : const [])
@@ -1831,6 +2017,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         return reconciliation == null
             ? _buildReconciliationsTab()
             : _buildReconciliationDetailPage(reconciliation);
+      case _FinanceLedgerPage.refunds:
+        return _buildRefundRegisterPage();
     }
   }
 
@@ -1866,7 +2054,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             ],
           ),
         ),
-        if (_canViewAllFinance) ...[
+        if (_financeLedgerPage != _FinanceLedgerPage.refunds &&
+            _canViewAllFinance) ...[
           OutlinedButton.icon(
             onPressed: _openReconciliationRequestDialog,
             icon: const Icon(Icons.fact_check_outlined),
@@ -1874,12 +2063,13 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           ),
           const SizedBox(width: 10),
         ],
-        FilledButton.icon(
-          onPressed: _openCreateRequisitionDialog,
-          icon: const Icon(Icons.playlist_add_rounded),
-          label: const Text('New requisition'),
-          style: _primaryButtonStyle(),
-        ),
+        if (_financeLedgerPage != _FinanceLedgerPage.refunds)
+          FilledButton.icon(
+            onPressed: _openCreateRequisitionDialog,
+            icon: const Icon(Icons.playlist_add_rounded),
+            label: const Text('New requisition'),
+            style: _primaryButtonStyle(),
+          ),
       ],
     );
   }
@@ -1981,6 +2171,15 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   : tab == _ExpenseTab.pettyCash
                   ? _pettyCashPendingCount
                   : 0,
+              badgeMessage: tab == _ExpenseTab.approvals
+                  ? _pendingItemLabel(
+                      _pendingApprovalCount,
+                      'finance action',
+                      'finance actions',
+                    )
+                  : tab == _ExpenseTab.pettyCash
+                  ? _pettyCashBadgeMessage
+                  : null,
               onTap: () => setState(() => _tab = tab),
             ),
         ],
@@ -2408,6 +2607,23 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   _PettyCashSection.reconciliations => _openReconciliationCount,
                   _PettyCashSection.followUps => _openFollowUpCount,
                 },
+                badgeMessage: switch (section) {
+                  _PettyCashSection.workspace => _pendingItemLabel(
+                    _activeTopUpCount,
+                    'top-up request',
+                    'top-up requests',
+                  ),
+                  _PettyCashSection.reconciliations => _pendingItemLabel(
+                    _openReconciliationCount,
+                    'reconciliation',
+                    'reconciliations',
+                  ),
+                  _PettyCashSection.followUps => _pendingItemLabel(
+                    _openFollowUpCount,
+                    'financial follow-up',
+                    'financial follow-ups',
+                  ),
+                },
                 onTap: () => setState(() => _pettyCashSection = section),
               ),
           ],
@@ -2684,6 +2900,12 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                 child: _PettyCashControlCard(
                   icon: Icons.add_card_outlined,
                   title: 'Top-up requests',
+                  pendingCount: _activeTopUpCount,
+                  pendingMessage: _pendingItemLabel(
+                    _activeTopUpCount,
+                    'top-up request',
+                    'top-up requests',
+                  ),
                   status: currentTopUp?.status.label ?? 'No active request',
                   detail: currentTopUp == null
                       ? '${_topUps.length} requests recorded'
@@ -2700,6 +2922,12 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                 child: _PettyCashControlCard(
                   icon: Icons.fact_check_outlined,
                   title: 'Reconciliations',
+                  pendingCount: _openReconciliationCount,
+                  pendingMessage: _pendingItemLabel(
+                    _openReconciliationCount,
+                    'reconciliation',
+                    'reconciliations',
+                  ),
                   status: openReconciliation?.status.label ?? 'No open request',
                   detail:
                       openReconciliation?.reference ??
@@ -2756,14 +2984,6 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           title: 'Financial follow-ups',
           subtitle:
               'Operational exceptions that need evidence, recovery, correction, or an administrator decision. These are not ordinary expense entries.',
-          trailing: _canApproveFinance
-              ? FilledButton.icon(
-                  onPressed: _openNewFollowUpDialog,
-                  icon: const Icon(Icons.add_rounded),
-                  label: const Text('Record follow-up'),
-                  style: _primaryButtonStyle(),
-                )
-              : null,
           child: LayoutBuilder(
             builder: (context, constraints) {
               final compact = constraints.maxWidth < 720;
@@ -3833,14 +4053,39 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                 _ActionTile(
                   icon: Icons.add_card_outlined,
                   iconColor: AppColors.blue,
-                  title: 'Top-up request ${item.requestId}',
-                  subtitle:
-                      'Requested ${_date(item.requestedAt)} · estimated ${_money(item.requestedAmount)}',
-                  trailing: FilledButton(
-                    onPressed: () => _approveTopUp(item),
-                    style: _primaryButtonStyle(),
-                    child: const Text('Approve'),
+                  title: item.requestId,
+                  titleStyle: const TextStyle(
+                    color: AppColors.text,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: .2,
                   ),
+                  subtitle:
+                      'Top-up request · Requested by ${item.requester} on ${_date(item.requestedAt)}',
+                  trailing: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _money(item.requestedAmount),
+                        style: const TextStyle(
+                          color: AppColors.text,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      FilledButton.icon(
+                        key: ValueKey('review-top-up-${item.serverId}'),
+                        onPressed: () =>
+                            _openTopUpDetailPage(item, fromApprovals: true),
+                        style: _primaryButtonStyle(),
+                        icon: const Icon(Icons.visibility_outlined, size: 18),
+                        label: const Text('Review request'),
+                      ),
+                    ],
+                  ),
+                  onTap: () => _openTopUpDetailPage(item, fromApprovals: true),
                 ),
               for (final item in pendingDisbursements)
                 _ActionTile(
@@ -4039,39 +4284,56 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   Widget _buildReportsTab() {
     final reportCards = [
       _ReportCardData(
-        icon: Icons.picture_as_pdf_outlined,
-        title: 'Audit export',
+        icon: Icons.receipt_long_outlined,
+        title: 'Expense register',
         subtitle:
-            'Export PDF or Excel with requisitions, expenses, receipts, and approval trail.',
-        action: 'Prepare export',
+            'School and petty-cash expenses with amounts, receipts, refunds, and status.',
+        action: 'Open report',
+        actionKey: const ValueKey('open-expense-register-report'),
+        onPressed: () => _openFinanceReport(_FinanceReportType.expenses),
       ),
       _ReportCardData(
         icon: Icons.balance_outlined,
-        title: 'Float reconciliation',
+        title: 'Petty cash ledger',
         subtitle:
-            'Compare cash box count and MoMo statement against system pockets.',
-        action: 'Request reconciliation',
-        onPressed: _openReconciliationRequestDialog,
+            'Top-ups, Cash/MoMo transfers, expenses, fees, reversals, and counts.',
+        action: 'Open report',
+        actionKey: const ValueKey('open-petty-cash-ledger-report'),
+        onPressed: () => _openFinanceReport(_FinanceReportType.pettyCash),
       ),
       _ReportCardData(
-        icon: Icons.history_outlined,
-        title: 'Date exceptions',
+        icon: Icons.rule_folder_outlined,
+        title: 'Approvals & exceptions',
         subtitle:
-            'Backdated expenses, late ratifications, and receipt-date tolerance warnings.',
-        action: 'Review exceptions',
+            'Approval decisions, emergency ratifications, variances, and open controls.',
+        action: 'Open report',
+        actionKey: const ValueKey('open-approvals-exceptions-report'),
+        onPressed: () => _openFinanceReport(_FinanceReportType.controls),
       ),
       _ReportCardData(
-        icon: Icons.receipt_long_outlined,
-        title: 'Refund register',
-        subtitle: 'Linked refund entries without modifying original expenses.',
-        action: 'Open register',
+        icon: Icons.currency_exchange_outlined,
+        title: 'Refunds & reversals',
+        subtitle:
+            'Returned money and approved or pending corrections linked to original expenses.',
+        action: 'Open report',
+        actionKey: const ValueKey('open-refunds-reversals-report'),
+        onPressed: () => _openFinanceReport(_FinanceReportType.corrections),
+      ),
+      _ReportCardData(
+        icon: Icons.picture_as_pdf_outlined,
+        title: 'Audit pack',
+        subtitle:
+            'One PDF containing all four current-term reports and generation details.',
+        action: 'Prepare pack',
+        actionKey: const ValueKey('open-finance-audit-pack'),
+        onPressed: () => _openFinanceReport(_FinanceReportType.auditPack),
       ),
     ];
 
     return _SectionCard(
-      title: 'Reports & controls',
+      title: 'Finance reports',
       subtitle:
-          'These are placeholders for the backend reporting APIs. They show the final control surface we should build toward.',
+          'Preview current-term records, download a CSV for Excel, or prepare the consolidated PDF audit pack.',
       child: LayoutBuilder(
         builder: (context, constraints) {
           final width = constraints.maxWidth > 900
@@ -4091,6 +4353,981 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         },
       ),
     );
+  }
+
+  _FinanceReportData _expenseRegisterReport() {
+    final records = [..._expenses]
+      ..sort((a, b) => b.transactionDate.compareTo(a.transactionDate));
+    return _FinanceReportData(
+      type: _FinanceReportType.expenses,
+      title: 'Expense register',
+      description:
+          'All School funds and petty-cash expenses in the current academic term.',
+      headers: const [
+        'Date',
+        'Expense ID',
+        'Source',
+        'Description',
+        'Payee',
+        'Category',
+        'Amount',
+        'Fee',
+        'Refunded',
+        'Net spend',
+        'Status',
+        'Requisition',
+        'Receipt',
+      ],
+      rows: records
+          .map(
+            (item) => [
+              _date(item.transactionDate),
+              item.expenseId,
+              item.source.label,
+              item.description,
+              item.payee,
+              item.category,
+              _reportMoney(item.amount),
+              _reportMoney(item.momoFee),
+              _reportMoney(item.refundedAmount),
+              _reportMoney(item.accountingAmount),
+              item.status.label,
+              _requisitionReference(item.requisitionId) ?? 'Not linked',
+              item.receiptNumber.isEmpty ? 'Not provided' : item.receiptNumber,
+            ],
+          )
+          .toList(),
+      totalLabel: 'Net recorded spend',
+      totalValue: _expenses.fold<double>(
+        0,
+        (total, item) => total + item.accountingAmount,
+      ),
+    );
+  }
+
+  _FinanceReportData _pettyCashLedgerReport() {
+    final lines = <_FinanceReportLine>[];
+    for (final item in _topUps.where(
+      (item) =>
+          item.status == _TopUpStatus.confirmed ||
+          item.status == _TopUpStatus.confirmedWithDiscrepancy,
+    )) {
+      final amount =
+          item.actualReceived ??
+          ((item.cashAmount ?? 0) + (item.momoAmount ?? 0));
+      lines.add(
+        _FinanceReportLine(
+          date: item.confirmedAt ?? item.decisionDate,
+          cells: [
+            _date(item.confirmedAt ?? item.decisionDate),
+            item.requestId,
+            'Confirmed top-up',
+            'Cash ${_reportMoney(item.cashAmount ?? 0)} / MoMo ${_reportMoney(item.momoAmount ?? 0)}',
+            _reportMoney(amount),
+            _reportMoney(0),
+            _reportMoney(0),
+            item.status.label,
+          ],
+        ),
+      );
+    }
+    for (final item in _pocketTransfers) {
+      lines.add(
+        _FinanceReportLine(
+          date: item.date,
+          cells: [
+            _date(item.date),
+            item.id,
+            'Pocket transfer',
+            '${item.fromPocket} to ${item.toPocket}',
+            _reportMoney(item.amount),
+            _reportMoney(item.amount),
+            _reportMoney(item.fee),
+            'Recorded',
+          ],
+        ),
+      );
+    }
+    for (final item in _expenses.where(
+      (item) => item.source == _ExpenseSource.pettyCash,
+    )) {
+      lines.add(
+        _FinanceReportLine(
+          date: item.transactionDate,
+          cells: [
+            _date(item.transactionDate),
+            item.expenseId,
+            'Expense',
+            item.channel.label,
+            _reportMoney(0),
+            _reportMoney(item.amount),
+            _reportMoney(item.momoFee),
+            item.status.label,
+          ],
+        ),
+      );
+    }
+    for (final reversal in _expenseReversals.where(
+      (item) => item.status == _ExpenseReversalStatus.approved,
+    )) {
+      _ExpenseRecord? original;
+      for (final expense in _expenses) {
+        if (expense.serverId == reversal.parentTransactionId) {
+          original = expense;
+          break;
+        }
+      }
+      if (original?.source != _ExpenseSource.pettyCash) continue;
+      final date = reversal.decidedAt ?? reversal.requestedAt;
+      lines.add(
+        _FinanceReportLine(
+          date: date,
+          cells: [
+            _date(date),
+            reversal.reference,
+            'Expense reversal',
+            original!.channel.label,
+            _reportMoney(reversal.amount),
+            _reportMoney(0),
+            _reportMoney(0),
+            reversal.status.label,
+          ],
+        ),
+      );
+    }
+    for (final item in _reconciliations) {
+      lines.add(
+        _FinanceReportLine(
+          date: item.confirmedAt ?? item.requestedAt,
+          cells: [
+            _date(item.confirmedAt ?? item.requestedAt),
+            item.reference,
+            'Reconciliation',
+            'Cash and MoMo count',
+            item.totalVariance > 0
+                ? _reportMoney(item.totalVariance)
+                : _reportMoney(0),
+            item.totalVariance < 0
+                ? _reportMoney(item.totalVariance.abs())
+                : _reportMoney(0),
+            _reportMoney(0),
+            item.status.label,
+          ],
+        ),
+      );
+    }
+    lines.sort((a, b) => b.date.compareTo(a.date));
+    return _FinanceReportData(
+      type: _FinanceReportType.pettyCash,
+      title: 'Petty cash ledger',
+      description:
+          'Movements and control checkpoints affecting the Cash and MoMo float.',
+      headers: const [
+        'Date',
+        'Record',
+        'Entry type',
+        'Pocket / route',
+        'Money in',
+        'Money out',
+        'Fee',
+        'Status',
+      ],
+      rows: lines.map((line) => line.cells).toList(),
+      totalLabel: 'Current pocket balance',
+      totalValue: _totalFloatBalance,
+    );
+  }
+
+  _FinanceReportData _controlsReport() {
+    final lines = <_FinanceReportLine>[];
+    for (final item in _requisitions) {
+      lines.add(
+        _FinanceReportLine(
+          date: item.decisionDate,
+          cells: [
+            _date(item.decisionDate),
+            item.id,
+            item.isEmergency ? 'Emergency request' : 'Requisition',
+            item.requestedBy,
+            _reportMoney(item.approvedAmount ?? item.requestedAmount),
+            item.status.label,
+            item.approver ?? 'Not assigned',
+            item.notes,
+          ],
+        ),
+      );
+    }
+    for (final item in _topUps) {
+      lines.add(
+        _FinanceReportLine(
+          date: item.decisionDate,
+          cells: [
+            _date(item.decisionDate),
+            item.requestId,
+            'Petty-cash top-up',
+            item.requester,
+            _reportMoney(item.approvedAmount ?? item.requestedAmount),
+            item.status.label,
+            item.approver ?? 'Not assigned',
+            item.disburser == null
+                ? 'No disburser selected'
+                : 'Disburser: ${item.disburser}',
+          ],
+        ),
+      );
+    }
+    for (final item in _expenses.where(
+      (item) =>
+          item.isEmergency ||
+          item.varianceStatus != _VarianceStatus.none ||
+          item.receiptNumber.isEmpty ||
+          item.reversal != null,
+    )) {
+      final isVariance = item.varianceStatus != _VarianceStatus.none;
+      final controlType = item.reversal != null
+          ? 'Expense reversal'
+          : isVariance
+          ? 'Expense variance'
+          : item.isEmergency
+          ? 'Emergency ratification'
+          : 'Missing receipt';
+      final controlStatus =
+          item.reversal?.status.label ??
+          (isVariance
+              ? item.varianceStatus.label
+              : item.isEmergency
+              ? item.approvalStatus.label
+              : 'Evidence required');
+      final detail =
+          item.reversal?.reasonLabel ??
+          (isVariance
+              ? item.varianceLabel
+              : item.isEmergency
+              ? item.notes
+              : 'No receipt reference recorded');
+      lines.add(
+        _FinanceReportLine(
+          date: item.transactionDate,
+          cells: [
+            _date(item.transactionDate),
+            item.expenseId,
+            controlType,
+            item.payee,
+            _reportMoney(item.amount),
+            controlStatus,
+            'Finance approver',
+            detail,
+          ],
+        ),
+      );
+    }
+    for (final item in _financialFollowUps) {
+      lines.add(
+        _FinanceReportLine(
+          date: item.createdAt,
+          cells: [
+            _date(item.createdAt),
+            item.reference,
+            item.type.label,
+            item.owner,
+            _reportMoney(item.amount),
+            item.status.label,
+            item.owner,
+            item.summary,
+          ],
+        ),
+      );
+    }
+    lines.sort((a, b) => b.date.compareTo(a.date));
+    return _FinanceReportData(
+      type: _FinanceReportType.controls,
+      title: 'Approvals & exceptions',
+      description:
+          'Approval decisions and finance matters requiring or recording management attention.',
+      headers: const [
+        'Date',
+        'Record',
+        'Control type',
+        'Requester / owner',
+        'Amount',
+        'Status',
+        'Approver / responsible party',
+        'Note',
+      ],
+      rows: lines.map((line) => line.cells).toList(),
+      totalLabel: 'Open exception value',
+      totalValue: _financialFollowUps
+          .where((item) => !item.isClosed)
+          .fold<double>(0, (total, item) => total + item.amount),
+    );
+  }
+
+  _FinanceReportData _correctionsReport() {
+    final lines = <_FinanceReportLine>[];
+    for (final item in _refunds) {
+      lines.add(
+        _FinanceReportLine(
+          date: item.receivedDate,
+          cells: [
+            _date(item.receivedDate),
+            item.refundId,
+            'Refund received',
+            item.originalExpenseId,
+            _reportMoney(item.amount),
+            'Received',
+            item.destination,
+            '${item.paymentMethod}${item.reference.isEmpty ? '' : ' / ${item.reference}'}',
+          ],
+        ),
+      );
+    }
+    for (final item in _expenseReversals) {
+      lines.add(
+        _FinanceReportLine(
+          date: item.decidedAt ?? item.requestedAt,
+          cells: [
+            _date(item.decidedAt ?? item.requestedAt),
+            item.reference,
+            'Expense reversal',
+            _expenseReferenceForServerId(item.parentTransactionId),
+            _reportMoney(item.amount),
+            item.status.label,
+            item.approver,
+            '${item.reasonLabel}${item.notes.isEmpty ? '' : ' / ${item.notes}'}',
+          ],
+        ),
+      );
+    }
+    lines.sort((a, b) => b.date.compareTo(a.date));
+    return _FinanceReportData(
+      type: _FinanceReportType.corrections,
+      title: 'Refunds & reversals',
+      description:
+          'Refunds are received money; reversals are approval-controlled recording corrections.',
+      headers: const [
+        'Date',
+        'Record',
+        'Type',
+        'Original expense',
+        'Amount',
+        'Status',
+        'Destination / approver',
+        'Reference / reason',
+      ],
+      rows: lines.map((line) => line.cells).toList(),
+      totalLabel: 'Refunds received',
+      totalValue: _refunds.fold<double>(
+        0,
+        (total, item) => total + item.amount,
+      ),
+    );
+  }
+
+  String _expenseReferenceForServerId(int serverId) {
+    for (final item in _expenses) {
+      if (item.serverId == serverId) return item.expenseId;
+    }
+    return 'Expense #$serverId';
+  }
+
+  _FinanceReportData _financeReport(_FinanceReportType type) => switch (type) {
+    _FinanceReportType.expenses => _expenseRegisterReport(),
+    _FinanceReportType.pettyCash => _pettyCashLedgerReport(),
+    _FinanceReportType.controls => _controlsReport(),
+    _FinanceReportType.corrections => _correctionsReport(),
+    _FinanceReportType.auditPack => _FinanceReportData.auditPack(),
+  };
+
+  void _openFinanceReport(_FinanceReportType type) {
+    final report = _financeReport(type);
+    final auditReports = type == _FinanceReportType.auditPack
+        ? [
+            _expenseRegisterReport(),
+            _pettyCashLedgerReport(),
+            _controlsReport(),
+            _correctionsReport(),
+          ]
+        : const <_FinanceReportData>[];
+    var search = '';
+    var source = 'All sources';
+    var status = 'All statuses';
+    var visibleReport = report;
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          visibleReport = _filterFinanceReport(
+            report,
+            search: search,
+            source: source,
+            status: status,
+          );
+          final preview = _financeReportDisplayRows(
+            visibleReport,
+          ).take(8).toList();
+          final previewHeaders = type == _FinanceReportType.auditPack
+              ? const ['Report', 'Records', 'Key total']
+              : visibleReport.headers;
+          final previewRows = type == _FinanceReportType.auditPack
+              ? auditReports
+                    .map(
+                      (item) => [
+                        item.title,
+                        '${item.rows.length}',
+                        '${item.totalLabel}: ${_reportMoney(item.totalValue)}',
+                      ],
+                    )
+                    .toList()
+              : preview;
+          return _ExpenseDialogShell(
+            title: report.title,
+            subtitle: type == _FinanceReportType.auditPack
+                ? 'Current academic term · PDF plus CSV workbook data'
+                : 'Current academic term · CSV opens in Excel',
+            width: 920,
+            secondaryLabel: 'Close',
+            primaryLabel: type == _FinanceReportType.auditPack
+                ? 'Download PDF'
+                : 'Download CSV',
+            persistentActions: [
+              if (type == _FinanceReportType.corrections)
+                TextButton.icon(
+                  onPressed: () {
+                    Navigator.pop(dialogContext);
+                    _openRefundRegister();
+                  },
+                  icon: const Icon(Icons.receipt_long_outlined),
+                  label: const Text('Open refund register'),
+                ),
+              if (type == _FinanceReportType.auditPack)
+                TextButton.icon(
+                  onPressed: () => _downloadAuditCsv(auditReports),
+                  icon: const Icon(Icons.table_view_outlined),
+                  label: const Text('Download CSV'),
+                ),
+            ],
+            onPrimary: () {
+              if (type == _FinanceReportType.auditPack) {
+                _downloadAuditPack(auditReports);
+              } else {
+                _downloadFinanceReportCsv(visibleReport);
+              }
+            },
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _DialogSummary(
+                  title: type == _FinanceReportType.auditPack
+                      ? 'Reports included'
+                      : report.totalLabel,
+                  value: type == _FinanceReportType.auditPack
+                      ? '${auditReports.length}'
+                      : _money(report.totalValue),
+                  subtitle: type == _FinanceReportType.auditPack
+                      ? '${auditReports.fold<int>(0, (total, item) => total + item.rows.length)} records across the current term'
+                      : '${visibleReport.rows.length} ${visibleReport.rows.length == 1 ? 'record' : 'records'} · ${report.description}',
+                  color: AppColors.green,
+                ),
+                if (type != _FinanceReportType.auditPack) ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    key: const ValueKey('finance-report-search'),
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search_rounded),
+                      labelText: 'Filter report',
+                      hintText:
+                          'Search any reference, person, category, or status',
+                    ),
+                    onChanged: (value) => setDialogState(() => search = value),
+                  ),
+                  if (type == _FinanceReportType.expenses) ...[
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            value: source,
+                            decoration: const InputDecoration(
+                              labelText: 'Funding source',
+                            ),
+                            items: const [
+                              DropdownMenuItem(
+                                value: 'All sources',
+                                child: Text('All sources'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'School funds',
+                                child: Text('School funds'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'Petty cash',
+                                child: Text('Petty cash'),
+                              ),
+                            ],
+                            onChanged: (value) => setDialogState(
+                              () => source = value ?? 'All sources',
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            value: status,
+                            decoration: const InputDecoration(
+                              labelText: 'Status',
+                            ),
+                            items: [
+                              const DropdownMenuItem(
+                                value: 'All statuses',
+                                child: Text('All statuses'),
+                              ),
+                              ..._expenses
+                                  .map((item) => item.status.label)
+                                  .toSet()
+                                  .map(
+                                    (value) => DropdownMenuItem(
+                                      value: value,
+                                      child: Text(value),
+                                    ),
+                                  ),
+                            ],
+                            onChanged: (value) => setDialogState(
+                              () => status = value ?? 'All statuses',
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+                const SizedBox(height: 14),
+                _FormSection(
+                  title: 'Preview',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (previewRows.isEmpty)
+                        const Text(
+                          'No records match the current report filters.',
+                          style: TextStyle(color: AppColors.muted),
+                        )
+                      else
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: DataTable(
+                            columns: previewHeaders
+                                .map(
+                                  (header) => DataColumn(label: Text(header)),
+                                )
+                                .toList(),
+                            rows: previewRows
+                                .map(
+                                  (row) => DataRow(
+                                    cells: row
+                                        .map(
+                                          (cell) => DataCell(
+                                            SizedBox(
+                                              width: 150,
+                                              child: Text(
+                                                cell,
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                          ),
+                                        )
+                                        .toList(),
+                                  ),
+                                )
+                                .toList(),
+                          ),
+                        ),
+                      if (type != _FinanceReportType.auditPack &&
+                          visibleReport.rows.length > preview.length) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          'Previewing ${preview.length} of ${visibleReport.rows.length} matching records. The download includes every match.',
+                          style: const TextStyle(color: AppColors.muted),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  _FinanceReportData _filterFinanceReport(
+    _FinanceReportData report, {
+    required String search,
+    required String source,
+    required String status,
+  }) {
+    if (report.type == _FinanceReportType.auditPack) return report;
+    final query = search.trim().toLowerCase();
+    final rows = report.rows.where((row) {
+      if (query.isNotEmpty &&
+          !row.any((cell) => cell.toLowerCase().contains(query))) {
+        return false;
+      }
+      if (report.type == _FinanceReportType.expenses) {
+        if (source != 'All sources' && row[2] != source) return false;
+        if (status != 'All statuses' && row[10] != status) return false;
+      }
+      return true;
+    }).toList();
+    return report.copyWithRows(rows);
+  }
+
+  Future<void> _downloadFinanceReportCsv(_FinanceReportData report) async {
+    final exporter = widget.financeCsvDownloader ?? exportFinanceCsv;
+    final downloaded = await exporter(
+      _financeReportFileName(report.type, 'csv'),
+      _financeReportCsv(report),
+    );
+    if (!mounted) return;
+    _snack(
+      downloaded
+          ? '${report.title} downloaded.'
+          : 'CSV downloads are available in the web application.',
+    );
+  }
+
+  Future<void> _downloadAuditCsv(List<_FinanceReportData> reports) async {
+    final exporter = widget.financeCsvDownloader ?? exportFinanceCsv;
+    final contents = reports.map(_financeReportCsv).join('\r\n\r\n');
+    final downloaded = await exporter(
+      _financeReportFileName(_FinanceReportType.auditPack, 'csv'),
+      contents,
+    );
+    if (!mounted) return;
+    _snack(
+      downloaded
+          ? 'Audit pack CSV downloaded.'
+          : 'CSV downloads are available in the web application.',
+    );
+  }
+
+  Future<void> _downloadAuditPack(List<_FinanceReportData> reports) async {
+    try {
+      final bytes = await buildFinanceAuditPackPdf(
+        schoolId: widget.customSchoolId,
+        termLabel: 'Academic term ${_academicTermId ?? 'not set'}',
+        generatedBy: (widget.recordedBy ?? '').trim().isEmpty
+            ? 'Signed-in finance user'
+            : widget.recordedBy!.trim(),
+        generatedAt: DateTime.now(),
+        sections: reports
+            .map(
+              (item) => FinanceAuditSection(
+                title: item.title,
+                headers: item.headers,
+                rows: _financeReportDisplayRows(item),
+              ),
+            )
+            .toList(),
+      );
+      final downloader = widget.financePdfDownloader ?? downloadReportPdf;
+      final downloaded = await downloader(
+        _financeReportFileName(_FinanceReportType.auditPack, 'pdf'),
+        bytes,
+      );
+      if (!mounted) return;
+      _snack(
+        downloaded
+            ? 'Finance audit pack downloaded.'
+            : 'PDF downloads are available in the web application.',
+      );
+    } catch (_) {
+      if (mounted) _snack('The finance audit pack could not be prepared.');
+    }
+  }
+
+  String _financeReportCsv(_FinanceReportData report) {
+    final metadata = [
+      ['Report', report.title],
+      ['School', widget.customSchoolId],
+      ['Academic term', '${_academicTermId ?? 'Not set'}'],
+      ['Generated by', widget.recordedBy ?? 'Signed-in finance user'],
+      ['Generated at', DateTime.now().toIso8601String()],
+      <String>[],
+    ];
+    return [
+      ...metadata,
+      report.headers,
+      ...report.rows,
+    ].map((row) => row.map(_financeCsvCell).join(',')).join('\r\n');
+  }
+
+  List<List<String>> _financeReportDisplayRows(_FinanceReportData report) {
+    if (report.type != _FinanceReportType.expenses) return report.rows;
+    const receiptColumn = 12;
+    return report.rows.map((row) {
+      final displayRow = List<String>.from(row);
+      if (displayRow.length > receiptColumn) {
+        displayRow[receiptColumn] = _compactReceiptReference(
+          displayRow[receiptColumn],
+        );
+      }
+      return displayRow;
+    }).toList();
+  }
+
+  String _compactReceiptReference(String reference) {
+    const visibleCharacters = 8;
+    if (reference.length <= 12) return reference;
+    return '...${reference.substring(reference.length - visibleCharacters)}';
+  }
+
+  String _financeCsvCell(String value) {
+    final escaped = value.replaceAll('"', '""');
+    return '"$escaped"';
+  }
+
+  String _financeReportFileName(_FinanceReportType type, String extension) {
+    final now = DateTime.now();
+    String two(int value) => value.toString().padLeft(2, '0');
+    final date = '${now.year}${two(now.month)}${two(now.day)}';
+    return '${type.fileStem}-${widget.customSchoolId}-$date.$extension';
+  }
+
+  String _reportMoney(double value) => 'GHS ${value.toStringAsFixed(2)}';
+
+  Future<void> _openRefundRegister() async {
+    setState(() {
+      _financeLedgerPage = _FinanceLedgerPage.refunds;
+      _isLoadingRefundRegister = true;
+      _refundRegisterError = null;
+    });
+    await _loadRefundRegister();
+  }
+
+  Future<void> _loadRefundRegister() async {
+    try {
+      const pageSize = 200;
+      final transactions = <dynamic>[];
+      var page = 0;
+      var totalPages = 1;
+      do {
+        final response = await _financeApi.get(
+          '/api/schools/${widget.customSchoolId}/finance/transactions',
+          query: {'page': '$page', 'size': '$pageSize'},
+        );
+        final pageItems = _pageContent(response);
+        transactions.addAll(pageItems);
+        final responseMap = _asMap(response);
+        final reportedPages = _asInt(responseMap['totalPages']);
+        totalPages = reportedPages > 0
+            ? reportedPages
+            : pageItems.length < pageSize
+            ? page + 1
+            : page + 2;
+        page += 1;
+      } while (page < totalPages);
+      if (!mounted) return;
+      setState(() {
+        _parseRefundRegister({'content': transactions});
+        _isLoadingRefundRegister = false;
+        _refundRegisterError = null;
+      });
+    } on FinanceApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingRefundRegister = false;
+        _refundRegisterError = error.message;
+      });
+    }
+  }
+
+  Widget _buildRefundRegisterPage() {
+    if (_isLoadingRefundRegister) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(48),
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+    if (_refundRegisterError != null) {
+      return _SectionCard(
+        title: 'Refund register',
+        child: Column(
+          children: [
+            _InlineNotice(
+              icon: Icons.error_outline,
+              color: AppColors.red,
+              text: _refundRegisterError!,
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _loadRefundRegister,
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Try again'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final now = DateTime.now();
+    final termRefunds = _refunds.where(
+      (item) => item.academicTermId == _academicTermId,
+    );
+    final monthRefunds = _refunds.where(
+      (item) =>
+          item.receivedDate.year == now.year &&
+          item.receivedDate.month == now.month,
+    );
+    final visible = _visibleRefunds;
+    final maxPage = visible.isEmpty
+        ? 0
+        : (visible.length - 1) ~/ _expensePageSize;
+    final page = _refundPage > maxPage ? maxPage : _refundPage;
+    final firstIndex = page * _expensePageSize;
+    final lastIndex = (firstIndex + _expensePageSize) > visible.length
+        ? visible.length
+        : firstIndex + _expensePageSize;
+    final pageRecords = visible.sublist(firstIndex, lastIndex);
+    final expected = _expectedRefundFollowUps;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildLedgerBackButton('Back to reports'),
+        const SizedBox(height: 8),
+        _SectionCard(
+          title: 'Refund register',
+          subtitle:
+              'Only money actually received into School funds appears here. Every refund remains linked to its original expense.',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final width = constraints.maxWidth >= 840
+                      ? (constraints.maxWidth - 24) / 3
+                      : constraints.maxWidth >= 520
+                      ? (constraints.maxWidth - 12) / 2
+                      : constraints.maxWidth;
+                  return Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      _CompactMetricCard(
+                        width: width,
+                        title: 'Received this term',
+                        value: _money(_refundTotal(termRefunds)),
+                        subtitle:
+                            '${termRefunds.length} ${termRefunds.length == 1 ? 'refund' : 'refunds'}',
+                      ),
+                      _CompactMetricCard(
+                        width: width,
+                        title: 'Received this month',
+                        value: _money(_refundTotal(monthRefunds)),
+                        subtitle:
+                            '${monthRefunds.length} ${monthRefunds.length == 1 ? 'refund' : 'refunds'}',
+                      ),
+                      _CompactMetricCard(
+                        width: width,
+                        title: 'Current results',
+                        value: _money(_refundTotal(visible)),
+                        subtitle:
+                            '${visible.length} ${visible.length == 1 ? 'refund' : 'refunds'}',
+                      ),
+                    ],
+                  );
+                },
+              ),
+              if (expected.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                TextButton.icon(
+                  onPressed: () => setState(() {
+                    _financeLedgerPage = null;
+                    _tab = _ExpenseTab.pettyCash;
+                    _pettyCashSection = _PettyCashSection.followUps;
+                    _followUpStatusFilter = 'Open';
+                  }),
+                  icon: const Icon(Icons.schedule_outlined),
+                  label: Text(
+                    '${expected.length} expected ${expected.length == 1 ? 'return' : 'returns'} under follow-up · ${_money(_expectedRefundAmount)}',
+                  ),
+                ),
+              ],
+              const SizedBox(height: 16),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final search = TextField(
+                    onChanged: (value) => setState(() {
+                      _refundQuery = value;
+                      _refundPage = 0;
+                    }),
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search_rounded),
+                      hintText: 'Search refund, expense, payee, or reference',
+                    ),
+                  );
+                  final period = _Dropdown<String>(
+                    width: constraints.maxWidth < 560
+                        ? constraints.maxWidth
+                        : 180,
+                    value: _refundPeriodFilter,
+                    items: const ['All dates', 'This term', 'This month'],
+                    onChanged: (value) => setState(() {
+                      _refundPeriodFilter = value;
+                      _refundPage = 0;
+                    }),
+                  );
+                  if (constraints.maxWidth < 560) {
+                    return Column(
+                      children: [search, const SizedBox(height: 10), period],
+                    );
+                  }
+                  return Row(
+                    children: [
+                      Expanded(child: search),
+                      const SizedBox(width: 12),
+                      period,
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(height: 16),
+              _RefundTable(
+                refunds: pageRecords,
+                onOpenExpense: _openRefundOriginalExpense,
+              ),
+              const SizedBox(height: 14),
+              _LedgerPagination(
+                keyPrefix: 'refund-register',
+                page: page,
+                totalItems: visible.length,
+                pageSize: _expensePageSize,
+                onPrevious: page == 0
+                    ? null
+                    : () => setState(() => _refundPage = page - 1),
+                onNext: page >= maxPage
+                    ? null
+                    : () => setState(() => _refundPage = page + 1),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _openRefundOriginalExpense(_RefundRecord refund) {
+    for (final expense in _refundExpenseHistory) {
+      if (expense.serverId == refund.originalTransactionId) {
+        _openExpenseDetailDialog(expense);
+        return;
+      }
+    }
+    _snack('The original expense could not be loaded.');
   }
 
   Widget _expenseListTile(_ExpenseRecord item) {
@@ -4139,7 +5376,11 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     return value;
   }
 
-  void _openTopUpDetailPage(_TopUpRequest item) {
+  void _openTopUpDetailPage(_TopUpRequest item, {bool fromApprovals = false}) {
+    if (fromApprovals) {
+      unawaited(_openTopUpApprovalReviewDialog(item));
+      return;
+    }
     setState(() {
       _selectedTopUp = item;
       _financeLedgerPage = _FinanceLedgerPage.topUpDetail;
@@ -4148,31 +5389,232 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     unawaited(_loadTopUpEvents(item));
   }
 
-  Future<void> _loadTopUpEvents(_TopUpRequest item) async {
-    if (item.serverId == null) return;
-    try {
-      final response = await _financeApi.get(
-        '/api/schools/${widget.customSchoolId}/finance/top-ups/${item.serverId}/events',
+  Future<List<_TopUpEvent>> _fetchTopUpEvents(_TopUpRequest item) async {
+    if (item.serverId == null) return const [];
+    final response = await _financeApi.get(
+      '/api/schools/${widget.customSchoolId}/finance/top-ups/${item.serverId}/events',
+    );
+    return (response is List ? response : _pageContent(response)).map((value) {
+      final map = _asMap(value);
+      return _TopUpEvent(
+        type: _asText(map['eventType']),
+        actor: _asText(map['actor']),
+        note: _nullableText(map['note']),
+        cash: _nullableDouble(map['cashAmount']),
+        momo: _nullableDouble(map['momoAmount']),
+        wallet: _nullableText(map['momoWalletNumber']),
+        reference: _nullableText(map['reference']),
+        at: _asDate(map['createdAt']),
       );
-      final events = (response is List ? response : _pageContent(response)).map(
-        (value) {
-          final map = _asMap(value);
-          return _TopUpEvent(
-            type: _asText(map['eventType']),
-            actor: _asText(map['actor']),
-            note: _nullableText(map['note']),
-            cash: _nullableDouble(map['cashAmount']),
-            momo: _nullableDouble(map['momoAmount']),
-            wallet: _nullableText(map['momoWalletNumber']),
-            reference: _nullableText(map['reference']),
-            at: _asDate(map['createdAt']),
-          );
-        },
-      ).toList();
+    }).toList();
+  }
+
+  Future<void> _loadTopUpEvents(_TopUpRequest item) async {
+    try {
+      final events = await _fetchTopUpEvents(item);
       if (mounted && _selectedTopUp?.serverId == item.serverId) {
         setState(() => _selectedTopUpEvents = events);
       }
     } catch (_) {}
+  }
+
+  Future<void> _openTopUpApprovalReviewDialog(_TopUpRequest item) async {
+    List<_TopUpEvent> events = const [];
+    try {
+      events = await _fetchTopUpEvents(item);
+    } catch (_) {}
+    if (!mounted) return;
+
+    String? requestNote;
+    for (final event in events) {
+      if (event.type.toUpperCase() == 'REQUESTED' &&
+          (event.note?.trim().isNotEmpty ?? false)) {
+        requestNote = event.note!.trim();
+        break;
+      }
+    }
+
+    if (!_canApproveFinance || widget.currentUserId != item.approverUserId) {
+      await _showBlockingNotice(
+        title: 'Assigned approver only',
+        message:
+            'This top-up can only be approved by ${item.approver ?? 'its assigned approver'}.',
+        icon: Icons.lock_outline,
+      );
+      return;
+    }
+    if (item.serverId == null) {
+      await _showBlockingNotice(
+        title: 'Request unavailable',
+        message:
+            'This top-up request is missing its reference and cannot be approved.',
+      );
+      return;
+    }
+    if (_topUpDisbursers.isEmpty) {
+      await _showBlockingNotice(
+        title: 'Disburser required',
+        message: 'No eligible disburser is available for this top-up request.',
+      );
+      return;
+    }
+
+    final currentFloat = _cashBalance + _momoBalance;
+    final projectedFloat = currentFloat + item.requestedAmount;
+    final approvedFloat = _settings.floatApprovedAmount;
+    final formKey = GlobalKey<FormState>();
+    int? disburserId;
+    var approvalNote = '';
+
+    final decision = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => _ExpenseDialogShell(
+          title: item.requestId,
+          subtitle: 'Review this petty cash top-up before approval.',
+          width: 600,
+          primaryLabel: 'Approve request',
+          persistentActions: [
+            OutlinedButton(
+              style: OutlinedButton.styleFrom(foregroundColor: AppColors.red),
+              onPressed: () => Navigator.pop(dialogContext, 'decline'),
+              child: const Text('Decline'),
+            ),
+          ],
+          onPrimary: () {
+            if (!(formKey.currentState?.validate() ?? false)) return;
+            Navigator.pop(dialogContext, 'approve');
+          },
+          child: Form(
+            key: formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _DialogSummary(
+                  title: 'Top-up requested',
+                  value: _money(item.requestedAmount),
+                  subtitle:
+                      '${item.requester} · ${_date(item.requestedAt)} · ${item.expensesCount} ${item.expensesCount == 1 ? 'expense' : 'expenses'} in cycle',
+                  color: AppColors.blue,
+                ),
+                const SizedBox(height: 14),
+                _FormSection(
+                  title: 'Request summary',
+                  child: Column(
+                    children: [
+                      _ReadOnlyRow('Requester', item.requester),
+                      _ReadOnlyRow('Current float', _money(currentFloat)),
+                      _ReadOnlyRow(
+                        'Float after top-up',
+                        _money(projectedFloat),
+                      ),
+                      _ReadOnlyRow('Approved float', _money(approvedFloat)),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF5F8FC),
+                    border: Border.all(color: const Color(0xFFDCE5F2)),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'REQUEST REASON',
+                        style: TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: .6,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        requestNote ?? 'No request reason was provided.',
+                        style: const TextStyle(
+                          color: AppColors.text,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (approvedFloat > 0 && projectedFloat > approvedFloat) ...[
+                  const SizedBox(height: 14),
+                  _InlineNotice(
+                    icon: Icons.warning_amber_rounded,
+                    color: AppColors.red,
+                    text:
+                        'This top-up would place the float ${_money(projectedFloat - approvedFloat)} above the approved amount.',
+                  ),
+                ],
+                const SizedBox(height: 14),
+                _FormSection(
+                  title: 'Approval',
+                  child: Column(
+                    children: [
+                      DropdownButtonFormField<int>(
+                        key: const ValueKey('top-up-approval-disburser'),
+                        value: disburserId,
+                        decoration: const InputDecoration(
+                          labelText: 'Who will disburse the funds?',
+                        ),
+                        items: _topUpDisbursers
+                            .map(
+                              (actor) => DropdownMenuItem(
+                                value: actor.id,
+                                child: Text('${actor.name} · ${actor.role}'),
+                              ),
+                            )
+                            .toList(),
+                        validator: (value) => value == null
+                            ? 'Select the person who will disburse the funds.'
+                            : null,
+                        onChanged: (value) =>
+                            setDialogState(() => disburserId = value),
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        key: const ValueKey('top-up-approval-note'),
+                        minLines: 2,
+                        maxLines: 3,
+                        onChanged: (value) => approvalNote = value,
+                        validator: (value) =>
+                            value == null || value.trim().isEmpty
+                            ? 'Add an approval note.'
+                            : null,
+                        decoration: const InputDecoration(
+                          labelText: 'Approval note',
+                          hintText: 'State what was checked before approval.',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (!mounted || decision == null) return;
+    if (decision == 'decline') {
+      await _declineTopUp(item);
+      return;
+    }
+
+    await _runFinanceMutation(
+      request: () => _financeApi.post(
+        '/api/schools/${widget.customSchoolId}/finance/top-ups/${item.serverId}/approve',
+        body: {'disburserUserId': disburserId, 'notes': approvalNote.trim()},
+      ),
+      successMessage: '${item.requestId} approved.',
+    );
   }
 
   Widget _buildTopUpDetailPage(_TopUpRequest item) {
@@ -4182,6 +5624,13 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         item.status == _TopUpStatus.disbursed ||
         item.status == _TopUpStatus.disputed ||
         item.status == _TopUpStatus.corrected;
+    _TopUpEvent? requestEvent;
+    for (final event in _selectedTopUpEvents) {
+      if (event.type.toUpperCase() == 'REQUESTED') {
+        requestEvent = event;
+        break;
+      }
+    }
 
     Widget metric(String label, String value, {Color? valueColor}) {
       return Container(
@@ -4225,14 +5674,15 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           'Back to top-up history',
           onPressed: () => setState(() {
             _selectedTopUp = null;
+            _selectedTopUpEvents = [];
             _financeLedgerPage = _FinanceLedgerPage.topUps;
           }),
         ),
         const SizedBox(height: 12),
         _SectionCard(
-          title: 'Top-up request ${item.requestId}',
+          title: item.requestId,
           subtitle:
-              'Review the request and complete the next financial control step.',
+              'Top-up request · Submitted by ${item.requester} on ${_date(item.requestedAt)}',
           trailing: _StatusPill(
             label: item.status.label,
             color: item.status.color,
@@ -4264,7 +5714,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               ),
               const SizedBox(height: 22),
               const Text(
-                'REQUEST RECORD',
+                'REQUEST DETAILS',
                 style: TextStyle(
                   color: _muted,
                   fontSize: 11,
@@ -4296,9 +5746,45 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                 _ReadOnlyRow('MoMo wallet', item.momoWalletNumber!),
               if (item.confirmedAt != null)
                 _ReadOnlyRow('Confirmed on', _date(item.confirmedAt!)),
+              if (requestEvent?.note?.trim().isNotEmpty ?? false) ...[
+                const SizedBox(height: 14),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF5F8FC),
+                    border: Border.all(color: const Color(0xFFDCE5F2)),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'REQUEST NOTE',
+                        style: TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: .6,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        requestEvent!.note!.trim(),
+                        style: const TextStyle(
+                          color: AppColors.text,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ],
           ),
         ),
+        const SizedBox(height: 18),
+        _TopUpWorkflowGuide(status: item.status),
         const SizedBox(height: 18),
         _SectionCard(
           title: 'Approval & disbursement history',
@@ -4437,6 +5923,13 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         ];
       case _TopUpStatus.approved:
         return [
+          if (!isDisburser)
+            _InlineNotice(
+              icon: Icons.schedule_outlined,
+              color: AppColors.blue,
+              text:
+                  'Approved. Awaiting disbursement by ${item.disburser ?? 'the assigned disburser'}.',
+            ),
           if (isApprover)
             OutlinedButton(
               onPressed: () => _topUpNoteAction(
@@ -4564,8 +6057,10 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     );
     final receipt = TextEditingController();
     final notes = TextEditingController();
+    final momoCharge = TextEditingController();
     final availableChannels = requisition.fundingSource.allowedChannels;
     _PaymentChannel channel = availableChannels.first;
+    var hasMomoCharge = false;
     picker.PlatformFile? receiptAttachment;
     final formKey = GlobalKey<FormState>();
     String? attachmentError;
@@ -4576,6 +6071,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             final amountValue = _parseAmount(amount.text);
+            final momoChargeValue = channel.isMomo && hasMomoCharge
+                ? _parseAmount(momoCharge.text)
+                : 0.0;
             final helper = _varianceMessage(requisition, amountValue);
             final selectedPocketBalance = switch (channel) {
               _PaymentChannel.floatCash => _cashBalance,
@@ -4590,6 +6088,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               onPrimary: () async {
                 if (!(formKey.currentState?.validate() ?? false)) return;
                 final actual = _parseAmount(amount.text);
+                final charge = channel.isMomo && hasMomoCharge
+                    ? _parseAmount(momoCharge.text)
+                    : 0.0;
                 final difference = actual - approvedAmount;
                 final hasVariance = difference.abs() > 0.005;
                 final variancePercent = approvedAmount <= 0
@@ -4610,52 +6111,70 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                     secondaryLabel: 'Back',
                     width: 560,
                     onPrimary: () => Navigator.pop(confirmationContext, true),
-                    child: Column(
-                      children: [
-                        _DialogSummary(
-                          title: hasVariance
-                              ? 'Actual is ${difference > 0 ? 'higher' : 'lower'}'
-                              : 'Actual matches approval',
-                          value: hasVariance
-                              ? _money(difference.abs())
-                              : 'No variance',
-                          subtitle: hasVariance
-                              ? '${variancePercent.toStringAsFixed(1)}% difference from the approved amount'
-                              : 'The approved and actual amounts are the same.',
-                          color: hasVariance
-                              ? AppColors.amber
-                              : AppColors.green,
-                        ),
-                        const SizedBox(height: 14),
-                        _FormSection(
-                          title: 'Spend summary',
-                          child: Column(
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: AppColors.background,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            requisition.title,
+                            style: const TextStyle(
+                              color: AppColors.text,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            '${channel.label}${channel.isMomo && charge > 0 ? ' · ${_money(charge)} charge' : ''}',
+                            style: const TextStyle(color: AppColors.muted),
+                          ),
+                          const SizedBox(height: 10),
+                          _InfoRow('Approved', _money(approvedAmount)),
+                          _InfoRow('Actual', _money(actual)),
+                          if (channel.isMomo && charge > 0)
+                            _InfoRow(
+                              channel == _PaymentChannel.floatMomo
+                                  ? 'Total MoMo deduction'
+                                  : 'Total paid',
+                              _money(actual + charge),
+                            ),
+                          const Divider(height: 20),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              _InfoRow('Description', requisition.title),
-                              _InfoRow(
-                                'Approved amount',
-                                _money(approvedAmount),
+                              Icon(
+                                hasVariance
+                                    ? Icons.info_outline
+                                    : Icons.check_circle_outline,
+                                size: 18,
+                                color: exceedsTolerance
+                                    ? AppColors.red
+                                    : hasVariance
+                                    ? AppColors.amber
+                                    : AppColors.green,
                               ),
-                              _InfoRow('Actual amount', _money(actual)),
-                              _InfoRow('Payment method', channel.label),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  hasVariance
+                                      ? '${_money(difference.abs())} ${difference > 0 ? 'above' : 'below'} approval (${variancePercent.toStringAsFixed(1)}%). ${exceedsTolerance ? 'Variance review required.' : 'Within the ${_settings.varianceTolerancePercent}% tolerance.'}'
+                                      : 'The actual amount matches the approval.',
+                                  style: TextStyle(
+                                    color: exceedsTolerance
+                                        ? AppColors.red
+                                        : AppColors.muted,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
                             ],
                           ),
-                        ),
-                        const SizedBox(height: 14),
-                        _InlineNotice(
-                          icon: hasVariance
-                              ? Icons.rule_outlined
-                              : Icons.verified_outlined,
-                          color: exceedsTolerance
-                              ? AppColors.red
-                              : hasVariance
-                              ? AppColors.amber
-                              : AppColors.blue,
-                          text: hasVariance
-                              ? 'I affirm that the actual amount is ${_money(difference.abs())} ${difference > 0 ? 'higher' : 'lower'} than approved.${exceedsTolerance ? ' This expense will be flagged for variance review.' : ' This difference is within the configured ${_settings.varianceTolerancePercent}% tolerance.'}'
-                              : 'I confirm that the actual spend matches the approved amount.',
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 );
@@ -4668,6 +6187,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   receiptNumber: receipt.text.trim(),
                   notes: notes.text.trim(),
                   channel: channel,
+                  feeAmount: charge,
                   receiptAttachment: receiptAttachment,
                 );
                 if (saved && context.mounted) Navigator.pop(context);
@@ -4714,7 +6234,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                                 }
                                 if (requisition.fundingSource ==
                                         _FundingSource.pettyCash &&
-                                    actual > selectedPocketBalance) {
+                                    actual + momoChargeValue >
+                                        selectedPocketBalance) {
                                   return '${channel == _PaymentChannel.floatCash ? 'Cash' : 'MoMo'} has only ${_money(selectedPocketBalance)} available.';
                                 }
                                 return null;
@@ -4760,19 +6281,103 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                                 .toList(),
                             onChanged: (value) {
                               if (value == null) return;
-                              setDialogState(() => channel = value);
+                              setDialogState(() {
+                                channel = value;
+                                if (!channel.isMomo) {
+                                  hasMomoCharge = false;
+                                  momoCharge.clear();
+                                }
+                              });
                             },
                           ),
+                          if (channel.isMomo &&
+                              _settings.captureTransactionFees) ...[
+                            const SizedBox(height: 14),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                'Were there MoMo charges?',
+                                style: Theme.of(context).textTheme.titleSmall
+                                    ?.copyWith(fontWeight: FontWeight.w800),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Wrap(
+                                spacing: 8,
+                                children: [
+                                  ChoiceChip(
+                                    key: const ValueKey('momo-charge-no'),
+                                    label: const Text('No'),
+                                    selected: !hasMomoCharge,
+                                    onSelected: (_) => setDialogState(() {
+                                      hasMomoCharge = false;
+                                      momoCharge.clear();
+                                    }),
+                                  ),
+                                  ChoiceChip(
+                                    key: const ValueKey('momo-charge-yes'),
+                                    label: const Text('Yes'),
+                                    selected: hasMomoCharge,
+                                    onSelected: (_) => setDialogState(
+                                      () => hasMomoCharge = true,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (hasMomoCharge) ...[
+                              const SizedBox(height: 12),
+                              TextFormField(
+                                key: const ValueKey('momo-charge-amount'),
+                                controller: momoCharge,
+                                keyboardType: TextInputType.number,
+                                onChanged: (_) => setDialogState(() {}),
+                                validator: (value) {
+                                  if (!hasMomoCharge) return null;
+                                  final fee = _strictAmount(value ?? '');
+                                  if (fee == null || fee <= 0) {
+                                    return 'Enter the MoMo charge amount.';
+                                  }
+                                  if (channel == _PaymentChannel.floatMomo &&
+                                      amountValue + fee >
+                                          selectedPocketBalance) {
+                                    return 'The expense and charge exceed the available MoMo balance.';
+                                  }
+                                  return null;
+                                },
+                                decoration: const InputDecoration(
+                                  labelText: 'MoMo charge',
+                                  prefixText: 'GH¢ ',
+                                  helperText:
+                                      'This charge will be linked to the expense automatically.',
+                                ),
+                              ),
+                            ],
+                          ],
+                          if (channel.isMomo &&
+                              !_settings.captureTransactionFees) ...[
+                            const SizedBox(height: 12),
+                            const _InlineNotice(
+                              icon: Icons.info_outline,
+                              color: AppColors.amber,
+                              text:
+                                  'MoMo charge recording is turned off in the finance settings.',
+                            ),
+                          ],
                           if (requisition.fundingSource ==
                               _FundingSource.pettyCash) ...[
                             const SizedBox(height: 12),
                             _InlineNotice(
                               icon: Icons.account_balance_wallet_outlined,
-                              color: amountValue > selectedPocketBalance
+                              color:
+                                  amountValue + momoChargeValue >
+                                      selectedPocketBalance
                                   ? AppColors.red
                                   : AppColors.green,
                               text:
-                                  'The selected ${channel == _PaymentChannel.floatCash ? 'Cash' : 'MoMo'} pocket has ${_money(selectedPocketBalance)}. The actual spend cannot make it negative.',
+                                  'The selected ${channel == _PaymentChannel.floatCash ? 'Cash' : 'MoMo'} pocket has ${_money(selectedPocketBalance)}. ${channel.isMomo && momoChargeValue > 0 ? 'Expense plus charge: ${_money(amountValue + momoChargeValue)}. ' : ''}The actual spend cannot make it negative.',
                             ),
                           ],
                         ],
@@ -5730,6 +7335,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     required String receiptNumber,
     required String notes,
     required _PaymentChannel channel,
+    required double feeAmount,
     picker.PlatformFile? receiptAttachment,
   }) async {
     if (requisition.status != _RequisitionStatus.approved &&
@@ -5777,6 +7383,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           'actualAmount': actualAmount,
           if (pocket != null) 'pocket': pocket,
           'paymentChannel': paymentChannel,
+          'feeAmount': feeAmount,
           'vendor': payee.isEmpty ? requisition.payee : payee,
           'category': requisition.category,
           'transactionDate': DateTime.now().toIso8601String().split('T').first,
@@ -5873,6 +7480,30 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         'contentType': contentType,
       },
     );
+  }
+
+  Future<void> _openExpenseReceipt(_ExpenseRecord item) async {
+    if (item.serverId == null || !item.hasReceiptAttachment) {
+      _snack('No receipt file is attached to this expense.');
+      return;
+    }
+    try {
+      prepareDocumentWindow();
+      final response = await _financeApi.get(
+        '/api/schools/${widget.customSchoolId}/finance/transactions/${item.serverId}/receipt/view-url',
+      );
+      final viewUrl = _asText(_asMap(response)['viewUrl']);
+      if (viewUrl.isEmpty) {
+        throw const FinanceApiException(
+          'The receipt link could not be prepared.',
+        );
+      }
+      await openDocumentUrl(viewUrl);
+    } on FinanceApiException catch (error) {
+      _snack(error.message);
+    } catch (_) {
+      _snack('The receipt could not be opened.');
+    }
   }
 
   Future<void> _approveRequisition(_RequisitionRecord item) async {
@@ -6073,8 +7704,16 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       return;
     }
 
-    if (_topUpApprovers.isEmpty) {
-      _snack('No eligible approver is available for this school.');
+    final eligibleApprovers = _topUpApprovers
+        .where((actor) => actor.id != widget.currentUserId)
+        .toList();
+    if (eligibleApprovers.isEmpty) {
+      await _showBlockingNotice(
+        title: 'Independent approver required',
+        message:
+            'You cannot approve your own top-up request. Ask an administrator to assign another eligible approver before submitting it.',
+        icon: Icons.admin_panel_settings_outlined,
+      );
       return;
     }
     final maximum = _settings.floatApprovedAmount - _totalFloatBalance;
@@ -6094,6 +7733,13 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  const _InlineNotice(
+                    icon: Icons.people_outline,
+                    color: AppColors.blue,
+                    text:
+                        'For separation of duties, the requester cannot approve their own top-up. Select another authorised person.',
+                  ),
+                  const SizedBox(height: 14),
                   TextFormField(
                     initialValue: amountText,
                     keyboardType: TextInputType.number,
@@ -6114,9 +7760,13 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<int>(
+                    key: const ValueKey('top-up-request-approver'),
                     value: approverId,
-                    decoration: const InputDecoration(labelText: 'Approver'),
-                    items: _topUpApprovers
+                    decoration: const InputDecoration(
+                      labelText: 'Approver',
+                      helperText: 'Choose someone other than yourself.',
+                    ),
+                    items: eligibleApprovers
                         .map(
                           (a) => DropdownMenuItem(
                             value: a.id,
@@ -6124,9 +7774,15 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                           ),
                         )
                         .toList(),
-                    validator: (value) => value == null
-                        ? 'Select the approver for this top-up.'
-                        : null,
+                    validator: (value) {
+                      if (value == null) {
+                        return 'Select the approver for this top-up.';
+                      }
+                      if (value == widget.currentUserId) {
+                        return 'You cannot approve your own top-up request.';
+                      }
+                      return null;
+                    },
                     onChanged: (v) => setDialogState(() => approverId = v),
                   ),
                   const SizedBox(height: 12),
@@ -6170,7 +7826,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     if (confirmed != true || !mounted) return;
 
     final amount = _parseAmount(amountText);
-    final approver = _topUpApprovers.firstWhere((a) => a.id == approverId);
+    final approver = eligibleApprovers.firstWhere((a) => a.id == approverId);
     final finalConfirmation = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -6252,6 +7908,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                     _money(item.requestedAmount),
                   ),
                   DropdownButtonFormField<int>(
+                    key: const ValueKey('top-up-approval-disburser'),
                     value: disburserId,
                     decoration: const InputDecoration(labelText: 'Disburser'),
                     items: _topUpDisbursers
@@ -6269,6 +7926,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
+                    key: const ValueKey('top-up-approval-note'),
                     minLines: 2,
                     maxLines: 3,
                     onChanged: (v) => note = v,
@@ -6622,6 +8280,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                       if (_parseAmount(momoController.text) > 0) ...[
                         const SizedBox(height: 12),
                         TextFormField(
+                          key: const ValueKey('disbursement-momo-wallet'),
                           initialValue: wallet,
                           onChanged: (v) => wallet = v,
                           validator: (value) =>
@@ -6635,6 +8294,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                       ],
                       const SizedBox(height: 12),
                       TextFormField(
+                        key: const ValueKey('disbursement-reference'),
                         onChanged: (value) => reference = value,
                         decoration: const InputDecoration(
                           labelText: 'Payment reference (optional)',
@@ -6642,6 +8302,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                       ),
                       const SizedBox(height: 12),
                       TextFormField(
+                        key: const ValueKey('disbursement-note'),
                         onChanged: (value) => notes = value,
                         minLines: 2,
                         maxLines: 3,
@@ -7140,29 +8801,79 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     final amount = TextEditingController(
       text: item.refundableAmount.toStringAsFixed(0),
     );
+    final reference = TextEditingController();
     final reason = TextEditingController();
     final formKey = GlobalKey<FormState>();
+    var receivedDate = DateTime.now();
+    var paymentMethod = 'Bank transfer';
+    var affirmed = false;
+    String? formError;
     showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Record refund'),
-        content: SizedBox(
-          width: 480,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => _ExpenseDialogShell(
+          title: 'Record refund received',
+          subtitle: '${item.expenseId} · ${item.description}',
+          primaryLabel: 'Record refund',
+          onPrimary: () async {
+            setDialogState(() => formError = null);
+            if (!(formKey.currentState?.validate() ?? false)) return;
+            final termId = _academicTermId;
+            if (termId == null || item.serverId == null) {
+              setDialogState(
+                () => formError =
+                    'The current academic term is unavailable. Refresh and try again.',
+              );
+              return;
+            }
+            final method = switch (paymentMethod) {
+              'Cheque' => 'CHEQUE',
+              'Cash deposit' => 'CASH_DEPOSIT',
+              'School MoMo' => 'DIRECT_MOMO',
+              _ => 'BANK_TRANSFER',
+            };
+            final saved = await _runFinanceMutation(
+              request: () => _financeApi.post(
+                '/api/schools/${widget.customSchoolId}/finance/transactions/${item.serverId}/refunds',
+                body: {
+                  'academicTermId': termId,
+                  'amount': _parseAmount(amount.text),
+                  'reason': reason.text.trim(),
+                  'transactionDate': receivedDate
+                      .toIso8601String()
+                      .split('T')
+                      .first,
+                  'reference': reference.text.trim(),
+                  'paymentMethod': method,
+                },
+              ),
+              successMessage:
+                  'Refund received into School funds and linked to ${item.expenseId}.',
+            );
+            if (saved) {
+              if (_financeLedgerPage == _FinanceLedgerPage.refunds) {
+                await _loadRefundRegister();
+              }
+              if (context.mounted) Navigator.pop(context);
+            }
+          },
           child: Form(
             key: formKey,
+            autovalidateMode: AutovalidateMode.onUserInteraction,
             child: Column(
-              mainAxisSize: MainAxisSize.min,
               children: [
-                _InlineNotice(
-                  icon: Icons.info_outline,
-                  color: _green,
+                const _InlineNotice(
+                  icon: Icons.account_balance_outlined,
+                  color: AppColors.blue,
                   text:
-                      'The original expense will not be edited. A linked refund entry will be created.',
+                      'Record this only after the money has been received. It will go to School funds and will not change the petty-cash float.',
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 14),
                 TextFormField(
                   controller: amount,
-                  keyboardType: TextInputType.number,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
                   validator: (text) {
                     final value = _strictAmount(text ?? '');
                     if (value == null || value <= 0) {
@@ -7174,58 +8885,118 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                     return null;
                   },
                   decoration: const InputDecoration(
-                    labelText: 'Refund amount',
+                    labelText: 'Amount received',
                     prefixText: 'GH¢ ',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _DateFilterButton(
+                  label: 'Date received',
+                  date: receivedDate,
+                  onPressed: () async {
+                    final selected = await showDatePicker(
+                      context: context,
+                      initialDate: receivedDate,
+                      firstDate: item.transactionDate,
+                      lastDate: DateTime.now(),
+                    );
+                    if (selected != null) {
+                      setDialogState(() => receivedDate = selected);
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  value: paymentMethod,
+                  items:
+                      const [
+                            'Bank transfer',
+                            'Cheque',
+                            'Cash deposit',
+                            'School MoMo',
+                          ]
+                          .map(
+                            (value) => DropdownMenuItem(
+                              value: value,
+                              child: Text(value),
+                            ),
+                          )
+                          .toList(),
+                  onChanged: (value) => setDialogState(
+                    () => paymentMethod = value ?? paymentMethod,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'How the refund was received',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: reference,
+                  validator: (value) => value == null || value.trim().isEmpty
+                      ? 'Enter the bank, deposit, cheque, or MoMo reference.'
+                      : null,
+                  decoration: const InputDecoration(
+                    labelText: 'Receipt reference',
+                    hintText: 'Bank credit, deposit slip, cheque, or MoMo ID',
                   ),
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
                   controller: reason,
                   minLines: 2,
-                  maxLines: 4,
+                  maxLines: 3,
                   validator: (value) => value == null || value.trim().isEmpty
-                      ? 'Enter a reason for the refund.'
+                      ? 'Enter the reason for the refund.'
                       : null,
                   decoration: const InputDecoration(labelText: 'Reason'),
                 ),
+                const SizedBox(height: 12),
+                FormField<bool>(
+                  initialValue: affirmed,
+                  validator: (value) => value == true
+                      ? null
+                      : 'Confirm that the money has been received.',
+                  builder: (field) => Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: affirmed,
+                        onChanged: (value) {
+                          setDialogState(() => affirmed = value ?? false);
+                          field.didChange(value ?? false);
+                        },
+                        title: const Text(
+                          'I confirm that this refund has been received into School funds.',
+                        ),
+                        controlAffinity: ListTileControlAffinity.leading,
+                      ),
+                      if (field.hasError)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 12),
+                          child: Text(
+                            field.errorText!,
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.error,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                if (formError != null) ...[
+                  const SizedBox(height: 8),
+                  _InlineNotice(
+                    icon: Icons.error_outline,
+                    color: AppColors.red,
+                    text: formError!,
+                  ),
+                ],
               ],
             ),
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              if (!(formKey.currentState?.validate() ?? false)) return;
-              final value = _parseAmount(amount.text);
-              if (item.serverId == null) {
-                return;
-              }
-              final saved = await _runFinanceMutation(
-                request: () => _financeApi.post(
-                  '/api/schools/${widget.customSchoolId}/finance/transactions/${item.serverId}/refunds',
-                  body: {
-                    'amount': value,
-                    'reason': reason.text.trim(),
-                    'transactionDate': DateTime.now()
-                        .toIso8601String()
-                        .split('T')
-                        .first,
-                    'reference': item.receiptNumber,
-                  },
-                ),
-                successMessage:
-                    'Refund recorded and linked to original expense.',
-              );
-              if (saved && context.mounted) Navigator.pop(context);
-            },
-            style: _primaryButtonStyle(),
-            child: const Text('Save refund'),
-          ),
-        ],
       ),
     );
   }
@@ -7843,74 +9614,147 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   void _openReconciliationRequestDialog() {
-    final assignee = TextEditingController(text: 'Bursar / Accounts officer');
+    final staff = _reconciliationAssignees;
+    if (staff.isEmpty) {
+      unawaited(
+        _showBlockingNotice(
+          title: 'No eligible staff available',
+          message:
+              'Add or activate an eligible finance staff member before requesting a reconciliation.',
+          icon: Icons.person_search_outlined,
+        ),
+      );
+      return;
+    }
+    final assigneeSearch = TextEditingController();
     final reason = TextEditingController(text: 'Weekly petty cash close');
     final formKey = GlobalKey<FormState>();
+    _FinanceActor? selectedAssignee;
+    String actorLabel(_FinanceActor actor) => [
+      actor.name,
+      if (actor.role.isNotEmpty) actor.role,
+      if (actor.username.isNotEmpty) actor.username,
+    ].join(' · ');
     showDialog<void>(
       context: context,
-      builder: (context) => _ExpenseDialogShell(
-        title: 'Request reconciliation',
-        subtitle: 'Ask staff to count cash and confirm the MoMo wallet.',
-        primaryLabel: 'Send request',
-        width: 560,
-        onPrimary: () async {
-          if (!(formKey.currentState?.validate() ?? false)) return;
-          final assignedTo = assignee.text.trim();
-          final requestReason = reason.text.trim();
-          final saved = await _runFinanceMutation(
-            request: () => _financeApi.post(
-              '/api/schools/${widget.customSchoolId}/finance/reconciliations',
-              body: {
-                'academicTermId': _academicTermId,
-                'assignedTo': assignedTo,
-                'reason': requestReason,
-              },
-            ),
-            successMessage: 'Reconciliation request sent to $assignedTo.',
-          );
-          if (saved && context.mounted) Navigator.pop(context);
-        },
-        child: Form(
-          key: formKey,
-          child: Column(
-            children: [
-              _FormSection(
-                title: 'Assignment',
-                child: Column(
-                  children: [
-                    TextFormField(
-                      controller: assignee,
-                      validator: (value) =>
-                          value == null || value.trim().isEmpty
-                          ? 'Choose the staff member responsible for the count.'
-                          : null,
-                      decoration: const InputDecoration(
-                        labelText: 'Staff responsible for confirmation',
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => _ExpenseDialogShell(
+          title: 'Request reconciliation',
+          subtitle: 'Ask staff to count cash and confirm the MoMo wallet.',
+          primaryLabel: 'Send request',
+          width: 560,
+          onPrimary: () async {
+            if (!(formKey.currentState?.validate() ?? false)) return;
+            final assignee = selectedAssignee!;
+            final requestReason = reason.text.trim();
+            final saved = await _runFinanceMutation(
+              request: () => _financeApi.post(
+                '/api/schools/${widget.customSchoolId}/finance/reconciliations',
+                body: {
+                  'academicTermId': _academicTermId,
+                  'assignedToUserId': assignee.id,
+                  'assignedTo': assignee.name,
+                  'reason': requestReason,
+                },
+              ),
+              successMessage:
+                  'Reconciliation request sent to ${assignee.name}.',
+            );
+            if (saved && context.mounted) Navigator.pop(context);
+          },
+          child: Form(
+            key: formKey,
+            child: Column(
+              children: [
+                _FormSection(
+                  title: 'Assignment',
+                  child: Column(
+                    children: [
+                      FormField<int>(
+                        key: const ValueKey('reconciliation-assignee-field'),
+                        validator: (_) {
+                          final assignee = selectedAssignee;
+                          if (assignee == null) {
+                            return 'Choose the staff member responsible for the count.';
+                          }
+                          if (assigneeSearch.text.trim() !=
+                              actorLabel(assignee)) {
+                            return 'Select a staff member from the search results.';
+                          }
+                          return null;
+                        },
+                        builder: (field) => DropdownMenu<int>(
+                          key: const ValueKey('reconciliation-assignee-search'),
+                          controller: assigneeSearch,
+                          expandedInsets: EdgeInsets.zero,
+                          menuHeight: 300,
+                          enableFilter: true,
+                          enableSearch: true,
+                          requestFocusOnTap: true,
+                          label: const Text(
+                            'Staff responsible for confirmation',
+                          ),
+                          hintText: 'Search by name, username, or role',
+                          leadingIcon: const Icon(Icons.person_search_outlined),
+                          errorText: field.errorText,
+                          filterCallback: (entries, filter) {
+                            final query = filter.trim().toLowerCase();
+                            if (query.isEmpty) return entries;
+                            return entries
+                                .where(
+                                  (entry) =>
+                                      entry.label.toLowerCase().contains(query),
+                                )
+                                .take(20)
+                                .toList();
+                          },
+                          dropdownMenuEntries: staff
+                              .map(
+                                (actor) => DropdownMenuEntry<int>(
+                                  value: actor.id,
+                                  label: actorLabel(actor),
+                                  leadingIcon: const Icon(
+                                    Icons.account_circle_outlined,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                          onSelected: (value) {
+                            final matches = staff.where(
+                              (actor) => actor.id == value,
+                            );
+                            final assignee = matches.isEmpty
+                                ? null
+                                : matches.first;
+                            setDialogState(() => selectedAssignee = assignee);
+                            field.didChange(value);
+                          },
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: reason,
-                      maxLines: 2,
-                      validator: (value) =>
-                          value == null || value.trim().isEmpty
-                          ? 'Enter the reason for this reconciliation.'
-                          : null,
-                      decoration: const InputDecoration(
-                        labelText: 'Reason or cycle note',
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: reason,
+                        maxLines: 2,
+                        validator: (value) =>
+                            value == null || value.trim().isEmpty
+                            ? 'Enter the reason for this reconciliation.'
+                            : null,
+                        decoration: const InputDecoration(
+                          labelText: 'Reason or cycle note',
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(height: 14),
-              const _InlineNotice(
-                icon: Icons.lock_outline,
-                color: AppColors.amber,
-                text:
-                    'This only creates a task. The system balance is captured when the responsible staff member starts the count, not when this request is sent.',
-              ),
-            ],
+                const SizedBox(height: 14),
+                const _InlineNotice(
+                  icon: Icons.lock_outline,
+                  color: AppColors.amber,
+                  text:
+                      'This only creates a task. The system balance is captured when the responsible staff member starts the count, not when this request is sent.',
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -8134,12 +9978,42 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           title: 'Close reconciliation variance',
           subtitle:
               '${item.reference} has a ${item.totalVariance > 0 ? 'surplus' : 'shortfall'} of ${_money(item.totalVariance.abs())}.',
-          primaryLabel: 'Close variance',
+          primaryLabel: followUpType == _FollowUpType.otherFinancialIssue
+              ? 'Create follow-up'
+              : 'Close variance',
           width: 560,
           onPrimary: () async {
             if (!(formKey.currentState?.validate() ?? false)) return;
             final note = resolution.text.trim();
             if (item.serverId == null) {
+              return;
+            }
+            if (followUpType == _FollowUpType.otherFinancialIssue) {
+              final termId = _academicTermId;
+              if (termId == null) return;
+              final saved = await _runFinanceMutation(
+                request: () => _financeApi.post(
+                  '/api/schools/${widget.customSchoolId}/finance/follow-ups',
+                  body: {
+                    'academicTermId': termId,
+                    'type': 'OTHER',
+                    'relatedReference': item.reference,
+                    'responsibleParty': item.assignedTo,
+                    'amount': item.totalVariance.abs(),
+                    'description': note,
+                    'dueDate': DateTime.now()
+                        .add(const Duration(days: 7))
+                        .toIso8601String()
+                        .split('T')
+                        .first,
+                    'note':
+                        'Other financial issue recorded from an unresolved reconciliation variance.',
+                  },
+                ),
+                successMessage:
+                    'Follow-up created. The reconciliation remains open and no balance was adjusted.',
+              );
+              if (saved && context.mounted) Navigator.pop(context);
               return;
             }
             final resolutionType = switch (followUpType) {
@@ -8198,6 +10072,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                             _FollowUpType.cashShortage,
                             _FollowUpType.cashSurplus,
                             _FollowUpType.unconfirmedTransfer,
+                            _FollowUpType.otherFinancialIssue,
                           ]
                           .map(
                             (type) => DropdownMenuItem(
@@ -8211,163 +10086,30 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   ),
                 ),
                 const SizedBox(height: 14),
+                if (followUpType == _FollowUpType.otherFinancialIssue) ...[
+                  const _InlineNotice(
+                    icon: Icons.info_outline,
+                    color: AppColors.blue,
+                    text:
+                        'This creates a linked follow-up and leaves the variance open. No balance adjustment will be made.',
+                  ),
+                  const SizedBox(height: 14),
+                ],
                 TextFormField(
                   controller: resolution,
                   maxLines: 4,
                   validator: (value) => value == null || value.trim().isEmpty
-                      ? 'Add a resolution note before closing the variance.'
+                      ? followUpType == _FollowUpType.otherFinancialIssue
+                            ? 'Describe the financial issue.'
+                            : 'Add a resolution note before closing the variance.'
                       : null,
-                  decoration: const InputDecoration(
-                    labelText: 'Resolution note',
-                    hintText:
-                        'Explain the investigation, decision, and any separate correction to be made.',
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _openNewFollowUpDialog() {
-    final related = TextEditingController();
-    final owner = TextEditingController();
-    final amount = TextEditingController();
-    final summary = TextEditingController();
-    var type = _FollowUpType.missingReceipt;
-    final formKey = GlobalKey<FormState>();
-    String? formError;
-    showDialog<void>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => _ExpenseDialogShell(
-          title: 'Record financial follow-up',
-          subtitle:
-              'Create an exception record for accountant review and closure.',
-          primaryLabel: 'Create follow-up',
-          onPrimary: () async {
-            setDialogState(() => formError = null);
-            if (!(formKey.currentState?.validate() ?? false)) return;
-            final relatedReference = related.text.trim();
-            final assignedOwner = owner.text.trim();
-            final value = _parseAmount(amount.text);
-            final description = summary.text.trim();
-            final termId = _academicTermId;
-            if (termId == null) {
-              setDialogState(
-                () => formError =
-                    'The current academic term is not available. Refresh and try again.',
-              );
-              return;
-            }
-            final apiType = switch (type) {
-              _FollowUpType.staffRecovery => 'RECOVER_FROM_STAFF',
-              _FollowUpType.missingReceipt => 'MISSING_RECEIPT',
-              _FollowUpType.vendorRefund => 'VENDOR_REFUND',
-              _FollowUpType.cashShortage => 'CASH_SHORTAGE',
-              _FollowUpType.unconfirmedTransfer => 'UNCONFIRMED_TRANSFER',
-              _FollowUpType.cashSurplus => 'CASH_SURPLUS',
-              _FollowUpType.floatOverage => 'FLOAT_OVERAGE',
-              _FollowUpType.expenseVariance => 'EXPENSE_VARIANCE',
-            };
-            final saved = await _runFinanceMutation(
-              request: () => _financeApi.post(
-                '/api/schools/${widget.customSchoolId}/finance/follow-ups',
-                body: {
-                  'academicTermId': termId,
-                  'type': apiType,
-                  'relatedReference': relatedReference,
-                  'responsibleParty': assignedOwner,
-                  'amount': value,
-                  'description': description.isEmpty
-                      ? 'Manual follow-up recorded for $relatedReference.'
-                      : description,
-                  'dueDate': DateTime.now()
-                      .add(const Duration(days: 7))
-                      .toIso8601String()
-                      .split('T')
-                      .first,
-                  'note': 'Follow-up opened manually.',
-                },
-              ),
-              successMessage: 'Financial follow-up created.',
-            );
-            if (saved && context.mounted) Navigator.pop(context);
-          },
-          child: Form(
-            key: formKey,
-            child: Column(
-              children: [
-                if (formError != null) ...[
-                  _InlineNotice(
-                    icon: Icons.error_outline,
-                    color: AppColors.red,
-                    text: formError!,
-                  ),
-                  const SizedBox(height: 14),
-                ],
-                DropdownButtonFormField<_FollowUpType>(
-                  value: type,
-                  decoration: const InputDecoration(labelText: 'Type'),
-                  items: _FollowUpType.values
-                      .where((value) => value != _FollowUpType.floatOverage)
-                      .map(
-                        (value) => DropdownMenuItem(
-                          value: value,
-                          child: Text(value.label),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) =>
-                      setDialogState(() => type = value ?? type),
-                ),
-                const SizedBox(height: 14),
-                _TwoFields(
-                  left: TextFormField(
-                    controller: related,
-                    validator: (value) => value == null || value.trim().isEmpty
-                        ? 'Enter the related record.'
-                        : null,
-                    decoration: const InputDecoration(
-                      labelText: 'Related record',
-                      hintText: 'Expense, top-up, or reconciliation reference',
-                    ),
-                  ),
-                  right: TextFormField(
-                    controller: owner,
-                    validator: (value) => value == null || value.trim().isEmpty
-                        ? 'Enter the responsible party.'
-                        : null,
-                    decoration: const InputDecoration(
-                      labelText: 'Owner',
-                      hintText: 'Staff member or supplier',
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                TextFormField(
-                  controller: amount,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  validator: (text) {
-                    final value = _strictAmount(text ?? '');
-                    return value == null || value <= 0
-                        ? 'Enter an amount greater than zero.'
-                        : null;
-                  },
-                  decoration: const InputDecoration(labelText: 'Amount (GH¢)'),
-                ),
-                const SizedBox(height: 14),
-                TextFormField(
-                  controller: summary,
-                  maxLines: 3,
-                  decoration: const InputDecoration(
-                    labelText: 'Summary',
-                    hintText:
-                        'What needs to be investigated, collected, or resolved?',
+                  decoration: InputDecoration(
+                    labelText: followUpType == _FollowUpType.otherFinancialIssue
+                        ? 'Issue description'
+                        : 'Resolution note',
+                    hintText: followUpType == _FollowUpType.otherFinancialIssue
+                        ? 'Describe the issue that requires investigation.'
+                        : 'Explain the investigation, decision, and any separate correction to be made.',
                   ),
                 ),
               ],
@@ -8775,15 +10517,29 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       );
       return;
     }
+    _RequisitionRecord? linkedRequisition;
+    if (item.requisitionId != null) {
+      for (final requisition in _requisitions) {
+        if (requisition.id == item.requisitionId ||
+            requisition.serverId?.toString() == item.requisitionId) {
+          linkedRequisition = requisition;
+          break;
+        }
+      }
+    }
+    final requestedAmount =
+        item.requestedAmount ??
+        linkedRequisition?.requestedAmount ??
+        item.approvedAmount;
+    final verbalApprover = linkedRequisition?.verbalApprover;
     final note = TextEditingController();
     final formKey = GlobalKey<FormState>();
     showDialog<void>(
       context: context,
       builder: (dialogContext) => _ExpenseDialogShell(
-        title: 'Ratify emergency expense',
-        subtitle:
-            'Confirm that the completed emergency payment is a legitimate school expense.',
-        primaryLabel: 'Ratify expense',
+        title: 'Review emergency expense',
+        subtitle: '${item.expenseId} · approval after payment',
+        primaryLabel: 'Affirm and ratify',
         onPrimary: () async {
           if (!(formKey.currentState?.validate() ?? false)) return;
           final value = note.text.trim();
@@ -8799,24 +10555,99 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         child: Form(
           key: formKey,
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _InlineNotice(
-                icon: Icons.gavel_outlined,
+              _DialogSummary(
+                title: 'Amount spent',
+                value: _money(item.amount),
+                subtitle:
+                    '${item.channel.label} · ${_date(item.transactionDate)}',
                 color: AppColors.amber,
-                text:
-                    'Ratification adds an after-the-fact approval to the permanent audit trail. It does not replace the original verbal authorisation.',
               ),
               const SizedBox(height: 14),
+              _FormSection(
+                title: 'Approval check',
+                child: Column(
+                  children: [
+                    _InfoRow('Purpose', item.description),
+                    _InfoRow(
+                      'Amount requested',
+                      requestedAmount == null
+                          ? 'Not recorded'
+                          : _money(requestedAmount),
+                    ),
+                    _InfoRow('Amount spent', _money(item.amount)),
+                    _InfoRow('Paid to', item.payee),
+                    _InfoRow('Payment method', item.channel.label),
+                    _InfoRow(
+                      'Receipt reference',
+                      item.receiptNumber.isEmpty
+                          ? 'Not provided'
+                          : item.receiptNumber,
+                    ),
+                    if (item.hasReceiptAttachment)
+                      _InfoActionRow(
+                        label: 'Receipt file',
+                        actionLabel: 'View receipt',
+                        icon: Icons.open_in_new_rounded,
+                        onPressed: () => _openExpenseReceipt(item),
+                      )
+                    else
+                      const _InfoRow('Receipt file', 'Not attached'),
+                    _InfoRow(
+                      'Prior authorisation',
+                      verbalApprover == null || verbalApprover.trim().isEmpty
+                          ? 'Verbal authorisation recorded'
+                          : 'Given by $verbalApprover',
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+              FormField<bool>(
+                key: const ValueKey('ratification-affirmation'),
+                initialValue: false,
+                validator: (value) => value == true
+                    ? null
+                    : 'Confirm the approval statement before ratifying.',
+                builder: (field) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      value: field.value ?? false,
+                      onChanged: field.didChange,
+                      title: const Text(
+                        'I affirm that I reviewed the request and amount spent, verified the recorded verbal authorisation, and approve this expense after the fact.',
+                      ),
+                    ),
+                    if (field.hasError)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 12),
+                        child: Text(
+                          field.errorText!,
+                          style: TextStyle(
+                            color: Theme.of(dialogContext).colorScheme.error,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
               TextFormField(
                 controller: note,
-                minLines: 3,
-                maxLines: 5,
+                minLines: 2,
+                maxLines: 4,
                 validator: (value) => value == null || value.trim().isEmpty
                     ? 'Add a ratification note before continuing.'
                     : null,
                 decoration: const InputDecoration(
-                  labelText: 'Ratification note',
-                  hintText: 'Explain why this emergency payment is accepted.',
+                  labelText: 'Approval note *',
+                  hintText:
+                      'Briefly state why the emergency expense is accepted.',
                 ),
               ),
             ],
@@ -9015,6 +10846,34 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Future<void> _showBlockingNotice({
+    required String title,
+    required String message,
+    IconData icon = Icons.error_outline,
+  }) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        icon: Icon(icon, color: AppColors.amber, size: 34),
+        title: Text(title),
+        content: Text(
+          message,
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: AppColors.muted, height: 1.45),
+        ),
+        actionsAlignment: MainAxisAlignment.center,
+        actions: [
+          FilledButton(
+            style: _primaryButtonStyle(),
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Okay'),
+          ),
+        ],
+      ),
+    );
+  }
+
   ButtonStyle _primaryButtonStyle() {
     return FilledButton.styleFrom(
       backgroundColor: _green,
@@ -9174,6 +11033,73 @@ class _ExpenseTable extends StatelessWidget {
                 ],
                 icon: const Icon(Icons.more_horiz),
               ),
+            ],
+          )
+          .toList(),
+    );
+  }
+}
+
+class _RefundTable extends StatelessWidget {
+  const _RefundTable({required this.refunds, required this.onOpenExpense});
+
+  final List<_RefundRecord> refunds;
+  final ValueChanged<_RefundRecord> onOpenExpense;
+
+  @override
+  Widget build(BuildContext context) {
+    if (refunds.isEmpty) {
+      return const _EmptyState(
+        icon: Icons.currency_exchange_outlined,
+        title: 'No refunds found',
+        subtitle:
+            'Only refunds already received into School funds appear here.',
+      );
+    }
+    return _TableShell(
+      columns: const [
+        'Refund',
+        'Original expense',
+        'Amount',
+        'Received into',
+        'Method / reference',
+        'Date received',
+        'Recorded by',
+      ],
+      rows: refunds
+          .map(
+            (item) => [
+              _MainCell(title: item.refundId, subtitle: item.reason),
+              TextButton(
+                onPressed: () => onOpenExpense(item),
+                style: TextButton.styleFrom(
+                  padding: EdgeInsets.zero,
+                  alignment: Alignment.centerLeft,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(item.originalExpenseId),
+                    Text(
+                      item.originalDescription,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                _money(item.amount),
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+              Text(item.destination),
+              _MainCell(title: item.paymentMethod, subtitle: item.reference),
+              Text(_date(item.receivedDate)),
+              Text(item.recordedBy),
             ],
           )
           .toList(),
@@ -9468,6 +11394,155 @@ class _SectionCard extends StatelessWidget {
   }
 }
 
+class _TopUpWorkflowGuide extends StatelessWidget {
+  const _TopUpWorkflowGuide({required this.status});
+
+  final _TopUpStatus status;
+
+  int get _completedSteps {
+    if (status == _TopUpStatus.confirmed ||
+        status == _TopUpStatus.confirmedWithDiscrepancy) {
+      return 4;
+    }
+    if (status == _TopUpStatus.disbursed ||
+        status == _TopUpStatus.disputed ||
+        status == _TopUpStatus.corrected) {
+      return 3;
+    }
+    if (status == _TopUpStatus.approved) return 2;
+    return 1;
+  }
+
+  int? get _activeStep {
+    if (status == _TopUpStatus.pending || status == _TopUpStatus.queried) {
+      return 2;
+    }
+    if (status == _TopUpStatus.approved) return 3;
+    if (status == _TopUpStatus.disbursed ||
+        status == _TopUpStatus.disputed ||
+        status == _TopUpStatus.corrected) {
+      return 4;
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    const steps = [
+      ('Request submitted', 'The requester asks for the float top-up.'),
+      ('Approval', 'The approver reviews it and assigns a disburser.'),
+      ('Disbursement', 'The assigned person issues the approved funds.'),
+      ('Receipt confirmed', 'The requester confirms the amount received.'),
+    ];
+    return _SectionCard(
+      title: 'How this request moves',
+      subtitle: 'Review first, approve with a note, then disburse and confirm.',
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final width = constraints.maxWidth >= 980
+              ? (constraints.maxWidth - 36) / 4
+              : constraints.maxWidth >= 520
+              ? (constraints.maxWidth - 12) / 2
+              : constraints.maxWidth;
+          return Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: [
+              for (var index = 0; index < steps.length; index++)
+                _TopUpWorkflowStep(
+                  width: width,
+                  number: index + 1,
+                  title: steps[index].$1,
+                  description: steps[index].$2,
+                  isComplete: index + 1 <= _completedSteps,
+                  isActive: index + 1 == _activeStep,
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _TopUpWorkflowStep extends StatelessWidget {
+  const _TopUpWorkflowStep({
+    required this.width,
+    required this.number,
+    required this.title,
+    required this.description,
+    required this.isComplete,
+    required this.isActive,
+  });
+
+  final double width;
+  final int number;
+  final String title;
+  final String description;
+  final bool isComplete;
+  final bool isActive;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isActive
+        ? AppColors.blue
+        : isComplete
+        ? AppColors.green
+        : AppColors.muted;
+    return Container(
+      width: width,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: isActive ? .10 : .06),
+        border: Border.all(
+          color: color.withValues(alpha: isActive ? .45 : .18),
+        ),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 30,
+            height: 30,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            child: isComplete && !isActive
+                ? const Icon(Icons.check, size: 18, color: Colors.white)
+                : Text(
+                    '$number',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: AppColors.text,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  description,
+                  style: const TextStyle(color: AppColors.muted, height: 1.3),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _MetricCard extends StatelessWidget {
   const _MetricCard({
     required this.width,
@@ -9537,18 +11612,73 @@ class _MetricCard extends StatelessWidget {
   }
 }
 
+class _CompactMetricCard extends StatelessWidget {
+  const _CompactMetricCard({
+    required this.width,
+    required this.title,
+    required this.value,
+    required this.subtitle,
+  });
+
+  final double width;
+  final String title;
+  final String value;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: width,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF4FAF9),
+          border: Border.all(color: const Color(0xFFCDE7E3)),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(
+                color: AppColors.muted,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              value,
+              style: const TextStyle(
+                color: AppColors.text,
+                fontSize: 23,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(subtitle, style: const TextStyle(color: AppColors.muted)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _TabPill extends StatelessWidget {
   const _TabPill({
     required this.label,
     required this.active,
     required this.onTap,
     this.badgeCount = 0,
+    this.badgeMessage,
   });
 
   final String label;
   final bool active;
   final VoidCallback onTap;
   final int badgeCount;
+  final String? badgeMessage;
 
   @override
   Widget build(BuildContext context) {
@@ -9574,23 +11704,39 @@ class _TabPill extends StatelessWidget {
             ),
             if (badgeCount > 0) ...[
               const SizedBox(width: 5),
-              Container(
+              Tooltip(
                 key: ValueKey('expense-tab-badge-$label'),
-                constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
-                padding: const EdgeInsets.symmetric(horizontal: 5),
-                decoration: BoxDecoration(
-                  color: AppColors.red,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.white, width: 1.5),
-                ),
-                alignment: Alignment.center,
-                child: Text(
-                  badgeCount > 99 ? '99+' : '$badgeCount',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w900,
-                    height: 1,
+                message: badgeMessage ?? _defaultPendingMessage(badgeCount),
+                child: Semantics(
+                  label: badgeMessage ?? _defaultPendingMessage(badgeCount),
+                  excludeSemantics: true,
+                  child: Container(
+                    constraints: const BoxConstraints(
+                      minWidth: 18,
+                      minHeight: 18,
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 5),
+                    decoration: BoxDecoration(
+                      color: active
+                          ? Colors.white.withValues(alpha: .14)
+                          : const Color(0xFFF1F4F4),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: active
+                            ? Colors.white.withValues(alpha: .75)
+                            : AppColors.border,
+                      ),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      badgeCount > 99 ? '99+' : '$badgeCount',
+                      style: TextStyle(
+                        color: active ? Colors.white : AppColors.text,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        height: 1,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -9600,6 +11746,9 @@ class _TabPill extends StatelessWidget {
       ),
     );
   }
+
+  static String _defaultPendingMessage(int count) =>
+      '$count ${count == 1 ? 'item' : 'items'} pending';
 }
 
 class _Dropdown<T> extends StatelessWidget {
@@ -9644,6 +11793,7 @@ class _ActionTile extends StatelessWidget {
     required this.iconColor,
     required this.title,
     required this.subtitle,
+    this.titleStyle,
     this.trailing,
     this.onTap,
   });
@@ -9652,6 +11802,7 @@ class _ActionTile extends StatelessWidget {
   final Color iconColor;
   final String title;
   final String subtitle;
+  final TextStyle? titleStyle;
   final Widget? trailing;
   final VoidCallback? onTap;
 
@@ -9683,10 +11834,12 @@ class _ActionTile extends StatelessWidget {
                 children: [
                   Text(
                     title,
-                    style: const TextStyle(
-                      color: AppColors.text,
-                      fontWeight: FontWeight.w800,
-                    ),
+                    style:
+                        titleStyle ??
+                        const TextStyle(
+                          color: AppColors.text,
+                          fontWeight: FontWeight.w800,
+                        ),
                   ),
                   const SizedBox(height: 4),
                   Text(
@@ -9910,10 +12063,52 @@ class _InfoRow extends StatelessWidget {
   }
 }
 
+class _InfoActionRow extends StatelessWidget {
+  const _InfoActionRow({
+    required this.label,
+    required this.actionLabel,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  final String label;
+  final String actionLabel;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: AppColors.muted,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          TextButton.icon(
+            onPressed: onPressed,
+            icon: Icon(icon, size: 16),
+            label: Text(actionLabel),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _PettyCashControlCard extends StatelessWidget {
   const _PettyCashControlCard({
     required this.icon,
     required this.title,
+    this.pendingCount = 0,
+    this.pendingMessage,
     required this.status,
     required this.detail,
     required this.color,
@@ -9923,6 +12118,8 @@ class _PettyCashControlCard extends StatelessWidget {
 
   final IconData icon;
   final String title;
+  final int pendingCount;
+  final String? pendingMessage;
   final String status;
   final String detail;
   final Color color;
@@ -9961,6 +12158,39 @@ class _PettyCashControlCard extends StatelessWidget {
                   ),
                 ),
               ),
+              if (pendingCount > 0)
+                Tooltip(
+                  key: ValueKey('petty-cash-control-count-$title'),
+                  message:
+                      pendingMessage ?? '$pendingCount pending finance items',
+                  child: Semantics(
+                    label:
+                        pendingMessage ?? '$pendingCount pending finance items',
+                    excludeSemantics: true,
+                    child: Container(
+                      constraints: const BoxConstraints(
+                        minWidth: 22,
+                        minHeight: 22,
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        border: Border.all(color: AppColors.border),
+                        borderRadius: BorderRadius.circular(11),
+                      ),
+                      child: Text(
+                        pendingCount > 99 ? '99+' : '$pendingCount',
+                        style: const TextStyle(
+                          color: AppColors.text,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                          height: 1,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: 12),
@@ -10365,7 +12595,11 @@ class _ReportCard extends StatelessWidget {
               ],
             ),
           ),
-          TextButton(onPressed: data.onPressed, child: Text(data.action)),
+          TextButton(
+            key: data.actionKey,
+            onPressed: data.onPressed,
+            child: Text(data.action),
+          ),
         ],
       ),
     );
@@ -10851,9 +13085,12 @@ class _ExpenseRecord {
     required this.channel,
     required this.status,
     this.receiptNumber = '',
+    this.receiptFileName = '',
+    this.hasReceiptAttachment = false,
     this.notes = '',
     this.requisitionId,
     this.linkedExpenseId,
+    this.requestedAmount,
     this.approvedAmount,
     this.momoFee = 0,
     this.refundedAmount = 0,
@@ -10887,9 +13124,12 @@ class _ExpenseRecord {
   final _PaymentChannel channel;
   _ExpenseStatus status;
   final String receiptNumber;
+  final String receiptFileName;
+  final bool hasReceiptAttachment;
   final String notes;
   final String? requisitionId;
   final String? linkedExpenseId;
+  final double? requestedAmount;
   final double? approvedAmount;
   final double momoFee;
   double refundedAmount;
@@ -10902,7 +13142,7 @@ class _ExpenseRecord {
   DateTime? varianceReviewedAt;
   _ExpenseReversal? reversal;
 
-  double get netAmount => amount + momoFee;
+  double get netAmount => (amount - refundedAmount).clamp(0, amount) + momoFee;
   double get accountingAmount =>
       status == _ExpenseStatus.reversed ? 0 : netAmount;
   double get varianceAmount =>
@@ -10919,6 +13159,40 @@ class _ExpenseRecord {
           status == _ExpenseStatus.pendingReversal
       ? 0
       : (amount - refundedAmount).clamp(0, amount);
+}
+
+class _RefundRecord {
+  const _RefundRecord({
+    required this.serverId,
+    required this.refundId,
+    required this.originalTransactionId,
+    required this.originalExpenseId,
+    required this.originalDescription,
+    required this.payee,
+    required this.amount,
+    required this.receivedDate,
+    required this.academicTermId,
+    required this.paymentMethod,
+    required this.destination,
+    required this.reference,
+    required this.reason,
+    required this.recordedBy,
+  });
+
+  final int? serverId;
+  final String refundId;
+  final int originalTransactionId;
+  final String originalExpenseId;
+  final String originalDescription;
+  final String payee;
+  final double amount;
+  final DateTime receivedDate;
+  final int? academicTermId;
+  final String paymentMethod;
+  final String destination;
+  final String reference;
+  final String reason;
+  final String recordedBy;
 }
 
 class _ExpenseReversal {
@@ -11330,6 +13604,7 @@ class _ReportCardData {
     required this.title,
     required this.subtitle,
     required this.action,
+    this.actionKey,
     this.onPressed,
   });
 
@@ -11337,7 +13612,68 @@ class _ReportCardData {
   final String title;
   final String subtitle;
   final String action;
+  final Key? actionKey;
   final VoidCallback? onPressed;
+}
+
+class _FinanceReportData {
+  const _FinanceReportData({
+    required this.type,
+    required this.title,
+    required this.description,
+    required this.headers,
+    required this.rows,
+    required this.totalLabel,
+    required this.totalValue,
+  });
+
+  factory _FinanceReportData.auditPack() => const _FinanceReportData(
+    type: _FinanceReportType.auditPack,
+    title: 'Finance audit pack',
+    description: 'Consolidated current-term finance reports.',
+    headers: [],
+    rows: [],
+    totalLabel: 'Reports included',
+    totalValue: 0,
+  );
+
+  final _FinanceReportType type;
+  final String title;
+  final String description;
+  final List<String> headers;
+  final List<List<String>> rows;
+  final String totalLabel;
+  final double totalValue;
+
+  _FinanceReportData copyWithRows(List<List<String>> filteredRows) {
+    return _FinanceReportData(
+      type: type,
+      title: title,
+      description: description,
+      headers: headers,
+      rows: filteredRows,
+      totalLabel: totalLabel,
+      totalValue: totalValue,
+    );
+  }
+}
+
+class _FinanceReportLine {
+  const _FinanceReportLine({required this.date, required this.cells});
+
+  final DateTime date;
+  final List<String> cells;
+}
+
+enum _FinanceReportType {
+  expenses('expense-register'),
+  pettyCash('petty-cash-ledger'),
+  controls('approvals-and-exceptions'),
+  corrections('refunds-and-reversals'),
+  auditPack('finance-audit-pack');
+
+  const _FinanceReportType(this.fileStem);
+  final String fileStem;
 }
 
 enum _ExpenseTab {
@@ -11362,7 +13698,13 @@ enum _PettyCashSection {
   final String label;
 }
 
-enum _FinanceLedgerPage { topUps, topUpDetail, transfers, reconciliationDetail }
+enum _FinanceLedgerPage {
+  topUps,
+  topUpDetail,
+  transfers,
+  reconciliationDetail,
+  refunds,
+}
 
 enum _ExpenseSource {
   pettyCash('Petty cash'),
@@ -11409,6 +13751,9 @@ enum _PaymentChannel {
 
   bool get isFloatPocket =>
       this == _PaymentChannel.floatCash || this == _PaymentChannel.floatMomo;
+
+  bool get isMomo =>
+      this == _PaymentChannel.floatMomo || this == _PaymentChannel.directMomo;
 }
 
 enum _ExpenseStatus {
@@ -11557,7 +13902,8 @@ enum _FollowUpType {
   unconfirmedTransfer('Unconfirmed MoMo'),
   cashSurplus('Cash surplus'),
   floatOverage('Float overage'),
-  expenseVariance('Expense variance');
+  expenseVariance('Expense variance'),
+  otherFinancialIssue('Other financial issue');
 
   const _FollowUpType(this.label);
   final String label;
@@ -11889,7 +14235,10 @@ _FollowUpType _followUpType(dynamic value) {
   if (type.contains('SURPLUS')) return _FollowUpType.cashSurplus;
   if (type.contains('OVERAGE')) return _FollowUpType.floatOverage;
   if (type.contains('VARIANCE')) return _FollowUpType.expenseVariance;
-  return _FollowUpType.staffRecovery;
+  if (type.contains('RECOVER') || type.contains('STAFF')) {
+    return _FollowUpType.staffRecovery;
+  }
+  return _FollowUpType.otherFinancialIssue;
 }
 
 _FollowUpStatus _followUpStatus(dynamic value) {

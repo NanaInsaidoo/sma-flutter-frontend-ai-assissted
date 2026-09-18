@@ -122,6 +122,98 @@ void main() {
     expect(find.text('Close'), findsOneWidget);
   });
 
+  testWidgets('audit log uses compact raw columns and sorts the current page', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final client = MockClient((request) async {
+      if (request.url.path.endsWith('/scopes')) {
+        return http.Response(
+          jsonEncode([
+            {
+              'value': 'platform',
+              'label': 'Platform activity',
+              'type': 'PLATFORM',
+            },
+            {
+              'value': 'all-schools',
+              'label': 'All schools',
+              'type': 'ALL_SCHOOLS',
+            },
+          ]),
+          200,
+        );
+      }
+      if (request.url.path.endsWith('/statistics')) {
+        return http.Response(
+          jsonEncode({
+            'totalLogs': 2,
+            'createCount': 0,
+            'editCount': 1,
+            'accessChangeCount': 0,
+            'failedLoginCount': 0,
+          }),
+          200,
+        );
+      }
+      return http.Response(
+        jsonEncode({
+          'logs': [_record, _otherRecord],
+          'totalElements': 2,
+          'totalPages': 1,
+          'currentPage': 0,
+          'pageSize': 20,
+        }),
+        200,
+      );
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: AuditActivityScreen(
+            repository: AuditApiClient(accessToken: 'token', client: client),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('audit-log-table')), findsOneWidget);
+    for (final heading in [
+      'TIME',
+      'EVENT ID',
+      'ACTION',
+      'ACTOR',
+      'TARGET',
+      'SCOPE',
+      'EVENT',
+    ]) {
+      expect(find.text(heading), findsOneWidget);
+    }
+    expect(find.text('#41'), findsOneWidget);
+    expect(find.text('#42'), findsOneWidget);
+    expect(find.text('DELETE'), findsOneWidget);
+    expect(find.text('EDIT'), findsOneWidget);
+
+    expect(
+      tester.getTopLeft(find.text('EDIT')).dy,
+      lessThan(tester.getTopLeft(find.text('DELETE')).dy),
+    );
+    await tester.ensureVisible(find.text('ACTION'));
+    await tester.tap(find.text('ACTION'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getTopLeft(find.text('DELETE')).dy,
+      lessThan(tester.getTopLeft(find.text('EDIT')).dy),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('custom date and time range is sent to the audit API', (
     tester,
   ) async {

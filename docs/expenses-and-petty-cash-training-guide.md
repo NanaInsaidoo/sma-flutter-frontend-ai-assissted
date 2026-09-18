@@ -1,8 +1,8 @@
 # Expenses & Petty Cash Training Guide
 
-**Version:** 1.1
+**Version:** 1.3
 
-**Last updated:** 12 September 2026
+**Last updated:** 15 September 2026
 
 **Audience:** School administrators, headmasters/headteachers, bursars, petty-cash custodians, finance officers, requesters, trainers, and auditors
 
@@ -22,7 +22,17 @@ The core control principles are:
 - exceptions require notes and remain visible until resolved; and
 - Cash and MoMo are separate petty-cash pockets.
 
-### Key changes in version 1.1
+### Key changes in version 1.3
+
+- The Reports tab now provides live previews and Excel-ready CSV downloads for the Expense register, Petty cash ledger, Approvals & exceptions, and Refunds & reversals.
+- A consolidated PDF Audit pack contains all four current-term reports with the school, term, generator, generation time, and page numbers.
+- Reported refunds remain separate from petty cash and show the original expense, amount received, School funds destination, payment method, and reference.
+- Reversals appear as linked corrections and never replace or delete the original expense row.
+- The ratification review now shows the amount requested, amount spent, payee, payment method, receipt reference, a secure receipt-file link where available, and the recorded prior verbal authorisation before affirmation.
+- Reconciliation requests now use a searchable eligible-staff selector instead of a free-text assignee name. The selected staff account is stored and receives an assignment notification.
+- Long receipt references are compacted to their final eight characters in report previews and the PDF Audit pack; CSV exports and expense details retain the full reference.
+
+Earlier controls retained in this release include:
 
 - Every requisition now records its requester and selected approver.
 - The approver confirms the request as submitted and cannot change its amount.
@@ -35,8 +45,9 @@ The core control principles are:
 - Financial follow-ups now show a linked expense, concise case summary, append-only activity timeline, and a separate administrator closure step.
 - Open top-ups, reconciliations, and Financial follow-ups display red pending counts on the Petty Cash tabs.
 - A disbursed top-up that remains unconfirmed for 15 minutes displays a persistent funds-received reminder with the minutes overdue.
-- Refunds, reversals, and already-disbursed top-ups are always recorded when money has actually moved. Any resulting float overage automatically creates an urgent Financial follow-up and alerts finance managers.
+- A refund is recorded only after money is received into School funds. It never replenishes Cash or MoMo and cannot create a petty-cash overage. Reversals and already-disbursed top-ups still record their true float effect; any resulting overage creates an urgent Financial follow-up.
 - Top-up, reconciliation, and pocket-transfer controls appear above the petty-cash expense list and open dedicated history or detail workspaces.
+- Reconciliation training now includes a complete discrepancy guide, worked examples, evidence expectations, and the current controlled procedure for correcting a Cash/MoMo pocket-transfer entry.
 
 ## 2. Learning Outcomes
 
@@ -51,6 +62,7 @@ After training, a user should be able to:
 7. Perform a reconciliation and resolve a shortage or surplus.
 8. Use Financial follow-ups for recovery, missing evidence, refunds, and unresolved issues.
 9. Understand which records may be cancelled and which require a correcting entry.
+10. Preview, validate, and export the finance reports and consolidated Audit pack.
 
 ## 3. Workspace Layout
 
@@ -67,7 +79,7 @@ Finance managers see six main tabs. Ordinary requesters see **Requisitions** and
 | **School Expenses** | Shows completed spending paid from school bank, cheque, or the main school MoMo account. |
 | **Petty Cash** | Holds petty-cash expenses, Cash/MoMo pockets, top-ups, transfers, reconciliations, and financial follow-ups. |
 | **Approvals** | Shows requisitions, top-ups, emergency ratifications, and variances needing an authorised decision. |
-| **Reports** | Reserved for management and audit reporting. See the current-release caveats before relying on it. |
+| **Reports** | Previews and exports the current-term Expense register, Petty cash ledger, Approvals & exceptions, Refunds & reversals, and consolidated Audit pack. |
 
 Within **Petty Cash**, use:
 
@@ -373,6 +385,8 @@ Required information includes:
 - receipt or other evidence; and
 - a written ratification note.
 
+The ratifying approver sees a concise review containing the expense ID, purpose, amount requested, amount spent, payee, payment method, receipt reference, prior verbal authorisation, and a **View receipt** link when a file is attached. The approver must inspect the evidence, affirm the after-the-fact approval statement, and enter an approval note before selecting **Affirm and ratify**.
+
 Ratification is not permission to spend. It is an after-the-fact acknowledgement that money already moved and that the authorised reviewer accepts the transaction as legitimate.
 
 Emergency status must never be used merely to avoid waiting for approval.
@@ -453,16 +467,17 @@ Net spend:                 GH¢370
 
 To record a refund:
 
-1. Find and open the original completed expense.
+1. Find and open the original completed expense in the appropriate expense register. The refund action always starts from the original expense so the returned money cannot be detached from its source payment.
 2. Select **Record refund**.
-3. Enter the amount, reference, date, and reason.
-4. Save the linked refund.
+3. Enter the amount received, actual receipt date, payment method, bank/deposit reference, and reason.
+4. Affirm that the money has been received into School funds.
+5. Save the linked refund.
 
 A refund cannot exceed the remaining unrefunded amount. Multiple partial refunds may be linked to one expense.
 
-For a petty-cash expense, a supported refund credits the original pocket. For a School funds expense, it does not alter petty cash.
+All refunds are deposited into the designated School funds account, regardless of whether the original expense used petty cash or School funds. A refund received months later is posted to the current academic term using the actual receipt date, while retaining the original expense and historical term reference. Closed petty-cash cycles are never reopened.
 
-Money that was genuinely returned must be recorded even when it makes the float exceed its approved amount. The system credits the correct pocket, creates an immediately due **Float overage** follow-up for the newly created excess, and alerts finance managers. The excess must then be moved out of petty cash and the transfer documented before the follow-up is closed.
+The **Refund register** contains only refunds already received. Its compact summary shows the amount and count received this term, received this month, and included in the current search/filter results. Expected supplier returns appear only as a link to Financial follow-ups; they are not refund transactions.
 
 Do not use a refund where no money was returned. A supplier credit note or expected refund should remain a Financial follow-up until it is formally handled.
 
@@ -590,17 +605,43 @@ Record:
 - direction;
 - amount;
 - editable transfer/agent fee, including zero;
-- date;
 - reference; and
-- note.
+- the automatically recorded transaction date and signed-in user.
 
 The transfer amount leaves one pocket and enters the other. Any fee reduces the source pocket and reduces total float. A transfer is not an expense and must not be entered as one.
 
-The source pocket must cover both the transfer amount and any fee. Before recording, the application shows a direct affirmation of the route, amount, fee, resulting Cash balance, resulting MoMo balance, and total float. If the route or result is wrong, cancel the confirmation and correct the form. A completed transfer is retained in its dedicated history and must be corrected through a linked, documented movement rather than deleted.
+The source pocket must cover both the transfer amount and any fee. Before recording, the application shows a direct affirmation of the route, amount, fee, resulting Cash balance, resulting MoMo balance, and total float. If the route or result is wrong, cancel the confirmation and correct the form.
+
+### Correcting a completed pocket transfer
+
+A completed transfer cannot be edited or deleted. The current release does not yet have a dedicated **Correct transfer** or **Reverse transfer** action. An authorised administrator must therefore use a compensating pocket transfer and place the original transfer ID and correction reason in the **Reference** field.
+
+Example: `Correction of TRF-204: actual amount was GH¢200, not GH¢250.`
+
+Use the following procedure:
+
+1. Open the original transfer and verify its direction, amount, fee, date, and reference.
+2. Recount both pockets and verify the actual MoMo statement or agent receipt.
+3. Calculate the exact amount required to restore each pocket to its correct balance.
+4. Record the compensating transfer in the necessary direction.
+5. Put the original transfer ID and correction explanation in the Reference field.
+6. Review the resulting Cash, MoMo, and total-float balances before confirming.
+7. Repeat or refresh the reconciliation and retain the evidence with the reconciliation or Financial follow-up.
+
+If the original entry has the wrong direction, two accounting effects must be represented: neutralise the wrong entry and then represent the correct direction. Because the current screen records both as ordinary pocket transfers, this workaround must be performed only by an authorised administrator with clear references. It must not be used to conceal missing money or manufacture a balance match.
+
+The source-pocket blocker still applies to a compensating transfer. If the correction would make a pocket negative, stop and investigate. Do not temporarily invent a top-up or expense to force the correction through.
 
 ## 16. Reconciliation Lifecycle
 
 The recommended routine is weekly, but an administrator may request a reconciliation at any time.
+
+When creating the request, search the eligible finance-staff list by name,
+username, or role and select the person who will physically count Cash and
+confirm the MoMo wallet. Free-text names are not accepted. This prevents a task
+from being assigned to a misspelled or inactive identity. The selected person
+owns the count task, but expected balances are still captured only when that
+person starts the count.
 
 Typical triggers include:
 
@@ -646,7 +687,7 @@ The single-open rule includes a requested count, a count in progress, and an unr
 ```text
 Expected pocket balance
   = confirmed opening/top-ups
-  + incoming transfers and supported refunds
+  + incoming pocket transfers
   - completed expenses
   - outgoing transfers and fees
 
@@ -669,6 +710,118 @@ Variance = actual counted amount - expected amount
 Confirming a variance does not silently alter the pocket. The balance changes only when an administrator records a formal resolution, which creates an auditable adjustment. A shortage may also create a Financial follow-up.
 
 Opening a reconciliation shows the expected and actual pocket amounts, evidence, notes, resolution, and status. Notes are retained in its activity history. Only a user with finance-approval authority may record the resolution and close the reconciliation.
+
+### Diagnose before correcting
+
+Do not choose a resolution merely because it makes the figures match. Use this order:
+
+1. Recount physical Cash with a second person present.
+2. Confirm the designated petty-cash MoMo wallet and its balance at the same cut-off time.
+3. Compare all expenses, top-ups, pocket transfers, fees, reversals, and pending confirmations since the previous reconciliation.
+4. Obtain the receipt, MoMo message, bank/agent reference, or signed handover evidence.
+5. Identify whether the difference is a missing record, incorrect record, timing difference, genuine shortage, or genuine surplus.
+6. Use the matching controlled action below; never type a convenient figure simply to close the reconciliation.
+
+### Reconciliation discrepancy scenarios
+
+| Scenario | Sample seen during count | Required response |
+| --- | --- | --- |
+| **Exact match** | System Cash GH¢600 and MoMo GH¢1,000; count is the same | Confirm the reconciliation with the count note and evidence. No adjustment or follow-up is needed. |
+| **Unrecorded MoMo-to-Cash transfer** | Cash is GH¢200 over and MoMo is GH¢200 short; total float still matches | Verify the cash-out receipt, record the missing MoMo-to-Cash pocket transfer, and refresh the reconciliation. |
+| **Unrecorded Cash-to-MoMo transfer** | Cash is GH¢300 short and MoMo is GH¢300 over; total float still matches | Verify the deposit, record the missing Cash-to-MoMo transfer, and refresh the reconciliation. |
+| **Wrong transfer amount** | GH¢250 was recorded from MoMo to Cash, but only GH¢200 moved | Record a GH¢50 compensating Cash-to-MoMo transfer referencing the original transfer, then reconcile again. |
+| **Wrong transfer direction** | Cash-to-MoMo GH¢200 was recorded, but the evidence shows MoMo-to-Cash GH¢200 | An administrator records referenced compensating entries to neutralise the wrong direction and represent the correct direction, then verifies both pockets again. |
+| **Transfer fee omitted** | MoMo is GH¢2 below the expected balance after a GH¢200 cash-out | Verify the provider charge and record the documented correction. Do not classify an unexplained shortage as a fee. |
+| **Transfer fee recorded incorrectly** | A GH¢5 fee was recorded, but the agent receipt shows GH¢2 | Correct the GH¢3 difference through an authorised, referenced correcting entry and repeat the count. |
+| **Unrecorded petty-cash expense** | Cash is GH¢80 short and a valid GH¢80 cleaning receipt exists | Complete the proper requisition/approval route and record the actual expense. If it was an emergency, use emergency ratification; do not use a pocket transfer. |
+| **Wrong expense amount** | Expense record is GH¢100, but receipt and payment evidence show GH¢120 | Use expense reversal and a correct new expense if the posted record is wrong. Use variance review only when the true actual amount was intentionally recorded against a different approved amount. |
+| **Duplicate expense** | One GH¢150 payment appears twice but money left only once | Request full reversal of the duplicate expense. Do not increase the physical count or delete the record. |
+| **Expense charged to the wrong pocket** | A GH¢90 Cash payment reduced MoMo in the system | Request full reversal of the incorrect expense and record the corrected expense from Cash through the approved route. |
+| **Top-up not recorded** | Cash is GH¢500 over and evidence shows School funds were added to the cash box | Complete the top-up request, approval, disbursement, and requester-confirmation workflow. Do not record the money as income or a pocket transfer. |
+| **Top-up disbursed but not confirmed** | The disburser says GH¢500 was issued, but the float has not increased in the system | The named requester must confirm receipt or report a problem. After 15 minutes the overdue reminder remains visible. Do not add a second top-up. |
+| **Cash shortage** | System Cash is GH¢835; physical Cash is GH¢805 with no missing transaction | Record the GH¢30 shortage resolution and open or retain a Financial follow-up for investigation, recovery, or authorised write-off. |
+| **Cash surplus** | System Cash is GH¢600; physical Cash is GH¢630 with no supporting transaction | Investigate the source. Record a proven missing transaction; otherwise document the surplus and route genuine excess through the approved resolution rather than treating it as income. |
+| **MoMo shortage** | System MoMo is GH¢1,000; wallet shows GH¢970 | Check fees, cash-outs, supplier payments, wrong-wallet transfers, and unauthorised activity. Record a proven missing event or escalate the GH¢30 difference. |
+| **MoMo surplus** | System MoMo is GH¢800; wallet shows GH¢900 | Check an unrecorded top-up, Cash-in, reversal, or incoming payment. Record only the event supported by evidence; escalate an unexplained surplus. |
+| **Wrong MoMo wallet counted** | Staff used a personal or main-school wallet balance | Stop the count and verify the wallet configured for petty cash. Restart using the designated wallet; do not adjust any balance. |
+| **Timing or pending-provider difference** | MoMo transfer appears pending at the reconciliation cut-off | Record the evidence and cut-off time, keep the matter open where necessary, and repeat the reconciliation after settlement. Do not backdate a false completed transaction. |
+| **Cash counting error** | First count shows GH¢480; supervised recount shows GH¢500 | Correct the count before confirmation and record that a supervised recount was performed. No financial adjustment is needed. |
+| **Incorrect opening allocation** | Total opening float is right, but the configured Cash/MoMo split does not match custody evidence | Administrator investigates the setup history and records an evidenced correction. Do not create a false expense or top-up. |
+| **Custody handover difference** | Outgoing custodian states GH¢700; incoming custodian counts GH¢680 | Both people sign or acknowledge the count, retain handover evidence, and open a GH¢20 follow-up before responsibility changes. |
+| **Refund incorrectly expected in petty cash** | Supplier returned money to the main school bank account, but staff expect Cash/MoMo to rise | Record the received refund in the Refund register as School funds. Petty Cash should not change. |
+| **Reversal creates float overage** | Reversing a GH¢100 petty-cash expense restores the pocket above the approved float | Keep the truthful reversal, use the automatically created Float overage follow-up, and return the exact excess to School funds with a reference. |
+
+### Worked reconciliation examples
+
+#### Example 1: Total matches but the pockets do not
+
+```text
+System Cash                              GH¢600
+System MoMo                            GH¢1,000
+Actual Cash                              GH¢800
+Actual MoMo                              GH¢800
+Total variance                              GH¢0
+```
+
+The equal and opposite pocket differences strongly suggest an unrecorded GH¢200 MoMo-to-Cash movement. Verify the agent receipt, record the missing pocket transfer, and run the reconciliation again. This is not a shortage and not an expense.
+
+#### Example 2: Wrong transfer amount
+
+```text
+Recorded transfer: MoMo to Cash          GH¢250
+Evidence and actual movement              GH¢200
+Overstatement                              GH¢50
+```
+
+An administrator records a GH¢50 Cash-to-MoMo compensating transfer. The Reference should identify the original transfer and state that the actual movement was GH¢200. Both pockets are then recounted.
+
+#### Example 3: Valid receipt but missing expense
+
+```text
+System Cash                              GH¢500
+Actual Cash                              GH¢420
+Supported cleaning purchase               GH¢80
+```
+
+This is a missing expense record, not a pocket transfer. Complete the normal requisition and actual-spend process, or the emergency/ratification route if the payment genuinely could not wait. The Cash pocket should become GH¢420 after the legitimate expense is posted.
+
+#### Example 4: Unexplained shortage
+
+```text
+System Cash                              GH¢835
+Actual Cash                              GH¢805
+Unexplained shortage                      GH¢30
+```
+
+Do not create a false GH¢30 expense. Record the reconciliation resolution that establishes the actual balance and create a GH¢30 Financial follow-up. Keep it open until recovery, evidenced write-off, or another authorised resolution.
+
+#### Example 5: Timing difference
+
+```text
+System MoMo                            GH¢1,000
+Wallet available balance                 GH¢900
+Provider transfer pending                GH¢100
+```
+
+Retain the provider reference and exact cut-off time. Do not force the balance to match while the transfer is pending. Repeat the reconciliation after it settles and escalate it if it remains unresolved.
+
+#### Example 6: Genuine surplus
+
+```text
+System Cash                              GH¢600
+Actual Cash                              GH¢650
+Unexplained surplus                       GH¢50
+```
+
+Check top-ups, reversals, Cash-ins, cancelled purchases, and handover records. If no valid source is proven, record the surplus through the reconciliation resolution and follow the school's excess-return policy. Never quietly absorb it into another expense.
+
+#### Example 7: Wrong wallet
+
+The configured petty-cash wallet ends in `7979`, but the user counted a main-school wallet ending in `1120`. Cancel or restart the count, select the correct wallet, and retain a note explaining the restart. No adjustment is permitted.
+
+#### Example 8: Custody handover
+
+The outgoing bursar's record shows GH¢1,200 total, while the incoming bursar counts GH¢1,180. Both users verify Cash and MoMo separately, record the GH¢20 difference, attach the handover evidence reference, and leave the case open for an administrator. The new custodian should not accept an undocumented starting balance.
 
 ## 17. Financial Follow-ups
 
@@ -714,7 +867,7 @@ When repayment arrives, record the repayment/evidence against the follow-up and 
 
 ### Resolving a Float overage
 
-A **Float overage** is created by the system, not manually. It means a refund, approved reversal, or confirmed top-up caused the total Cash and MoMo balance to exceed the approved float. The incoming money is recorded first because it has actually arrived.
+A **Float overage** is created by the system, not manually. It means an approved reversal, confirmed top-up, reconciliation surplus, or other exceptional float movement caused total Cash and MoMo to exceed the approved float. Refunds received into School funds do not affect petty cash and cannot create an overage.
 
 When this control is introduced to an existing school, any active cycle that is already above its approved float receives one backfilled overage case. This does not change the recorded balance; it brings the pre-existing excess into the same visible resolution process without creating duplicate cases.
 
@@ -728,7 +881,7 @@ To close the overage:
 6. Add a resolution note stating where the funds went and who verified the movement.
 7. Select **Record return & close**.
 
-The system immediately reduces the selected petty-cash pockets and creates a linked **Float return** transaction to School funds. The original refund, reversal, or top-up remains unchanged. The overage case, return reference, administrator, amounts, and notes remain in the audit trail.
+The system immediately reduces the selected petty-cash pockets and creates a linked **Float return** transaction to School funds. The original reversal, top-up, or reconciliation record remains unchanged. The overage case, return reference, administrator, amounts, and notes remain in the audit trail.
 
 Do not close a Float overage using only a note. Do not use **Pocket transfer**, because that control only moves money between Cash and MoMo and does not reduce the total float. If the exact return would make either pocket negative, the system blocks closure; verify the physical balances and investigate the difference first.
 
@@ -795,20 +948,125 @@ An overdue follow-up remains visible; it does not automatically become an expens
 | Partially recovered | Some, but not all, of the expected recovery or refund has been resolved. |
 | Closed | An authorised final resolution note was recorded. |
 
-## 19. Current-Release Caveats and Go-Live Cautions
+## 19. Reports and Exports
+
+The **Reports** tab is available only to authorised users with school-wide finance visibility. Ordinary requesters continue to see only their own requisitions and resulting expenses.
+
+Every report is scoped to the current academic term shown by the application. Open a report to preview its key total and first records before downloading. CSV files open in Microsoft Excel and similar spreadsheet applications. The PDF Audit pack is intended for management review, handover, and audit support.
+
+### Expense register
+
+The Expense register includes:
+
+- transaction date and expense ID;
+- School funds or Petty cash source;
+- description, payee, and category;
+- actual amount and separately recorded MoMo fee;
+- refund amount and net recorded spend;
+- current status and linked requisition; and
+- receipt reference.
+
+Long receipt references are shortened in the on-screen preview and PDF to the
+final eight characters, prefixed with `...`. The full reference remains in the
+CSV export and on the linked expense record. Staff should search or verify the
+full reference from the expense when two receipts have similar endings.
+
+**Net recorded spend** reflects approved reversals and received refunds. A reversed expense remains in the report with **Reversed** status and zero accounting amount; it is not deleted. A petty-cash refund received into School funds reduces net school spending but does not restore the Cash or MoMo pocket.
+
+### Petty cash ledger
+
+The Petty cash ledger lists operational movements and control checkpoints in date order:
+
+- confirmed top-ups;
+- Cash-to-MoMo and MoMo-to-Cash pocket transfers;
+- petty-cash expenses and transaction fees;
+- approved petty-cash expense reversals; and
+- reconciliation results.
+
+The report shows money in, money out, fees, route/pocket, reference, and status. Pocket transfers show the amount on both sides because value leaves one pocket and enters the other; only the fee reduces total float. A reconciliation row is a control checkpoint and should not be treated as a new receipt or payment unless a separate adjustment transaction was formally recorded.
+
+The headline total is the current combined Cash and MoMo pocket balance at generation time. Confirm that this agrees with the latest completed reconciliation before using the report for custody handover.
+
+### Approvals & exceptions
+
+This report combines controlled decisions and unresolved finance work:
+
+- requisitions and selected approvers;
+- petty-cash top-up approvals and disbursers;
+- emergency expenses and ratification status;
+- expense variance status; and
+- Financial follow-ups and their responsible party.
+
+The total shown is the value of currently open Financial follow-ups. It is an attention amount, not an additional expense and not automatically an accounting loss.
+
+### Refunds & reversals
+
+Use this report to distinguish two different events:
+
+| Entry | Meaning in the report |
+| --- | --- |
+| **Refund received** | Valid spending occurred and money later returned into School funds. The row shows the original expense, received amount, destination, method, and reference. |
+| **Expense reversal** | The original expense record was erroneous. The row shows the original expense, full amount, reason, approver, and approval status. |
+
+Select **Open refund register** from this report when line-by-line refund searching, date filtering, paging, or opening the linked original expense is required.
+
+### Audit pack
+
+The Audit pack produces one landscape PDF containing the Expense register, Petty cash ledger, Approvals & exceptions, and Refunds & reversals. It records:
+
+- school identifier;
+- current academic term identifier;
+- user who generated the pack;
+- generation date and time; and
+- page numbers.
+
+The Audit pack also offers a CSV download containing the same four report sections. Generate the pack after completing the period's approvals, receipt collection, variance reviews, and reconciliation. Regenerate it whenever a late refund, reversal, ratification, or correction changes the underlying records.
+
+Receipt images and PDFs are not embedded in the Audit pack. They remain protected in receipt storage. Long receipt references in the PDF show only the final eight characters so wide tables remain readable; the CSV retains the complete reference. Open the linked expense in the application and select **View receipt** where evidence review is required.
+
+### Reporting edge cases
+
+| Scenario | How the report handles it |
+| --- | --- |
+| Pending requisition with no payment | Appears in Approvals & exceptions, not the Expense register or Petty cash ledger. |
+| Approved request not yet spent | Appears as an approval record; it is not reported as an expense. |
+| Emergency payment awaiting ratification | Appears in the Expense register and Approvals & exceptions with Pending ratification status because money has already moved. |
+| Actual amount differs from approved amount | The Expense register shows the true actual amount; Approvals & exceptions shows the variance status. |
+| Partial refund | The original expense remains, Refunded shows the amount received, and Net spend shows the unrecovered balance. |
+| Refund received in a later term | The refund belongs to the term/date in which money was received and retains the original-expense link. Regenerate the affected current-term report. |
+| Pending reversal | The original expense remains financially posted until approval. The reversal appears as Pending in Refunds & reversals. |
+| Approved reversal | The original expense remains visible as Reversed, the correcting entry appears in Refunds & reversals, and a petty-cash reversal is shown as money in on the Petty cash ledger. |
+| Missing receipt file | The receipt reference may still appear, but no attachment link is available. Treat this as an evidence exception where policy requires a file. |
+| Open Financial follow-up | Appears in Approvals & exceptions; its amount is not added to expense totals. |
+
+### Export checks before sharing
+
+Before giving a report to management, an accountant, or an auditor:
+
+1. Confirm the school and academic term shown in the export.
+2. Confirm the generation date and signed-in generator.
+3. Resolve or clearly explain pending ratifications, variances, reversals, and overdue follow-ups.
+4. Compare the Petty cash ledger closing total with the latest reconciliation.
+5. Confirm that receipt references and required attachments exist.
+6. Keep the exported file according to the school's financial-record retention policy.
+
+These exports are operational source reports. They do not replace the school's formal general ledger, bank reconciliation, statutory accounts, or external audit procedures.
+
+## 20. Current-Release Caveats and Go-Live Cautions
 
 Trainers and administrators must understand these remaining limitations and operational cautions. Do not represent an unverified integration as a completed control.
 
-1. **Reports are not production-ready.** The Reports tab is currently outside the verified finance scope. Use transaction and detail records for operational review until reports are implemented and validated.
+1. **Reports are operational, term-scoped exports.** The four live CSV reports and consolidated PDF Audit pack use finance-workspace records for the current academic term. They are not a general ledger or statutory financial statement.
 2. **Receipt storage still needs a real S3 verification.** The upload flow exists, but secure upload/view of a real receipt remains a production-hardening check.
 3. **The app cannot verify receipt content.** A user can upload the wrong image or PDF. Human review remains mandatory.
 4. **Duplicate handling needs a complete user confirmation flow.** The backend detects a possible duplicate, but the current UI does not yet provide the final intentional-duplicate confirmation journey. Stop and investigate rather than retrying blindly.
 5. **Follow-up entries are operational records, not accounting postings.** Manual and system-generated follow-ups, due dates, linked references, notes, and administrator closure are persisted. Accountants must still decide and post the formal accounting treatment outside this module.
-6. **Closed-cycle and different-method refunds need further routing work.** The present refund process links the refund and protects against over-refunding, but changing the refund destination or routing a late refund into a newer cycle/general account is not fully supported in the UI.
+6. **Refunds use one controlled destination.** Received refunds are routed to School funds in the current term. The current release intentionally does not allow staff to redirect a refund into a petty Cash or MoMo pocket.
 7. **School-funded requisitions currently depend on the term finance workspace being configured.** The two spending registers are separated, but both use the same term-scoped finance service.
 8. **Intermediate follow-up states require operational discipline.** Notes and closure are persisted, but staff must keep responsibility, due dates, evidence, and any partial recovery clear in the timeline until richer accounting treatment is integrated.
 9. **Permissions must match real duties.** A visible action is not a substitute for management authorisation. Review FINANCE VIEW, EDIT, and APPROVE access whenever staff responsibilities change.
 10. **Do not delete completed finance records.** Corrections must use refund, reversal, reconciliation adjustment, or follow-up records. Expense reversal is now implemented as a full, independently approved correction. It does not support partial reversal; use refund only when money genuinely came back.
+11. **Pocket-transfer correction is an interim control.** The current release has no dedicated Correct transfer action or system-generated link between a transfer and its compensating entry. Only an authorised administrator should use the compensating-transfer procedure, and the Reference must identify the original transfer and correction reason. A future dedicated correction workflow should replace this workaround.
 
 The following controls are now implemented and should be taught as active rules: named requisition approvers, immutable approval amounts, audited petty-cash auto-approval, requisition expiry, the single-expense limit, selected-pocket balance enforcement at actual spend, percentage-based variance routing, persistent variance notes, and linked follow-up activity history.
 
@@ -822,7 +1080,7 @@ Before production launch, the school should define:
 - who can authorise write-offs; and
 - how finance records are handed to the accountant.
 
-## 20. Audit Checklist
+## 21. Audit Checklist
 
 For every expenditure, confirm that the record answers:
 
@@ -864,7 +1122,7 @@ For every reconciliation, confirm:
 - linked follow-up; and
 - closure actor and note.
 
-## 21. Training Scenarios
+## 22. Training Scenarios
 
 ### Scenario A: Standard school expense
 
@@ -920,7 +1178,7 @@ Record one actual amount exactly at the configured percentage tolerance and anot
 
 Expected learning: tolerance boundary, higher/lower symmetry, persistent review notes.
 
-## 22. Trainer Delivery Checklist
+## 23. Trainer Delivery Checklist
 
 - [ ] Explain School funds versus Petty cash before showing forms.
 - [ ] Demonstrate the six main tabs and Petty Cash sub-sections.
@@ -934,12 +1192,15 @@ Expected learning: tolerance boundary, higher/lower symmetry, persistent review 
 - [ ] Show that Disbursed does not yet mean received.
 - [ ] Demonstrate Cash/MoMo transfer and fee treatment.
 - [ ] Perform a matching reconciliation.
+- [ ] Perform an equal-and-opposite Cash/MoMo pocket mismatch and record the missing transfer.
+- [ ] Demonstrate a wrong transfer amount and the controlled compensating-transfer procedure.
 - [ ] Perform a shortage reconciliation and create a follow-up.
+- [ ] Demonstrate a surplus, wrong-wallet count, and pending-provider timing difference without forcing the balances to match.
 - [ ] Explain refunds as linked entries rather than edits.
 - [ ] Review the current-release caveats.
 - [ ] Confirm each trainee understands notes, evidence, and separation of duties.
 
-## 23. Quick Answers
+## 24. Quick Answers
 
 **Do all expenses start with a requisition?**
 
@@ -993,6 +1254,14 @@ Only after the named requester confirms receipt and allocation.
 
 No. Only its transfer fee reduces total float.
 
+**Can a completed pocket transfer be edited or deleted?**
+
+No. The current release has no dedicated correction action. An authorised administrator must use a clearly referenced compensating transfer, retain the evidence, and repeat the reconciliation. If the correction would make a pocket negative, stop and investigate.
+
+**Does confirming a reconciliation automatically change a balance?**
+
+No. Confirmation records the count and opens a variance when either pocket differs. Balances change only through the selected administrator resolution, which creates an auditable reconciliation-adjustment transaction.
+
 **Is missing money an expense?**
 
 No. It is a reconciliation adjustment and, where needed, a Financial follow-up.
@@ -1005,6 +1274,6 @@ No. It remains open until repaid, written off, corrected, or otherwise closed by
 
 No. Add linked correcting records and notes instead.
 
-## 24. Related Document
+## 25. Related Document
 
 For additional detail on shortages, surpluses, and recoveries, see [Petty Cash Reconciliation and Financial Follow-ups](petty-cash-reconciliation-process.md).

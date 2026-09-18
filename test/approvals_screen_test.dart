@@ -482,6 +482,49 @@ void main() {
     expect(find.text('Nothing is waiting for you'), findsOneWidget);
   });
 
+  testWidgets('approval table sorts and paginates eight records at a time', (
+    tester,
+  ) async {
+    await _useDesktopSurface(tester);
+    final api = _ManyApprovalsApiClient();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: ApprovalsScreen(schoolId: 'SCH-1', repository: api),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('REQUEST'), findsOneWidget);
+    expect(find.text('CATEGORY'), findsOneWidget);
+    expect(find.text('REQUESTER'), findsOneWidget);
+    expect(find.text('DATE'), findsOneWidget);
+    expect(find.text('STATUS'), findsOneWidget);
+    expect(find.text('Approval 10'), findsOneWidget);
+    expect(find.text('Approval 01'), findsNothing);
+    expect(find.text('Showing 1-8 of 10 · Page 1 of 2'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('approval-sort-request')));
+    await tester.pumpAndSettle();
+    expect(find.text('Approval 01'), findsOneWidget);
+    expect(find.text('Approval 08'), findsOneWidget);
+    expect(find.text('Approval 10'), findsNothing);
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('approval-page-next')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('approval-page-next')));
+    await tester.pumpAndSettle();
+    expect(find.text('Approval 09'), findsOneWidget);
+    expect(find.text('Approval 10'), findsOneWidget);
+    expect(find.text('Approval 01'), findsNothing);
+    expect(find.text('Showing 9-10 of 10 · Page 2 of 2'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('my requests shows a withdraw action', (tester) async {
     await _useDesktopSurface(tester);
     final api = _FakeApprovalApiClient();
@@ -1460,6 +1503,40 @@ class _FakeApprovalApiClient extends ApprovalApiClient {
     lastAction = action;
     if (action == 'APPROVE') approved = true;
     return getInbox(schoolId);
+  }
+}
+
+class _ManyApprovalsApiClient extends ApprovalApiClient {
+  _ManyApprovalsApiClient() : super(accessToken: 'test');
+
+  @override
+  Future<ApprovalInbox> getInbox(String schoolId) async {
+    final items = List.generate(10, (index) {
+      final number = index + 1;
+      return ApprovalItem(
+        key: 'TEST:$number',
+        type: 'TEST',
+        entityId: number,
+        category: number.isEven ? 'Fees' : 'Items & supplies',
+        title: 'Approval ${number.toString().padLeft(2, '0')}',
+        subtitle: 'Reference TEST-$number',
+        status: number.isEven ? 'PENDING_APPROVAL' : 'CHANGES_REQUESTED',
+        requesterName: 'Requester ${number.toString().padLeft(2, '0')}',
+        approverName: 'Adjoa Mensah',
+        reason: '',
+        submittedAt: DateTime(2026, 9, number),
+        canApprove: true,
+        canReject: true,
+        canWithdraw: false,
+        sourcePage: 'test',
+      );
+    });
+    return ApprovalInbox(
+      pendingMyApproval: items.length,
+      pendingMyRequests: 0,
+      myApprovals: items,
+      myRequests: const [],
+    );
   }
 }
 

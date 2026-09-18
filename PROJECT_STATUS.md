@@ -1,6 +1,6 @@
 # SMA Project Status
 
-Last updated: 2026-09-12
+Last updated: 2026-09-13
 
 This file is the durable source of truth for implementation and verification
 status across the Flutter frontend and Spring Boot backend.
@@ -59,8 +59,9 @@ Verified against the real local backend:
   show red counts for active records; completed history is excluded
 - Funds awaiting receiver confirmation for more than 15 minutes show a
   persistent reminder with the live overdue duration
-- Confirmed incoming money is never hidden or rejected because capacity changed:
-  refunds, reversals, and already-disbursed top-ups are recorded, and any newly
+- Confirmed incoming money is never hidden or rejected because capacity changed.
+  Refunds are received into School funds and do not alter the float. Reversals
+  and already-disbursed top-ups record their true pocket effect, and any newly
   created excess above the approved float opens an urgent, manager-notified
   Float overage follow-up. Closing that case requires the exact Cash/MoMo return
   allocation, a transfer or deposit reference, and a resolution note; the
@@ -121,6 +122,11 @@ Implemented and automated; live role-separated verification is pending:
   school-spend totals, and appears in notifications and approval history
 - Refund and reversal are mutually exclusive for one expense, preventing duplicate
   credits; reversals are full-only and approved reversals cannot be cancelled
+- Refunds now start from the original expense, post to School funds in the current
+  term, require receipt date, method, reference, reason, and affirmation, and never
+  credit Cash or MoMo. The compact Refund register supports historical-expense
+  lookup, term/month/current-result summaries, search, period filtering, paging,
+  and links back to the original expense
 - Expense-reversal approvals now lead with the original expense ID, description,
   amount, funding source, payment channel, payee, receipt, reason, and financial
   effect; secondary request metadata is kept compact below the decision facts
@@ -131,10 +137,19 @@ Implemented and automated; live role-separated verification is pending:
 Automated evidence:
 
 - `flutter analyze` passed with no issues.
-- The focused Expenses & Petty Cash and Approvals widget suites passed all 45 tests,
+- The 13 Sep 2026 live UI rerun passed the setup, separated top-up approval,
+  mixed Cash/MoMo disbursement, requester receipt confirmation, pocket transfer,
+  staff-scoped requisition, approval confirmation, variance affirmation and
+  administrator review, School-funds refund, matched reconciliation, insufficient
+  pocket balance blocker, and requester cancellation journeys.
+- The focused Expenses & Petty Cash widget file passed all 17 tests, including
+  the regression that keeps the MoMo wallet, payment reference, and disbursement
+  note fields correctly separated after a mixed allocation is entered.
+- The focused backend `FinanceWorkflowServiceTest` suite passed all 48 tests.
+- The focused Expenses & Petty Cash and Approvals widget suites passed all 46 tests,
   including requester-scoped expense visibility, sorting, pagination, reversal
   submission, reversal approval affirmation, and compact approval evidence.
-- `flutter test` passed: 425 tests.
+- `flutter test` passed: 426 tests.
 - Live Flutter Web/Playwright finance checks passed: 2 tests against the real
   local API, including workspace loading and requester top-up cancellation.
 - `mvn -q test` passed: 497 tests, with no failures, errors,
@@ -175,6 +190,10 @@ Known data and cleanup notes:
 
 - Disposable finance records for the test school are removed after the final
   test run so the next manual journey starts at petty-cash setup.
+- The 13 Sep 2026 final cleanup was verified in both MySQL and the live browser:
+  finance cycles, requisitions, transactions, top-up events, reconciliations,
+  follow-ups, notes, approval attempts, and finance notifications are empty for
+  `AKW-XXX-E41A3E`.
 - Test users remain available for future separation-of-duty checks.
 
 Remaining production-hardening checks:

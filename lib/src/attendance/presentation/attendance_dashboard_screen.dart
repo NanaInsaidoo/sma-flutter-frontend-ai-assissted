@@ -215,7 +215,7 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
   Widget _submissionBanner() {
     final pending = _liveClasses.where((item) => item.pending).toList();
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
       decoration: BoxDecoration(
         color: const Color(0xFFFFF7E8),
         border: Border.all(color: AppColors.amber.withValues(alpha: .35)),
@@ -237,63 +237,71 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
           ),
           const SizedBox(width: 13),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${pending.length} classes have not submitted attendance today',
-                  style: const TextStyle(fontWeight: FontWeight.w800),
-                ),
-                const SizedBox(height: 7),
-                Wrap(
-                  spacing: 7,
-                  runSpacing: 7,
-                  children: pending
-                      .map(
-                        (item) => InkWell(
-                          onTap: () => _openRegister(item),
-                          borderRadius: BorderRadius.circular(20),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 9,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(
-                                color: AppColors.amber.withValues(alpha: .3),
-                              ),
-                            ),
-                            child: Text(
-                              item.name,
-                              style: const TextStyle(
-                                color: Color(0xFF9A6400),
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                        ),
-                      )
-                      .toList(),
-                ),
-              ],
+            child: Text(
+              '${pending.length} classes have not submitted attendance today',
+              style: const TextStyle(fontWeight: FontWeight.w800),
             ),
           ),
-          OutlinedButton.icon(
-            onPressed: () => _message('Reminders sent to the class teachers.'),
-            icon: const Icon(Icons.notifications_active_outlined, size: 18),
-            label: const Text('Remind all'),
-          ),
-          const SizedBox(width: 8),
           TextButton(
+            key: const ValueKey('view-pending-attendance-classes'),
+            onPressed: () => _showPendingClasses(pending),
+            child: const Text('View classes'),
+          ),
+          IconButton(
+            tooltip: 'Dismiss',
             onPressed: () => setState(() => _showSubmissionBanner = false),
-            child: const Text('Dismiss'),
+            icon: const Icon(Icons.close_rounded, size: 19),
           ),
         ],
       ),
     );
+  }
+
+  Future<void> _showPendingClasses(
+    List<_ClassAttendanceSummary> pending,
+  ) async {
+    final selected = await showDialog<_ClassAttendanceSummary>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Pending attendance (${pending.length})'),
+        content: SizedBox(
+          width: 520,
+          height: 420,
+          child: ListView.separated(
+            itemCount: pending.length,
+            separatorBuilder: (_, _) => const Divider(height: 1),
+            itemBuilder: (context, index) {
+              final item = pending[index];
+              return ListTile(
+                key: ValueKey('pending-attendance-${item.streamId}'),
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  item.name,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                subtitle: Text(item.teacher),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () => Navigator.pop(context, item),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _message('Reminders sent to the class teachers.');
+            },
+            child: const Text('Remind all'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+    if (selected != null) _openRegister(selected);
   }
 
   Widget _dateAndPeriod() {
@@ -616,8 +624,12 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
   }
 
   Widget _alertsCard() {
-    final alerts = _overview?.alerts ?? const <AttendanceAlert>[];
+    final alerts = (_overview?.alerts ?? const <AttendanceAlert>[])
+        .where((alert) => !_isSubmissionAlert(alert))
+        .toList();
+    final visibleAlerts = alerts.take(3).toList();
     return Card(
+      key: const ValueKey('attendance-alerts-card'),
       child: Column(
         children: [
           _cardHeader(
@@ -633,67 +645,160 @@ class _AttendanceDashboardScreenState extends State<AttendanceDashboardScreen> {
                 style: TextStyle(color: AppColors.muted),
               ),
             ),
-          for (final alert in alerts)
+          for (final alert in visibleAlerts) _alertRow(alert),
+          if (alerts.length > visibleAlerts.length)
+            TextButton(
+              key: const ValueKey('view-all-attendance-alerts'),
+              onPressed: () => _showAllAlerts(alerts),
+              child: Text('View all ${alerts.length} alerts →'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _alertRow(AttendanceAlert alert) {
+    final color = alert.severity.toLowerCase() == 'high'
+        ? AppColors.red
+        : AppColors.amber;
+    return InkWell(
+      onTap: () => _openAlert(alert),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+        decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: AppColors.border)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
             Container(
-              padding: const EdgeInsets.all(15),
-              decoration: const BoxDecoration(
-                border: Border(bottom: BorderSide(color: AppColors.border)),
-              ),
-              child: Row(
+              width: 8,
+              height: 8,
+              margin: const EdgeInsets.only(top: 5),
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 11),
+            Expanded(
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    margin: const EdgeInsets.only(top: 5),
-                    decoration: BoxDecoration(
-                      color: alert.severity.toLowerCase() == 'high'
-                          ? AppColors.red
-                          : AppColors.amber,
-                      shape: BoxShape.circle,
+                  Text(
+                    alert.title.isEmpty ? 'Attendance alert' : alert.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
-                  const SizedBox(width: 11),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (alert.title.isNotEmpty) ...[
-                          Text(
-                            alert.title,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(height: 3),
-                        ],
-                        Text(
-                          alert.message,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: AppColors.muted,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          alert.timestamp == null
-                              ? 'Attendance alert'
-                              : _friendlyDate(alert.timestamp!),
-                          style: const TextStyle(
-                            color: AppColors.muted,
-                            fontSize: 11,
-                          ),
-                        ),
-                      ],
+                  const SizedBox(height: 3),
+                  Text(
+                    alert.message,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.muted,
                     ),
                   ),
+                  if (alert.timestamp != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      _friendlyDate(alert.timestamp!),
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
-          TextButton(
-            onPressed: () => _message('All attendance alerts are shown.'),
-            child: const Text('View all alerts →'),
+            const SizedBox(width: 6),
+            const Icon(
+              Icons.chevron_right_rounded,
+              color: AppColors.muted,
+              size: 18,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  bool _isSubmissionAlert(AttendanceAlert alert) {
+    final text = '${alert.title} ${alert.message}'.toLowerCase();
+    return text.contains('not submitted') ||
+        text.contains('not been submitted') ||
+        text.contains('pending submission') ||
+        text.contains('attendance pending') ||
+        text.contains('submit attendance');
+  }
+
+  void _openAlert(AttendanceAlert alert) {
+    _ClassAttendanceSummary? target;
+    for (final item in _liveClasses) {
+      if (item.gradeId == alert.gradeId && item.streamId == alert.streamId) {
+        target = item;
+        break;
+      }
+    }
+    if (target != null) {
+      _openRegister(target);
+      return;
+    }
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(alert.title.isEmpty ? 'Attendance alert' : alert.title),
+        content: Text(alert.message),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showAllAlerts(List<AttendanceAlert> alerts) {
+    return showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Attendance alerts (${alerts.length})'),
+        content: SizedBox(
+          width: 520,
+          height: 440,
+          child: ListView.separated(
+            itemCount: alerts.length,
+            separatorBuilder: (_, _) => const Divider(height: 1),
+            itemBuilder: (context, index) {
+              final alert = alerts[index];
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  alert.title.isEmpty ? 'Attendance alert' : alert.title,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                subtitle: Text(
+                  alert.message,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () {
+                  Navigator.pop(context);
+                  _openAlert(alert);
+                },
+              );
+            },
+          ),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
           ),
         ],
       ),

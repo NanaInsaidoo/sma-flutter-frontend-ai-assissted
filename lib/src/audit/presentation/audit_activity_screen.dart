@@ -10,6 +10,8 @@ import 'audit_csv_export.dart';
 
 enum _AuditPeriod { today, sevenDays, thirtyDays, custom, all }
 
+enum _AuditSortField { time, id, action, actor, target, scope, event }
+
 typedef AuditCustomRangePicker =
     Future<(DateTime, DateTime)?> Function(
       BuildContext context,
@@ -71,6 +73,8 @@ class _AuditActivityScreenState extends State<AuditActivityScreen> {
   String? _error;
   int _currentPage = 0;
   final Map<String, AuditLogRecord> _selectedRecords = {};
+  _AuditSortField _sortField = _AuditSortField.time;
+  bool _sortAscending = false;
 
   @override
   void initState() {
@@ -542,10 +546,7 @@ class _AuditActivityScreenState extends State<AuditActivityScreen> {
           if (_loading) const LinearProgressIndicator(minHeight: 2),
           _recordsToolbar(page, compact),
           const Divider(height: 1),
-          if (compact)
-            ...page.logs.map(_mobileRow)
-          else
-            _desktopTable(page.logs),
+          _activityTable(page.logs),
           const Divider(height: 1),
           _pagination(page),
         ],
@@ -553,99 +554,284 @@ class _AuditActivityScreenState extends State<AuditActivityScreen> {
     );
   }
 
-  Widget _desktopTable(List<AuditLogRecord> records) {
+  Widget _activityTable(List<AuditLogRecord> sourceRecords) {
+    final records = [...sourceRecords]..sort(_compareRecords);
     final allSelected = _allPageRecordsSelected(records);
     final anySelected = records.any(
       (record) => _selectedRecords.containsKey(record.id),
     );
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: DataTable(
-        headingRowColor: WidgetStateProperty.all(const Color(0xFFF8FAF9)),
-        columns: [
-          DataColumn(
-            label: Checkbox(
-              key: const ValueKey('audit-select-page'),
-              value: allSelected
-                  ? true
-                  : anySelected
-                  ? null
-                  : false,
-              tristate: true,
-              onChanged: (_) => _togglePageSelection(records),
-            ),
+    final hasScope = _scopes.length > 1;
+    final sortColumnIndex = switch (_sortField) {
+      _AuditSortField.time => 1,
+      _AuditSortField.id => 2,
+      _AuditSortField.action => 3,
+      _AuditSortField.actor => 4,
+      _AuditSortField.target => 5,
+      _AuditSortField.scope => hasScope ? 6 : null,
+      _AuditSortField.event => hasScope ? 7 : 6,
+    };
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            minWidth: constraints.maxWidth < 1220 ? 1220 : constraints.maxWidth,
           ),
-          const DataColumn(label: Text('DATE & TIME')),
-          const DataColumn(label: Text('ACTIVITY')),
-          if (_scopes.length > 1) const DataColumn(label: Text('SCOPE')),
-          const DataColumn(label: Text('AFFECTED ACCOUNT')),
-          const DataColumn(label: Text('DONE BY')),
-          const DataColumn(label: Text('DETAILS')),
-        ],
-        rows: records.map((record) {
-          final style = _actionStyle(record.actionType);
-          return DataRow(
-            cells: [
-              DataCell(
-                Checkbox(
-                  key: ValueKey('audit-select-${record.id}'),
-                  value: _selectedRecords.containsKey(record.id),
-                  onChanged: (selected) =>
-                      _setRecordSelected(record, selected ?? false),
+          child: DataTable(
+            key: const ValueKey('audit-log-table'),
+            showCheckboxColumn: false,
+            showBottomBorder: true,
+            headingRowHeight: 44,
+            dataRowMinHeight: 50,
+            dataRowMaxHeight: 50,
+            horizontalMargin: 14,
+            columnSpacing: 20,
+            dividerThickness: .7,
+            sortColumnIndex: sortColumnIndex,
+            sortAscending: _sortAscending,
+            headingRowColor: WidgetStateProperty.all(const Color(0xFFF5F8F7)),
+            columns: [
+              DataColumn(
+                label: Checkbox(
+                  key: const ValueKey('audit-select-page'),
+                  value: allSelected
+                      ? true
+                      : anySelected
+                      ? null
+                      : false,
+                  tristate: true,
+                  onChanged: (_) => _togglePageSelection(records),
                 ),
               ),
-              DataCell(
-                SizedBox(width: 128, child: Text(_dateTime(record.timestamp))),
-              ),
-              DataCell(_actionChip(record.actionType, style)),
-              if (_scopes.length > 1)
-                DataCell(
-                  SizedBox(
-                    width: 150,
-                    child: Text(
-                      _scopeLabel(record.customSchoolId),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ),
-              DataCell(
-                SizedBox(
-                  width: 180,
-                  child: _person(record.subjectName, record.subjectUsername),
-                ),
-              ),
-              DataCell(
-                SizedBox(
-                  width: 170,
-                  child: _person(record.actorName, record.performedByUsername),
-                ),
-              ),
-              DataCell(
-                InkWell(
-                  onTap: () => _showDetails(record),
-                  child: SizedBox(
-                    width: 350,
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            record.description,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        const Icon(Icons.chevron_right_rounded, size: 18),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
+              _sortableColumn('TIME', _AuditSortField.time),
+              _sortableColumn('EVENT ID', _AuditSortField.id),
+              _sortableColumn('ACTION', _AuditSortField.action),
+              _sortableColumn('ACTOR', _AuditSortField.actor),
+              _sortableColumn('TARGET', _AuditSortField.target),
+              if (hasScope) _sortableColumn('SCOPE', _AuditSortField.scope),
+              _sortableColumn('EVENT', _AuditSortField.event),
             ],
-          );
-        }).toList(),
+            rows: [
+              for (var index = 0; index < records.length; index++)
+                _activityDataRow(records[index], index, hasScope),
+            ],
+          ),
+        ),
       ),
     );
+  }
+
+  DataColumn _sortableColumn(String label, _AuditSortField field) {
+    return DataColumn(
+      label: Text(
+        label,
+        style: const TextStyle(
+          color: AppColors.muted,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+          letterSpacing: .35,
+        ),
+      ),
+      onSort: (_, ascending) => setState(() {
+        _sortField = field;
+        _sortAscending = ascending;
+      }),
+    );
+  }
+
+  DataRow _activityDataRow(AuditLogRecord record, int index, bool hasScope) {
+    final style = _actionStyle(record.actionType);
+    return DataRow(
+      key: ValueKey('audit-row-${record.id}'),
+      color: WidgetStateProperty.all(
+        index.isOdd ? const Color(0xFFFBFCFC) : Colors.white,
+      ),
+      cells: [
+        DataCell(
+          Checkbox(
+            key: ValueKey('audit-select-${record.id}'),
+            value: _selectedRecords.containsKey(record.id),
+            onChanged: (selected) =>
+                _setRecordSelected(record, selected ?? false),
+          ),
+        ),
+        DataCell(
+          SizedBox(
+            width: 150,
+            child: Text(
+              _dateTimeSingleLineOrUnknown(record.timestamp),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppColors.text,
+                fontFamily: 'monospace',
+                fontSize: 11,
+              ),
+            ),
+          ),
+        ),
+        DataCell(
+          SizedBox(
+            width: 90,
+            child: Text(
+              '#${record.id}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppColors.muted,
+                fontFamily: 'monospace',
+                fontSize: 11,
+              ),
+            ),
+          ),
+        ),
+        DataCell(
+          SizedBox(
+            width: 112,
+            child: Text(
+              record.actionType,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: style.color,
+                fontFamily: 'monospace',
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ),
+        DataCell(
+          SizedBox(
+            width: 170,
+            child: _logPerson(record.actorName, record.performedByUsername),
+          ),
+        ),
+        DataCell(
+          SizedBox(
+            width: 180,
+            child: _logPerson(record.subjectName, record.subjectUsername),
+          ),
+        ),
+        if (hasScope)
+          DataCell(
+            SizedBox(
+              width: 150,
+              child: Text(
+                _scopeLabel(record.customSchoolId),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+          ),
+        DataCell(
+          InkWell(
+            key: ValueKey('audit-open-${record.id}'),
+            onTap: () => _showDetails(record),
+            borderRadius: BorderRadius.circular(8),
+            child: SizedBox(
+              width: 330,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      record.description,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    color: AppColors.green,
+                    size: 18,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _logPerson(String name, String username) {
+    final cleanName = name.trim();
+    final cleanUsername = username.trim();
+    return Row(
+      children: [
+        Flexible(
+          child: Text(
+            cleanName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12),
+          ),
+        ),
+        if (cleanUsername.isNotEmpty && cleanUsername != cleanName) ...[
+          const Text(
+            ' · ',
+            style: TextStyle(color: AppColors.muted, fontSize: 11),
+          ),
+          Flexible(
+            child: Text(
+              cleanUsername,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppColors.muted,
+                fontFamily: 'monospace',
+                fontSize: 11,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  int _compareRecords(AuditLogRecord left, AuditLogRecord right) {
+    int result;
+    switch (_sortField) {
+      case _AuditSortField.time:
+        result = (left.timestamp ?? DateTime.fromMillisecondsSinceEpoch(0))
+            .compareTo(
+              right.timestamp ?? DateTime.fromMillisecondsSinceEpoch(0),
+            );
+        break;
+      case _AuditSortField.id:
+        result = left.id.toLowerCase().compareTo(right.id.toLowerCase());
+        break;
+      case _AuditSortField.action:
+        result = left.actionType.toLowerCase().compareTo(
+          right.actionType.toLowerCase(),
+        );
+        break;
+      case _AuditSortField.actor:
+        result = left.actorName.toLowerCase().compareTo(
+          right.actorName.toLowerCase(),
+        );
+        break;
+      case _AuditSortField.target:
+        result = left.subjectName.toLowerCase().compareTo(
+          right.subjectName.toLowerCase(),
+        );
+        break;
+      case _AuditSortField.scope:
+        result = _scopeLabel(left.customSchoolId).toLowerCase().compareTo(
+          _scopeLabel(right.customSchoolId).toLowerCase(),
+        );
+        break;
+      case _AuditSortField.event:
+        result = left.description.toLowerCase().compareTo(
+          right.description.toLowerCase(),
+        );
+        break;
+    }
+    if (result == 0) result = left.id.compareTo(right.id);
+    return _sortAscending ? result : -result;
   }
 
   Widget _recordsToolbar(AuditLogPage page, bool compact) {
@@ -824,57 +1010,6 @@ class _AuditActivityScreenState extends State<AuditActivityScreen> {
         '${two(now.hour)}${two(now.minute)}${two(now.second)}.csv';
   }
 
-  Widget _mobileRow(AuditLogRecord record) {
-    final style = _actionStyle(record.actionType);
-    return InkWell(
-      onTap: () => _showDetails(record),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Checkbox(
-                  key: ValueKey('audit-select-${record.id}'),
-                  value: _selectedRecords.containsKey(record.id),
-                  onChanged: (selected) =>
-                      _setRecordSelected(record, selected ?? false),
-                ),
-                const SizedBox(width: 4),
-                _actionChip(record.actionType, style),
-                const Spacer(),
-                Text(
-                  _dateTime(record.timestamp),
-                  style: const TextStyle(color: AppColors.muted, fontSize: 12),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Text(
-              record.description,
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '${record.actorName} → ${record.subjectName}',
-              style: const TextStyle(color: AppColors.muted, fontSize: 12),
-            ),
-            if (_scopes.length > 1) ...[
-              const SizedBox(height: 4),
-              Text(
-                _scopeLabel(record.customSchoolId),
-                style: const TextStyle(color: AppColors.muted, fontSize: 12),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _pagination(AuditLogPage page) {
     final shownPage = page.totalPages == 0 ? 0 : page.currentPage + 1;
     return Padding(
@@ -909,41 +1044,6 @@ class _AuditActivityScreenState extends State<AuditActivityScreen> {
             icon: const Icon(Icons.chevron_right_rounded),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _person(String name, String username) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
-        if (username.trim().isNotEmpty && username.trim() != name.trim())
-          Text(
-            username,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: AppColors.muted, fontSize: 11),
-          ),
-      ],
-    );
-  }
-
-  Widget _actionChip(String action, _ActionStyle style) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-      decoration: BoxDecoration(
-        color: style.color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        _actionLabel(action),
-        style: TextStyle(
-          color: style.color,
-          fontSize: 11,
-          fontWeight: FontWeight.w800,
-        ),
       ),
     );
   }
@@ -1460,6 +1560,10 @@ class _AuditActivityScreenState extends State<AuditActivityScreen> {
 
   String _dateTimeSingleLine(DateTime value) =>
       _dateTime(value).replaceFirst('\n', ' at ');
+
+  String _dateTimeSingleLineOrUnknown(DateTime? value) => value == null
+      ? 'Unknown time'
+      : _dateTime(value).replaceFirst('\n', ' · ');
 
   String _month(int month) => const [
     'Jan',

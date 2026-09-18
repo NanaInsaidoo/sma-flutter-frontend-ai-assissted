@@ -110,6 +110,177 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('top-up requester cannot select themselves as the approver', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = MockClient((request) async {
+      dynamic data;
+      if (request.url.path.endsWith('/academic-context/current')) {
+        data = {'academicTermId': 10};
+      } else if (request.url.path.endsWith('/finance/overview')) {
+        data = {
+          'cycle': {
+            'id': 12,
+            'status': 'ACTIVE',
+            'floatApprovedAmount': 1000,
+            'floatCeiling': 300,
+          },
+          'pockets': {'cash': 0, 'momo': 0},
+        };
+      } else if (request.url.path.endsWith('/finance/top-up-actors')) {
+        data = {
+          'approvers': [
+            {
+              'id': 7,
+              'name': 'Adjoa Mensah',
+              'username': 'adjoa',
+              'role': 'ADMINISTRATOR',
+            },
+            {
+              'id': 8,
+              'name': 'Kofi Nketia',
+              'username': 'kofi',
+              'role': 'ADMINISTRATOR',
+            },
+          ],
+          'disbursers': <dynamic>[],
+        };
+      } else {
+        data = <dynamic>[];
+      }
+      return http.Response(
+        jsonEncode({'data': data}),
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: ExpensesScreen(
+            customSchoolId: 'SCH-001',
+            accessToken: 'test-token',
+            currentUserId: 7,
+            recordedBy: 'Adjoa Mensah',
+            role: 'ADMINISTRATOR',
+            financeApi: FinanceApiClient(
+              accessToken: 'test-token',
+              client: client,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Petty Cash'));
+    await tester.pumpAndSettle();
+    final requestTopUp = find.text('Request top-up');
+    await tester.ensureVisible(requestTopUp);
+    await tester.tap(requestTopUp);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Request petty-cash top-up'), findsOneWidget);
+    expect(
+      find.textContaining('the requester cannot approve their own top-up'),
+      findsOneWidget,
+    );
+    expect(find.text('Choose someone other than yourself.'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('top-up-request-approver')));
+    await tester.pumpAndSettle();
+    expect(find.text('Kofi Nketia · ADMINISTRATOR'), findsOneWidget);
+    expect(find.text('Adjoa Mensah · ADMINISTRATOR'), findsNothing);
+    expect(find.byType(SnackBar), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'top-up request shows a blocking dialog when no independent approver exists',
+    (tester) async {
+      tester.view.physicalSize = const Size(1600, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final client = MockClient((request) async {
+        dynamic data;
+        if (request.url.path.endsWith('/academic-context/current')) {
+          data = {'academicTermId': 10};
+        } else if (request.url.path.endsWith('/finance/overview')) {
+          data = {
+            'cycle': {
+              'id': 12,
+              'status': 'ACTIVE',
+              'floatApprovedAmount': 1000,
+              'floatCeiling': 300,
+            },
+            'pockets': {'cash': 0, 'momo': 0},
+          };
+        } else if (request.url.path.endsWith('/finance/top-up-actors')) {
+          data = {
+            'approvers': [
+              {
+                'id': 7,
+                'name': 'Adjoa Mensah',
+                'username': 'adjoa',
+                'role': 'ADMINISTRATOR',
+              },
+            ],
+            'disbursers': <dynamic>[],
+          };
+        } else {
+          data = <dynamic>[];
+        }
+        return http.Response(
+          jsonEncode({'data': data}),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: ExpensesScreen(
+              customSchoolId: 'SCH-001',
+              accessToken: 'test-token',
+              currentUserId: 7,
+              role: 'ADMINISTRATOR',
+              financeApi: FinanceApiClient(
+                accessToken: 'test-token',
+                client: client,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Petty Cash'));
+      await tester.pumpAndSettle();
+      final requestTopUp = find.text('Request top-up');
+      await tester.ensureVisible(requestTopUp);
+      await tester.tap(requestTopUp);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Independent approver required'), findsOneWidget);
+      expect(
+        find.textContaining('You cannot approve your own top-up request'),
+        findsOneWidget,
+      );
+      expect(find.widgetWithText(FilledButton, 'Okay'), findsOneWidget);
+      expect(find.byType(SnackBar), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets(
     'assigned disburser can submit a cash and MoMo split without a UI error',
     (tester) async {
@@ -219,6 +390,26 @@ void main() {
         '0240000000',
       );
 
+      await tester.tap(
+        find.widgetWithText(FilledButton, 'Confirm disbursement'),
+      );
+      await tester.pump();
+      final noteError = find.text('Add a disbursement note.');
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('disbursement-reference')),
+          matching: noteError,
+        ),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('disbursement-note')),
+          matching: noteError,
+        ),
+        findsOneWidget,
+      );
+
       await tester.tap(find.text('Select receiver of funds'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Kofi Nketia · Requester').last);
@@ -249,6 +440,193 @@ void main() {
       expect(disbursementBody?['momoAmount'], 400);
       expect(disbursementBody?['receiverUserId'], 88);
       expect(find.text('Disburse TOP-71'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'top-up approver reviews a concise dialog before approval and disbursement',
+    (tester) async {
+      tester.view.physicalSize = const Size(1600, 1200);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      var approved = false;
+      var approvalCalls = 0;
+      Map<String, dynamic>? approvalBody;
+      Map<String, dynamic> topUp() => {
+        'id': 72,
+        'transactionCode': 'TOP-REVIEW-72',
+        'status': approved ? 'APPROVED' : 'PENDING',
+        'requestedAmount': 2000,
+        if (approved) 'approvedAmount': 2000,
+        'requestedAt': '2026-09-13T09:00:00',
+        'createdAt': '2026-09-13T09:00:00',
+        'updatedAt': approved ? '2026-09-13T10:00:00' : '2026-09-13T09:00:00',
+        'requesterName': 'Adjoa Mensah',
+        'requesterUserId': 8,
+        'approverName': 'Kofi Approver',
+        'approverUserId': 7,
+        if (approved) 'approvedAt': '2026-09-13T10:00:00',
+        if (approved) 'disburserName': 'Kofi Approver',
+        if (approved) 'disburserUserId': 7,
+        'expensesCount': 0,
+      };
+
+      final client = MockClient((request) async {
+        dynamic data;
+        if (request.url.path.endsWith('/academic-context/current')) {
+          data = {'academicTermId': 10};
+        } else if (request.url.path.endsWith('/finance/overview')) {
+          data = {
+            'cycle': {
+              'id': 12,
+              'status': 'ACTIVE',
+              'floatApprovedAmount': 2000,
+            },
+            'pockets': {'cash': 0, 'momo': 0},
+          };
+        } else if (request.method == 'POST' &&
+            request.url.path.endsWith('/finance/top-ups/72/approve')) {
+          approvalCalls++;
+          approvalBody = jsonDecode(request.body) as Map<String, dynamic>;
+          approved = true;
+          data = topUp();
+        } else if (request.url.path.endsWith('/finance/top-ups/72/events')) {
+          data = [
+            {
+              'eventType': 'REQUESTED',
+              'actor': 'Adjoa Mensah',
+              'note': 'Restore the float for approved petty-cash spending.',
+              'createdAt': '2026-09-13T09:00:00',
+            },
+            if (approved)
+              {
+                'eventType': 'APPROVED',
+                'actor': 'Kofi Approver',
+                'note': 'Request and supporting records verified.',
+                'createdAt': '2026-09-13T10:00:00',
+              },
+          ];
+        } else if (request.url.path.endsWith('/finance/top-ups')) {
+          data = [topUp()];
+        } else if (request.url.path.endsWith('/finance/top-up-actors')) {
+          data = {
+            'approvers': [
+              {
+                'id': 7,
+                'name': 'Kofi Approver',
+                'username': 'kofi',
+                'role': 'ADMINISTRATOR',
+              },
+            ],
+            'disbursers': [
+              {
+                'id': 7,
+                'name': 'Kofi Approver',
+                'username': 'kofi',
+                'role': 'ADMINISTRATOR',
+              },
+            ],
+          };
+        } else if (request.url.path.endsWith('/finance/requisitions')) {
+          data = {'content': <dynamic>[]};
+        } else if (request.url.path.endsWith('/finance/transactions')) {
+          data = {'content': <dynamic>[]};
+        } else {
+          data = <dynamic>[];
+        }
+        return http.Response(
+          jsonEncode({'data': data}),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: ExpensesScreen(
+              customSchoolId: 'SCH-001',
+              accessToken: 'test-token',
+              currentUserId: 7,
+              role: 'ADMINISTRATOR',
+              financeApi: FinanceApiClient(
+                accessToken: 'test-token',
+                client: client,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Approvals'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('TOP-REVIEW-72'), findsOneWidget);
+      expect(find.text('GH¢2000'), findsOneWidget);
+      expect(
+        find.textContaining('Top-up request · Requested by Adjoa Mensah'),
+        findsOneWidget,
+      );
+      expect(find.text('Review request'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Approve'), findsNothing);
+      expect(approvalCalls, 0);
+
+      await tester.tap(find.byKey(const ValueKey('review-top-up-72')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Review this petty cash top-up before approval.'),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byType(Dialog),
+          matching: find.text('TOP-REVIEW-72'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Top-up requested'), findsOneWidget);
+      expect(find.text('REQUEST SUMMARY'), findsOneWidget);
+      expect(find.text('REQUEST REASON'), findsOneWidget);
+      expect(
+        find.text('Restore the float for approved petty-cash spending.'),
+        findsOneWidget,
+      );
+      expect(find.text('Current float'), findsOneWidget);
+      expect(find.text('Float after top-up'), findsOneWidget);
+      expect(find.text('Approved float'), findsOneWidget);
+      expect(find.text('How this request moves'), findsNothing);
+      expect(find.text('Approval & disbursement history'), findsNothing);
+      expect(find.text('Cycle transactions'), findsNothing);
+      expect(approvalCalls, 0);
+
+      await tester.tap(find.byKey(const ValueKey('top-up-approval-disburser')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Kofi Approver · ADMINISTRATOR').last);
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('top-up-approval-note')),
+        'Request and supporting records verified.',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Approve request'));
+      await tester.pumpAndSettle();
+
+      expect(approvalCalls, 1);
+      expect(approvalBody?['disburserUserId'], 7);
+      expect(
+        approvalBody?['notes'],
+        'Request and supporting records verified.',
+      );
+      expect(find.widgetWithText(FilledButton, 'Disburse'), findsOneWidget);
+      expect(
+        find.text('Review this petty cash top-up before approval.'),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -364,6 +742,176 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('ratification shows the request and spend before affirmation', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    var ratified = false;
+    var ratificationCalls = 0;
+    Map<String, dynamic>? ratificationBody;
+    final client = MockClient((request) async {
+      dynamic data;
+      if (request.url.path.endsWith('/academic-context/current')) {
+        data = {'academicTermId': 10};
+      } else if (request.url.path.endsWith('/finance/overview')) {
+        data = {
+          'cycle': {'id': 12, 'status': 'ACTIVE'},
+          'pockets': {'cash': 500, 'momo': 300},
+        };
+      } else if (request.url.path.endsWith('/finance/requisitions')) {
+        data = {
+          'content': [
+            {
+              'id': 201,
+              'requisitionCode': 'REQ-EMERGENCY-201',
+              'description': 'Urgent plumbing repair',
+              'category': 'Repairs & Maintenance',
+              'vendor': 'Julius the plumber',
+              'requestedBy': 'Adjoa Mensah',
+              'requesterUserId': 8,
+              'approverName': 'Kofi Approver',
+              'approverUserId': 7,
+              'requestedAmount': 90,
+              'requestedAt': '2026-09-14T09:00:00',
+              'updatedAt': '2026-09-14T09:00:00',
+              'status': 'APPROVED',
+              'fundingSource': 'PETTY_CASH',
+              'reason': 'Stop an active leak in the kitchen.',
+              'emergency': true,
+              'verbalApprover': 'Yaw Asante',
+            },
+          ],
+        };
+      } else if (request.url.path.endsWith('/finance/transactions')) {
+        data = {
+          'content': [
+            {
+              'id': 601,
+              'transactionCode': 'EXP-EMERGENCY-601',
+              'transactionType': 'EXPENSE',
+              'requisitionId': 201,
+              'description': 'Urgent plumbing repair',
+              'category': 'Repairs & Maintenance',
+              'vendor': 'Julius the plumber',
+              'requestedAmount': 90,
+              'actualAmount': 110,
+              'sourcePocket': 'MOMO',
+              'paymentChannel': 'MOMO',
+              'status': ratified ? 'RATIFIED' : 'PENDING_RATIFICATION',
+              'requiresRatification': !ratified,
+              'emergency': true,
+              'receiptNumber': 'MOMO-7781',
+              'receiptStorageKey': 'finance/SCH-001/receipts/601.pdf',
+              'receiptFileName': 'plumbing-receipt.pdf',
+              'transactionDate': '2026-09-14',
+            },
+          ],
+        };
+      } else if (request.method == 'POST' &&
+          request.url.path.endsWith('/finance/transactions/601/ratify')) {
+        ratificationCalls++;
+        ratificationBody = jsonDecode(request.body) as Map<String, dynamic>;
+        ratified = true;
+        data = <String, dynamic>{};
+      } else if (request.url.path.endsWith('/finance/top-up-actors')) {
+        data = {'approvers': <dynamic>[], 'disbursers': <dynamic>[]};
+      } else {
+        data = <dynamic>[];
+      }
+      return http.Response(
+        jsonEncode({'data': data}),
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: ExpensesScreen(
+            customSchoolId: 'SCH-001',
+            accessToken: 'test-token',
+            currentUserId: 7,
+            role: 'ADMINISTRATOR',
+            financeApi: FinanceApiClient(
+              accessToken: 'test-token',
+              client: client,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Approvals'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Urgent plumbing repair requires ratification'),
+      findsOneWidget,
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Ratify'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Review emergency expense'), findsOneWidget);
+    expect(
+      find.text('EXP-EMERGENCY-601 · approval after payment'),
+      findsOneWidget,
+    );
+    expect(find.text('APPROVAL CHECK'), findsOneWidget);
+    expect(find.text('Amount requested'), findsOneWidget);
+    expect(find.text('GH¢90'), findsOneWidget);
+    expect(find.text('Amount spent'), findsWidgets);
+    expect(find.text('GH¢110'), findsWidgets);
+    expect(find.text('Julius the plumber'), findsOneWidget);
+    expect(find.text('Float - MoMo'), findsWidgets);
+    expect(find.text('MOMO-7781'), findsOneWidget);
+    expect(find.text('View receipt'), findsOneWidget);
+    expect(find.text('Given by Yaw Asante'), findsOneWidget);
+    expect(ratificationCalls, 0);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Affirm and ratify'));
+    await tester.pumpAndSettle();
+    expect(ratificationCalls, 0);
+    expect(
+      find.text('Confirm the approval statement before ratifying.'),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Add a ratification note before continuing.'),
+      findsOneWidget,
+    );
+
+    final affirmation = find.descendant(
+      of: find.byKey(const ValueKey('ratification-affirmation')),
+      matching: find.byType(Checkbox),
+    );
+    await tester.ensureVisible(affirmation);
+    await tester.pumpAndSettle();
+    await tester.tap(affirmation);
+    final approvalNote = find.widgetWithText(TextFormField, 'Approval note *');
+    await tester.ensureVisible(approvalNote);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      approvalNote,
+      'Emergency need and prior verbal authorisation verified.',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Affirm and ratify'));
+    await tester.pumpAndSettle();
+
+    expect(ratificationCalls, 1);
+    expect(
+      ratificationBody?['note'],
+      'Emergency need and prior verbal authorisation verified.',
+    );
+    expect(find.text('Review emergency expense'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('actual spend shows balances and requires variance affirmation', (
     tester,
   ) async {
@@ -385,6 +933,7 @@ void main() {
             'status': 'ACTIVE',
             'floatCeiling': 2000,
             'varianceTolerancePercent': 5,
+            'captureTransactionFees': true,
           },
           'pockets': {'cash': 400, 'momo': 1500},
         };
@@ -405,7 +954,7 @@ void main() {
               'approvedAmount': 100,
               'requestedAt': '2026-09-10T09:00:00',
               'approvedAt': '2026-09-10T10:00:00',
-              'expiresAt': '2026-09-17T09:00:00',
+              'expiresAt': '2099-09-17T09:00:00',
               'status': 'APPROVED',
               'fundingSource': 'PETTY_CASH',
               'reason': 'Needed for daily administration.',
@@ -471,6 +1020,13 @@ void main() {
     expect(find.text('Float - MoMo · GH¢1500 available'), findsOneWidget);
     await tester.tap(find.text('Float - MoMo · GH¢1500 available'));
     await tester.pumpAndSettle();
+    expect(find.text('Were there MoMo charges?'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('momo-charge-yes')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('momo-charge-amount')),
+      '5',
+    );
     await tester.enterText(expenseFields.at(1), '80');
     await tester.pumpAndSettle();
     expect(
@@ -482,18 +1038,17 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Confirm actual spend'), findsOneWidget);
-    expect(find.text('Actual is lower'), findsOneWidget);
-    expect(find.text('GH¢20'), findsOneWidget);
-    expect(
-      find.textContaining('This expense will be flagged for variance review.'),
-      findsOneWidget,
-    );
+    expect(find.text('Float - MoMo · GH¢5 charge'), findsOneWidget);
+    expect(find.text('Total MoMo deduction'), findsOneWidget);
+    expect(find.text('GH¢85'), findsOneWidget);
+    expect(find.textContaining('Variance review required.'), findsOneWidget);
     expect(actualSpendCalls, 0);
 
     await tester.tap(find.text('Affirm and record'));
     await tester.pumpAndSettle();
     expect(actualSpendCalls, 1);
     expect(actualSpendBody?['actualAmount'], 80);
+    expect(actualSpendBody?['feeAmount'], 5);
     expect(actualSpendBody?['paymentChannel'], 'MOMO');
     expect(tester.takeException(), isNull);
   });
@@ -537,7 +1092,7 @@ void main() {
               'approvedAmount': 30000,
               'requestedAt': '2026-09-10T09:00:00',
               'approvedAt': '2026-09-10T10:00:00',
-              'expiresAt': '2026-09-17T09:00:00',
+              'expiresAt': '2099-09-17T09:00:00',
               'status': 'APPROVED',
               'fundingSource': 'SCHOOL_FUNDS',
               'reason': 'Repair the school bus.',
@@ -918,6 +1473,239 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('reconciliation request searches and selects eligible staff', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    Map<String, dynamic>? submittedBody;
+    final client = MockClient((request) async {
+      dynamic data;
+      if (request.method == 'POST' &&
+          request.url.path.endsWith('/finance/reconciliations')) {
+        submittedBody = jsonDecode(request.body) as Map<String, dynamic>;
+        data = {'id': 91};
+      } else if (request.url.path.endsWith('/academic-context/current')) {
+        data = {'academicTermId': 10};
+      } else if (request.url.path.endsWith('/finance/overview')) {
+        data = {
+          'cycle': {
+            'id': 12,
+            'status': 'ACTIVE',
+            'floatApprovedAmount': 1000,
+            'floatCeiling': 300,
+          },
+          'pockets': {'cash': 600, 'momo': 200},
+        };
+      } else if (request.url.path.endsWith('/finance/top-up-actors')) {
+        data = {
+          'approvers': [
+            {
+              'id': 7,
+              'name': 'Kofi Nketia',
+              'username': 'kofi.nketia',
+              'role': 'ADMINISTRATOR',
+            },
+          ],
+          'disbursers': [
+            {
+              'id': 11,
+              'name': 'Yaw Asante',
+              'username': 'yaw.asante',
+              'role': 'HEAD_TEACHER',
+            },
+          ],
+        };
+      } else {
+        data = <dynamic>[];
+      }
+      return http.Response(
+        jsonEncode({'data': data}),
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: ExpensesScreen(
+            customSchoolId: 'SCH-001',
+            accessToken: 'test-token',
+            currentUserId: 7,
+            recordedBy: 'Kofi Nketia',
+            role: 'ADMINISTRATOR',
+            financeApi: FinanceApiClient(
+              accessToken: 'test-token',
+              client: client,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Petty Cash'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Request reconciliation').first);
+    await tester.pumpAndSettle();
+
+    final staffSearch = find.byKey(
+      const ValueKey('reconciliation-assignee-search'),
+    );
+    expect(staffSearch, findsOneWidget);
+    expect(find.text('Bursar / Accounts officer'), findsNothing);
+    await tester.tap(staffSearch);
+    await tester.pumpAndSettle();
+    final searchInput = find.descendant(
+      of: staffSearch,
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(searchInput, 'Yaw');
+    await tester.pumpAndSettle();
+    expect(find.text('Yaw Asante · HEAD_TEACHER · yaw.asante'), findsOneWidget);
+    expect(find.textContaining('Kofi Nketia'), findsNothing);
+    await tester.tap(find.text('Yaw Asante · HEAD_TEACHER · yaw.asante'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Send request'));
+    await tester.pumpAndSettle();
+
+    expect(submittedBody, isNotNull);
+    expect(submittedBody!['assignedToUserId'], 11);
+    expect(submittedBody!['assignedTo'], 'Yaw Asante');
+    expect(submittedBody!['reason'], 'Weekly petty cash close');
+    expect(find.text('Request reconciliation'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'other reconciliation issue creates a follow-up without adjusting balances',
+    (tester) async {
+      tester.view.physicalSize = const Size(1600, 1100);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      var followUpCalls = 0;
+      var resolutionCalls = 0;
+      Map<String, dynamic>? followUpBody;
+      final client = MockClient((request) async {
+        dynamic data;
+        if (request.url.path.endsWith('/academic-context/current')) {
+          data = {'academicTermId': 10};
+        } else if (request.url.path.endsWith('/finance/overview')) {
+          data = {
+            'cycle': {
+              'id': 12,
+              'status': 'ACTIVE',
+              'floatApprovedAmount': 1000,
+              'floatCeiling': 300,
+            },
+            'pockets': {'cash': 450, 'momo': 100},
+          };
+        } else if (request.url.path.endsWith('/finance/reconciliations')) {
+          data = {
+            'content': [
+              {
+                'id': 51,
+                'reconciliationCode': 'REC-OTHER-51',
+                'requestedAt': '2026-09-14T09:00:00',
+                'requestedBy': 'Adjoa Mensah',
+                'assignedTo': 'Administrator / Accounts',
+                'reason': 'Routine cash count',
+                'status': 'RECON_VARIANCE_OPEN',
+                'expectedCash': 500,
+                'expectedMomo': 100,
+                'actualCash': 450,
+                'actualMomo': 100,
+                'confirmedAt': '2026-09-14T10:00:00',
+              },
+            ],
+          };
+        } else if (request.method == 'POST' &&
+            request.url.path.endsWith('/finance/follow-ups')) {
+          followUpCalls += 1;
+          followUpBody = jsonDecode(request.body) as Map<String, dynamic>;
+          data = {'id': 61, 'followUpCode': 'FUP-OTHER-61'};
+        } else if (request.method == 'POST' &&
+            request.url.path.contains('/finance/reconciliations/51/')) {
+          resolutionCalls += 1;
+          data = <String, dynamic>{};
+        } else if (request.url.path.endsWith('/finance/top-up-actors')) {
+          data = {'approvers': <dynamic>[], 'disbursers': <dynamic>[]};
+        } else {
+          data = <dynamic>[];
+        }
+        return http.Response(
+          jsonEncode({'data': data}),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: ExpensesScreen(
+              customSchoolId: 'SCH-001',
+              accessToken: 'test-token',
+              currentUserId: 1,
+              role: 'ADMINISTRATOR',
+              financeApi: FinanceApiClient(
+                accessToken: 'test-token',
+                client: client,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Petty Cash'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Reconciliations').first);
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('REC-OTHER-51'));
+      await tester.tap(find.text('REC-OTHER-51'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Close variance'));
+      await tester.tap(find.text('Close variance'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Staff recovery'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Other financial issue').last);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Issue description'), findsOneWidget);
+      expect(find.textContaining('leaves the variance open'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, 'Create follow-up'));
+      await tester.pumpAndSettle();
+      expect(find.text('Describe the financial issue.'), findsOneWidget);
+      expect(followUpCalls, 0);
+
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Issue description'),
+        'The source of the difference needs further investigation.',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Create follow-up'));
+      await tester.pumpAndSettle();
+
+      expect(followUpCalls, 1);
+      expect(resolutionCalls, 0);
+      expect(followUpBody?['type'], 'OTHER');
+      expect(followUpBody?['relatedReference'], 'REC-OTHER-51');
+      expect(
+        followUpBody?['description'],
+        'The source of the difference needs further investigation.',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets(
     'requester edits a petty-cash requisition as a draft and resubmits it',
     (tester) async {
@@ -1178,6 +1966,11 @@ void main() {
         find.descendant(of: pettyCashBadge, matching: find.text('3')),
         findsOneWidget,
       );
+      expect(
+        tester.widget<Tooltip>(pettyCashBadge).message,
+        '1 top-up request pending, 1 reconciliation pending, '
+        '1 financial follow-up pending',
+      );
 
       await tester.tap(find.text('Petty Cash'));
       await tester.pumpAndSettle();
@@ -1192,9 +1985,26 @@ void main() {
           findsOneWidget,
         );
       }
+      expect(
+        tester
+            .widget<Tooltip>(
+              find.byKey(const ValueKey('expense-tab-badge-Float & expenses')),
+            )
+            .message,
+        '1 top-up request pending',
+      );
+      expect(
+        find.byKey(const ValueKey('petty-cash-control-count-Top-up requests')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('petty-cash-control-count-Reconciliations')),
+        findsOneWidget,
+      );
 
       await tester.tap(find.text('Financial follow-ups'));
       await tester.pumpAndSettle();
+      expect(find.text('Record follow-up'), findsNothing);
       final followUpRow = find.byKey(const ValueKey('follow-up-FUP-81'));
       await tester.ensureVisible(followUpRow);
       tester
@@ -2090,6 +2900,438 @@ void main() {
     expect(find.text('Reversed'), findsOneWidget);
     expect(find.text('Duplicate classroom repair'), findsOneWidget);
     expect(find.text('REV-31'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('finance reports preview and export current-term records', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1800, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    String? downloadedCsvName;
+    String? downloadedCsv;
+    String? downloadedPdfName;
+    List<int>? downloadedPdf;
+    final transactions = <Map<String, dynamic>>[
+      {
+        'id': 701,
+        'transactionCode': 'EXP-REPORT-701',
+        'transactionType': 'EXPENSE',
+        'academicTermId': 10,
+        'requisitionId': 601,
+        'description': 'Emergency plumbing repair',
+        'category': 'Repairs & Maintenance',
+        'vendor': 'Julius Plumbing',
+        'requestedAmount': 100,
+        'approvedAmount': 100,
+        'actualAmount': 110,
+        'feeAmount': 2,
+        'sourcePocket': 'MOMO',
+        'paymentChannel': 'MOMO',
+        'receiptNumber': 'RECEIPT-ABCDEFGHIJ-12345678',
+        'status': 'TRANSACTION_PENDING_VARIANCE_REVIEW',
+        'transactionDate': '2026-09-14',
+      },
+      {
+        'id': 702,
+        'transactionCode': 'EXP-REPORT-702',
+        'transactionType': 'EXPENSE',
+        'academicTermId': 10,
+        'description': 'School bus service',
+        'category': 'Transport',
+        'vendor': 'Bus Garage',
+        'actualAmount': 900,
+        'paymentChannel': 'BANK_TRANSFER',
+        'receiptNumber': 'INV-702',
+        'status': 'COMPLETE',
+        'transactionDate': '2026-09-13',
+      },
+      {
+        'id': 703,
+        'transactionCode': 'REF-REPORT-703',
+        'transactionType': 'EXPENSE_REFUND',
+        'academicTermId': 10,
+        'parentTransactionId': 702,
+        'actualAmount': -100,
+        'destinationPocket': 'SCHOOL_FUNDS',
+        'paymentChannel': 'BANK_TRANSFER',
+        'receiptNumber': 'BANK-703',
+        'notes': 'Supplier refund received.',
+        'createdBy': 'Kofi Accounts',
+        'status': 'COMPLETE',
+        'transactionDate': '2026-09-15',
+      },
+      {
+        'id': 704,
+        'transactionCode': 'TRF-REPORT-704',
+        'transactionType': 'POCKET_TRANSFER',
+        'academicTermId': 10,
+        'sourcePocket': 'MOMO',
+        'destinationPocket': 'CASH',
+        'actualAmount': 50,
+        'feeAmount': 1,
+        'status': 'COMPLETE',
+        'transactionDate': '2026-09-12',
+      },
+    ];
+    final client = MockClient((request) async {
+      dynamic data;
+      if (request.url.path.endsWith('/academic-context/current')) {
+        data = {'academicTermId': 10};
+      } else if (request.url.path.endsWith('/finance/overview')) {
+        data = {
+          'cycle': {'id': 12, 'status': 'ACTIVE', 'floatApprovedAmount': 1000},
+          'pockets': {'cash': 350, 'momo': 250},
+        };
+      } else if (request.url.path.endsWith('/finance/transactions')) {
+        data = {'content': transactions};
+      } else if (request.url.path.endsWith('/finance/requisitions')) {
+        data = {
+          'content': [
+            {
+              'id': 601,
+              'requisitionCode': 'REQ-REPORT-601',
+              'description': 'Emergency plumbing repair',
+              'category': 'Repairs & Maintenance',
+              'vendor': 'Julius Plumbing',
+              'requestedBy': 'Adjoa Mensah',
+              'requesterUserId': 8,
+              'approverName': 'Kofi Approver',
+              'approverUserId': 7,
+              'requestedAmount': 100,
+              'approvedAmount': 100,
+              'requestedAt': '2026-09-14T08:00:00',
+              'approvedAt': '2026-09-14T08:30:00',
+              'updatedAt': '2026-09-14T08:30:00',
+              'expiresAt': '2026-09-21T08:00:00',
+              'status': 'FULFILLED',
+              'fundingSource': 'PETTY_CASH',
+              'reason': 'Stop an active leak.',
+            },
+          ],
+        };
+      } else if (request.url.path.endsWith('/finance/top-ups')) {
+        data = [
+          {
+            'id': 801,
+            'transactionCode': 'TOP-REPORT-801',
+            'status': 'CONFIRMED',
+            'requestedAmount': 500,
+            'approvedAmount': 500,
+            'actualAmount': 500,
+            'cashAmount': 300,
+            'momoAmount': 200,
+            'requesterName': 'Adjoa Mensah',
+            'approverName': 'Kofi Approver',
+            'disburserName': 'Ama Manager',
+            'requestedAt': '2026-09-10T09:00:00',
+            'updatedAt': '2026-09-10T10:00:00',
+            'confirmedAt': '2026-09-10T11:00:00',
+          },
+        ];
+      } else if (request.url.path.endsWith('/finance/reconciliations')) {
+        data = [
+          {
+            'id': 901,
+            'reconciliationCode': 'REC-REPORT-901',
+            'status': 'CONFIRMED',
+            'requestedAt': '2026-09-11T09:00:00',
+            'confirmedAt': '2026-09-11T10:00:00',
+            'expectedCash': 350,
+            'expectedMomo': 250,
+            'actualCash': 350,
+            'actualMomo': 250,
+          },
+        ];
+      } else if (request.url.path.endsWith('/finance/follow-ups')) {
+        data = [
+          {
+            'id': 1001,
+            'followUpCode': 'FUP-REPORT-1001',
+            'type': 'EXPENSE_VARIANCE',
+            'status': 'OPEN',
+            'amount': 10,
+            'responsibleParty': 'Administrator / Accounts',
+            'description': 'Review the plumbing variance.',
+            'createdAt': '2026-09-14T12:00:00',
+          },
+        ];
+      } else if (request.url.path.endsWith('/finance/top-up-actors')) {
+        data = {'approvers': <dynamic>[], 'disbursers': <dynamic>[]};
+      } else {
+        data = <dynamic>[];
+      }
+      return http.Response(
+        jsonEncode({'data': data}),
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: ExpensesScreen(
+            customSchoolId: 'SCH-001',
+            accessToken: 'test-token',
+            currentUserId: 7,
+            recordedBy: 'Kofi Accounts',
+            role: 'ADMINISTRATOR',
+            financeApi: FinanceApiClient(
+              accessToken: 'test-token',
+              client: client,
+            ),
+            financeCsvDownloader: (name, contents) async {
+              downloadedCsvName = name;
+              downloadedCsv = contents;
+              return true;
+            },
+            financePdfDownloader: (name, bytes) async {
+              downloadedPdfName = name;
+              downloadedPdf = bytes;
+              return true;
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Reports'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Expense register'), findsOneWidget);
+    expect(find.text('Petty cash ledger'), findsOneWidget);
+    expect(find.text('Approvals & exceptions'), findsOneWidget);
+    expect(find.text('Refunds & reversals'), findsOneWidget);
+    expect(find.text('Audit pack'), findsOneWidget);
+    expect(find.textContaining('still being prepared'), findsNothing);
+
+    await tester.tap(
+      find.byKey(const ValueKey('open-expense-register-report')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('EXP-REPORT-701'), findsOneWidget);
+    expect(find.text('Emergency plumbing repair'), findsOneWidget);
+    expect(find.text('...12345678'), findsOneWidget);
+    expect(find.text('RECEIPT-ABCDEFGHIJ-12345678'), findsNothing);
+    await tester.enterText(
+      find.byKey(const ValueKey('finance-report-search')),
+      'EXP-REPORT-701',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('EXP-REPORT-702'), findsNothing);
+    await tester.tap(find.text('Download CSV'));
+    await tester.pumpAndSettle();
+    expect(downloadedCsvName, startsWith('expense-register-SCH-001-'));
+    expect(downloadedCsv, contains('"Expense ID"'));
+    expect(downloadedCsv, contains('"EXP-REPORT-701"'));
+    expect(downloadedCsv, contains('"GHS 110.00"'));
+    expect(downloadedCsv, contains('"RECEIPT-ABCDEFGHIJ-12345678"'));
+    expect(downloadedCsv, isNot(contains('"...12345678"')));
+    expect('EXP-REPORT-701'.allMatches(downloadedCsv!).length, 1);
+    expect(downloadedCsv, isNot(contains('"EXP-REPORT-702"')));
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Close'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('open-finance-audit-pack')));
+    await tester.pumpAndSettle();
+    expect(find.text('Finance audit pack'), findsOneWidget);
+    expect(find.text('4'), findsWidgets);
+    await tester.tap(find.text('Download PDF'));
+    await tester.pumpAndSettle();
+
+    expect(downloadedPdfName, startsWith('finance-audit-pack-SCH-001-'));
+    expect(downloadedPdf, isNotNull);
+    expect(downloadedPdf!.length, greaterThan(1000));
+    expect(String.fromCharCodes(downloadedPdf!.take(4)), '%PDF');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('refund register stays focused on received refunds', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final now = DateTime.now();
+    final today = now.toIso8601String().split('T').first;
+    final thisMonth =
+        '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-01';
+    final priorMonth = DateTime(
+      now.year,
+      now.month - 1,
+      15,
+    ).toIso8601String().split('T').first;
+    final transactions = <Map<String, dynamic>>[
+      {
+        'id': 101,
+        'transactionCode': 'EXP-OLD-101',
+        'transactionType': 'EXPENSE',
+        'academicTermId': 9,
+        'cycleId': 9,
+        'description': 'Old textbook purchase',
+        'vendor': 'Book Supplier',
+        'actualAmount': 100,
+        'sourcePocket': 'CASH',
+        'paymentChannel': 'CASH',
+        'status': 'COMPLETE',
+        'transactionDate': priorMonth,
+      },
+      {
+        'id': 102,
+        'transactionCode': 'EXP-CURRENT-102',
+        'transactionType': 'EXPENSE',
+        'academicTermId': 10,
+        'cycleId': 10,
+        'description': 'Current stationery purchase',
+        'vendor': 'Stationery Supplier',
+        'actualAmount': 100,
+        'paymentChannel': 'BANK_TRANSFER',
+        'status': 'COMPLETE',
+        'transactionDate': thisMonth,
+      },
+      {
+        'id': 103,
+        'transactionCode': 'EXP-HISTORY-103',
+        'transactionType': 'EXPENSE',
+        'academicTermId': 9,
+        'cycleId': 9,
+        'description': 'Historical repair',
+        'vendor': 'Repair Vendor',
+        'actualAmount': 200,
+        'sourcePocket': 'MOMO',
+        'paymentChannel': 'MOMO',
+        'status': 'COMPLETE',
+        'transactionDate': priorMonth,
+      },
+      {
+        'id': 201,
+        'transactionCode': 'REF-201',
+        'transactionType': 'EXPENSE_REFUND',
+        'academicTermId': 10,
+        'cycleId': 10,
+        'parentTransactionId': 101,
+        'description': 'Refund for old textbook purchase',
+        'vendor': 'Book Supplier',
+        'actualAmount': -100,
+        'destinationPocket': 'SCHOOL_FUNDS',
+        'paymentChannel': 'BANK_TRANSFER',
+        'receiptNumber': 'BANK-201',
+        'notes': 'Supplier returned the payment.',
+        'createdBy': 'accounts.user',
+        'status': 'COMPLETE',
+        'transactionDate': today,
+      },
+      {
+        'id': 202,
+        'transactionCode': 'REF-202',
+        'transactionType': 'EXPENSE_REFUND',
+        'academicTermId': 10,
+        'cycleId': 10,
+        'parentTransactionId': 102,
+        'description': 'Refund for stationery purchase',
+        'vendor': 'Stationery Supplier',
+        'actualAmount': -50,
+        'destinationPocket': 'SCHOOL_FUNDS',
+        'paymentChannel': 'CHEQUE',
+        'receiptNumber': 'CHQ-202',
+        'notes': 'Price adjustment received.',
+        'createdBy': 'accounts.user',
+        'status': 'COMPLETE',
+        'transactionDate': thisMonth,
+      },
+    ];
+    final client = MockClient((request) async {
+      dynamic data;
+      if (request.url.path.endsWith('/academic-context/current')) {
+        data = {'academicTermId': 10};
+      } else if (request.url.path.endsWith('/finance/overview')) {
+        data = {
+          'cycle': {'status': 'ACTIVE', 'floatCeiling': 500},
+          'pockets': {'cash': 400, 'momo': 100},
+        };
+      } else if (request.url.path.endsWith('/finance/transactions') &&
+          !request.url.queryParameters.containsKey('academicTermId')) {
+        data = {'content': transactions};
+      } else if (request.url.path.endsWith('/finance/transactions')) {
+        data = {
+          'content': transactions
+              .where((item) => item['academicTermId'] == 10)
+              .toList(),
+        };
+      } else if (request.url.path.endsWith('/finance/follow-ups')) {
+        data = [
+          {
+            'id': 301,
+            'followUpCode': 'FUP-301',
+            'type': 'VENDOR_REFUND',
+            'status': 'OPEN',
+            'amount': 25,
+            'description': 'Expected supplier return',
+            'createdAt': '${today}T09:00:00',
+          },
+        ];
+      } else if (request.url.path.endsWith('/finance/top-up-actors')) {
+        data = {'approvers': <dynamic>[], 'disbursers': <dynamic>[]};
+      } else {
+        data = <dynamic>[];
+      }
+      return http.Response(
+        jsonEncode({'data': data}),
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: ExpensesScreen(
+            customSchoolId: 'SCH-001',
+            accessToken: 'test-token',
+            currentUserId: 7,
+            role: 'BURSAR',
+            financeApi: FinanceApiClient(
+              accessToken: 'test-token',
+              client: client,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Reports'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('open-refunds-reversals-report')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Refunds & reversals'), findsWidgets);
+    await tester.tap(find.text('Open refund register'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Received this term'), findsOneWidget);
+    expect(find.text('Received this month'), findsOneWidget);
+    expect(find.text('Current results'), findsOneWidget);
+    expect(find.text('GH¢150'), findsWidgets);
+    expect(
+      find.textContaining('1 expected return under follow-up'),
+      findsOneWidget,
+    );
+    expect(find.text('School funds'), findsWidgets);
+    expect(find.text('REF-201'), findsOneWidget);
+    expect(find.text('EXP-OLD-101'), findsOneWidget);
+    expect(find.text('Find expense'), findsNothing);
+    expect(find.text('Request reconciliation'), findsNothing);
+    expect(find.text('New requisition'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 }

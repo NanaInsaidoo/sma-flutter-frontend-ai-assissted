@@ -75,11 +75,16 @@ class ApprovalsScreen extends StatefulWidget {
 }
 
 class _ApprovalsScreenState extends State<ApprovalsScreen> {
+  static const _pageSize = 8;
+
   late Future<ApprovalInbox> _future;
   bool _myApprovals = true;
   String _category = 'All';
   String _status = 'All';
   String _query = '';
+  _ApprovalSortField _sortField = _ApprovalSortField.date;
+  bool _sortAscending = false;
+  int _page = 0;
 
   @override
   void initState() {
@@ -129,6 +134,53 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
               item.requesterName.toLowerCase().contains(q);
           return categoryMatches && statusMatches && queryMatches;
         }).toList();
+        items.sort((left, right) {
+          int result;
+          switch (_sortField) {
+            case _ApprovalSortField.request:
+              result = left.title.toLowerCase().compareTo(
+                right.title.toLowerCase(),
+              );
+              break;
+            case _ApprovalSortField.details:
+              result = left.subtitle.toLowerCase().compareTo(
+                right.subtitle.toLowerCase(),
+              );
+              break;
+            case _ApprovalSortField.category:
+              result = left.category.toLowerCase().compareTo(
+                right.category.toLowerCase(),
+              );
+              break;
+            case _ApprovalSortField.person:
+              final leftPerson = _myApprovals
+                  ? left.requesterName
+                  : left.approverName;
+              final rightPerson = _myApprovals
+                  ? right.requesterName
+                  : right.approverName;
+              result = leftPerson.toLowerCase().compareTo(
+                rightPerson.toLowerCase(),
+              );
+              break;
+            case _ApprovalSortField.date:
+              result = _approvalItemDate(
+                left,
+              ).compareTo(_approvalItemDate(right));
+              break;
+            case _ApprovalSortField.status:
+              result = _statusText(
+                left.status,
+              ).compareTo(_statusText(right.status));
+              break;
+          }
+          if (result == 0) result = left.key.compareTo(right.key);
+          return _sortAscending ? result : -result;
+        });
+        final lastPage = items.isEmpty ? 0 : (items.length - 1) ~/ _pageSize;
+        final page = _page > lastPage ? lastPage : _page;
+        final firstItem = page * _pageSize;
+        final pageItems = items.skip(firstItem).take(_pageSize).toList();
         return RefreshIndicator(
           onRefresh: () async => _refresh(),
           child: LayoutBuilder(
@@ -145,6 +197,7 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                     _myApprovals = value;
                     _category = 'All';
                     _status = 'All';
+                    _page = 0;
                   }),
                 ),
                 const SizedBox(height: 18),
@@ -161,15 +214,20 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                           hintText: 'Search approvals',
                           prefixIcon: Icon(Icons.search_rounded),
                         ),
-                        onChanged: (value) =>
-                            setState(() => _query = value.trim()),
+                        onChanged: (value) => setState(() {
+                          _query = value.trim();
+                          _page = 0;
+                        }),
                       ),
                     ),
                     _Filter(
                       label: 'Category',
                       value: categories.contains(_category) ? _category : 'All',
                       values: categories.toList(),
-                      onChanged: (value) => setState(() => _category = value),
+                      onChanged: (value) => setState(() {
+                        _category = value;
+                        _page = 0;
+                      }),
                     ),
                     _Filter(
                       label: 'Status',
@@ -187,7 +245,10 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                         'CANCELLED',
                         'PUBLISHED',
                       ],
-                      onChanged: (value) => setState(() => _status = value),
+                      onChanged: (value) => setState(() {
+                        _status = value;
+                        _page = 0;
+                      }),
                     ),
                   ],
                 ),
@@ -195,8 +256,30 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                 if (items.isEmpty)
                   _EmptyState(myApprovals: _myApprovals)
                 else
-                  _ApprovalList(
-                    items: items,
+                  _ApprovalTable(
+                    items: pageItems,
+                    totalItems: items.length,
+                    firstItem: firstItem,
+                    page: page,
+                    pageSize: _pageSize,
+                    myApprovals: _myApprovals,
+                    sortField: _sortField,
+                    sortAscending: _sortAscending,
+                    onSort: (field) => setState(() {
+                      if (_sortField == field) {
+                        _sortAscending = !_sortAscending;
+                      } else {
+                        _sortField = field;
+                        _sortAscending = true;
+                      }
+                      _page = 0;
+                    }),
+                    onPrevious: page == 0
+                        ? null
+                        : () => setState(() => _page = page - 1),
+                    onNext: page >= lastPage
+                        ? null
+                        : () => setState(() => _page = page + 1),
                     onOpen: (item) => _openItem(context, item),
                   ),
               ],
@@ -432,101 +515,451 @@ class _Filter extends StatelessWidget {
   );
 }
 
-class _ApprovalList extends StatelessWidget {
-  const _ApprovalList({required this.items, required this.onOpen});
+enum _ApprovalSortField { request, details, category, person, date, status }
+
+class _ApprovalTable extends StatelessWidget {
+  const _ApprovalTable({
+    required this.items,
+    required this.totalItems,
+    required this.firstItem,
+    required this.page,
+    required this.pageSize,
+    required this.myApprovals,
+    required this.sortField,
+    required this.sortAscending,
+    required this.onSort,
+    required this.onPrevious,
+    required this.onNext,
+    required this.onOpen,
+  });
+
   final List<ApprovalItem> items;
+  final int totalItems;
+  final int firstItem;
+  final int page;
+  final int pageSize;
+  final bool myApprovals;
+  final _ApprovalSortField sortField;
+  final bool sortAscending;
+  final ValueChanged<_ApprovalSortField> onSort;
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
   final ValueChanged<ApprovalItem> onOpen;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      return Container(
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: AppColors.border),
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x0A17233A),
+              blurRadius: 18,
+              offset: Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Column(
+          children: [
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                width: constraints.maxWidth < 1080
+                    ? 1080
+                    : constraints.maxWidth,
+                child: Column(
+                  children: [
+                    _ApprovalTableHeader(
+                      myApprovals: myApprovals,
+                      sortField: sortField,
+                      sortAscending: sortAscending,
+                      onSort: onSort,
+                    ),
+                    for (var i = 0; i < items.length; i++)
+                      _ApprovalTableRow(
+                        item: items[i],
+                        myApprovals: myApprovals,
+                        onTap: () => onOpen(items[i]),
+                        shaded: i.isOdd,
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            _ApprovalPagination(
+              totalItems: totalItems,
+              firstItem: firstItem,
+              visibleItems: items.length,
+              page: page,
+              pageSize: pageSize,
+              onPrevious: onPrevious,
+              onNext: onNext,
+            ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+class _ApprovalTableHeader extends StatelessWidget {
+  const _ApprovalTableHeader({
+    required this.myApprovals,
+    required this.sortField,
+    required this.sortAscending,
+    required this.onSort,
+  });
+
+  final bool myApprovals;
+  final _ApprovalSortField sortField;
+  final bool sortAscending;
+  final ValueChanged<_ApprovalSortField> onSort;
+
   @override
   Widget build(BuildContext context) => Container(
-    decoration: BoxDecoration(
-      color: Colors.white,
-      border: Border.all(color: AppColors.border),
-      borderRadius: BorderRadius.circular(16),
-    ),
-    child: Column(
+    color: const Color(0xFFF6F9F8),
+    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
+    child: Row(
       children: [
-        for (var i = 0; i < items.length; i++) ...[
-          _ApprovalRow(item: items[i], onTap: () => onOpen(items[i])),
-          if (i != items.length - 1) const Divider(height: 1),
-        ],
+        Expanded(
+          flex: 3,
+          child: _ApprovalSortHeader(
+            label: 'Request',
+            field: _ApprovalSortField.request,
+            activeField: sortField,
+            ascending: sortAscending,
+            onSort: onSort,
+          ),
+        ),
+        Expanded(
+          flex: 3,
+          child: _ApprovalSortHeader(
+            label: 'Details',
+            field: _ApprovalSortField.details,
+            activeField: sortField,
+            ascending: sortAscending,
+            onSort: onSort,
+          ),
+        ),
+        Expanded(
+          flex: 2,
+          child: _ApprovalSortHeader(
+            label: 'Category',
+            field: _ApprovalSortField.category,
+            activeField: sortField,
+            ascending: sortAscending,
+            onSort: onSort,
+          ),
+        ),
+        Expanded(
+          flex: 2,
+          child: _ApprovalSortHeader(
+            label: myApprovals ? 'Requester' : 'Approver',
+            field: _ApprovalSortField.person,
+            activeField: sortField,
+            ascending: sortAscending,
+            onSort: onSort,
+          ),
+        ),
+        Expanded(
+          flex: 2,
+          child: _ApprovalSortHeader(
+            label: 'Date',
+            field: _ApprovalSortField.date,
+            activeField: sortField,
+            ascending: sortAscending,
+            onSort: onSort,
+          ),
+        ),
+        Expanded(
+          flex: 2,
+          child: _ApprovalSortHeader(
+            label: 'Status',
+            field: _ApprovalSortField.status,
+            activeField: sortField,
+            ascending: sortAscending,
+            onSort: onSort,
+          ),
+        ),
+        const SizedBox(width: 42),
       ],
     ),
   );
 }
 
-class _ApprovalRow extends StatelessWidget {
-  const _ApprovalRow({required this.item, required this.onTap});
-  final ApprovalItem item;
-  final VoidCallback onTap;
+class _ApprovalSortHeader extends StatelessWidget {
+  const _ApprovalSortHeader({
+    required this.label,
+    required this.field,
+    required this.activeField,
+    required this.ascending,
+    required this.onSort,
+  });
+
+  final String label;
+  final _ApprovalSortField field;
+  final _ApprovalSortField activeField;
+  final bool ascending;
+  final ValueChanged<_ApprovalSortField> onSort;
+
   @override
-  Widget build(BuildContext context) => InkWell(
-    onTap: onTap,
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-      child: LayoutBuilder(
-        builder: (context, constraints) => Row(
+  Widget build(BuildContext context) {
+    final active = field == activeField;
+    return InkWell(
+      key: ValueKey('approval-sort-${field.name}'),
+      borderRadius: BorderRadius.circular(8),
+      onTap: () => onSort(field),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 6),
+        child: Row(
           children: [
-            Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                color: _categoryColor(item.category).withValues(alpha: .12),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(
-                _categoryIcon(item.category),
-                color: _categoryColor(item.category),
+            Flexible(
+              child: Text(
+                label.toUpperCase(),
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: active ? AppColors.green : AppColors.muted,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: .35,
+                ),
               ),
             ),
-            const SizedBox(width: 14),
+            const SizedBox(width: 3),
+            Icon(
+              active
+                  ? ascending
+                        ? Icons.arrow_upward_rounded
+                        : Icons.arrow_downward_rounded
+                  : Icons.unfold_more_rounded,
+              size: 15,
+              color: active ? AppColors.green : AppColors.muted,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ApprovalTableRow extends StatelessWidget {
+  const _ApprovalTableRow({
+    required this.item,
+    required this.myApprovals,
+    required this.onTap,
+    required this.shaded,
+  });
+
+  final ApprovalItem item;
+  final bool myApprovals;
+  final VoidCallback onTap;
+  final bool shaded;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: shaded ? const Color(0xFFFBFCFC) : Colors.white,
+    child: InkWell(
+      onTap: onTap,
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 54),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+        decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: AppColors.border)),
+        ),
+        child: Row(
+          children: [
             Expanded(
               flex: 3,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.title,
-                    style: const TextStyle(fontWeight: FontWeight.w800),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: Text(
+                  item.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppColors.navy,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    item.type == 'STAFF_LEAVE'
-                        ? formatLeaveSummaryDates(item.subtitle)
-                        : item.subtitle,
-                    style: const TextStyle(
-                      color: AppColors.muted,
-                      fontSize: 13,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  if (constraints.maxWidth < 400) ...[
-                    const SizedBox(height: 8),
-                    _StatusPill(status: item.status),
-                  ],
-                ],
+                ),
               ),
             ),
-            if (MediaQuery.sizeOf(context).width > 820) ...[
-              Expanded(
+            Expanded(
+              flex: 3,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
                 child: Text(
-                  item.requesterName.isEmpty ? '—' : item.requesterName,
+                  item.type == 'STAFF_LEAVE'
+                      ? formatLeaveSummaryDates(item.subtitle)
+                      : item.subtitle,
+                  maxLines: 1,
                   overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: AppColors.muted, fontSize: 12),
                 ),
               ),
-              Expanded(
+            ),
+            Expanded(
+              flex: 2,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
                 child: Text(
-                  _dateText(item.submittedAt ?? item.updatedAt),
-                  style: const TextStyle(color: AppColors.muted),
+                  item.category.isEmpty ? 'Other' : item.category,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12),
                 ),
               ),
-            ],
-            if (constraints.maxWidth >= 400) _StatusPill(status: item.status),
-            const SizedBox(width: 8),
-            const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
+            ),
+            Expanded(
+              flex: 2,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: SelectionArea(
+                  child: RichText(
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    text: TextSpan(
+                      text: _approvalPerson(item, myApprovals),
+                      style: DefaultTextStyle.of(context).style.copyWith(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Expanded(
+              flex: 2,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: SelectionArea(
+                  child: RichText(
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    text: TextSpan(
+                      text: _dateText(_approvalItemDateOrNull(item)),
+                      style: DefaultTextStyle.of(
+                        context,
+                      ).style.copyWith(color: AppColors.muted, fontSize: 12),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Expanded(
+              flex: 2,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: _ApprovalStatusText(status: item.status),
+              ),
+            ),
+            SizedBox(
+              width: 42,
+              child: IconButton(
+                tooltip: 'Open ${item.title}',
+                onPressed: onTap,
+                icon: const Icon(
+                  Icons.chevron_right_rounded,
+                  color: AppColors.green,
+                ),
+              ),
+            ),
           ],
         ),
       ),
     ),
+  );
+}
+
+class _ApprovalStatusText extends StatelessWidget {
+  const _ApprovalStatusText({required this.status});
+  final String status;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (status) {
+      'PENDING_APPROVAL' ||
+      'PENDING_ACCEPTANCE' ||
+      'CHANGES_REQUESTED' => const Color(0xFFB56F00),
+      'APPROVED' || 'PUBLISHED' || 'ACCEPTED' => AppColors.green,
+      'REJECTED' || 'CANCELLED' => AppColors.red,
+      _ => AppColors.navy,
+    };
+    return Text(
+      _statusText(status),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700),
+    );
+  }
+}
+
+class _ApprovalPagination extends StatelessWidget {
+  const _ApprovalPagination({
+    required this.totalItems,
+    required this.firstItem,
+    required this.visibleItems,
+    required this.page,
+    required this.pageSize,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  final int totalItems;
+  final int firstItem;
+  final int visibleItems;
+  final int page;
+  final int pageSize;
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final summary = Text(
+        'Showing ${totalItems == 0 ? 0 : firstItem + 1}-${firstItem + visibleItems} of $totalItems · Page ${totalItems == 0 ? 0 : page + 1} of ${totalItems == 0 ? 0 : (totalItems + pageSize - 1) ~/ pageSize}',
+        style: const TextStyle(color: AppColors.muted, fontSize: 12),
+      );
+      final controls = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          OutlinedButton(
+            key: const ValueKey('approval-page-previous'),
+            onPressed: onPrevious,
+            child: const Text('Previous'),
+          ),
+          const SizedBox(width: 8),
+          OutlinedButton(
+            key: const ValueKey('approval-page-next'),
+            onPressed: onNext,
+            child: const Text('Next'),
+          ),
+        ],
+      );
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        child: constraints.maxWidth < 520
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  summary,
+                  const SizedBox(height: 10),
+                  Align(alignment: Alignment.centerRight, child: controls),
+                ],
+              )
+            : Row(
+                children: [
+                  Expanded(child: summary),
+                  controls,
+                ],
+              ),
+      );
+    },
   );
 }
 
@@ -2747,6 +3180,17 @@ String _statusText(String value) => switch (value) {
         )
         .join(' '),
 };
+
+DateTime? _approvalItemDateOrNull(ApprovalItem item) =>
+    item.submittedAt ?? item.updatedAt ?? item.createdAt ?? item.decidedAt;
+
+DateTime _approvalItemDate(ApprovalItem item) =>
+    _approvalItemDateOrNull(item) ?? DateTime.fromMillisecondsSinceEpoch(0);
+
+String _approvalPerson(ApprovalItem item, bool myApprovals) {
+  final value = myApprovals ? item.requesterName : item.approverName;
+  return value.trim().isEmpty ? 'Not assigned' : value;
+}
 
 String _dateText(DateTime? value) {
   if (value == null) return 'Not available';
