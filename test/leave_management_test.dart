@@ -551,7 +551,10 @@ void main() {
               r.url.path.endsWith('/availability')
                   ? [
                       {'staffUserId': 1, 'endDate': '2027-01-06'},
-                      {'staffUserId': 2, 'endDate': '2027-01-07'},
+                      {
+                        'staffUserId': 2,
+                        'endDate': [2027, 1, 7],
+                      },
                     ]
                   : [
                       {
@@ -577,6 +580,7 @@ void main() {
       expect(entries.first.mark, StaffAttendanceMark.present);
       expect(entries.first.approvedLeaveEndDate, '2027-01-06');
       expect(entries.last.mark, StaffAttendanceMark.unmarked);
+      expect(entries.last.approvedLeaveEndDate, '2027-01-07');
       expect(
         entries.last.copyWith(note: 'review').approvedLeaveEndDate,
         '2027-01-07',

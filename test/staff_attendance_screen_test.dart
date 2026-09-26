@@ -5,6 +5,59 @@ import 'package:school_management_app/src/staff_attendance/presentation/staff_at
 import 'package:school_management_app/src/theme/app_theme.dart';
 
 void main() {
+  testWidgets('generates a staff attendance report preview', (tester) async {
+    tester.view.physicalSize = const Size(1500, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: StaffAttendanceScreen(
+            schoolId: 'SCH-1',
+            schoolName: 'Akwaba Learning Academy',
+            repository: _FakeStaffAttendanceRepository(
+              dashboardDays: [
+                StaffAttendanceDayRecord(
+                  date: DateTime.now(),
+                  expected: 2,
+                  present: 1,
+                  late: 1,
+                  excused: 0,
+                  unexcused: 0,
+                  status: 'SUBMITTED',
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey('create-staff-attendance-report')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Create staff attendance report'), findsOneWidget);
+    expect(find.text('All staff included'), findsOneWidget);
+    expect(find.byKey(const ValueKey('staff-report-output')), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(const ValueKey('generate-staff-attendance-report')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('staff-attendance-report-preview')),
+      findsOneWidget,
+    );
+    expect(find.text('Ama Mensah'), findsOneWidget);
+    expect(find.text('Kofi Owusu'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('late opens a focused editable arrival time immediately', (
     tester,
   ) async {
@@ -107,6 +160,41 @@ void main() {
     expect(repository.saveCount, 1);
     expect(repository.lastSubmitted, isTrue);
     expect(find.text('Staff attendance submitted.'), findsOneWidget);
+  });
+
+  testWidgets('approved leave is automatically marked as excused absence', (
+    tester,
+  ) async {
+    final repository = _FakeStaffAttendanceRepository(
+      approvedLeaveStaffId: 'STF-1',
+    );
+    tester.view.physicalSize = const Size(1500, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: StaffAttendanceScreen(
+            schoolId: 'SCH-1',
+            repository: repository,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('take-staff-attendance')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Excused · Approved leave'), findsOneWidget);
+    expect(find.text('Approved leave · through 24 Sep 2026'), findsOneWidget);
+    expect(find.text('1 not marked'), findsOneWidget);
+    await tester.tap(find.text('Mark all present'));
+    await tester.pump();
+    expect(find.text('0 not marked'), findsOneWidget);
   });
 
   testWidgets('compacts missing registers and opens the complete list', (
@@ -244,9 +332,13 @@ void main() {
 }
 
 class _FakeStaffAttendanceRepository implements StaffAttendanceRepository {
-  _FakeStaffAttendanceRepository({this.dashboardDays});
+  _FakeStaffAttendanceRepository({
+    this.dashboardDays,
+    this.approvedLeaveStaffId,
+  });
 
   final List<StaffAttendanceDayRecord>? dashboardDays;
+  final String? approvedLeaveStaffId;
   int saveCount = 0;
   bool? lastSubmitted;
   final people = const [
@@ -305,8 +397,16 @@ class _FakeStaffAttendanceRepository implements StaffAttendanceRepository {
     required String schoolId,
     required DateTime date,
     required List<StaffAttendancePerson> people,
-  }) async =>
-      people.map((person) => StaffAttendanceEntry(person: person)).toList();
+  }) async => people
+      .map(
+        (person) => StaffAttendanceEntry(
+          person: person,
+          approvedLeaveEndDate: person.id == approvedLeaveStaffId
+              ? '2026-09-24'
+              : null,
+        ),
+      )
+      .toList();
   @override
   Future<List<StaffAttendanceEntry>> saveDailyRegister({
     required String schoolId,

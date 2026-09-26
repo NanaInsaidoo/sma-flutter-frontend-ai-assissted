@@ -1,5 +1,12 @@
 enum AttendanceMark { unmarked, present, absent, late }
 
+enum AttendanceRegisterStatus {
+  notSubmitted,
+  awaitingAcknowledgment,
+  complete,
+  nonSchoolDay,
+}
+
 class AttendanceGradeLevel {
   const AttendanceGradeLevel({required this.id, required this.name});
 
@@ -27,6 +34,8 @@ class AttendanceStudent {
     required this.gradeLevelId,
     required this.streamId,
     required this.streamName,
+    this.gender = '',
+    this.dateOfBirth,
   });
 
   final String customStudentId;
@@ -35,6 +44,8 @@ class AttendanceStudent {
   final int gradeLevelId;
   final int streamId;
   final String streamName;
+  final String gender;
+  final DateTime? dateOfBirth;
 
   String get fullName => '$firstName $lastName'.trim();
 }
@@ -55,6 +66,28 @@ class AttendanceRecord {
   final String remarks;
 }
 
+class AttendanceLateConcern {
+  const AttendanceLateConcern({
+    required this.customStudentId,
+    required this.fullName,
+    required this.consecutiveLateDays,
+    required this.totalMinutesLate,
+    required this.latestLateDate,
+    this.escalated = false,
+    this.escalationId,
+    this.escalatedAt,
+  });
+
+  final String customStudentId;
+  final String fullName;
+  final int consecutiveLateDays;
+  final int totalMinutesLate;
+  final DateTime latestLateDate;
+  final bool escalated;
+  final int? escalationId;
+  final DateTime? escalatedAt;
+}
+
 class AttendanceRoster {
   const AttendanceRoster({required this.students, required this.records});
 
@@ -62,6 +95,42 @@ class AttendanceRoster {
   final List<AttendanceRecord> records;
 
   bool get hasExistingAttendance => records.isNotEmpty;
+}
+
+class AttendanceEntryContext {
+  const AttendanceEntryContext({
+    required this.date,
+    required this.currentDate,
+    required this.futureDate,
+    required this.schoolDay,
+    required this.assignedClassTeacher,
+    required this.permissionAffirmationRequired,
+    this.calendarMessage = '',
+    this.submitted = false,
+    this.registerStatus = AttendanceRegisterStatus.notSubmitted,
+    this.revision = 0,
+    this.submittedAt,
+    this.submittedBy = '',
+    this.acknowledgedAt,
+    this.acknowledgedBy = '',
+    this.acknowledgmentNote = '',
+  });
+
+  final DateTime date;
+  final DateTime currentDate;
+  final bool futureDate;
+  final bool schoolDay;
+  final bool assignedClassTeacher;
+  final bool permissionAffirmationRequired;
+  final String calendarMessage;
+  final bool submitted;
+  final AttendanceRegisterStatus registerStatus;
+  final int revision;
+  final DateTime? submittedAt;
+  final String submittedBy;
+  final DateTime? acknowledgedAt;
+  final String acknowledgedBy;
+  final String acknowledgmentNote;
 }
 
 enum AttendanceDayStatus { completed, missing, nonSchoolDay }
@@ -106,6 +175,90 @@ class AttendanceTermHistory {
   final List<AttendanceDaySummary> days;
 }
 
+class AttendanceReportOption {
+  const AttendanceReportOption({
+    required this.customStudentId,
+    required this.studentName,
+    required this.gradeLevelId,
+    required this.gradeName,
+    required this.streamId,
+    required this.streamName,
+    this.householdId,
+    this.householdName = '',
+  });
+
+  final String customStudentId;
+  final String studentName;
+  final int gradeLevelId;
+  final String gradeName;
+  final int streamId;
+  final String streamName;
+  final int? householdId;
+  final String householdName;
+}
+
+class AttendanceReportStudent {
+  const AttendanceReportStudent({
+    required this.customStudentId,
+    required this.studentName,
+    this.gradeLevelId = 0,
+    required this.gradeName,
+    this.streamId = 0,
+    required this.streamName,
+    required this.markedDays,
+    required this.present,
+    required this.absent,
+    required this.late,
+    this.lateMinutes = 0,
+    required this.attendanceRate,
+    required this.absenceRate,
+    this.householdId,
+    this.householdName = '',
+    this.matchingDates = const [],
+  });
+
+  final String customStudentId;
+  final String studentName;
+  final int gradeLevelId;
+  final String gradeName;
+  final int streamId;
+  final String streamName;
+  final int markedDays;
+  final int present;
+  final int absent;
+  final int late;
+  final int lateMinutes;
+  final double attendanceRate;
+  final double absenceRate;
+  final int? householdId;
+  final String householdName;
+  final List<DateTime> matchingDates;
+}
+
+class AttendanceGeneratedReport {
+  const AttendanceGeneratedReport({
+    required this.startDate,
+    required this.endDate,
+    required this.criterion,
+    required this.studentsIncluded,
+    required this.present,
+    required this.absent,
+    required this.late,
+    required this.attendanceRate,
+    required this.students,
+  });
+
+  final DateTime startDate;
+  final DateTime endDate;
+  final String criterion;
+  final int studentsIncluded;
+  final int present;
+  final int absent;
+  final int late;
+  final double attendanceRate;
+  final List<AttendanceReportStudent> students;
+}
+
 class AttendanceDashboardOverview {
   const AttendanceDashboardOverview({
     required this.currentDate,
@@ -113,9 +266,18 @@ class AttendanceDashboardOverview {
     required this.today,
     required this.week,
     required this.month,
+    this.term = const AttendancePeriodSummary(
+      attendanceRate: 0,
+      present: 0,
+      absent: 0,
+      late: 0,
+      totalStudents: 0,
+    ),
     required this.classes,
     required this.alerts,
     required this.streamsPending,
+    this.calendarMessage = '',
+    this.recentSchoolDates = const [],
   });
 
   final DateTime currentDate;
@@ -123,9 +285,12 @@ class AttendanceDashboardOverview {
   final AttendancePeriodSummary today;
   final AttendancePeriodSummary week;
   final AttendancePeriodSummary month;
+  final AttendancePeriodSummary term;
   final List<AttendanceClassSummary> classes;
   final List<AttendanceAlert> alerts;
   final int streamsPending;
+  final String calendarMessage;
+  final List<DateTime> recentSchoolDates;
 }
 
 class AttendancePeriodSummary {
@@ -135,6 +300,7 @@ class AttendancePeriodSummary {
     required this.absent,
     required this.late,
     required this.totalStudents,
+    this.studentsNeedingAttention = 0,
   });
 
   final double attendanceRate;
@@ -142,6 +308,7 @@ class AttendancePeriodSummary {
   final int absent;
   final int late;
   final int totalStudents;
+  final int studentsNeedingAttention;
 }
 
 class AttendanceClassSummary {
@@ -157,6 +324,13 @@ class AttendanceClassSummary {
     required this.late,
     required this.attendanceRate,
     required this.submitted,
+    this.registerStatus = AttendanceRegisterStatus.notSubmitted,
+    this.revision = 0,
+    this.submittedAt,
+    this.submittedBy = '',
+    this.acknowledgedAt,
+    this.acknowledgedBy = '',
+    this.acknowledgmentNote = '',
   });
 
   final int gradeId;
@@ -170,6 +344,13 @@ class AttendanceClassSummary {
   final int late;
   final double attendanceRate;
   final bool submitted;
+  final AttendanceRegisterStatus registerStatus;
+  final int revision;
+  final DateTime? submittedAt;
+  final String submittedBy;
+  final DateTime? acknowledgedAt;
+  final String acknowledgedBy;
+  final String acknowledgmentNote;
 }
 
 class AttendanceAlert {
@@ -224,6 +405,11 @@ class AttendanceEntry {
 abstract class AttendanceRepository {
   Future<AttendanceDashboardOverview> getOverview(String customSchoolId);
 
+  Future<AttendanceDashboardOverview> getOverviewForDate(
+    String customSchoolId,
+    DateTime date,
+  ) => getOverview(customSchoolId);
+
   Future<List<AttendanceGradeLevel>> getGradeLevels(String customSchoolId);
 
   Future<List<AttendanceStream>> getStreams({
@@ -237,6 +423,28 @@ abstract class AttendanceRepository {
     required int streamId,
     required DateTime date,
   });
+
+  Future<AttendanceEntryContext> getEntryContext({
+    required String customSchoolId,
+    required int streamId,
+    required DateTime date,
+  });
+
+  Future<List<AttendanceLateConcern>> getLateConcerns({
+    required String customSchoolId,
+    required int gradeLevelId,
+    required int streamId,
+    required DateTime date,
+  }) async => const [];
+
+  Future<AttendanceLateConcern> escalateLateConcern({
+    required String customSchoolId,
+    required int gradeLevelId,
+    required int streamId,
+    required String customStudentId,
+    required DateTime date,
+    required String note,
+  }) => throw UnimplementedError('Late-attendance escalation is unavailable.');
 
   Future<AttendanceTermHistory> getTermHistory({
     required String customSchoolId,
@@ -253,6 +461,13 @@ abstract class AttendanceRepository {
     String? description,
   });
 
+  Future<void> acknowledgeAttendance({
+    required String customSchoolId,
+    required DateTime date,
+    required List<int> streamIds,
+    String? note,
+  });
+
   Future<void> saveAttendance({
     required String customSchoolId,
     required int gradeLevelId,
@@ -261,5 +476,25 @@ abstract class AttendanceRepository {
     required List<AttendanceEntry> entries,
     required bool updateExisting,
     String? vacationOverrideReason,
+    bool permissionAffirmed = false,
+    String? authorizationStatement,
+    String? correctionReason,
+  });
+}
+
+abstract interface class AttendanceReportRepository {
+  Future<List<AttendanceReportOption>> getAttendanceReportOptions({
+    required String customSchoolId,
+  });
+
+  Future<AttendanceGeneratedReport> generateAttendanceReport({
+    required String customSchoolId,
+    required String criterion,
+    List<int> streamIds = const [],
+    List<String> studentIds = const [],
+    int? householdId,
+    DateTime? startDate,
+    DateTime? endDate,
+    double? absenteeismThreshold,
   });
 }

@@ -211,6 +211,20 @@ class _FakeAttendanceRepository extends Fake implements AttendanceRepository {
   }) async => const AttendanceRoster(students: [], records: []);
 
   @override
+  Future<AttendanceEntryContext> getEntryContext({
+    required String customSchoolId,
+    required int streamId,
+    required DateTime date,
+  }) async => AttendanceEntryContext(
+    date: date,
+    currentDate: date,
+    futureDate: false,
+    schoolDay: true,
+    assignedClassTeacher: true,
+    permissionAffirmationRequired: false,
+  );
+
+  @override
   Future<AttendanceTermHistory> getTermHistory({
     required String customSchoolId,
     required int gradeLevelId,

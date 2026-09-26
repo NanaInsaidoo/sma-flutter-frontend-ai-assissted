@@ -12,6 +12,7 @@ class AssessmentDashboardScreen extends StatelessWidget {
     required this.accessToken,
     required this.viewerRole,
     required this.viewerName,
+    this.initialStreamId,
     this.openFinalReportsOnLoad = false,
     this.onRefreshAccessToken,
   });
@@ -23,6 +24,7 @@ class AssessmentDashboardScreen extends StatelessWidget {
   final String? accessToken;
   final String viewerRole;
   final String viewerName;
+  final int? initialStreamId;
   final bool openFinalReportsOnLoad;
   final Future<String?> Function()? onRefreshAccessToken;
 
@@ -36,6 +38,7 @@ class AssessmentDashboardScreen extends StatelessWidget {
       accessToken: accessToken,
       viewerRole: viewerRole,
       viewerName: viewerName,
+      initialStreamId: initialStreamId,
       openFinalReportsOnLoad: openFinalReportsOnLoad,
       onRefreshAccessToken: onRefreshAccessToken,
     );

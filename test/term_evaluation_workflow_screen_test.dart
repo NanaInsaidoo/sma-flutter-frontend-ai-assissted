@@ -130,11 +130,113 @@ void main() {
     },
   );
 
+  testWidgets(
+    'teacher can save a submitted update directly and clear all responses',
+    (tester) async {
+      await useWideScreen(tester);
+      final requests = <http.Request>[];
+      final ratings = {
+        'HOMEWORK_HABITS': 'Good',
+        'ATTENTIVENESS': 'Good',
+        'TEAMWORK': 'Good',
+        'CLASS_PARTICIPATION': 'Good',
+        'RESPECT_AND_DISCIPLINE': 'Good',
+        'NEATNESS': 'Good',
+      };
+      final api = AssessmentApiClient(
+        accessToken: 'token',
+        client: MockClient((request) async {
+          requests.add(request);
+          if (request.method == 'PUT' || request.method == 'DELETE') {
+            return http.Response('', 204);
+          }
+          if (request.url.path.endsWith('/assignments/14')) {
+            return http.Response(
+              jsonEncode({
+                'id': 14,
+                'staffId': 'T-1',
+                'staffName': 'Adwoa Teacher',
+                'subjectName': 'Mathematics',
+                'assignmentType': 'SUBJECT_TEACHER',
+                'status': 'SUBMITTED',
+                'students': [
+                  {'id': 'STU-1', 'name': 'Ama Mensah'},
+                ],
+                'ratings': {'STU-1': ratings},
+              }),
+              200,
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'released': true,
+              'teacherEntryOpen': true,
+              'totalAssignments': 1,
+              'submitted': 1,
+              'incomplete': 0,
+              'assignments': [
+                {
+                  'id': 14,
+                  'staffId': 'T-1',
+                  'staffName': 'Adwoa Teacher',
+                  'subjectName': 'Mathematics',
+                  'assignmentType': 'SUBJECT_TEACHER',
+                  'status': 'SUBMITTED',
+                  'studentCount': 1,
+                  'completionPercent': 100,
+                },
+              ],
+            }),
+            200,
+          );
+        }),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TermEvaluationWorkflowScreen(
+            api: api,
+            schoolId: 'SCHOOL-1',
+            viewerName: 'Adwoa Teacher',
+            viewerRole: 'TEACHER',
+            setup: setup,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Edit ratings'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Save update'), findsOneWidget);
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Excellent'));
+      await tester.tap(find.text('Save update'));
+      await tester.pumpAndSettle();
+
+      expect(requests.any((request) => request.method == 'PUT'), isTrue);
+      expect(find.text('Edit ratings'), findsOneWidget);
+
+      await tester.tap(find.text('Edit ratings'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Evaluation actions'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Clear responses'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Clear responses'));
+      await tester.pumpAndSettle();
+
+      expect(requests.any((request) => request.method == 'DELETE'), isTrue);
+      expect(find.text('All responses cleared'), findsOneWidget);
+    },
+  );
+
   testWidgets('class teacher confirms calculated wording and adds comment', (
     tester,
   ) async {
     await useWideScreen(tester);
-    http.Request? finalizeRequest;
+    http.Request? saveCommentRequest;
+    http.Request? submitClassRequest;
+    var reviewStatus = 'PENDING';
+    var savedComment = '';
     final calculated = {
       'HOMEWORK_HABITS': 'Good',
       'ATTENTIVENESS': 'Good',
@@ -160,18 +262,31 @@ void main() {
             200,
           );
         }
+        if (request.method == 'PUT' && request.url.path.endsWith('/comment')) {
+          saveCommentRequest = request;
+          savedComment =
+              (jsonDecode(request.body) as Map<String, dynamic>)['comment']
+                  ?.toString() ??
+              '';
+          reviewStatus = 'COMMENTS_IN_PROGRESS';
+          return http.Response('{"status":"COMMENTS_IN_PROGRESS"}', 200);
+        }
         if (request.method == 'POST' &&
-            request.url.path.endsWith('/finalize')) {
-          finalizeRequest = request;
-          return http.Response('{"status":"FINALIZED"}', 200);
+            request.url.path.endsWith('/submit-comments')) {
+          submitClassRequest = request;
+          reviewStatus = 'SUBMITTED';
+          return http.Response(
+            '{"status":"READY_FOR_LEADERSHIP","studentsSubmitted":1}',
+            200,
+          );
         }
         if (request.url.path.endsWith('/review')) {
           return http.Response(
             jsonEncode({
               'calculated': calculated,
               'finalRatings': calculated,
-              'comment': '',
-              'status': 'PENDING',
+              'comment': savedComment,
+              'status': reviewStatus,
             }),
             200,
           );
@@ -215,7 +330,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Review class'));
+    expect(find.text('Edit ratings'), findsOneWidget);
+    await tester.tap(find.text('Add student comments'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Ama Mensah'));
     await tester.pumpAndSettle();
@@ -247,35 +363,23 @@ void main() {
     await tester.drag(find.byType(ListView).last, const Offset(0, -1200));
     await tester.pumpAndSettle();
     await tester.tap(
-      find
-          .byKey(const ValueKey('preview-student-evaluation'))
-          .hitTestable()
-          .last,
+      find.byKey(const ValueKey('save-student-comment')).hitTestable().last,
     );
-    await tester.pumpAndSettle();
-    expect(find.text('Preview report-card comment'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('evaluation-comment-preview')),
-      findsOneWidget,
-    );
-    expect(finalizeRequest, isNull);
-    await tester.tap(find.byKey(const ValueKey('send-student-evaluation')));
     await tester.pumpAndSettle();
 
-    final sentRequest = finalizeRequest;
-    expect(sentRequest, isNotNull);
-    expect(sentRequest!.url.queryParameters['staffId'], 'CLASS-1');
-    expect(sentRequest.body, contains('"finalRatings"'));
-    expect(sentRequest.body, contains('Ama has made steady progress.'));
-    expect(commentField().readOnly, isTrue);
+    expect(saveCommentRequest, isNotNull);
+    expect(saveCommentRequest!.body, contains('Ama has made steady progress.'));
+    expect(find.text('Student comments complete'), findsOneWidget);
     expect(
-      find.textContaining('combined wording cannot be changed'),
+      find.byKey(const ValueKey('submit-class-evaluation')),
       findsOneWidget,
     );
-    expect(
-      find.byKey(const ValueKey('preview-student-evaluation')),
-      findsNothing,
-    );
+    await tester.tap(find.byKey(const ValueKey('submit-class-evaluation')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Submit for approval').hitTestable());
+    await tester.pumpAndSettle();
+    expect(submitClassRequest, isNotNull);
+    expect(find.text('Awaiting approval'), findsWidgets);
   });
 
   testWidgets('headmaster alone can correct finalized wording with a reason', (
@@ -297,7 +401,7 @@ void main() {
         if (request.method == 'POST' &&
             request.url.path.endsWith('/final-wordings')) {
           adjustmentRequest = request;
-          return http.Response('{"status":"FINALIZED"}', 200);
+          return http.Response('{"status":"APPROVED"}', 200);
         }
         if (request.url.path.endsWith('/review')) {
           return http.Response(
@@ -305,7 +409,7 @@ void main() {
               'calculated': calculated,
               'finalRatings': calculated,
               'comment': 'Ama has worked well this term.',
-              'status': 'FINALIZED',
+              'status': 'APPROVED',
               'audit': [
                 {
                   'action': 'HEADMASTER_FINAL_WORDING_CHANGED',
@@ -364,9 +468,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.textContaining(
-        'Only the headmaster can correct the final report-card wording.',
-      ),
+      find.textContaining('approved and ready for report generation'),
       findsOneWidget,
     );
     expect(find.byType(DropdownButtonFormField<String>), findsNWidgets(6));
@@ -408,56 +510,109 @@ void main() {
     );
   });
 
-  testWidgets('ordinary administrator cannot open final wording correction', (
-    tester,
-  ) async {
-    await useWideScreen(tester);
-    final api = AssessmentApiClient(
-      accessToken: 'token',
-      client: MockClient(
-        (_) async => http.Response(
-          jsonEncode({
-            'released': true,
-            'totalAssignments': 1,
-            'submitted': 1,
-            'incomplete': 0,
-            'assignments': [
-              {
-                'id': 15,
-                'staffId': 'CLASS-1',
-                'staffName': 'Adwoa Teacher',
-                'subjectName': 'Class-teacher evaluation',
-                'assignmentType': 'CLASS_TEACHER',
-                'status': 'SUBMITTED',
-                'studentCount': 1,
-                'completionPercent': 100,
-                'students': [
-                  {'id': 'STU-1', 'name': 'Ama Mensah'},
-                ],
-              },
-            ],
-          }),
-          200,
-        ),
-      ),
-    );
+  testWidgets(
+    'administrator can review but cannot change final rating wording',
+    (tester) async {
+      await useWideScreen(tester);
+      var reviewStatus = 'SUBMITTED';
+      http.Request? startReviewRequest;
+      final calculated = {
+        'HOMEWORK_HABITS': 'Good',
+        'ATTENTIVENESS': 'Good',
+        'TEAMWORK': 'Good',
+        'CLASS_PARTICIPATION': 'Good',
+        'RESPECT_AND_DISCIPLINE': 'Good',
+        'NEATNESS': 'Good',
+      };
+      final api = AssessmentApiClient(
+        accessToken: 'token',
+        client: MockClient((request) async {
+          if (request.method == 'POST' &&
+              request.url.path.endsWith('/leadership-review/start')) {
+            startReviewRequest = request;
+            reviewStatus = 'UNDER_REVIEW';
+            return http.Response('{"status":"UNDER_REVIEW"}', 200);
+          }
+          if (request.url.path.endsWith('/review')) {
+            return http.Response(
+              jsonEncode({
+                'calculated': calculated,
+                'finalRatings': calculated,
+                'comment': 'Ama has worked well this term.',
+                'status': reviewStatus,
+                'leadershipReviewer': reviewStatus == 'UNDER_REVIEW'
+                    ? 'School Administrator'
+                    : null,
+              }),
+              200,
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'released': true,
+              'totalAssignments': 1,
+              'submitted': 1,
+              'incomplete': 0,
+              'assignments': [
+                {
+                  'id': 15,
+                  'staffId': 'CLASS-1',
+                  'staffName': 'Adwoa Teacher',
+                  'subjectName': 'Class-teacher evaluation',
+                  'assignmentType': 'CLASS_TEACHER',
+                  'status': 'SUBMITTED',
+                  'studentCount': 1,
+                  'completionPercent': 100,
+                  'students': [
+                    {'id': 'STU-1', 'name': 'Ama Mensah'},
+                  ],
+                },
+              ],
+            }),
+            200,
+          );
+        }),
+      );
 
-    await tester.pumpWidget(
-      MaterialApp(
-        home: TermEvaluationWorkflowScreen(
-          api: api,
-          schoolId: 'SCHOOL-1',
-          viewerName: 'School Administrator',
-          viewerRole: 'ADMINISTRATOR',
-          setup: setup,
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TermEvaluationWorkflowScreen(
+            api: api,
+            schoolId: 'SCHOOL-1',
+            viewerName: 'School Administrator',
+            viewerRole: 'ADMINISTRATOR',
+            setup: setup,
+          ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
+      );
+      await tester.pumpAndSettle();
 
-    expect(find.text('Review results'), findsNothing);
-    expect(find.text('Reopen'), findsOneWidget);
-  });
+      expect(find.text('Review results'), findsOneWidget);
+      expect(find.text('Reopen'), findsNothing);
+
+      await tester.tap(find.text('Review results'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Ama Mensah'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+      expect(find.text('Start review'), findsOneWidget);
+      final comment = tester.widget<TextField>(
+        find.byKey(const ValueKey('evaluation-final-comment')),
+      );
+      expect(comment.readOnly, isTrue);
+
+      await tester.drag(find.byType(ListView).last, const Offset(0, -1200));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Start review').hitTestable());
+      await tester.pumpAndSettle();
+
+      expect(startReviewRequest, isNotNull);
+      expect(find.text('Approve'), findsOneWidget);
+      expect(find.text('Reject'), findsOneWidget);
+      expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+    },
+  );
 
   testWidgets(
     'headmaster can inspect report blockers and remind the responsible teacher',
@@ -581,6 +736,101 @@ void main() {
     },
   );
 
+  testWidgets('leadership can select all eligible students and approve them', (
+    tester,
+  ) async {
+    await useWideScreen(tester);
+    http.Request? batchApprovalRequest;
+    final calculated = {
+      'HOMEWORK_HABITS': 'Good',
+      'ATTENTIVENESS': 'Good',
+      'TEAMWORK': 'Good',
+      'CLASS_PARTICIPATION': 'Good',
+      'RESPECT_AND_DISCIPLINE': 'Good',
+      'NEATNESS': 'Good',
+    };
+    final api = AssessmentApiClient(
+      accessToken: 'token',
+      client: MockClient((request) async {
+        if (request.method == 'POST' &&
+            request.url.path.endsWith('/approve-batch')) {
+          batchApprovalRequest = request;
+          return http.Response(
+            '{"approved":2,"skipped":[],"requested":2}',
+            200,
+          );
+        }
+        if (request.url.path.endsWith('/review')) {
+          return http.Response(
+            jsonEncode({
+              'calculated': calculated,
+              'finalRatings': calculated,
+              'comment': 'Ready for approval.',
+              'status': 'SUBMITTED',
+            }),
+            200,
+          );
+        }
+        return http.Response(
+          jsonEncode({
+            'released': true,
+            'totalAssignments': 1,
+            'submitted': 1,
+            'incomplete': 0,
+            'assignments': [
+              {
+                'id': 15,
+                'staffId': 'CLASS-1',
+                'staffName': 'Adwoa Teacher',
+                'streamId': 8,
+                'streamName': 'JHS 1 - Section 3',
+                'subjectName': 'Class-teacher evaluation',
+                'assignmentType': 'CLASS_TEACHER',
+                'status': 'SUBMITTED',
+                'studentCount': 2,
+                'completionPercent': 100,
+                'students': [
+                  {'id': 'STU-1', 'name': 'Ama Mensah'},
+                  {'id': 'STU-2', 'name': 'Kojo Boateng'},
+                ],
+              },
+            ],
+          }),
+          200,
+        );
+      }),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: TermEvaluationWorkflowScreen(
+          api: api,
+          schoolId: 'SCHOOL-1',
+          viewerName: 'School Administrator',
+          viewerRole: 'ADMINISTRATOR',
+          setup: setup,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Review results'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Select all eligible (2)'), findsOneWidget);
+    await tester.tap(find.byType(Checkbox).first);
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('approve-selected-evaluations')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Approve selected').last);
+    await tester.pumpAndSettle();
+
+    expect(batchApprovalRequest, isNotNull);
+    expect(batchApprovalRequest!.body, contains('STU-1'));
+    expect(batchApprovalRequest!.body, contains('STU-2'));
+  });
+
   testWidgets(
     'focused progress shows only assignments for the selected stream',
     (tester) async {
@@ -644,14 +894,207 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        find.text('Evaluation progress — Grade 1 - Stream A'),
+        find.text('Ratings & comments progress — Grade 1 - Stream A'),
         findsOneWidget,
       );
-      expect(find.text('Teachers and assigned evaluations'), findsOneWidget);
+      expect(
+        find.text('Teacher ratings & comment responsibilities'),
+        findsOneWidget,
+      );
       expect(find.textContaining('Kojo Pending'), findsOneWidget);
       expect(find.textContaining('Esi Submitted'), findsNothing);
       expect(find.text('Remind'), findsOneWidget);
       expect(find.text('Report readiness'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    "combines a teacher's subjects into one responsibility for the same class",
+    (tester) async {
+      await useWideScreen(tester);
+      final api = AssessmentApiClient(
+        accessToken: 'token',
+        client: MockClient(
+          (_) async => http.Response(
+            jsonEncode({
+              'released': true,
+              'totalAssignments': 2,
+              'submitted': 0,
+              'incomplete': 2,
+              'assignments': [
+                {
+                  'id': 51,
+                  'streamId': 10,
+                  'staffId': 'T-1',
+                  'staffName': 'Sena Owusu',
+                  'subjectName': 'English Language',
+                  'streamName': 'JHS 1 - Section 3',
+                  'assignmentType': 'SUBJECT_TEACHER',
+                  'status': 'NOT_STARTED',
+                  'studentCount': 2,
+                  'completionPercent': 0,
+                },
+                {
+                  'id': 52,
+                  'streamId': 10,
+                  'staffId': 'T-1',
+                  'staffName': 'Sena Owusu',
+                  'subjectName': 'Mathematics',
+                  'streamName': 'JHS 1 - Section 3',
+                  'assignmentType': 'SUBJECT_TEACHER',
+                  'status': 'NOT_STARTED',
+                  'studentCount': 2,
+                  'completionPercent': 0,
+                },
+              ],
+            }),
+            200,
+          ),
+        ),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TermEvaluationWorkflowScreen(
+            api: api,
+            schoolId: 'SCHOOL-1',
+            viewerName: 'Nana Headmaster',
+            viewerRole: 'HEADMASTER',
+            setup: setup,
+            initialStreamId: 10,
+            initialStreamName: 'JHS 1 - Section 3',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Sena Owusu'), findsOneWidget);
+      expect(find.textContaining('Subject teacher'), findsOneWidget);
+      expect(find.text('English Language, Mathematics'), findsOneWidget);
+      expect(find.textContaining('TEACHER RESPONSIBILITIES'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'teacher dashboard opens all responsibilities and filters them by class',
+    (tester) async {
+      await useWideScreen(tester);
+      final api = AssessmentApiClient(
+        accessToken: 'token',
+        client: MockClient(
+          (_) async => http.Response(
+            jsonEncode({
+              'released': true,
+              'totalAssignments': 3,
+              'submitted': 1,
+              'incomplete': 2,
+              'assignments': [
+                {
+                  'id': 61,
+                  'streamId': 10,
+                  'staffId': 'T-1',
+                  'staffName': 'Sena Owusu',
+                  'subjectName': 'English Language',
+                  'streamName': 'JHS 1 - Section 3',
+                  'assignmentType': 'SUBJECT_TEACHER',
+                  'status': 'NOT_STARTED',
+                  'studentCount': 2,
+                  'completionPercent': 0,
+                },
+                {
+                  'id': 62,
+                  'streamId': 10,
+                  'staffId': 'T-1',
+                  'staffName': 'Sena Owusu',
+                  'subjectName': 'Mathematics',
+                  'streamName': 'JHS 1 - Section 3',
+                  'assignmentType': 'SUBJECT_TEACHER',
+                  'status': 'NOT_STARTED',
+                  'studentCount': 2,
+                  'completionPercent': 0,
+                },
+                {
+                  'id': 63,
+                  'streamId': 11,
+                  'staffId': 'T-1',
+                  'staffName': 'Sena Owusu',
+                  'subjectName': 'Class-teacher evaluation',
+                  'streamName': 'JHS 1 - Section 2',
+                  'assignmentType': 'CLASS_TEACHER',
+                  'status': 'SUBMITTED',
+                  'studentCount': 3,
+                  'completionPercent': 100,
+                },
+              ],
+            }),
+            200,
+          ),
+        ),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TermEvaluationWorkflowScreen(
+            api: api,
+            schoolId: 'SCHOOL-1',
+            viewerName: 'Sena Owusu',
+            viewerRole: 'CLASS_TEACHER',
+            setup: setup,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('My evaluation responsibilities'), findsOneWidget);
+      expect(find.text('Responsibilities by class'), findsOneWidget);
+      expect(find.text('RATINGS COMPLETE'), findsOneWidget);
+      expect(find.text('STUDENT COMMENTS'), findsOneWidget);
+      expect(find.text('SUBMITTED FOR APPROVAL'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('teacher-responsibilities-table')),
+        findsOneWidget,
+      );
+      expect(find.text('CLASS'), findsOneWidget);
+      expect(find.text('RATINGS'), findsOneWidget);
+      expect(find.text('COMMENTS'), findsOneWidget);
+      expect(find.text('APPROVAL STATUS'), findsOneWidget);
+      expect(find.text('ACTION'), findsOneWidget);
+      expect(find.text('Not required'), findsWidgets);
+      expect(find.text('1 / 2'), findsOneWidget);
+      expect(find.text('0 / 3'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('teacher-responsibility-class-filter')),
+        findsOneWidget,
+      );
+      expect(find.text('English Language, Mathematics'), findsNothing);
+      expect(find.textContaining('2 subjects'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('responsibility-class-JHS 1 - Section 2')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('responsibility-class-JHS 1 - Section 3')),
+        findsOneWidget,
+      );
+
+      await tester.tap(
+        find.byKey(const ValueKey('teacher-responsibility-class-filter')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.widgetWithText(DropdownMenuItem<String>, 'JHS 1 - Section 2'),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('responsibility-class-JHS 1 - Section 2')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('responsibility-class-JHS 1 - Section 3')),
+        findsNothing,
+      );
+      expect(find.text('English Language, Mathematics'), findsNothing);
     },
   );
 
@@ -767,24 +1210,47 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Student evaluation progress'), findsNWidgets(2));
-      expect(find.text('71%'), findsOneWidget);
-      expect(find.text('29%'), findsOneWidget);
-      expect(find.byKey(const ValueKey('evaluation-by-staff')), findsOneWidget);
-      expect(find.text('Ama Teacher'), findsOneWidget);
-      expect(find.text('Kojo Teacher'), findsOneWidget);
-      expect(find.text('89% done · 11% remaining'), findsOneWidget);
-
-      await tester.tap(find.text('Evaluation by class'));
-      await tester.pumpAndSettle();
-
+      expect(find.text('Evaluations & comments'), findsNWidgets(2));
+      expect(find.text('RATINGS COMPLETE'), findsOneWidget);
+      expect(find.text('COMMENTS COMPLETE'), findsOneWidget);
+      expect(find.text('SUBMITTED FOR APPROVAL'), findsOneWidget);
+      expect(find.text('7 / 14'), findsOneWidget);
+      expect(find.text('0 / 5'), findsNWidgets(2));
       expect(find.byKey(const ValueKey('evaluation-by-class')), findsOneWidget);
+      expect(find.text('Ratings & comments progress by class'), findsOneWidget);
       expect(find.text('Grade 1 - Stream A'), findsOneWidget);
       expect(find.text('Grade 1 - Stream B'), findsOneWidget);
-      expect(find.text('60% done · 40% remaining'), findsOneWidget);
+      expect(find.text('3 of 10 complete'), findsOneWidget);
+      expect(find.text('0 of 5 complete'), findsOneWidget);
       expect(find.text('Remind'), findsNothing);
 
-      await tester.tap(find.text('Evaluation insights'));
+      final progressTable = find.byKey(
+        const ValueKey('evaluation-progress-table'),
+      );
+      var table = tester.widget<DataTable>(progressTable);
+      expect(table.sortColumnIndex, 1);
+      expect(table.sortAscending, isFalse);
+
+      await tester.tap(
+        find.descendant(of: progressTable, matching: find.text('COMMENTS')),
+      );
+      await tester.pumpAndSettle();
+
+      table = tester.widget<DataTable>(progressTable);
+      expect(table.sortColumnIndex, 2);
+      expect(table.sortAscending, isTrue);
+
+      await tester.tap(find.text('By staff'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('evaluation-by-staff')), findsOneWidget);
+      expect(find.text('Ratings & comments progress by staff'), findsOneWidget);
+      expect(find.text('Ama Teacher'), findsOneWidget);
+      expect(find.text('Kojo Teacher'), findsOneWidget);
+      expect(find.text('6 of 9 complete'), findsOneWidget);
+      expect(find.text('Not required'), findsWidgets);
+
+      await tester.tap(find.text('Insights'));
       await tester.pumpAndSettle();
 
       expect(find.byKey(const ValueKey('evaluation-insights')), findsOneWidget);
@@ -807,27 +1273,171 @@ void main() {
     },
   );
 
-  testWidgets('headmaster locks and releases the evaluation entry window', (
+  testWidgets(
+    'class approval register previews comments and approves selected students',
+    (tester) async {
+      await useWideScreen(tester);
+      http.Request? batchApprovalRequest;
+      var batchApproved = false;
+      final ratings = {
+        'HOMEWORK_HABITS': 'Excellent',
+        'ATTENTIVENESS': 'Good',
+        'TEAMWORK': 'Good',
+        'CLASS_PARTICIPATION': 'Satisfactory',
+        'RESPECT_AND_DISCIPLINE': 'Satisfactory',
+        'NEATNESS': 'Needs improvement',
+      };
+      final students = [
+        {'id': 'STU-1', 'name': 'Kojo Boateng'},
+        {'id': 'STU-2', 'name': 'Selina Opoku'},
+        {'id': 'STU-3', 'name': 'Sena Owusu'},
+        {'id': 'STU-4', 'name': 'Ama Mensah'},
+      ];
+      final api = AssessmentApiClient(
+        accessToken: 'token',
+        client: MockClient((request) async {
+          if (request.method == 'POST' &&
+              request.url.path.endsWith('/approve-batch')) {
+            batchApprovalRequest = request;
+            batchApproved = true;
+            return http.Response(
+              '{"approved":2,"skipped":[],"requested":2}',
+              200,
+            );
+          }
+          if (request.url.path.endsWith('/review')) {
+            final studentId = request
+                .url
+                .pathSegments[request.url.pathSegments.indexOf('students') + 1];
+            final status =
+                batchApproved && const {'STU-2', 'STU-3'}.contains(studentId)
+                ? 'APPROVED'
+                : switch (studentId) {
+                    'STU-1' => 'APPROVED',
+                    'STU-4' => 'CHANGES_REQUESTED',
+                    _ => 'SUBMITTED',
+                  };
+            return http.Response(
+              jsonEncode({
+                'calculated': ratings,
+                'finalRatings': ratings,
+                'comment': studentId == 'STU-2'
+                    ? 'Selina is attentive, curious and increasingly confident when participating in group activities. She listens carefully to instructions and contributes thoughtful ideas during lessons.'
+                    : 'A clear class-teacher comment.',
+                'status': status,
+              }),
+              200,
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'released': true,
+              'totalAssignments': 1,
+              'submitted': 1,
+              'incomplete': 0,
+              'assignments': [
+                {
+                  'id': 81,
+                  'streamId': 18,
+                  'staffId': 'T-CLASS',
+                  'staffName': 'Sena Owusu',
+                  'subjectName': 'Class-teacher evaluation',
+                  'streamName': 'Creche - Section 1',
+                  'assignmentType': 'CLASS_TEACHER',
+                  'status': 'SUBMITTED',
+                  'studentCount': 4,
+                  'completedStudentCount': 4,
+                  'remainingStudentCount': 0,
+                  'ratedCount': 24,
+                  'requiredCount': 24,
+                  'completionPercent': 100,
+                  'commentsCompleted': 4,
+                  'commentsSubmitted': 3,
+                  'commentsApproved': 1,
+                  'workflowStatus': 'READY_FOR_LEADERSHIP',
+                  'students': students,
+                },
+              ],
+            }),
+            200,
+          );
+        }),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TermEvaluationWorkflowScreen(
+            api: api,
+            schoolId: 'SCHOOL-1',
+            viewerName: 'Nana Headmaster',
+            viewerRole: 'HEADMASTER',
+            setup: setup,
+            managementProgressOnly: true,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('View'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Class ratings & comments approval'), findsOneWidget);
+      expect(find.text('Awaiting 2'), findsOneWidget);
+      expect(find.text('Approved 1'), findsOneWidget);
+      expect(find.text('Rejected 1'), findsOneWidget);
+      expect(find.text('Expand to read the full comment'), findsOneWidget);
+      expect(
+        tester
+            .widget<Checkbox>(
+              find.byKey(const ValueKey('select-class-result-STU-1')),
+            )
+            .onChanged,
+        isNull,
+      );
+
+      await tester.tap(
+        find.byKey(const ValueKey('select-all-awaiting-class-results')),
+      );
+      await tester.pump();
+      expect(find.text('Approve selected (2)'), findsOneWidget);
+
+      await tester.tap(
+        find.byKey(const ValueKey('approve-selected-class-results')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Approve').hitTestable().last);
+      await tester.pumpAndSettle();
+
+      expect(batchApprovalRequest, isNotNull);
+      expect(batchApprovalRequest!.body, contains('STU-2'));
+      expect(batchApprovalRequest!.body, contains('STU-3'));
+      expect(batchApprovalRequest!.body, isNot(contains('STU-1')));
+      expect(find.text('Awaiting 0'), findsOneWidget);
+      expect(find.text('Approved 3'), findsOneWidget);
+    },
+  );
+
+  testWidgets('headmaster releases evaluations once without a global lock', (
     tester,
   ) async {
     await useWideScreen(tester);
-    var locked = false;
-    http.Request? lockRequest;
+    var released = false;
+    http.Request? releaseRequest;
     final api = AssessmentApiClient(
       accessToken: 'token',
       client: MockClient((request) async {
         if (request.method == 'POST' &&
-            request.url.path.endsWith('/term-evaluations/lock')) {
-          lockRequest = request;
-          locked = true;
-          return http.Response('{"status":"LOCKED"}', 200);
+            request.url.path.endsWith('/term-evaluations/release')) {
+          releaseRequest = request;
+          released = true;
+          return http.Response('{"status":"RELEASED"}', 200);
         }
         return http.Response(
           jsonEncode({
-            'released': true,
-            'cycleStatus': locked ? 'LOCKED' : 'RELEASED',
-            'teacherEntryOpen': !locked,
-            'locked': locked,
+            'released': released,
+            'cycleStatus': released ? 'RELEASED' : 'NOT_RELEASED',
+            'teacherEntryOpen': released,
+            'locked': false,
             'totalAssignments': 0,
             'submitted': 0,
             'incomplete': 0,
@@ -853,19 +1463,180 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Released'), findsOneWidget);
-    expect(find.byKey(const ValueKey('lock-evaluations')), findsOneWidget);
-    expect(find.text('Refresh'), findsNothing);
-
-    await tester.tap(find.byKey(const ValueKey('lock-evaluations')));
-    await tester.pumpAndSettle();
-    expect(find.text('Lock evaluations?'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('confirm-lock-evaluations')));
-    await tester.pumpAndSettle();
-
-    expect(lockRequest, isNotNull);
-    expect(lockRequest!.url.queryParameters['termId'], '7');
     expect(find.text('Locked'), findsOneWidget);
     expect(find.byKey(const ValueKey('release-evaluations')), findsOneWidget);
+    expect(find.text('Refresh'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('release-evaluations')));
+    await tester.pumpAndSettle();
+    expect(find.text('Release evaluations?'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('confirm-release-evaluations')));
+    await tester.pumpAndSettle();
+
+    expect(releaseRequest, isNotNull);
+    expect(releaseRequest!.url.queryParameters['termId'], '7');
+    expect(find.text('Released'), findsOneWidget);
+    expect(find.byKey(const ValueKey('release-evaluations')), findsNothing);
+    expect(find.byKey(const ValueKey('lock-evaluations')), findsNothing);
   });
+
+  testWidgets(
+    'manager sees a contextual update banner only when teaching setup changed',
+    (tester) async {
+      await useWideScreen(tester);
+      var changesDetected = true;
+      http.Request? syncRequest;
+      final api = AssessmentApiClient(
+        accessToken: 'token',
+        client: MockClient((request) async {
+          if (request.method == 'POST' &&
+              request.url.path.endsWith('/term-evaluations/sync')) {
+            syncRequest = request;
+            changesDetected = false;
+            return http.Response('{"assignmentsCreated":1}', 200);
+          }
+          return http.Response(
+            jsonEncode({
+              'released': true,
+              'cycleStatus': 'RELEASED',
+              'teacherEntryOpen': true,
+              'locked': false,
+              'setupChangesDetected': changesDetected,
+              'pendingAssignmentCount': changesDetected ? 1 : 0,
+              'totalAssignments': changesDetected ? 1 : 0,
+              'submitted': 0,
+              'incomplete': changesDetected ? 1 : 0,
+              'assignments': const [],
+              'insights': {'totalStudents': 0, 'criteria': const []},
+            }),
+            200,
+          );
+        }),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TermEvaluationWorkflowScreen(
+            api: api,
+            schoolId: 'SCHOOL-1',
+            viewerName: 'Nana Headmaster',
+            viewerRole: 'HEADMASTER',
+            setup: setup,
+            managementProgressOnly: true,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('New class or teacher changes found'), findsOneWidget);
+      expect(find.byKey(const ValueKey('update-evaluations')), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('update-evaluations')));
+      await tester.pumpAndSettle();
+
+      expect(syncRequest, isNotNull);
+      expect(syncRequest!.url.queryParameters['termId'], '7');
+      expect(find.text('New class or teacher changes found'), findsNothing);
+      expect(
+        find.text('Evaluations updated. 1 evaluation record was added.'),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'leadership approves a proposed score correction and regeneration',
+    (tester) async {
+      await useWideScreen(tester);
+      var pending = true;
+      http.Request? approvalRequest;
+      final api = AssessmentApiClient(
+        accessToken: 'token',
+        client: MockClient((request) async {
+          if (request.url.path.contains('/report-corrections/')) {
+            if (request.method == 'POST' &&
+                request.url.path.endsWith('/9/approve')) {
+              approvalRequest = request;
+              pending = false;
+              return http.Response(
+                '{"id":9,"status":"APPROVED_REGENERATED"}',
+                200,
+              );
+            }
+            return http.Response(
+              pending
+                  ? jsonEncode([
+                      {
+                        'id': 9,
+                        'customStudentId': 'STU-1',
+                        'assessmentId': 'ASM-1',
+                        'assessmentTitle': 'Mathematics CAT 1',
+                        'originalScore': 12,
+                        'proposedScore': 15,
+                        'reason': 'Transcription error',
+                        'requestedBy': 'teacher@example.com',
+                        'assignedApprover': 'head@example.com',
+                      },
+                    ])
+                  : '[]',
+              200,
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'released': true,
+              'cycleStatus': 'RELEASED',
+              'teacherEntryOpen': true,
+              'totalAssignments': 0,
+              'submitted': 0,
+              'incomplete': 0,
+              'assignments': const [],
+              'readiness': {
+                'readyStudents': 0,
+                'blockedStudents': 0,
+                'students': const [],
+              },
+              'insights': {'totalStudents': 0, 'criteria': const []},
+            }),
+            200,
+          );
+        }),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TermEvaluationWorkflowScreen(
+            api: api,
+            schoolId: 'SCHOOL-1',
+            viewerName: 'Nana Headmaster',
+            viewerRole: 'HEADMASTER',
+            setup: setup,
+            managementProgressOnly: true,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('1 report correction needs'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('review-report-corrections')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('12 → 15'), findsOneWidget);
+      expect(
+        find.textContaining('Assigned to head@example.com'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.text('Approve & regenerate').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Approve & regenerate').last);
+      await tester.pumpAndSettle();
+
+      expect(approvalRequest, isNotNull);
+      expect(approvalRequest!.method, 'POST');
+      expect(
+        find.text('No correction requests are awaiting a decision.'),
+        findsOneWidget,
+      );
+    },
+  );
 }

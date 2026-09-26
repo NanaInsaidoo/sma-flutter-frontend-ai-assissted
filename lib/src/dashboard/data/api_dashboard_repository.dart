@@ -186,17 +186,8 @@ class ApiDashboardRepository implements DashboardRepository {
       final totalStudents = _integer(statistics['totalStudents']);
       final activeClasses = _integer(statistics['totalActiveClasses']);
       final totalClasses = _integer(statistics['totalClasses']);
-      final attendanceRate = attendance.today.totalStudents == 0
-          ? 0.0
-          : ((attendance.today.present + attendance.today.late) /
-                    attendance.today.totalStudents) *
-                100;
-      final streamsPending = attendance.schoolDay
-          ? attendance.classes.where((item) {
-              final recorded = item.present + item.absent + item.late;
-              return !item.submitted || recorded < item.totalStudents;
-            }).length
-          : 0;
+      final attendanceRate = attendance.term.attendanceRate;
+      final studentsNeedingAttention = attendance.term.studentsNeedingAttention;
 
       return DashboardSnapshot(
         schoolName: schoolName?.trim().isNotEmpty == true
@@ -229,11 +220,12 @@ class ApiDashboardRepository implements DashboardRepository {
             color: AppColors.purple,
           ),
           DashboardMetric(
-            label: 'Attendance today',
+            label: 'Student attendance',
             value: '${attendanceRate.toStringAsFixed(1)}%',
-            caption:
-                '${attendance.today.present} of ${attendance.today.totalStudents} present',
-            change: '$streamsPending streams pending',
+            caption: 'Term-to-date attendance',
+            change: studentsNeedingAttention == 0
+                ? 'No attendance concerns'
+                : '$studentsNeedingAttention student${studentsNeedingAttention == 1 ? '' : 's'} need follow-up',
             icon: Icons.fact_check_rounded,
             color: AppColors.blue,
           ),
@@ -273,10 +265,11 @@ class ApiDashboardRepository implements DashboardRepository {
         calendarEvents: schoolEvents,
         activities: const [],
         attendance: AttendanceSummary(
-          total: attendance.today.totalStudents,
-          present: attendance.today.present,
-          absent: attendance.today.absent,
-          late: attendance.today.late,
+          total: attendance.term.totalStudents,
+          present: attendance.term.present,
+          absent: attendance.term.absent,
+          late: attendance.term.late,
+          studentsNeedingAttention: studentsNeedingAttention,
         ),
         fees: FeeSummary(
           collected: feeOverview.totalCollected,
@@ -319,6 +312,40 @@ class ApiDashboardRepository implements DashboardRepository {
         })
         .whereType<CalendarEventType>()
         .toList();
+  }
+
+  @override
+  Future<List<CalendarEventChange>> getCalendarEventHistory({
+    required String schoolId,
+    required String eventId,
+  }) async {
+    final school = Uri.encodeQueryComponent(schoolId);
+    final id = Uri.encodeComponent(eventId);
+    final items = await _jsonListRequest(
+      () => _client
+          .get(
+            Uri.parse(
+              '${ApiConfig.baseUrl}/api/term-events/$id/history?customSchoolId=$school',
+            ),
+            headers: _headers,
+          )
+          .timeout(const Duration(seconds: 20)),
+    );
+    return items.whereType<Map<String, dynamic>>().map((item) {
+      final actorName = _firstText(item, const [
+        'actorDisplayName',
+        'actorUsername',
+      ], fallback: 'School administrator');
+      return CalendarEventChange(
+        action: _firstText(item, const ['action'], fallback: 'UPDATED'),
+        actorName: actorName,
+        actorRole: _firstText(item, const ['actorRole'], fallback: ''),
+        summary: _firstText(item, const [
+          'summary',
+        ], fallback: 'Updated calendar event'),
+        changedAt: _dateValue(item['changedAt']),
+      );
+    }).toList();
   }
 
   @override

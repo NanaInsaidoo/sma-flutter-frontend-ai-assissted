@@ -20,10 +20,7 @@ void main() {
         ),
       ),
     );
-    expect(
-      find.textContaining('Enter the global username'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('Enter the global username'), findsOneWidget);
     expect(
       find.textContaining('registered phone to find eligible accounts'),
       findsNothing,

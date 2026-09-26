@@ -8,8 +8,10 @@ class StaffAttendanceScreen extends StatefulWidget {
     super.key,
     required this.schoolId,
     required this.repository,
+    this.schoolName,
   });
   final String schoolId;
+  final String? schoolName;
   final StaffAttendanceRepository repository;
   @override
   State<StaffAttendanceScreen> createState() => _StaffAttendanceScreenState();
@@ -48,11 +50,24 @@ class _StaffAttendanceScreenState extends State<StaffAttendanceScreen> {
       final people = initial || _entries.isEmpty
           ? await widget.repository.getActiveStaff(widget.schoolId)
           : _entries.map((e) => e.person).toList();
-      final entries = await widget.repository.getDailyRegister(
+      final loadedEntries = await widget.repository.getDailyRegister(
         schoolId: widget.schoolId,
         date: _date,
         people: people,
       );
+      final entries = loadedEntries
+          .map(
+            (entry) =>
+                entry.approvedLeaveEndDate != null &&
+                    entry.mark == StaffAttendanceMark.unmarked
+                ? entry.copyWith(
+                    mark: StaffAttendanceMark.absent,
+                    excused: true,
+                    absenceReason: 'Approved leave',
+                  )
+                : entry,
+          )
+          .toList();
       if (!mounted) return;
       final markedEntries = entries
           .where((entry) => entry.mark != StaffAttendanceMark.unmarked)
@@ -74,6 +89,7 @@ class _StaffAttendanceScreenState extends State<StaffAttendanceScreen> {
   Widget build(BuildContext context) => !_showRegister
       ? StaffAttendanceDashboard(
           schoolId: widget.schoolId,
+          schoolName: widget.schoolName,
           repository: widget.repository,
           onOpenRegister: _openRegister,
         )
@@ -527,7 +543,7 @@ class _StaffAttendanceScreenState extends State<StaffAttendanceScreen> {
                     ),
                   if (entry.approvedLeaveEndDate != null)
                     Text(
-                      'Approved leave · through ${entry.approvedLeaveEndDate}',
+                      'Approved leave · through ${_formatLeaveDate(entry.approvedLeaveEndDate!)}',
                       style: const TextStyle(
                         color: AppColors.blue,
                         fontSize: 12,
@@ -986,4 +1002,9 @@ class _StaffAttendanceScreenState extends State<StaffAttendanceScreen> {
       );
   static String _formatDate(DateTime date) =>
       '${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][date.weekday - 1]}, ${date.day} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][date.month - 1]} ${date.year}';
+  static String _formatLeaveDate(String value) {
+    final date = DateTime.tryParse(value);
+    if (date == null) return value;
+    return '${date.day} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][date.month - 1]} ${date.year}';
+  }
 }

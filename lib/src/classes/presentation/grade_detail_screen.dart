@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../domain/class_models.dart';
+import '../../assessments/data/assessment_api_client.dart';
 import '../../attendance/data/attendance_api_client.dart';
 import '../../attendance/domain/attendance_models.dart';
 import '../../attendance/presentation/attendance_screen.dart';
@@ -23,9 +24,11 @@ class GradeDetailScreen extends StatefulWidget {
     this.onRefreshAccessToken,
     this.onOpenAttendance,
     this.onOpenAssessments,
+    this.onOpenEvaluations,
     this.onOpenIncidents,
     this.onOpenCalendar,
     this.attendanceRepository,
+    this.teacherView = false,
     required this.repository,
     this.onClassTeachersChanged,
     required this.onBack,
@@ -45,9 +48,11 @@ class GradeDetailScreen extends StatefulWidget {
   final Future<String?> Function()? onRefreshAccessToken;
   final VoidCallback? onOpenAttendance;
   final VoidCallback? onOpenAssessments;
+  final VoidCallback? onOpenEvaluations;
   final VoidCallback? onOpenIncidents;
   final VoidCallback? onOpenCalendar;
   final AttendanceRepository? attendanceRepository;
+  final bool teacherView;
   final ClassesRepository repository;
   final Future<void> Function()? onClassTeachersChanged;
   final VoidCallback onBack;
@@ -144,6 +149,7 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
       );
   late Future<AttendanceRoster> _rosterFuture;
   late Future<AttendanceTermHistory> _attendanceHistoryFuture;
+  late Future<_TeacherClassOverview> _teacherOverviewFuture;
   bool _attendanceRegisterOpen = false;
   DateTime? _attendanceRegisterDate;
 
@@ -169,6 +175,89 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
       date: DateTime.now(),
     );
     _attendanceHistoryFuture = _loadAttendanceHistory();
+    _teacherOverviewFuture = _loadTeacherOverview();
+  }
+
+  Future<_TeacherClassOverview> _loadTeacherOverview() async {
+    final results = await Future.wait<Object?>([
+      _optionalOverview(() => _rosterFuture),
+      _optionalOverview(
+        () => _attendanceRepository.getEntryContext(
+          customSchoolId: widget.customSchoolId,
+          streamId: widget.streamId,
+          date: DateTime.now(),
+        ),
+      ),
+      _optionalOverview(
+        () => _attendanceRepository.getLateConcerns(
+          customSchoolId: widget.customSchoolId,
+          gradeLevelId: widget.gradeLevelId,
+          streamId: widget.streamId,
+          date: DateTime.now(),
+        ),
+      ),
+      _optionalOverview(() async {
+        final api = AssessmentApiClient(
+          accessToken: widget.accessToken,
+          onRefreshAccessToken: widget.onRefreshAccessToken,
+        );
+        final setup = await api.getFormSetup(widget.customSchoolId);
+        final assessments = await api.getAssessments(
+          customSchoolId: widget.customSchoolId,
+          streamId: widget.streamId,
+          term: setup.termSequence,
+          academicYearId: setup.academicYearId,
+        );
+        var incomplete = 0;
+        var outstandingScores = 0;
+        for (final assessment in assessments.where(
+          (item) => _overviewInteger(item['streamId']) == widget.streamId,
+        )) {
+          final entered = _overviewInteger(assessment['scoresEntered']);
+          final total = _overviewInteger(assessment['totalStudents']);
+          final missing = (total - entered).clamp(0, total);
+          if (missing > 0) incomplete++;
+          outstandingScores += missing;
+        }
+        return (incomplete: incomplete, outstanding: outstandingScores);
+      }),
+    ]);
+    final roster = results[0] as AttendanceRoster?;
+    final attendance = results[1] as AttendanceEntryContext?;
+    final concerns = results[2] as List<AttendanceLateConcern>?;
+    final assessmentWork = results[3] as ({int incomplete, int outstanding})?;
+
+    var boys = 0;
+    var girls = 0;
+    var unspecified = 0;
+    for (final student in roster?.students ?? const <AttendanceStudent>[]) {
+      final gender = student.gender.trim().toLowerCase();
+      if (gender == 'male' || gender == 'boy') {
+        boys++;
+      } else if (gender == 'female' || gender == 'girl') {
+        girls++;
+      } else {
+        unspecified++;
+      }
+    }
+    return _TeacherClassOverview(
+      totalStudents: roster?.students.length,
+      boys: roster == null ? null : boys,
+      girls: roster == null ? null : girls,
+      unspecified: roster == null ? null : unspecified,
+      attendance: attendance,
+      incompleteAssessments: assessmentWork?.incomplete,
+      outstandingScores: assessmentWork?.outstanding,
+      concerns: concerns?.length,
+    );
+  }
+
+  Future<T?> _optionalOverview<T>(Future<T> Function() load) async {
+    try {
+      return await load();
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _loadSubjects() async {
@@ -186,15 +275,18 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
           customSchoolId: widget.customSchoolId,
           streamId: widget.streamId,
         ),
-        widget.repository.getSchoolStaff(widget.customSchoolId),
+        if (!widget.teacherView)
+          widget.repository.getSchoolStaff(widget.customSchoolId),
       ]);
       if (!mounted) return;
       setState(() {
         _subjects = result[0] as List<ClassSubject>;
         _subjectTeachers = result[1] as List<SubjectTeacherAssignment>;
-        _staff = (result[2] as List<SchoolStaffOption>)
-            .where((s) => s.active)
-            .toList();
+        _staff = widget.teacherView
+            ? const []
+            : (result[2] as List<SchoolStaffOption>)
+                  .where((s) => s.active)
+                  .toList();
         _loadingSubjects = false;
       });
     } catch (e) {
@@ -227,6 +319,7 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
               date: DateTime.now(),
             );
             _attendanceHistoryFuture = _loadAttendanceHistory();
+            _teacherOverviewFuture = _loadTeacherOverview();
           });
         },
       );
@@ -249,18 +342,11 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _ClassIntro(
-                          streamName: widget.streamName,
-                          classTeacherName: _displayClassTeacherName,
-                          enrolled: widget.enrolled,
-                          capacity: widget.capacity,
-                          active: widget.active,
-                          totalSubjects: _totalSubjects,
-                        ),
-                        const SizedBox(height: 18),
                         _StreamDetailTabs(
                           selected: _selectedTab,
                           pendingAttendance: 0,
+                          onOpenAssessments: widget.onOpenAssessments,
+                          onOpenEvaluations: widget.onOpenEvaluations,
                           onChanged: (tab) =>
                               setState(() => _selectedTab = tab),
                         ),
@@ -268,37 +354,41 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
                         switch (_selectedTab) {
                           _StreamDetailTab.overview => Column(
                             children: [
-                              _ClassStats(
-                                enrolled: widget.enrolled,
-                                capacity: widget.capacity,
-                                active: widget.active,
+                              _TeacherClassOverviewCards(
+                                future: _teacherOverviewFuture,
+                                onOpenAttendance: () => setState(
+                                  () => _selectedTab =
+                                      _StreamDetailTab.attendance,
+                                ),
+                                onOpenAssessments: widget.onOpenAssessments,
+                                onOpenStudents: null,
                               ),
                               const SizedBox(height: 18),
-                              _ClassTeachersCard(
-                                teachers: _classTeachers,
-                                loading: _loadingTeachers,
-                                error: _teacherError,
-                                busy: _teacherActionBusy,
-                                fallbackTeacherName: widget.classTeacherName,
-                                onRetry: _loadClassTeachers,
-                                onAddTeacher: _showAddClassTeacherDialog,
-                                onSetPrimary: _setPrimaryClassTeacher,
-                                onToggleActive: _toggleClassTeacher,
-                                onRemove: _removeClassTeacher,
-                              ),
-                              const SizedBox(height: 18),
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Expanded(
-                                    child: _StudentsCard(
-                                      rosterFuture: _rosterFuture,
-                                      onRetry: _reloadRoster,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 16),
-                                  SizedBox(
-                                    width: 290,
+                              if (!widget.teacherView) ...[
+                                _ClassTeachersCard(
+                                  teachers: _classTeachers,
+                                  loading: _loadingTeachers,
+                                  error: _teacherError,
+                                  busy: _teacherActionBusy,
+                                  fallbackTeacherName: widget.classTeacherName,
+                                  onRetry: _loadClassTeachers,
+                                  onAddTeacher: _showAddClassTeacherDialog,
+                                  onSetPrimary: _setPrimaryClassTeacher,
+                                  onToggleActive: _toggleClassTeacher,
+                                  onRemove: _removeClassTeacher,
+                                  editable: true,
+                                ),
+                                const SizedBox(height: 18),
+                              ],
+                              LayoutBuilder(
+                                builder: (context, constraints) {
+                                  final stacked = constraints.maxWidth < 900;
+                                  final students = _StudentsCard(
+                                    rosterFuture: _rosterFuture,
+                                    onRetry: _reloadRoster,
+                                  );
+                                  final links = SizedBox(
+                                    width: stacked ? constraints.maxWidth : 330,
                                     child: _SidePanel(
                                       totalSubjects: _totalSubjects,
                                       gesCount: _subjects
@@ -319,11 +409,33 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
                                           widget.onOpenAssessments,
                                       onOpenIncidents: widget.onOpenIncidents,
                                       onOpenCalendar: widget.onOpenCalendar,
+                                      primaryLinksInTabs: true,
                                     ),
-                                  ),
-                                ],
+                                  );
+                                  return stacked
+                                      ? Column(
+                                          children: [
+                                            students,
+                                            const SizedBox(height: 16),
+                                            links,
+                                          ],
+                                        )
+                                      : Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Expanded(child: students),
+                                            const SizedBox(width: 16),
+                                            links,
+                                          ],
+                                        );
+                                },
                               ),
                             ],
+                          ),
+                          _StreamDetailTab.students => _StudentsCard(
+                            rosterFuture: _rosterFuture,
+                            onRetry: _reloadRoster,
                           ),
                           _StreamDetailTab.subjects => _StreamSubjectsCard(
                             subjects: _subjects,
@@ -333,6 +445,7 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
                             error: _subjectError,
                             onRetry: _loadSubjects,
                             onManage: _manageSubjectTeachers,
+                            editable: !widget.teacherView,
                           ),
                           _StreamDetailTab.attendance => _StreamAttendanceTab(
                             streamName: widget.streamName,
@@ -343,6 +456,7 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
                                 _openAttendanceRegister(DateTime.now()),
                             onOpenDay: _openAttendanceRegister,
                             onResolveDay: _resolveNonSchoolDay,
+                            canResolveNonSchoolDay: !widget.teacherView,
                             onRetry: () => setState(
                               () => _attendanceHistoryFuture =
                                   _loadAttendanceHistory(),
@@ -401,6 +515,7 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
       streamId: widget.streamId,
       date: DateTime.now(),
     );
+    _teacherOverviewFuture = _loadTeacherOverview();
   });
 
   Future<AttendanceTermHistory> _loadAttendanceHistory() =>
@@ -722,10 +837,13 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
           customSchoolId: widget.customSchoolId,
           streamId: widget.streamId,
         ),
-        widget.repository.getSchoolStaff(widget.customSchoolId),
+        if (!widget.teacherView)
+          widget.repository.getSchoolStaff(widget.customSchoolId),
       ]);
       final teachers = result[0] as List<ClassTeacherAssignment>;
-      final staff = result[1] as List<SchoolStaffOption>;
+      final staff = widget.teacherView
+          ? const <SchoolStaffOption>[]
+          : result[1] as List<SchoolStaffOption>;
       final staffById = {for (final member in staff) member.id: member};
       final hydratedTeachers = teachers.map((teacher) {
         final member = staffById[teacher.staffId];
@@ -754,14 +872,6 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
         _loadingTeachers = false;
       });
     }
-  }
-
-  String? get _displayClassTeacherName {
-    final active = _classTeachers.where((teacher) => teacher.isActive).toList();
-    if (active.isEmpty) return widget.classTeacherName;
-    return active
-        .firstWhere((teacher) => teacher.isPrimary, orElse: () => active.first)
-        .name;
   }
 
   Future<void> _showAddClassTeacherDialog() async {
@@ -999,252 +1109,342 @@ class _DetailTopBar extends StatelessWidget {
   }
 }
 
-class _ClassIntro extends StatelessWidget {
-  const _ClassIntro({
-    required this.streamName,
-    required this.classTeacherName,
-    required this.enrolled,
-    required this.capacity,
-    required this.active,
-    required this.totalSubjects,
+class _TeacherClassOverview {
+  const _TeacherClassOverview({
+    required this.totalStudents,
+    required this.boys,
+    required this.girls,
+    required this.unspecified,
+    required this.attendance,
+    required this.incompleteAssessments,
+    required this.outstandingScores,
+    required this.concerns,
   });
 
-  final String streamName;
-  final String? classTeacherName;
-  final int enrolled;
-  final int? capacity;
-  final bool active;
-  final int totalSubjects;
+  final int? totalStudents;
+  final int? boys;
+  final int? girls;
+  final int? unspecified;
+  final AttendanceEntryContext? attendance;
+  final int? incompleteAssessments;
+  final int? outstandingScores;
+  final int? concerns;
+}
+
+int _overviewInteger(dynamic value) =>
+    value is num ? value.toInt() : int.tryParse('$value') ?? 0;
+
+class _TeacherClassOverviewCards extends StatelessWidget {
+  const _TeacherClassOverviewCards({
+    required this.future,
+    required this.onOpenAttendance,
+    required this.onOpenAssessments,
+    required this.onOpenStudents,
+  });
+
+  final Future<_TeacherClassOverview> future;
+  final VoidCallback onOpenAttendance;
+  final VoidCallback? onOpenAssessments;
+  final VoidCallback? onOpenStudents;
 
   @override
   Widget build(BuildContext context) {
-    final teacher = classTeacherName?.trim() ?? '';
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          '$enrolled enrolled · ${capacity == null ? 'Capacity not set' : 'Capacity $capacity'}',
-          style: const TextStyle(color: AppColors.muted, fontSize: 13),
-        ),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            _IntroPill(
-              icon: Icons.groups_rounded,
-              label: capacity == null
-                  ? 'Capacity not set'
-                  : '$enrolled / $capacity',
+    return FutureBuilder<_TeacherClassOverview>(
+      future: future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Card(
+            child: Padding(
+              padding: EdgeInsets.all(28),
+              child: Center(child: CircularProgressIndicator()),
             ),
-            _IntroPill(
-              icon: Icons.person_outline_rounded,
-              label: teacher.isEmpty ? 'No class teacher assigned' : teacher,
+          );
+        }
+        final value = snapshot.data;
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final columns = constraints.maxWidth >= 1040
+                ? 4
+                : constraints.maxWidth >= 620
+                ? 2
+                : 1;
+            final width =
+                (constraints.maxWidth - ((columns - 1) * 12)) / columns;
+            return Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                SizedBox(
+                  width: width,
+                  child: _ClassCompositionCard(
+                    total: value?.totalStudents,
+                    boys: value?.boys,
+                    girls: value?.girls,
+                    unspecified: value?.unspecified,
+                    onTap: onOpenStudents,
+                  ),
+                ),
+                SizedBox(
+                  width: width,
+                  child: _TeacherInsightCard(
+                    label: 'Today’s attendance',
+                    value: _attendanceValue(value?.attendance),
+                    caption: _attendanceCaption(value?.attendance),
+                    icon: Icons.fact_check_outlined,
+                    color: AppColors.green,
+                    onTap: onOpenAttendance,
+                  ),
+                ),
+                SizedBox(
+                  width: width,
+                  child: _TeacherInsightCard(
+                    label: 'Assessment work',
+                    value: value?.outstandingScores == null
+                        ? 'Unavailable'
+                        : value!.outstandingScores == 0
+                        ? 'Up to date'
+                        : '${value.outstandingScores} scores',
+                    caption: value?.incompleteAssessments == null
+                        ? 'Assessment summary could not be loaded'
+                        : value!.incompleteAssessments == 0
+                        ? 'No incomplete assessments'
+                        : '${value.incompleteAssessments} assessment${value.incompleteAssessments == 1 ? '' : 's'} need work',
+                    icon: Icons.assignment_outlined,
+                    color: AppColors.blue,
+                    onTap: onOpenAssessments,
+                  ),
+                ),
+                SizedBox(
+                  width: width,
+                  child: _TeacherInsightCard(
+                    label: 'Needs attention',
+                    value: value?.concerns == null
+                        ? 'Unavailable'
+                        : value!.concerns == 0
+                        ? 'No concerns'
+                        : '${value.concerns} student${value.concerns == 1 ? '' : 's'}',
+                    caption: value?.concerns == null
+                        ? 'Student concerns could not be loaded'
+                        : value!.concerns == 0
+                        ? 'No repeated-lateness concerns'
+                        : 'Repeated lateness to review',
+                    icon: Icons.person_search_outlined,
+                    color: AppColors.amber,
+                    onTap: onOpenAttendance,
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  String _attendanceValue(AttendanceEntryContext? attendance) {
+    if (attendance == null) return 'Unavailable';
+    if (!attendance.schoolDay ||
+        attendance.registerStatus == AttendanceRegisterStatus.nonSchoolDay) {
+      return 'Non-school day';
+    }
+    return switch (attendance.registerStatus) {
+      AttendanceRegisterStatus.notSubmitted => 'Not submitted',
+      AttendanceRegisterStatus.awaitingAcknowledgment =>
+        'Awaiting acknowledgment',
+      AttendanceRegisterStatus.complete => 'Complete',
+      AttendanceRegisterStatus.nonSchoolDay => 'Non-school day',
+    };
+  }
+
+  String _attendanceCaption(AttendanceEntryContext? attendance) {
+    if (attendance == null) return 'Attendance status could not be loaded';
+    if (!attendance.schoolDay) {
+      return attendance.calendarMessage.trim().isEmpty
+          ? 'Not an official school day'
+          : attendance.calendarMessage;
+    }
+    return switch (attendance.registerStatus) {
+      AttendanceRegisterStatus.notSubmitted => 'Attendance is due today',
+      AttendanceRegisterStatus.awaitingAcknowledgment =>
+        'Submitted and waiting for review',
+      AttendanceRegisterStatus.complete => 'Attendance has been acknowledged',
+      AttendanceRegisterStatus.nonSchoolDay => 'Not an official school day',
+    };
+  }
+}
+
+class _ClassCompositionCard extends StatelessWidget {
+  const _ClassCompositionCard({
+    required this.total,
+    required this.boys,
+    required this.girls,
+    required this.unspecified,
+    required this.onTap,
+  });
+
+  final int? total;
+  final int? boys;
+  final int? girls;
+  final int? unspecified;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final knownTotal = total ?? 0;
+    final boyCount = boys ?? 0;
+    final girlCount = girls ?? 0;
+    final otherCount = unspecified ?? 0;
+    final parts = <String>[
+      '$boyCount ${boyCount == 1 ? 'boy' : 'boys'}',
+      '$girlCount ${girlCount == 1 ? 'girl' : 'girls'}',
+      if (otherCount > 0) '$otherCount not specified',
+    ];
+    return _TeacherInsightCard(
+      label: 'Class composition',
+      value: total == null ? 'Unavailable' : '$knownTotal students',
+      caption: total == null
+          ? 'Class composition could not be loaded'
+          : parts.join(' · '),
+      icon: Icons.donut_small_outlined,
+      color: AppColors.purple,
+      onTap: onTap,
+      footer: knownTotal <= 0
+          ? null
+          : ClipRRect(
+              borderRadius: BorderRadius.circular(99),
+              child: SizedBox(
+                height: 6,
+                child: Row(
+                  children: [
+                    if (boyCount > 0)
+                      Expanded(
+                        flex: boyCount,
+                        child: Container(color: AppColors.blue),
+                      ),
+                    if (girlCount > 0)
+                      Expanded(
+                        flex: girlCount,
+                        child: Container(color: AppColors.purple),
+                      ),
+                    if (otherCount > 0)
+                      Expanded(
+                        flex: otherCount,
+                        child: Container(color: AppColors.muted),
+                      ),
+                  ],
+                ),
+              ),
             ),
-            _IntroPill(
-              icon: active
-                  ? Icons.check_circle_outline_rounded
-                  : Icons.pause_circle_outline_rounded,
-              label: active ? 'Active stream' : 'Inactive stream',
-              color: active ? AppColors.green : AppColors.muted,
-            ),
-          ],
-        ),
-      ],
     );
   }
 }
 
-class _IntroPill extends StatelessWidget {
-  const _IntroPill({
-    required this.icon,
-    required this.label,
-    this.color = AppColors.green,
-  });
-
-  final IconData icon;
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(10, 7, 14, 7),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: AppColors.border),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: color, size: 16),
-          const SizedBox(width: 7),
-          Text(label, style: const TextStyle(fontWeight: FontWeight.w800)),
-        ],
-      ),
-    );
-  }
-}
-
-class _ClassStats extends StatelessWidget {
-  const _ClassStats({
-    required this.enrolled,
-    required this.capacity,
-    required this.active,
-  });
-
-  final int enrolled;
-  final int? capacity;
-  final bool active;
-
-  @override
-  Widget build(BuildContext context) {
-    final capacityText = capacity == null ? 'Not set' : '$capacity';
-    final fill = capacity == null || capacity! <= 0
-        ? null
-        : ((enrolled / capacity!) * 100).round();
-    return Row(
-      children: [
-        Expanded(
-          child: _StatCard(
-            label: 'Enrolled',
-            value: '$enrolled',
-            sub: 'Active students in stream',
-            icon: Icons.people_alt_rounded,
-            color: AppColors.green,
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: _StatCard(
-            label: 'Capacity',
-            value: capacityText,
-            sub: 'Stream capacity',
-            icon: Icons.event_seat_rounded,
-            color: AppColors.amber,
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: _StatCard(
-            label: 'Fill',
-            value: fill == null ? 'N/A' : '$fill%',
-            sub: fill == null
-                ? 'Set capacity to calculate'
-                : 'Current utilization',
-            icon: Icons.stacked_line_chart_rounded,
-            color: AppColors.purple,
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: _StatCard(
-            label: 'Status',
-            value: active ? 'Active' : 'Inactive',
-            sub: 'Backend stream state',
-            icon: active
-                ? Icons.check_circle_outline_rounded
-                : Icons.pause_circle_outline_rounded,
-            color: active ? AppColors.green : AppColors.muted,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _StatCard extends StatelessWidget {
-  const _StatCard({
+class _TeacherInsightCard extends StatelessWidget {
+  const _TeacherInsightCard({
     required this.label,
     required this.value,
-    required this.sub,
+    required this.caption,
     required this.icon,
     required this.color,
+    required this.onTap,
+    this.footer,
   });
 
   final String label;
   final String value;
-  final String sub;
+  final String caption;
   final IconData icon;
   final Color color;
+  final VoidCallback? onTap;
+  final Widget? footer;
 
   @override
   Widget build(BuildContext context) {
     return Card(
-      margin: EdgeInsets.zero,
-      child: Stack(
-        children: [
-          Positioned.fill(
-            left: 0,
-            right: null,
-            child: Container(width: 4, color: color),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        label.toUpperCase(),
-                        style: TextStyle(
-                          color: AppColors.muted,
-                          fontSize: 10,
-                          letterSpacing: .7,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        value,
-                        style: const TextStyle(
-                          color: AppColors.text,
-                          fontSize: 26,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      Text(
-                        sub,
-                        style: const TextStyle(
-                          color: AppColors.muted,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: .12),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(icon, color: color, size: 19),
                   ),
+                  const Spacer(),
+                  if (onTap != null)
+                    const Icon(
+                      Icons.arrow_forward_rounded,
+                      size: 18,
+                      color: AppColors.muted,
+                    ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Text(
+                label.toUpperCase(),
+                style: const TextStyle(
+                  color: AppColors.muted,
+                  fontSize: 10,
+                  letterSpacing: .7,
+                  fontWeight: FontWeight.w900,
                 ),
-                Container(
-                  padding: const EdgeInsets.all(9),
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: .12),
-                    borderRadius: BorderRadius.circular(9),
-                  ),
-                  child: Icon(icon, color: color, size: 18),
+              ),
+              const SizedBox(height: 5),
+              Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: AppColors.text,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                caption,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: AppColors.muted, fontSize: 12),
+              ),
+              if (footer != null) ...[
+                const SizedBox(height: 12),
+                footer!,
+              ] else
+                const SizedBox(height: 18),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 }
 
-enum _StreamDetailTab { overview, subjects, attendance }
+enum _StreamDetailTab { overview, students, subjects, attendance }
 
 class _StreamDetailTabs extends StatelessWidget {
   const _StreamDetailTabs({
     required this.selected,
     required this.pendingAttendance,
     required this.onChanged,
+    this.onOpenAssessments,
+    this.onOpenEvaluations,
   });
 
   final _StreamDetailTab selected;
   final int pendingAttendance;
   final ValueChanged<_StreamDetailTab> onChanged;
+  final VoidCallback? onOpenAssessments;
+  final VoidCallback? onOpenEvaluations;
 
   @override
   Widget build(BuildContext context) {
@@ -1262,15 +1462,50 @@ class _StreamDetailTabs extends StatelessWidget {
               Icons.dashboard_outlined,
             ),
             _tab(
-              _StreamDetailTab.subjects,
-              'Subjects',
-              Icons.menu_book_outlined,
-            ),
-            _tab(
               _StreamDetailTab.attendance,
               'Attendance',
               Icons.fact_check_outlined,
               badge: pendingAttendance,
+            ),
+            if (onOpenAssessments != null)
+              _action(
+                'Assessments',
+                Icons.assignment_outlined,
+                onOpenAssessments!,
+              ),
+            if (onOpenEvaluations != null)
+              _action(
+                'Evaluations',
+                Icons.star_outline_rounded,
+                onOpenEvaluations!,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _action(String label, IconData icon, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.transparent),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 18, color: AppColors.muted),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: const TextStyle(
+                color: AppColors.text,
+                fontWeight: FontWeight.w800,
+              ),
             ),
           ],
         ),
@@ -1349,6 +1584,7 @@ class _StreamAttendanceTab extends StatefulWidget {
     required this.onOpenDay,
     required this.onResolveDay,
     required this.onRetry,
+    this.canResolveNonSchoolDay = true,
   });
 
   final String streamName;
@@ -1359,6 +1595,7 @@ class _StreamAttendanceTab extends StatefulWidget {
   final ValueChanged<DateTime> onOpenDay;
   final void Function(AttendanceDaySummary day, int termId) onResolveDay;
   final VoidCallback onRetry;
+  final bool canResolveNonSchoolDay;
 
   @override
   State<_StreamAttendanceTab> createState() => _StreamAttendanceTabState();
@@ -1658,6 +1895,10 @@ class _StreamAttendanceTabState extends State<_StreamAttendanceTab> {
   }
 
   Future<void> _showMissingActions(AttendanceDaySummary day, int termId) async {
+    if (!widget.canResolveNonSchoolDay) {
+      widget.onOpenDay(day.date);
+      return;
+    }
     final action = await showModalBottomSheet<String>(
       context: context,
       builder: (context) => SafeArea(
@@ -1859,16 +2100,56 @@ String _attendanceDate(DateTime value) {
   return '${value.day} ${months[value.month - 1]} ${value.year}';
 }
 
-class _StudentsCard extends StatelessWidget {
+class _StudentsCard extends StatefulWidget {
   const _StudentsCard({required this.rosterFuture, required this.onRetry});
 
   final Future<AttendanceRoster> rosterFuture;
   final VoidCallback onRetry;
 
   @override
+  State<_StudentsCard> createState() => _StudentsCardState();
+}
+
+class _StudentsCardState extends State<_StudentsCard> {
+  int _sortColumnIndex = 0;
+  bool _sortAscending = true;
+
+  void _sort(int columnIndex, bool ascending) {
+    setState(() {
+      _sortColumnIndex = columnIndex;
+      _sortAscending = ascending;
+    });
+  }
+
+  List<AttendanceStudent> _sorted(List<AttendanceStudent> source) {
+    final students = source.toList();
+    int compare(AttendanceStudent left, AttendanceStudent right) {
+      return switch (_sortColumnIndex) {
+        0 => left.fullName.toLowerCase().compareTo(
+          right.fullName.toLowerCase(),
+        ),
+        1 => left.customStudentId.toLowerCase().compareTo(
+          right.customStudentId.toLowerCase(),
+        ),
+        2 => _studentSex(left).compareTo(_studentSex(right)),
+        3 => (_studentAge(left.dateOfBirth) ?? -1).compareTo(
+          _studentAge(right.dateOfBirth) ?? -1,
+        ),
+        _ => 0,
+      };
+    }
+
+    students.sort(
+      (left, right) =>
+          _sortAscending ? compare(left, right) : compare(right, left),
+    );
+    return students;
+  }
+
+  @override
   Widget build(BuildContext context) {
     return FutureBuilder<AttendanceRoster>(
-      future: rosterFuture,
+      future: widget.rosterFuture,
       builder: (context, snapshot) => Card(
         margin: EdgeInsets.zero,
         clipBehavior: Clip.antiAlias,
@@ -1890,7 +2171,7 @@ class _StudentsCard extends StatelessWidget {
                   children: [
                     const Text('Unable to load the student roster.'),
                     TextButton(
-                      onPressed: onRetry,
+                      onPressed: widget.onRetry,
                       child: const Text('Try again'),
                     ),
                   ],
@@ -1901,25 +2182,243 @@ class _StudentsCard extends StatelessWidget {
                 padding: EdgeInsets.all(42),
                 child: Text('No active students are assigned to this stream.'),
               )
-            else
-              ...snapshot.data!.students.map(
-                (student) => ListTile(
-                  leading: CircleAvatar(
-                    child: Text(
-                      student.fullName.isEmpty
-                          ? '?'
-                          : student.fullName[0].toUpperCase(),
+            else ...[
+              Container(
+                color: const Color(0xFFF7F9F8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 13,
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      flex: 22,
+                      child: _StudentSortHeader(
+                        label: 'Name',
+                        active: _sortColumnIndex == 0,
+                        ascending: _sortAscending,
+                        onTap: () => _sort(
+                          0,
+                          _sortColumnIndex == 0 ? !_sortAscending : true,
+                        ),
+                      ),
                     ),
-                  ),
-                  title: Text(
-                    student.fullName,
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  subtitle: Text(student.customStudentId),
+                    Expanded(
+                      flex: 20,
+                      child: _StudentSortHeader(
+                        label: 'Student ID',
+                        active: _sortColumnIndex == 1,
+                        ascending: _sortAscending,
+                        onTap: () => _sort(
+                          1,
+                          _sortColumnIndex == 1 ? !_sortAscending : true,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      flex: 10,
+                      child: _StudentSortHeader(
+                        label: 'Sex',
+                        active: _sortColumnIndex == 2,
+                        ascending: _sortAscending,
+                        onTap: () => _sort(
+                          2,
+                          _sortColumnIndex == 2 ? !_sortAscending : true,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      flex: 6,
+                      child: _StudentSortHeader(
+                        label: 'Age',
+                        active: _sortColumnIndex == 3,
+                        ascending: _sortAscending,
+                        alignEnd: true,
+                        onTap: () => _sort(
+                          3,
+                          _sortColumnIndex == 3 ? !_sortAscending : true,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
+              ..._sorted(snapshot.data!.students).map(
+                (student) => _StudentTableRow(
+                  student: student,
+                  sex: _studentSex(student),
+                  age: _studentAge(student.dateOfBirth),
+                ),
+              ),
+            ],
           ],
         ),
+      ),
+    );
+  }
+
+  String _studentSex(AttendanceStudent student) {
+    final value = student.gender.trim();
+    if (value.isEmpty) return 'Not specified';
+    final lower = value.toLowerCase();
+    if (lower == 'male' || lower == 'boy') return 'Boy';
+    if (lower == 'female' || lower == 'girl') return 'Girl';
+    return '${value[0].toUpperCase()}${value.substring(1).toLowerCase()}';
+  }
+
+  int? _studentAge(DateTime? dateOfBirth) {
+    if (dateOfBirth == null) return null;
+    final today = DateTime.now();
+    var age = today.year - dateOfBirth.year;
+    if (today.month < dateOfBirth.month ||
+        (today.month == dateOfBirth.month && today.day < dateOfBirth.day)) {
+      age--;
+    }
+    return age < 0 ? null : age;
+  }
+}
+
+class _StudentSortHeader extends StatelessWidget {
+  const _StudentSortHeader({
+    required this.label,
+    required this.active,
+    required this.ascending,
+    required this.onTap,
+    this.alignEnd = false,
+  });
+
+  final String label;
+  final bool active;
+  final bool ascending;
+  final VoidCallback onTap;
+  final bool alignEnd;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: alignEnd ? Alignment.centerRight : Alignment.centerLeft,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label.toUpperCase(),
+                style: TextStyle(
+                  color: active ? AppColors.green : AppColors.muted,
+                  fontSize: 10,
+                  letterSpacing: .55,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(width: 5),
+              Icon(
+                active
+                    ? (ascending
+                          ? Icons.arrow_upward_rounded
+                          : Icons.arrow_downward_rounded)
+                    : Icons.unfold_more_rounded,
+                size: 14,
+                color: active ? AppColors.green : AppColors.muted,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StudentTableRow extends StatelessWidget {
+  const _StudentTableRow({
+    required this.student,
+    required this.sex,
+    required this.age,
+  });
+
+  final AttendanceStudent student;
+  final String sex;
+  final int? age;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: AppColors.border)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 22,
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 15,
+                  backgroundColor: AppColors.greenSoft,
+                  child: Text(
+                    student.fullName.isEmpty
+                        ? '?'
+                        : student.fullName[0].toUpperCase(),
+                    style: const TextStyle(
+                      color: AppColors.green,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    student.fullName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            flex: 20,
+            child: Text(
+              student.customStudentId,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppColors.muted,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          Expanded(
+            flex: 10,
+            child: Text(
+              sex,
+              style: const TextStyle(color: AppColors.text, fontSize: 13),
+            ),
+          ),
+          Expanded(
+            flex: 6,
+            child: Text(
+              age?.toString() ?? '—',
+              textAlign: TextAlign.right,
+              style: const TextStyle(
+                color: AppColors.text,
+                fontSize: 13,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1937,6 +2436,7 @@ class _ClassTeachersCard extends StatelessWidget {
     required this.onSetPrimary,
     required this.onToggleActive,
     required this.onRemove,
+    this.editable = true,
   });
 
   final List<ClassTeacherAssignment> teachers;
@@ -1949,6 +2449,7 @@ class _ClassTeachersCard extends StatelessWidget {
   final ValueChanged<ClassTeacherAssignment> onSetPrimary;
   final ValueChanged<ClassTeacherAssignment> onToggleActive;
   final ValueChanged<ClassTeacherAssignment> onRemove;
+  final bool editable;
 
   @override
   Widget build(BuildContext context) {
@@ -2019,12 +2520,14 @@ class _ClassTeachersCard extends StatelessWidget {
                       style: const TextStyle(color: AppColors.muted),
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  FilledButton.icon(
-                    onPressed: busy ? null : onAddTeacher,
-                    icon: const Icon(Icons.add_rounded, size: 18),
-                    label: const Text('Add teacher'),
-                  ),
+                  if (editable) ...[
+                    const SizedBox(width: 12),
+                    FilledButton.icon(
+                      onPressed: busy ? null : onAddTeacher,
+                      icon: const Icon(Icons.add_rounded, size: 18),
+                      label: const Text('Add teacher'),
+                    ),
+                  ],
                 ],
               ),
             )
@@ -2035,31 +2538,33 @@ class _ClassTeachersCard extends StatelessWidget {
                   _ClassTeacherRow(
                     teacher: teacher,
                     busy: busy,
+                    editable: editable,
                     onSetPrimary: () => onSetPrimary(teacher),
                     onToggleActive: () => onToggleActive(teacher),
                     onRemove: () => onRemove(teacher),
                   ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 10, 18, 16),
-                  child: Row(
-                    children: [
-                      const Expanded(
-                        child: Text(
-                          'Only one teacher can be primary for a stream.',
-                          style: TextStyle(
-                            color: AppColors.muted,
-                            fontSize: 12,
+                if (editable)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 10, 18, 16),
+                    child: Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Only one teacher can be primary for a stream.',
+                            style: TextStyle(
+                              color: AppColors.muted,
+                              fontSize: 12,
+                            ),
                           ),
                         ),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: busy ? null : onAddTeacher,
-                        icon: const Icon(Icons.add_rounded, size: 18),
-                        label: const Text('Add teacher'),
-                      ),
-                    ],
+                        OutlinedButton.icon(
+                          onPressed: busy ? null : onAddTeacher,
+                          icon: const Icon(Icons.add_rounded, size: 18),
+                          label: const Text('Add teacher'),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
               ],
             ),
         ],
@@ -2075,6 +2580,7 @@ class _ClassTeacherRow extends StatelessWidget {
     required this.onSetPrimary,
     required this.onToggleActive,
     required this.onRemove,
+    this.editable = true,
   });
 
   final ClassTeacherAssignment teacher;
@@ -2082,6 +2588,7 @@ class _ClassTeacherRow extends StatelessWidget {
   final VoidCallback onSetPrimary;
   final VoidCallback onToggleActive;
   final VoidCallback onRemove;
+  final bool editable;
 
   @override
   Widget build(BuildContext context) {
@@ -2134,23 +2641,25 @@ class _ClassTeacherRow extends StatelessWidget {
               ],
             ),
           ),
-          if (!teacher.isPrimary)
+          if (editable && !teacher.isPrimary)
             TextButton(
               onPressed: busy || !teacher.isActive ? null : onSetPrimary,
               child: const Text('Make primary'),
             ),
-          TextButton(
-            onPressed: busy ? null : onToggleActive,
-            child: Text(teacher.isActive ? 'Deactivate' : 'Reactivate'),
-          ),
-          IconButton(
-            tooltip: 'Remove teacher',
-            onPressed: busy ? null : onRemove,
-            icon: const Icon(
-              Icons.delete_outline_rounded,
-              color: AppColors.red,
+          if (editable) ...[
+            TextButton(
+              onPressed: busy ? null : onToggleActive,
+              child: Text(teacher.isActive ? 'Deactivate' : 'Reactivate'),
             ),
-          ),
+            IconButton(
+              tooltip: 'Remove teacher',
+              onPressed: busy ? null : onRemove,
+              icon: const Icon(
+                Icons.delete_outline_rounded,
+                color: AppColors.red,
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -2428,6 +2937,7 @@ class _StreamSubjectsCard extends StatelessWidget {
     required this.error,
     required this.onRetry,
     required this.onManage,
+    this.editable = true,
   });
   final List<ClassSubject> subjects;
   final List<SubjectTeacherAssignment> assignments;
@@ -2435,6 +2945,7 @@ class _StreamSubjectsCard extends StatelessWidget {
   final String? error;
   final VoidCallback onRetry;
   final ValueChanged<ClassSubject> onManage;
+  final bool editable;
 
   @override
   Widget build(BuildContext context) => Card(
@@ -2447,11 +2958,11 @@ class _StreamSubjectsCard extends StatelessWidget {
             children: [
               const Icon(Icons.menu_book_rounded, color: AppColors.green),
               const SizedBox(width: 10),
-              const Expanded(
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
+                    const Text(
                       'Subjects and teachers',
                       style: TextStyle(
                         fontSize: 17,
@@ -2459,8 +2970,10 @@ class _StreamSubjectsCard extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      'Each subject belongs to this grade. Assign one or more teachers for this stream.',
-                      style: TextStyle(color: AppColors.muted),
+                      editable
+                          ? 'Each subject belongs to this grade. Assign one or more teachers for this stream.'
+                          : 'Subjects and assigned teachers for this class.',
+                      style: const TextStyle(color: AppColors.muted),
                     ),
                   ],
                 ),
@@ -2532,16 +3045,25 @@ class _StreamSubjectsCard extends StatelessWidget {
                       ? 'No subject teacher assigned'
                       : assigned.map((a) => a.staffName).join(', '),
                 ),
-                trailing: OutlinedButton.icon(
-                  onPressed: busy ? null : () => onManage(subject),
-                  icon: Icon(
-                    assigned.isEmpty
-                        ? Icons.person_add_alt_1
-                        : Icons.edit_outlined,
-                    size: 18,
-                  ),
-                  label: Text(assigned.isEmpty ? 'Assign teachers' : 'Manage'),
-                ),
+                trailing: editable
+                    ? OutlinedButton.icon(
+                        onPressed: busy ? null : () => onManage(subject),
+                        icon: Icon(
+                          assigned.isEmpty
+                              ? Icons.person_add_alt_1
+                              : Icons.edit_outlined,
+                          size: 18,
+                        ),
+                        label: Text(
+                          assigned.isEmpty ? 'Assign teachers' : 'Manage',
+                        ),
+                      )
+                    : assigned.isEmpty
+                    ? const Text(
+                        'Not assigned',
+                        style: TextStyle(color: AppColors.muted),
+                      )
+                    : null,
               );
             }),
           if (assignments.any((a) => !a.active)) ...[
@@ -2588,6 +3110,7 @@ class _SidePanel extends StatelessWidget {
     this.onOpenAssessments,
     this.onOpenIncidents,
     this.onOpenCalendar,
+    this.primaryLinksInTabs = false,
   });
 
   final int totalSubjects;
@@ -2598,6 +3121,7 @@ class _SidePanel extends StatelessWidget {
   final VoidCallback? onOpenAssessments;
   final VoidCallback? onOpenIncidents;
   final VoidCallback? onOpenCalendar;
+  final bool primaryLinksInTabs;
 
   @override
   Widget build(BuildContext context) {
@@ -2673,20 +3197,22 @@ class _SidePanel extends StatelessWidget {
               color: AppColors.amber,
               onTap: onOpenCalendar,
             ),
-            _ClassQuickLink(
-              icon: Icons.fact_check_rounded,
-              title: 'Attendance',
-              subtitle: '',
-              color: AppColors.green,
-              onTap: onOpenAttendance,
-            ),
-            _ClassQuickLink(
-              icon: Icons.assessment_rounded,
-              title: 'Assessments',
-              subtitle: '',
-              color: AppColors.blue,
-              onTap: onOpenAssessments,
-            ),
+            if (!primaryLinksInTabs)
+              _ClassQuickLink(
+                icon: Icons.fact_check_rounded,
+                title: 'Attendance',
+                subtitle: '',
+                color: AppColors.green,
+                onTap: onOpenAttendance,
+              ),
+            if (!primaryLinksInTabs)
+              _ClassQuickLink(
+                icon: Icons.assessment_rounded,
+                title: 'Assessments',
+                subtitle: '',
+                color: AppColors.blue,
+                onTap: onOpenAssessments,
+              ),
             _ClassQuickLink(
               icon: Icons.warning_amber_rounded,
               title: 'Record Incident',
@@ -2694,13 +3220,14 @@ class _SidePanel extends StatelessWidget {
               color: AppColors.amber,
               onTap: onOpenIncidents,
             ),
-            _ClassQuickLink(
-              icon: Icons.star_border_rounded,
-              title: 'Evaluations',
-              subtitle: '',
-              color: AppColors.purple,
-              onTap: onOpenAssessments,
-            ),
+            if (!primaryLinksInTabs)
+              _ClassQuickLink(
+                icon: Icons.star_border_rounded,
+                title: 'Evaluations',
+                subtitle: '',
+                color: AppColors.purple,
+                onTap: onOpenAssessments,
+              ),
           ],
         ),
         const SizedBox(height: 14),

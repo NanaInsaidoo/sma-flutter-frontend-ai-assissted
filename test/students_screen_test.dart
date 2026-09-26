@@ -19,6 +19,7 @@ void main() {
     bool focusSearchOnLoad = false,
     ValueChanged<EnrolledStudent>? onCollectPayment,
     AdmissionsApiClient? admissionsApi,
+    String? viewerRole,
   }) async {
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1;
@@ -38,6 +39,7 @@ void main() {
             focusSearchOnLoad: focusSearchOnLoad,
             admissionsApi: admissionsApi,
             customSchoolId: admissionsApi == null ? null : 'SCHOOL',
+            viewerRole: viewerRole,
           ),
         ),
       ),
@@ -72,6 +74,64 @@ void main() {
       ),
     );
     expect(editable.focusNode.hasFocus, isTrue);
+  });
+
+  testWidgets('class teacher gets a focused read-only assigned register', (
+    tester,
+  ) async {
+    final repository = _TeacherBoundaryStudentsRepository();
+    await pumpStudents(
+      tester,
+      repository: repository,
+      viewerRole: 'CLASS_TEACHER',
+    );
+
+    expect(find.text('My Students'), findsOneWidget);
+    expect(find.text('Assigned students (6)'), findsOneWidget);
+    expect(find.textContaining('Kofi Asante'), findsOneWidget);
+    expect(find.textContaining('Household'), findsNothing);
+    expect(find.text('Fee balance'), findsNothing);
+    expect(find.text('Items & supplies'), findsNothing);
+
+    await tester.tap(find.byKey(const Key('student-row-STU-FA1BC0-9043')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Primary guardian contact'), findsOneWidget);
+    expect(find.textContaining('Household'), findsNothing);
+    expect(find.text('Medical alerts'), findsOneWidget);
+    expect(find.text('Edit profile'), findsNothing);
+    expect(find.byKey(const Key('change-class-grade')), findsNothing);
+    expect(find.byKey(const Key('student-tab-medical')), findsNothing);
+    expect(find.byKey(const Key('student-tab-fees')), findsNothing);
+    expect(find.byKey(const Key('student-tab-requirements')), findsNothing);
+    expect(find.byKey(const Key('student-tab-documents')), findsNothing);
+    expect(repository.placementLoads, 0);
+    expect(repository.itemReceiptLoads, 0);
+  });
+
+  testWidgets('subject teacher cannot see guardian or finance details', (
+    tester,
+  ) async {
+    final repository = _TeacherBoundaryStudentsRepository();
+    await pumpStudents(
+      tester,
+      repository: repository,
+      viewerRole: 'SUBJECT_TEACHER',
+    );
+
+    expect(find.text('My Students'), findsOneWidget);
+    expect(find.textContaining('Kofi Asante'), findsNothing);
+    expect(find.textContaining('Household'), findsNothing);
+    await tester.tap(find.byKey(const Key('student-row-STU-FA1BC0-9043')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Primary guardian contact'), findsNothing);
+    expect(find.textContaining('Household'), findsNothing);
+    expect(find.text('Fee balance'), findsNothing);
+    expect(find.text('Items & supplies'), findsNothing);
+    expect(find.text('Medical alerts'), findsOneWidget);
+    expect(repository.placementLoads, 0);
+    expect(repository.itemReceiptLoads, 0);
   });
 
   testWidgets('opens student profile tabs and returns to register', (
@@ -731,6 +791,25 @@ class _CountingStudentsRepository extends FakeStudentsRepository {
   ) {
     lastPreviewInput = input;
     return super.previewTransfer(studentId, input);
+  }
+}
+
+class _TeacherBoundaryStudentsRepository extends FakeStudentsRepository {
+  int placementLoads = 0;
+  int itemReceiptLoads = 0;
+
+  @override
+  Future<List<StudentPlacement>> getPlacementHistory(String studentId) {
+    placementLoads += 1;
+    return super.getPlacementHistory(studentId);
+  }
+
+  @override
+  Future<List<StudentItemCollectionReceipt>> getStudentItemReceipts({
+    required String studentId,
+  }) {
+    itemReceiptLoads += 1;
+    return super.getStudentItemReceipts(studentId: studentId);
   }
 }
 

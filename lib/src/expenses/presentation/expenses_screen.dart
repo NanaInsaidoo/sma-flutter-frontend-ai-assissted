@@ -2038,9 +2038,11 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Expenses & Petty Cash',
-                style: TextStyle(
+              Text(
+                _canViewAllFinance
+                    ? 'Expenses & Petty Cash'
+                    : 'My Requisitions & Expenses',
+                style: const TextStyle(
                   fontSize: 30,
                   fontWeight: FontWeight.w800,
                   color: _text,
@@ -2048,7 +2050,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               ),
               const SizedBox(height: 6),
               Text(
-                'Requisitions, petty cash, approvals, refunds, and audit-ready spending for ${widget.customSchoolId}.',
+                _canViewAllFinance
+                    ? 'Requisitions, petty cash, approvals, refunds, and audit-ready spending for ${widget.customSchoolId}.'
+                    : 'Request school spending and follow your own approved expenses.',
                 style: const TextStyle(fontSize: 15, color: _muted),
               ),
             ],
@@ -2518,8 +2522,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   Widget _buildRequisitionsTab() {
     return _SectionCard(
       title: 'Requisitions',
-      subtitle:
-          'All spending requests in one place. Filter by funding source or status.',
+      subtitle: _canViewAllFinance
+          ? 'All spending requests in one place. Filter by funding source or status.'
+          : 'Your spending requests and their current approval status.',
       trailing: FilledButton.icon(
         onPressed: _openCreateRequisitionDialog,
         icon: const Icon(Icons.add),

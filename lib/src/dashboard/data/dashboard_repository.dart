@@ -7,6 +7,11 @@ abstract interface class DashboardRepository {
 
   Future<List<CalendarEventType>> getCalendarEventTypes();
 
+  Future<List<CalendarEventChange>> getCalendarEventHistory({
+    required String schoolId,
+    required String eventId,
+  });
+
   Future<SchoolEvent> createCalendarEvent({
     required String schoolId,
     required CalendarEventPayload event,

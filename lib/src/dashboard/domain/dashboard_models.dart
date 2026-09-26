@@ -93,6 +93,22 @@ class CalendarEventType {
   final String name;
 }
 
+class CalendarEventChange {
+  const CalendarEventChange({
+    required this.action,
+    required this.actorName,
+    required this.actorRole,
+    required this.summary,
+    required this.changedAt,
+  });
+
+  final String action;
+  final String actorName;
+  final String actorRole;
+  final String summary;
+  final DateTime? changedAt;
+}
+
 class CalendarEventPayload {
   const CalendarEventPayload({
     required this.name,
@@ -133,12 +149,14 @@ class AttendanceSummary {
     required this.present,
     required this.absent,
     required this.late,
+    this.studentsNeedingAttention = 0,
   });
 
   final int total;
   final int present;
   final int absent;
   final int late;
+  final int studentsNeedingAttention;
 
   double get percentage => total == 0 ? 0 : present / total;
 }

@@ -140,7 +140,7 @@ class StaffAttendanceApiClient implements StaffAttendanceRepository {
     );
     final leaveDates = <String, String>{
       for (final leave in availability.whereType<Map>())
-        '${leave['staffUserId']}': '${leave['endDate']}',
+        '${leave['staffUserId']}': _date(_parseDate(leave['endDate'])),
     };
     return people.map((person) {
       Map<String, dynamic>? record;

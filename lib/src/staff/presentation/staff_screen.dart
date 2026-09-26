@@ -1609,7 +1609,6 @@ class _ManageRolesDialogState extends State<_ManageRolesDialog> {
     ('HEAD_TEACHER', 'Head teacher'),
     ('ASSISTANT_HEAD_TEACHER', 'Assistant head teacher'),
     ('CLASS_TEACHER', 'Class teacher'),
-    ('SUBJECT_TEACHER', 'Subject teacher'),
     ('BURSAR', 'Bursar'),
     ('SECRETARY', 'Secretary'),
   ];
@@ -1622,9 +1621,12 @@ class _ManageRolesDialogState extends State<_ManageRolesDialog> {
     super.initState();
     _primaryRole = widget.primaryRole.trim().toUpperCase();
     if (!_options.any((option) => option.$1 == _primaryRole)) {
-      _primaryRole = widget.roles.isEmpty
-          ? 'CLASS_TEACHER'
-          : widget.roles.first.trim().toUpperCase();
+      _primaryRole = widget.roles
+          .map((role) => role.trim().toUpperCase())
+          .firstWhere(
+            (role) => _options.any((option) => option.$1 == role),
+            orElse: () => 'CLASS_TEACHER',
+          );
     }
     _roles = widget.roles.map((role) => role.trim().toUpperCase()).toSet();
     _roles.add(_primaryRole);
@@ -1645,6 +1647,32 @@ class _ManageRolesDialogState extends State<_ManageRolesDialog> {
                 'The primary role is the workspace shown immediately after sign-in. Additional roles are available through the workspace switcher.',
                 style: TextStyle(color: AppColors.muted, height: 1.4),
               ),
+              if (_roles.contains('SUBJECT_TEACHER')) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppColors.green.withValues(alpha: .08),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: AppColors.green.withValues(alpha: .24),
+                    ),
+                  ),
+                  child: const Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.auto_awesome_outlined, color: AppColors.green),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Subject teacher is managed automatically from Classes & Sections → Subjects. Change the teacher’s subject allocations there.',
+                          style: TextStyle(height: 1.35),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
                 value: _primaryRole,
@@ -2265,7 +2293,6 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
     ('HEAD_TEACHER', 'Head teacher'),
     ('ASSISTANT_HEAD_TEACHER', 'Assistant head teacher'),
     ('CLASS_TEACHER', 'Class teacher'),
-    ('SUBJECT_TEACHER', 'Subject teacher'),
     ('BURSAR', 'Bursar'),
     ('SECRETARY', 'Secretary'),
   ];

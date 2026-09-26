@@ -30,6 +30,7 @@ class StudentsScreen extends StatefulWidget {
     this.onApprovalChanged,
     this.admissionsApi,
     this.customSchoolId,
+    this.viewerRole,
   });
 
   final String term;
@@ -42,6 +43,15 @@ class StudentsScreen extends StatefulWidget {
   final VoidCallback? onApprovalChanged;
   final AdmissionsApiClient? admissionsApi;
   final String? customSchoolId;
+  final String? viewerRole;
+
+  bool get teacherView {
+    final role = viewerRole?.trim().toUpperCase();
+    return role == 'CLASS_TEACHER' || role == 'SUBJECT_TEACHER';
+  }
+
+  bool get subjectTeacherView =>
+      viewerRole?.trim().toUpperCase() == 'SUBJECT_TEACHER';
 
   @override
   State<StudentsScreen> createState() => _StudentsScreenState();
@@ -147,6 +157,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
             onCollectPayment: widget.onCollectPayment,
             repository: widget.repository,
             onApprovalChanged: widget.onApprovalChanged,
+            viewerRole: widget.viewerRole,
           );
         },
       );
@@ -165,6 +176,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         onCollectPayment: widget.onCollectPayment,
         repository: widget.repository,
         onApprovalChanged: widget.onApprovalChanged,
+        viewerRole: widget.viewerRole,
       );
     }
 
@@ -190,11 +202,15 @@ class _StudentsScreenState extends State<StudentsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const _StudentsHeader(),
+                  _StudentsHeader(teacherView: widget.teacherView),
                   const SizedBox(height: 20),
-                  _StudentSummary(students: students),
+                  _StudentSummary(
+                    students: students,
+                    teacherView: widget.teacherView,
+                  ),
                   const SizedBox(height: 20),
                   _StudentFilters(
+                    teacherView: widget.teacherView,
                     classes: classes.toList()..sort(),
                     selectedClass: _selectedClass,
                     selectedStatus: _selectedStatus,
@@ -215,12 +231,20 @@ class _StudentsScreenState extends State<StudentsScreen> {
                     }),
                   ),
                   const SizedBox(height: 14),
-                  _StudentsRegister(
-                    students: visible,
-                    totalStudents: students.length,
-                    compact: compact,
-                    onSelected: (student) => _openStudent(student.id),
-                  ),
+                  if (widget.teacherView)
+                    _TeacherStudentsRegister(
+                      students: visible,
+                      totalStudents: students.length,
+                      showGuardian: !widget.subjectTeacherView,
+                      onSelected: (student) => _openStudent(student.id),
+                    )
+                  else
+                    _StudentsRegister(
+                      students: visible,
+                      totalStudents: students.length,
+                      compact: compact,
+                      onSelected: (student) => _openStudent(student.id),
+                    ),
                 ],
               ),
             );
@@ -232,7 +256,9 @@ class _StudentsScreenState extends State<StudentsScreen> {
 }
 
 class _StudentsHeader extends StatelessWidget {
-  const _StudentsHeader();
+  const _StudentsHeader({required this.teacherView});
+
+  final bool teacherView;
 
   @override
   Widget build(BuildContext context) {
@@ -242,13 +268,13 @@ class _StudentsHeader extends StatelessWidget {
       alignment: WrapAlignment.spaceBetween,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        const SizedBox(
+        SizedBox(
           width: 560,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Students',
+                teacherView ? 'My Students' : 'Students',
                 style: TextStyle(
                   color: AppColors.text,
                   fontSize: 28,
@@ -257,7 +283,9 @@ class _StudentsHeader extends StatelessWidget {
               ),
               SizedBox(height: 6),
               Text(
-                'Enrolled student register and current-term progress.',
+                teacherView
+                    ? 'Students connected to your active teaching assignments.'
+                    : 'Enrolled student register and current-term progress.',
                 style: TextStyle(color: AppColors.muted, fontSize: 15),
               ),
             ],
@@ -269,9 +297,10 @@ class _StudentsHeader extends StatelessWidget {
 }
 
 class _StudentSummary extends StatelessWidget {
-  const _StudentSummary({required this.students});
+  const _StudentSummary({required this.students, this.teacherView = false});
 
   final List<EnrolledStudent> students;
+  final bool teacherView;
 
   @override
   Widget build(BuildContext context) {
@@ -283,8 +312,9 @@ class _StudentSummary extends StatelessWidget {
         .where(
           (student) =>
               student.attendanceRate < 90 ||
-              student.feeBalance > 0 ||
-              student.requirementsOutstanding > 0,
+              (!teacherView &&
+                  (student.feeBalance > 0 ||
+                      student.requirementsOutstanding > 0)),
         )
         .length;
     return LayoutBuilder(
@@ -303,7 +333,9 @@ class _StudentSummary extends StatelessWidget {
               width: width,
               label: 'Total enrolled',
               value: '${students.length}',
-              caption: 'Students in the register',
+              caption: teacherView
+                  ? 'Connected to your assignments'
+                  : 'Students in the register',
               icon: Icons.school_rounded,
               color: AppColors.green,
             ),
@@ -327,7 +359,9 @@ class _StudentSummary extends StatelessWidget {
               width: width,
               label: 'Needs attention',
               value: '$attention',
-              caption: 'Fees, attendance or supplies',
+              caption: teacherView
+                  ? 'Attendance requiring follow-up'
+                  : 'Fees, attendance or supplies',
               icon: Icons.notification_important_rounded,
               color: AppColors.amber,
             ),
@@ -413,6 +447,7 @@ class _SummaryCard extends StatelessWidget {
 
 class _StudentFilters extends StatelessWidget {
   const _StudentFilters({
+    this.teacherView = false,
     required this.classes,
     required this.selectedClass,
     required this.selectedStatus,
@@ -426,6 +461,7 @@ class _StudentFilters extends StatelessWidget {
   });
 
   final List<String> classes;
+  final bool teacherView;
   final String selectedClass;
   final String selectedStatus;
   final bool newThisTermOnly;
@@ -448,9 +484,11 @@ class _StudentFilters extends StatelessWidget {
               key: const Key('students-search'),
               autofocus: autofocusSearch,
               onChanged: onSearchChanged,
-              decoration: const InputDecoration(
-                hintText: 'Search by student, ID, guardian or household',
-                prefixIcon: Icon(Icons.search_rounded),
+              decoration: InputDecoration(
+                hintText: teacherView
+                    ? 'Search by student or ID'
+                    : 'Search by student, ID, guardian or household',
+                prefixIcon: const Icon(Icons.search_rounded),
               ),
             );
             final controls = [
@@ -526,6 +564,113 @@ class _StudentFilters extends StatelessWidget {
             );
           },
         ),
+      ),
+    );
+  }
+}
+
+class _TeacherStudentsRegister extends StatelessWidget {
+  const _TeacherStudentsRegister({
+    required this.students,
+    required this.totalStudents,
+    required this.showGuardian,
+    required this.onSelected,
+  });
+
+  final List<EnrolledStudent> students;
+  final int totalStudents;
+  final bool showGuardian;
+  final ValueChanged<EnrolledStudent> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Assigned students (${students.length})',
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                Text(
+                  students.length == totalStudents
+                      ? 'My current register'
+                      : 'Filtered from $totalStudents',
+                  style: const TextStyle(color: AppColors.muted),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          if (students.isEmpty)
+            const _EmptyRegister()
+          else
+            ...students.map(
+              (student) => InkWell(
+                key: Key('student-row-${student.id}'),
+                onTap: () => onSelected(student),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 15,
+                  ),
+                  decoration: const BoxDecoration(
+                    border: Border(bottom: BorderSide(color: AppColors.border)),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: _StudentIdentity(
+                          student: student,
+                          showHousehold: false,
+                        ),
+                      ),
+                      Expanded(
+                        flex: 2,
+                        child: Text(
+                          student.className,
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      if (showGuardian)
+                        Expanded(
+                          flex: 3,
+                          child: Text(
+                            student.guardianName.trim().isEmpty
+                                ? 'Guardian not provided'
+                                : '${student.guardianName} · ${student.guardianPhone}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: AppColors.muted),
+                          ),
+                        ),
+                      Expanded(
+                        flex: 2,
+                        child: _AttendanceValue(rate: student.attendanceRate),
+                      ),
+                      Expanded(child: _StatusBadge(status: student.status)),
+                      const Icon(
+                        Icons.chevron_right_rounded,
+                        color: AppColors.muted,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -771,9 +916,10 @@ class _StudentCompactRow extends StatelessWidget {
 }
 
 class _StudentIdentity extends StatelessWidget {
-  const _StudentIdentity({required this.student});
+  const _StudentIdentity({required this.student, this.showHousehold = true});
 
   final EnrolledStudent student;
+  final bool showHousehold;
 
   @override
   Widget build(BuildContext context) {
@@ -806,7 +952,9 @@ class _StudentIdentity extends StatelessWidget {
               ),
               const SizedBox(height: 3),
               Text(
-                '${student.id} · ${student.householdId}',
+                showHousehold
+                    ? '${student.id} · ${student.householdId}'
+                    : student.id,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(color: AppColors.muted, fontSize: 12),
@@ -1026,6 +1174,7 @@ class StudentProfileView extends StatefulWidget {
     this.onApprovalChanged,
     this.admissionsApi,
     this.customSchoolId,
+    this.viewerRole,
   });
 
   final EnrolledStudent student;
@@ -1040,6 +1189,15 @@ class StudentProfileView extends StatefulWidget {
   final VoidCallback? onApprovalChanged;
   final AdmissionsApiClient? admissionsApi;
   final String? customSchoolId;
+  final String? viewerRole;
+
+  bool get teacherView {
+    final role = viewerRole?.trim().toUpperCase();
+    return role == 'CLASS_TEACHER' || role == 'SUBJECT_TEACHER';
+  }
+
+  bool get subjectTeacherView =>
+      viewerRole?.trim().toUpperCase() == 'SUBJECT_TEACHER';
 
   @override
   State<StudentProfileView> createState() => _StudentProfileViewState();
@@ -1128,9 +1286,10 @@ class _StudentProfileViewState extends State<StudentProfileView> {
   }
 
   EnrolledStudent get _student => _refreshedStudent ?? widget.student;
-  late final Future<List<StudentPlacement>>? _placementHistory = widget
-      .repository
-      ?.getPlacementHistory(widget.student.id);
+  late final Future<List<StudentPlacement>>? _placementHistory =
+      widget.teacherView
+      ? null
+      : widget.repository?.getPlacementHistory(widget.student.id);
   Future<List<StudentItemCollectionReceipt>>? _itemReceiptHistory;
 
   @override
@@ -1150,6 +1309,14 @@ class _StudentProfileViewState extends State<StudentProfileView> {
   }
 
   void _refreshItemReceiptHistory({bool notify = true}) {
+    if (widget.teacherView) {
+      if (notify && mounted) {
+        setState(() => _itemReceiptHistory = null);
+      } else {
+        _itemReceiptHistory = null;
+      }
+      return;
+    }
     final repository = widget.repository;
     final future = repository?.getStudentItemReceipts(
       studentId: widget.student.id,
@@ -1180,8 +1347,10 @@ class _StudentProfileViewState extends State<StudentProfileView> {
               const SizedBox(height: 8),
               _StudentProfileHeader(
                 student: _student,
+                teacherView: widget.teacherView,
                 onEdit:
-                    widget.admissionsApi == null ||
+                    widget.teacherView ||
+                        widget.admissionsApi == null ||
                         widget.customSchoolId == null ||
                         _editingRecord
                     ? null
@@ -1189,19 +1358,23 @@ class _StudentProfileViewState extends State<StudentProfileView> {
                 onCollectPayment: widget.onCollectPayment == null
                     ? null
                     : () => widget.onCollectPayment!(_student),
-                onTransfer: widget.repository == null ? null : _transfer,
+                onTransfer: widget.teacherView || widget.repository == null
+                    ? null
+                    : _transfer,
               ),
-              if (_placementHistory != null) ...[
+              if (!widget.teacherView && _placementHistory != null) ...[
                 const SizedBox(height: 12),
                 _PlacementHistoryPanel(future: _placementHistory),
               ],
               const SizedBox(height: 16),
               _ProfileTabs(
                 selected: _tab,
+                teacherView: widget.teacherView,
                 onSelected: (tab) => setState(() => _tab = tab),
               ),
               const SizedBox(height: 16),
-              if (widget.admissionsApi != null &&
+              if (!widget.teacherView &&
+                  widget.admissionsApi != null &&
                   widget.customSchoolId != null) ...[
                 StudentRecordHistoryPanel(
                   key: ValueKey('${_student.id}-$_historyRevision'),
@@ -1216,6 +1389,8 @@ class _StudentProfileViewState extends State<StudentProfileView> {
                 _StudentProfileTab.overview => _OverviewTab(
                   student: _student,
                   compact: compact,
+                  teacherView: widget.teacherView,
+                  subjectTeacherView: widget.subjectTeacherView,
                   onOpenStudent: widget.onOpenStudent,
                   onOpenHousehold:
                       widget.admissionsApi != null &&
@@ -1496,12 +1671,14 @@ String _shortDate(DateTime d) => '${d.day}/${d.month}/${d.year}';
 class _StudentProfileHeader extends StatelessWidget {
   const _StudentProfileHeader({
     required this.student,
+    this.teacherView = false,
     this.onCollectPayment,
     this.onTransfer,
     this.onEdit,
   });
 
   final EnrolledStudent student;
+  final bool teacherView;
   final VoidCallback? onCollectPayment;
   final VoidCallback? onTransfer;
   final VoidCallback? onEdit;
@@ -1533,7 +1710,9 @@ class _StudentProfileHeader extends StatelessWidget {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        '${student.id} · ${student.className} · ${student.householdId}',
+                        teacherView
+                            ? '${student.id} · ${student.className}'
+                            : '${student.id} · ${student.className} · ${student.householdId}',
                         style: const TextStyle(color: AppColors.muted),
                       ),
                     ],
@@ -1591,10 +1770,15 @@ class _StudentProfileHeader extends StatelessWidget {
 }
 
 class _ProfileTabs extends StatelessWidget {
-  const _ProfileTabs({required this.selected, required this.onSelected});
+  const _ProfileTabs({
+    required this.selected,
+    required this.onSelected,
+    this.teacherView = false,
+  });
 
   final _StudentProfileTab selected;
   final ValueChanged<_StudentProfileTab> onSelected;
+  final bool teacherView;
 
   @override
   Widget build(BuildContext context) {
@@ -1609,31 +1793,41 @@ class _ProfileTabs extends StatelessWidget {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Row(
-        children: labels.entries.map((entry) {
-          final active = selected == entry.key;
-          return Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: OutlinedButton(
-              key: Key('student-tab-${entry.key.name}'),
-              onPressed: () => onSelected(entry.key),
-              style: OutlinedButton.styleFrom(
-                backgroundColor: active ? AppColors.greenSoft : Colors.white,
-                foregroundColor: active ? AppColors.green : AppColors.muted,
-                side: BorderSide(
-                  color: active ? AppColors.green : AppColors.border,
+        children: labels.entries
+            .where(
+              (entry) =>
+                  !teacherView ||
+                  entry.key == _StudentProfileTab.overview ||
+                  entry.key == _StudentProfileTab.attendance,
+            )
+            .map((entry) {
+              final active = selected == entry.key;
+              return Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: OutlinedButton(
+                  key: Key('student-tab-${entry.key.name}'),
+                  onPressed: () => onSelected(entry.key),
+                  style: OutlinedButton.styleFrom(
+                    backgroundColor: active
+                        ? AppColors.greenSoft
+                        : Colors.white,
+                    foregroundColor: active ? AppColors.green : AppColors.muted,
+                    side: BorderSide(
+                      color: active ? AppColors.green : AppColors.border,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 15,
+                    ),
+                  ),
+                  child: Text(
+                    entry.value,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
                 ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 15,
-                ),
-              ),
-              child: Text(
-                entry.value,
-                style: const TextStyle(fontWeight: FontWeight.w800),
-              ),
-            ),
-          );
-        }).toList(),
+              );
+            })
+            .toList(),
       ),
     );
   }
@@ -1646,6 +1840,8 @@ class _OverviewTab extends StatelessWidget {
     required this.onOpenStudent,
     this.onOpenHousehold,
     this.onOpenGuardian,
+    this.teacherView = false,
+    this.subjectTeacherView = false,
   });
 
   final EnrolledStudent student;
@@ -1653,6 +1849,8 @@ class _OverviewTab extends StatelessWidget {
   final ValueChanged<String> onOpenStudent;
   final VoidCallback? onOpenHousehold;
   final ValueChanged<String>? onOpenGuardian;
+  final bool teacherView;
+  final bool subjectTeacherView;
 
   @override
   Widget build(BuildContext context) {
@@ -1666,9 +1864,11 @@ class _OverviewTab extends StatelessWidget {
               'Full name': student.name,
               'Date of birth': _formatDate(student.dateOfBirth),
               'Gender': student.gender,
-              'Religion': student.religion,
-              'Country of birth': student.countryOfBirth,
-              'City of birth': student.cityOfBirth,
+              if (!teacherView) ...{
+                'Religion': student.religion,
+                'Country of birth': student.countryOfBirth,
+                'City of birth': student.cityOfBirth,
+              },
             },
           ),
         ),
@@ -1680,10 +1880,12 @@ class _OverviewTab extends StatelessWidget {
             values: {
               'Student ID': student.id,
               'Current class & section': student.className,
-              'Enrolled on': _formatDate(student.enrolledOn),
-              'Household ID': student.householdId,
               'Enrollment status': _statusLabel(student.status),
-              'Address': student.address,
+              if (!teacherView) ...{
+                'Enrolled on': _formatDate(student.enrolledOn),
+                'Household ID': student.householdId,
+                'Address': student.address,
+              },
             },
           ),
         ),
@@ -1703,36 +1905,56 @@ class _OverviewTab extends StatelessWidget {
                     ? AppColors.green
                     : AppColors.red,
               ),
-              _SnapshotRow(
-                label: 'Fee balance',
-                value: student.feeBalance == 0
-                    ? 'Paid'
-                    : student.feeBalance > 0
-                    ? '${_money(student.feeBalance)} due'
-                    : _projectedMoney(student.feeBalance),
-                color: student.feeBalance > 0 ? AppColors.red : AppColors.green,
-              ),
-              _SnapshotRow(
-                label: 'Items & supplies',
-                value: _requirementsSummary(student),
-                color:
-                    student.requirementsTotal > 0 &&
-                        student.requirementsOutstanding == 0 &&
-                        student.requirementsAwaitingPublication == 0
-                    ? AppColors.green
-                    : AppColors.amber,
-              ),
+              if (!teacherView) ...[
+                _SnapshotRow(
+                  label: 'Fee balance',
+                  value: student.feeBalance == 0
+                      ? 'Paid'
+                      : student.feeBalance > 0
+                      ? '${_money(student.feeBalance)} due'
+                      : _projectedMoney(student.feeBalance),
+                  color: student.feeBalance > 0
+                      ? AppColors.red
+                      : AppColors.green,
+                ),
+                _SnapshotRow(
+                  label: 'Items & supplies',
+                  value: _requirementsSummary(student),
+                  color:
+                      student.requirementsTotal > 0 &&
+                          student.requirementsOutstanding == 0 &&
+                          student.requirementsAwaitingPublication == 0
+                      ? AppColors.green
+                      : AppColors.amber,
+                ),
+              ],
             ],
           ),
         ),
         const SizedBox(height: 14),
-        _HouseholdMembersCard(
-          student: student,
-          onOpenStudent: onOpenStudent,
-          onOpenHousehold: onOpenHousehold,
-          onOpenGuardian: onOpenGuardian,
-        ),
-        const SizedBox(height: 14),
+        if (!teacherView) ...[
+          _HouseholdMembersCard(
+            student: student,
+            onOpenStudent: onOpenStudent,
+            onOpenHousehold: onOpenHousehold,
+            onOpenGuardian: onOpenGuardian,
+          ),
+          const SizedBox(height: 14),
+        ] else if (!subjectTeacherView &&
+            student.guardianName.trim().isNotEmpty) ...[
+          _SectionCard(
+            title: 'Primary guardian contact',
+            icon: Icons.contact_phone_outlined,
+            child: _InfoGrid(
+              values: {
+                'Guardian': student.guardianName,
+                'Relationship': student.guardianRelationship,
+                'Phone': student.guardianPhone,
+              },
+            ),
+          ),
+          const SizedBox(height: 14),
+        ],
         _SectionCard(
           title: 'Medical alerts',
           icon: Icons.medical_information_outlined,

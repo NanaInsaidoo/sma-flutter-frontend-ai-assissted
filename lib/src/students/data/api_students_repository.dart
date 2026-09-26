@@ -13,6 +13,7 @@ import '../domain/student_models.dart';
 class ApiStudentsRepository implements StudentsRepository {
   ApiStudentsRepository({
     required this.customSchoolId,
+    this.viewerRole,
     required String? accessToken,
     this.onRefreshAccessToken,
     http.Client? client,
@@ -30,11 +31,20 @@ class ApiStudentsRepository implements StudentsRepository {
        );
 
   final String customSchoolId;
+  final String? viewerRole;
   final Future<String?> Function()? onRefreshAccessToken;
   final http.Client _client;
   final AdmissionsApiClient _admissions;
   final FeeApiClient _fees;
   String? _accessToken;
+
+  bool get _teacherView {
+    final role = viewerRole?.trim().toUpperCase();
+    return role == 'CLASS_TEACHER' || role == 'SUBJECT_TEACHER';
+  }
+
+  bool get _classTeacherView =>
+      viewerRole?.trim().toUpperCase() == 'CLASS_TEACHER';
 
   @override
   Future<StudentPlacement> getCurrentPlacement(
@@ -354,29 +364,33 @@ class ApiStudentsRepository implements StudentsRepository {
     if (active.isEmpty) return const [];
 
     FeeStudentFeesPage? feePage;
-    try {
-      feePage = await _fees.getFeeManagementStudents(
-        customSchoolId: customSchoolId,
-        termId: term.id,
-        size: 500,
-      );
-    } on FeeApiException {
-      // Student registration remains available even before fees are configured.
+    if (!_teacherView) {
+      try {
+        feePage = await _fees.getFeeManagementStudents(
+          customSchoolId: customSchoolId,
+          termId: term.id,
+          size: 500,
+        );
+      } on FeeApiException {
+        // Student registration remains available even before fees are configured.
+      }
     }
     final feeRows = {
       for (final row in feePage?.content ?? const <FeeStudentFeeRow>[])
         row.customStudentId: row,
     };
     final guardiansByHousehold = <int, List<AdmissionGuardian>>{};
-    for (final householdId
-        in active
-            .map((student) => student.householdId)
-            .whereType<int>()
-            .toSet()) {
-      guardiansByHousehold[householdId] = await _admissions.getGuardians(
-        customSchoolId: customSchoolId,
-        householdId: householdId,
-      );
+    if (!_teacherView || _classTeacherView) {
+      for (final householdId
+          in active
+              .map((student) => student.householdId)
+              .whereType<int>()
+              .toSet()) {
+        guardiansByHousehold[householdId] = await _admissions.getGuardians(
+          customSchoolId: customSchoolId,
+          householdId: householdId,
+        );
+      }
     }
 
     return Future.wait(
@@ -409,34 +423,40 @@ class ApiStudentsRepository implements StudentsRepository {
       customStudentId: studentId,
     );
 
-    final guardiansFuture = detail.householdId == null
+    final guardiansFuture = !_classTeacherView && _teacherView
+        ? Future.value(const <AdmissionGuardian>[])
+        : detail.householdId == null
         ? Future.value(const <AdmissionGuardian>[])
         : _admissions.getGuardians(
             customSchoolId: customSchoolId,
             householdId: detail.householdId,
           );
-    final householdStudentsFuture = detail.householdId == null
+    final householdStudentsFuture = _teacherView || detail.householdId == null
         ? Future.value(const <AdmissionStudent>[])
         : _admissions.getStudents(
             customSchoolId: customSchoolId,
             householdId: detail.householdId,
           );
-    final documentsFuture = _admissions.getStudentDocuments(
-      customSchoolId: customSchoolId,
-      customStudentId: studentId,
-    );
-    final feeAccountFuture = _fees.getStudentFeeAccount(
-      customSchoolId: customSchoolId,
-      customStudentId: studentId,
-      academicTermId: term.id ?? 0,
-    );
-    final adjustmentsFuture = (term.id ?? 0) <= 0
+    final documentsFuture = _teacherView
+        ? Future.value(const <AdmissionStudentDocument>[])
+        : _admissions.getStudentDocuments(
+            customSchoolId: customSchoolId,
+            customStudentId: studentId,
+          );
+    final feeAccountFuture = _teacherView
+        ? Future.value(null)
+        : _fees.getStudentFeeAccount(
+            customSchoolId: customSchoolId,
+            customStudentId: studentId,
+            academicTermId: term.id ?? 0,
+          );
+    final adjustmentsFuture = _teacherView || (term.id ?? 0) <= 0
         ? Future.value(const <FeeAdjustment>[])
         : _fees.getFeeAdjustments(
             customSchoolId: customSchoolId,
             termId: term.id!,
           );
-    final reversalsFuture = (term.id ?? 0) <= 0
+    final reversalsFuture = _teacherView || (term.id ?? 0) <= 0
         ? Future.value(const <PaymentReversal>[])
         : _fees.getSchoolPaymentReversals(customSchoolId: customSchoolId);
     final attendanceFuture = _getAttendanceSummary(
@@ -464,12 +484,14 @@ class ApiStudentsRepository implements StudentsRepository {
       const [],
     );
     final attendance = await attendanceFuture;
-    final requirements = await _loadRequirements(
-      studentId: studentId,
-      academicTermId: term.id ?? 0,
-      gradeLevelId: _studentGradeLevelId(detail.rawJson),
-      gradeLevelName: detail.gradeLevel,
-    );
+    final requirements = _teacherView
+        ? const <StudentRequirement>[]
+        : await _loadRequirements(
+            studentId: studentId,
+            academicTermId: term.id ?? 0,
+            gradeLevelId: _studentGradeLevelId(detail.rawJson),
+            gradeLevelName: detail.gradeLevel,
+          );
 
     return _mapStudent(
       detail: detail,

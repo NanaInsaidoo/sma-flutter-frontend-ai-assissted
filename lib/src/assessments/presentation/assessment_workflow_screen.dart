@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../data/assessment_api_client.dart';
+import '../domain/teacher_assessment_scope.dart';
+import '../../dashboard/data/teacher_workspace_api_client.dart';
 import '../../platform/presentation/document_opener.dart';
 import '../../theme/app_theme.dart';
 import 'assessment_csv_export.dart';
@@ -28,6 +30,68 @@ enum _Route {
   parentDetail,
 }
 
+const _reportBasedAssessmentCategory = 'Report-Based Assessment';
+const _practiceBasedAssessmentCategory = 'Practice-Based Assessment';
+
+const _assessmentCategories = <String>[
+  _reportBasedAssessmentCategory,
+  _practiceBasedAssessmentCategory,
+];
+
+const _classroomAssessmentTypes = <String>[
+  'Class Exercise',
+  'Homework',
+  'Quiz',
+  'Class Test',
+  'Project',
+  'Practical',
+  'Experiment',
+  'Oral Assessment',
+  'Performance Assessment',
+];
+
+const _schoolBasedAssessmentTypes = <String>[
+  'CAT 1',
+  'CAT 2',
+  'CAT 3',
+  'CAT 4',
+];
+
+const _examinationTypes = <String>['End-of-Term Examination'];
+
+const _reportBasedAssessmentTypes = <String>[
+  ..._schoolBasedAssessmentTypes,
+  ..._examinationTypes,
+];
+
+const _allAssessmentTypes = <String>[
+  ..._classroomAssessmentTypes,
+  ..._schoolBasedAssessmentTypes,
+  ..._examinationTypes,
+];
+
+List<String> _typesForAssessmentCategory(String? category) =>
+    switch (category) {
+      _reportBasedAssessmentCategory => _reportBasedAssessmentTypes,
+      _practiceBasedAssessmentCategory => _classroomAssessmentTypes,
+      _ => const <String>[],
+    };
+
+String _categoryForAssessmentType(String? type) {
+  if (_classroomAssessmentTypes.contains(type)) {
+    return _practiceBasedAssessmentCategory;
+  }
+  return _reportBasedAssessmentCategory;
+}
+
+String _canonicalAssessmentTypeLabel(String type) => switch (type) {
+  'CAT 4 – Project/Assignment' => 'CAT 4',
+  'End-of-Term Exam' => 'End-of-Term Examination',
+  'Practical and Experiment' => 'Practical',
+  'Performance and Oral Assessment' => 'Performance Assessment',
+  _ => type,
+};
+
 class CompleteAssessmentWorkflow extends StatefulWidget {
   const CompleteAssessmentWorkflow({
     super.key,
@@ -38,6 +102,7 @@ class CompleteAssessmentWorkflow extends StatefulWidget {
     required this.accessToken,
     required this.viewerRole,
     required this.viewerName,
+    this.initialStreamId,
     this.openFinalReportsOnLoad = false,
     this.onRefreshAccessToken,
   });
@@ -50,6 +115,7 @@ class CompleteAssessmentWorkflow extends StatefulWidget {
   final Future<String?> Function()? onRefreshAccessToken;
   final String viewerRole;
   final String viewerName;
+  final int? initialStreamId;
   final bool openFinalReportsOnLoad;
 
   @override
@@ -73,10 +139,15 @@ class _CompleteAssessmentWorkflowState
   _StudentRecord? _selectedReportStudent;
   String _selectedClass = '';
   bool _editingAssessment = false;
+  final TextEditingController _assessmentSearchController =
+      TextEditingController();
+  final ScrollController _assessmentTableScrollController = ScrollController();
   String _assessmentQuery = '';
-  String _assessmentTypeFilter = 'All Types';
-  String _assessmentSubjectFilter = 'All Subjects';
-  String _assessmentStatusFilter = 'All Statuses';
+  final Set<String> _assessmentTypeFilters = {};
+  final Set<String> _assessmentSubjectFilters = {};
+  final Set<String> _assessmentStatusFilters = {};
+  int _assessmentSortColumnIndex = 0;
+  bool _assessmentSortAscending = true;
   String _evaluationQuery = '';
   String _evaluationStatusFilter = 'All Status';
   final Set<String> _selectedEvaluationStudents = {};
@@ -105,7 +176,6 @@ class _CompleteAssessmentWorkflowState
   final List<_FinalReportStream> _finalReportStreams = [];
   bool _loadingFinalReports = false;
   String? _finalReportLoadError;
-
   String get _displayTerm {
     final configured = widget.term.trim();
     if (configured.isNotEmpty) return configured;
@@ -129,6 +199,13 @@ class _CompleteAssessmentWorkflowState
         role == 'ASSISTANT_HEAD_TEACHER';
   }
 
+  bool get _teacherViewer {
+    final role = widget.viewerRole.trim().toUpperCase();
+    return role == 'CLASS_TEACHER' ||
+        role == 'SUBJECT_TEACHER' ||
+        role == 'TEACHER';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -145,12 +222,37 @@ class _CompleteAssessmentWorkflowState
               'A school must be selected before loading assessments.',
             ),
           )
-        : _assessmentApi.getFormSetup(widget.customSchoolId);
+        : _loadAssessmentSetup();
     if (widget.openFinalReportsOnLoad && _evaluationManager) {
       _loadFinalReportOverview();
     } else {
       _loadLiveAssessments();
     }
+  }
+
+  @override
+  void dispose() {
+    _assessmentSearchController.dispose();
+    _assessmentTableScrollController.dispose();
+    super.dispose();
+  }
+
+  Future<AssessmentFormSetup> _loadAssessmentSetup() async {
+    final setup = await _assessmentApi.getFormSetup(widget.customSchoolId);
+    if (!_teacherViewer) return setup;
+
+    TeacherWorkspaceSnapshot workspace;
+    try {
+      workspace = await TeacherWorkspaceApiClient(
+        accessToken: widget.accessToken,
+        onRefreshAccessToken: widget.onRefreshAccessToken,
+      ).get(widget.customSchoolId);
+    } catch (_) {
+      throw const AssessmentApiException(
+        'Your teaching assignments could not be loaded. Please try again.',
+      );
+    }
+    return scopeAssessmentSetupForTeacher(setup, workspace);
   }
 
   Future<void> _loadLiveAssessments() async {
@@ -179,11 +281,21 @@ class _CompleteAssessmentWorkflowState
           .toSet()
           .toList();
       if (setup.streams.isEmpty) {
-        throw const AssessmentApiException(
-          'No active class streams are configured for this school.',
+        throw AssessmentApiException(
+          _teacherViewer
+              ? 'No active class is assigned to this teacher account.'
+              : 'No active class streams are configured for this school.',
         );
       }
       var stream = setup.streams.first;
+      if (_selectedClass.isEmpty && widget.initialStreamId != null) {
+        for (final option in setup.streams) {
+          if (option.id == widget.initialStreamId) {
+            stream = option;
+            break;
+          }
+        }
+      }
       for (final option in setup.streams) {
         if (option.label == _selectedClass) {
           stream = option;
@@ -271,7 +383,7 @@ class _CompleteAssessmentWorkflowState
           .where((indicator) => indicator.code.isNotEmpty)
           .toList(),
       streamId: streamId,
-      gradeLevelId: _jsonInt(item['gradeLevelId']),
+      gradeLevelId: classOption?.gradeLevelId ?? _jsonInt(item['gradeLevelId']),
       schoolSubjectId: _jsonInt(item['schoolSubjectId']),
       description: item['description']?.toString() ?? '',
       officialSba: item['isOfficialSBA'] == true,
@@ -350,18 +462,28 @@ class _CompleteAssessmentWorkflowState
     'CAT1' => 'CAT 1',
     'CAT2' => 'CAT 2',
     'CAT3' => 'CAT 3',
-    'CAT4' || 'PROJECT' => 'CAT 4 – Project/Assignment',
-    'END_OF_TERM_EXAM' => 'End-of-Term Exam',
+    'CAT4' => 'CAT 4',
+    'END_OF_TERM_EXAM' => 'End-of-Term Examination',
     'CLASS_EXERCISE' => 'Class Exercise',
     'HOMEWORK' => 'Homework',
-    _ => 'Class Test',
+    'QUIZ' => 'Quiz',
+    'CLASS_TEST' => 'Class Test',
+    'PROJECT' => 'Project',
+    'PRACTICAL' => 'Practical',
+    'EXPERIMENT' => 'Experiment',
+    'ORAL' => 'Oral Assessment',
+    'PERFORMANCE' => 'Performance Assessment',
+    'PRACTICAL_EXPERIMENT' => 'Practical',
+    'PERFORMANCE_ORAL' => 'Performance Assessment',
+    _ => 'Assessment',
   };
 
   String _assessmentStatusLabel(String value) => switch (value) {
+    'NOT_STARTED' => 'Not Started',
     'COMPLETE' => 'Graded',
-    'IN_PROGRESS' => 'Open',
+    'IN_PROGRESS' => 'In Progress',
     'CLOSED' => 'Closed',
-    _ => 'Open',
+    _ => 'Not Started',
   };
 
   final List<_AssessmentRecord> _assessments = [];
@@ -435,10 +557,19 @@ class _CompleteAssessmentWorkflowState
     'CAT 1' => 'CAT1',
     'CAT 2' => 'CAT2',
     'CAT 3' => 'CAT3',
-    'CAT 4' || 'CAT 4 – Project/Assignment' || 'Project' => 'CAT4',
-    'End of Term' || 'End-of-Term Exam' || 'Exam' => 'END_OF_TERM_EXAM',
+    'CAT 4' || 'CAT 4 – Project/Assignment' => 'CAT4',
+    'End of Term' ||
+    'End-of-Term Exam' ||
+    'End-of-Term Examination' ||
+    'Exam' => 'END_OF_TERM_EXAM',
     'Homework' => 'HOMEWORK',
     'Class Exercise' => 'CLASS_EXERCISE',
+    'Quiz' => 'QUIZ',
+    'Project' => 'PROJECT',
+    'Practical' => 'PRACTICAL',
+    'Experiment' => 'EXPERIMENT',
+    'Oral Assessment' => 'ORAL',
+    'Performance Assessment' => 'PERFORMANCE',
     _ => 'CLASS_TEST',
   };
 
@@ -504,45 +635,173 @@ class _CompleteAssessmentWorkflowState
     }
   }
 
-  Future<void> _showAssessmentReadiness() {
-    final withoutScores = _assessments.where((a) => a.entered == 0).length;
-    final incomplete = _assessments
-        .where((a) => a.entered > 0 && a.entered < a.totalStudents)
-        .length;
-    final complete = _assessments
-        .where((a) => a.entered == a.totalStudents)
-        .length;
-    return showDialog<void>(
+  Future<void> _showAssessmentReadiness() async {
+    var ready = false;
+    var totalStudents = 0;
+    var missingScores = 0;
+    final missingAssessments = <String>[];
+    final subjectReadinessDetails = <Map<String, dynamic>>[];
+    var evaluationPending = 0;
+    var finalReviewPending = 0;
+
+    if (widget.customSchoolId.trim().isNotEmpty) {
+      try {
+        final setup = await _assessmentFormSetup;
+        final streams = setup.streams.where(
+          (stream) => stream.label == _selectedClass,
+        );
+        if (streams.isEmpty) {
+          throw const AssessmentApiException(
+            'The selected class could not be resolved.',
+          );
+        }
+        final response = await _assessmentApi.getStreamReportReadiness(
+          customSchoolId: widget.customSchoolId,
+          streamId: streams.first.id,
+          term: setup.termSequence,
+          academicYearId: setup.academicYearId,
+          academicTermId: setup.termId,
+        );
+        final overall = response['overallStatus'] is Map
+            ? Map<String, dynamic>.from(response['overallStatus'] as Map)
+            : const <String, dynamic>{};
+        final details =
+            (response['studentReadinessDetails'] as List? ?? const [])
+                .whereType<Map>()
+                .map((item) => Map<String, dynamic>.from(item))
+                .toList();
+        totalStudents = _jsonInt(response['totalStudents']);
+        if (totalStudents == 0) totalStudents = details.length;
+        final subjectBreakdown =
+            (response['subjectBreakdown'] as List? ?? const [])
+                .whereType<Map>()
+                .map((item) => Map<String, dynamic>.from(item))
+                .toList();
+        var foundAssessmentBreakdown = false;
+        for (final subject in subjectBreakdown) {
+          final subjectName = subject['subjectName']?.toString() ?? 'Subject';
+          final rawBreakdown = subject['assessmentBreakdown'];
+          if (rawBreakdown is! Map) continue;
+          foundAssessmentBreakdown = true;
+          final missingComponents = <String>[];
+          var subjectMissingScores = 0;
+          for (final entry in rawBreakdown.entries) {
+            if (entry.value is! Map) continue;
+            final component = Map<String, dynamic>.from(entry.value as Map);
+            final required = _jsonInt(component['totalStudents']);
+            final entered = _jsonInt(component['studentsScored']);
+            final scoreGap = (required - entered).clamp(0, required);
+            subjectMissingScores += scoreGap;
+            missingScores += scoreGap;
+            if (component['exists'] != true) {
+              final componentLabel = _readinessAssessmentTypeLabel(
+                entry.key.toString(),
+              );
+              missingComponents.add(componentLabel);
+              missingAssessments.add(
+                '$subjectName $componentLabel assessment is missing.',
+              );
+            }
+          }
+          if (missingComponents.isNotEmpty || subjectMissingScores > 0) {
+            subjectReadinessDetails.add({
+              'subjectName': subjectName,
+              'missingComponents': missingComponents,
+              'missingScores': subjectMissingScores,
+            });
+          }
+        }
+        if (!foundAssessmentBreakdown) {
+          missingScores = details.fold<int>(
+            0,
+            (total, student) => total + _jsonInt(student['assessmentsMissing']),
+          );
+        }
+        evaluationPending = details
+            .where((student) => student['evaluationReady'] == false)
+            .length;
+        finalReviewPending = details
+            .where(
+              (student) =>
+                  student['canGenerateReport'] != true &&
+                  student['assessmentDataReady'] == true &&
+                  student['evaluationReady'] != false,
+            )
+            .length;
+        ready = overall['canGenerateForAllStudents'] == true;
+      } on AssessmentApiException catch (error) {
+        if (mounted) _notice(error.message);
+        return;
+      }
+    } else {
+      totalStudents = _assessments
+          .map((assessment) => assessment.totalStudents)
+          .fold<int>(0, (largest, value) => value > largest ? value : largest);
+      missingScores = _assessments.fold<int>(
+        0,
+        (total, assessment) =>
+            total +
+            (assessment.totalStudents - assessment.entered).clamp(
+              0,
+              assessment.totalStudents,
+            ),
+      );
+      ready = _assessments.isNotEmpty && missingScores == 0;
+    }
+    if (!mounted) return;
+
+    final blockers = <String>[
+      if (missingAssessments.isNotEmpty)
+        '${missingAssessments.length} required assessment${missingAssessments.length == 1 ? ' is' : 's are'} missing.',
+      if (missingScores > 0)
+        '$missingScores required score${missingScores == 1 ? ' is' : 's are'} missing.',
+      if (evaluationPending > 0)
+        '$evaluationPending student evaluation${evaluationPending == 1 ? ' is' : 's are'} not completed.',
+      if (finalReviewPending > 0)
+        '$finalReviewPending report${finalReviewPending == 1 ? ' needs' : 's need'} final review.',
+    ];
+    await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Assessment Readiness'),
+        title: Text(ready ? 'Reports are ready' : 'Reports are not ready'),
         content: SizedBox(
-          width: 460,
+          width: 400,
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _readinessRow(
-                Icons.check_circle_outline,
-                'Complete',
-                '$complete assessments have all scores entered',
-                AppColors.green,
-              ),
-              _readinessRow(
-                Icons.pending_actions_outlined,
-                'In progress',
-                '$incomplete assessments have missing scores',
-                Colors.orange,
-              ),
-              _readinessRow(
-                Icons.warning_amber_outlined,
-                'Not started',
-                '$withoutScores assessments have no scores',
-                Colors.red,
-              ),
+              if (ready)
+                _reportReadinessChecklistItem(
+                  'All $totalStudents student report${totalStudents == 1 ? '' : 's'} can be generated.',
+                  complete: true,
+                )
+              else if (blockers.isEmpty)
+                _reportReadinessChecklistItem(
+                  'Required report information is incomplete.',
+                )
+              else
+                for (final blocker in blockers)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: _reportReadinessChecklistItem(blocker),
+                  ),
             ],
           ),
         ),
         actions: [
+          if (!ready &&
+              (subjectReadinessDetails.isNotEmpty ||
+                  evaluationPending > 0 ||
+                  finalReviewPending > 0))
+            TextButton(
+              onPressed: () => _showReportReadinessDetails(
+                dialogContext,
+                subjects: subjectReadinessDetails,
+                evaluationPending: evaluationPending,
+                finalReviewPending: finalReviewPending,
+              ),
+              child: const Text('More details'),
+            ),
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext),
             child: const Text('Done'),
@@ -552,17 +811,185 @@ class _CompleteAssessmentWorkflowState
     );
   }
 
-  Widget _readinessRow(
-    IconData icon,
-    String title,
-    String subtitle,
-    Color color,
-  ) {
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: Icon(icon, color: color),
-      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
-      subtitle: Text(subtitle),
+  Future<void> _showReportReadinessDetails(
+    BuildContext parentDialogContext, {
+    required List<Map<String, dynamic>> subjects,
+    required int evaluationPending,
+    required int finalReviewPending,
+  }) async {
+    final totalMissingScores = subjects.fold<int>(
+      0,
+      (total, subject) => total + _jsonInt(subject['missingScores']),
+    );
+
+    await showDialog<void>(
+      context: parentDialogContext,
+      builder: (detailsContext) => AlertDialog(
+        title: const Text('What is missing'),
+        content: SizedBox(
+          width: 540,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 520),
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                if (totalMissingScores > 0) ...[
+                  Text(
+                    '$totalMissingScores required score${totalMissingScores == 1 ? ' is' : 's are'} missing.',
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+                for (final subject in subjects)
+                  _subjectReadinessSummaryCard(subject),
+                if (evaluationPending > 0)
+                  _aggregateReadinessCard(
+                    title: 'Evaluations',
+                    detail:
+                        '$evaluationPending evaluation${evaluationPending == 1 ? ' is' : 's are'} not completed',
+                  ),
+                if (finalReviewPending > 0)
+                  _aggregateReadinessCard(
+                    title: 'Final review',
+                    detail:
+                        '$finalReviewPending report${finalReviewPending == 1 ? ' needs' : 's need'} final review',
+                  ),
+                if (subjects.isEmpty &&
+                    evaluationPending == 0 &&
+                    finalReviewPending == 0)
+                  const Text('No detailed blockers were returned.'),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(detailsContext),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _subjectReadinessSummaryCard(Map<String, dynamic> subject) {
+    final subjectName = subject['subjectName']?.toString() ?? 'Subject';
+    final missingScores = _jsonInt(subject['missingScores']);
+    final components = (subject['missingComponents'] as List? ?? const [])
+        .map((item) => item.toString())
+        .toList();
+    final detail = components.isEmpty
+        ? '$missingScores score${missingScores == 1 ? '' : 's'} missing'
+        : '${components.length} assessment${components.length == 1 ? '' : 's'} missing · '
+              '$missingScores score${missingScores == 1 ? '' : 's'} affected';
+    return _aggregateReadinessCard(
+      title: subjectName,
+      detail: detail,
+      components: components,
+    );
+  }
+
+  Widget _aggregateReadinessCard({
+    required String title,
+    required String detail,
+    List<String> components = const [],
+  }) => Container(
+    width: double.infinity,
+    margin: const EdgeInsets.only(bottom: 8),
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: const Color(0xFFF8FAFC),
+      border: Border.all(color: AppColors.border),
+      borderRadius: BorderRadius.circular(10),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+        const SizedBox(height: 3),
+        Text(detail, style: const TextStyle(color: AppColors.muted)),
+        if (components.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: components
+                .map(
+                  (component) => Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF7ED),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      component,
+                      style: const TextStyle(
+                        color: Color(0xFF9A4D08),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                )
+                .toList(),
+          ),
+        ],
+      ],
+    ),
+  );
+
+  String _readinessAssessmentTypeLabel(String value) =>
+      switch (value.toUpperCase()) {
+        'CAT1' => 'CAT 1',
+        'CAT2' => 'CAT 2',
+        'CAT3' => 'CAT 3',
+        'CAT4' => 'CAT 4',
+        'EXAM' || 'END_OF_TERM_EXAM' => 'End-of-Term Examination',
+        _ => value,
+      };
+
+  Widget _reportReadinessChecklistItem(
+    String message, {
+    bool complete = false,
+  }) {
+    final color = complete ? AppColors.green : const Color(0xFFD97706);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+      decoration: BoxDecoration(
+        color: complete ? const Color(0xFFECFDF5) : const Color(0xFFFFF7ED),
+        border: Border.all(
+          color: complete ? const Color(0xFFA7F3D0) : const Color(0xFFFED7AA),
+        ),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            complete
+                ? Icons.check_box_rounded
+                : Icons.check_box_outline_blank_rounded,
+            color: color,
+            size: 21,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(
+                color: AppColors.text,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -626,7 +1053,7 @@ class _CompleteAssessmentWorkflowState
         _open(_Route.reportCards);
       case 'Final Reports':
         _open(_Route.finalReports);
-      case 'Student Evaluations':
+      case 'Evaluations & Comments':
         if (widget.customSchoolId.trim().isNotEmpty) {
           await _loadLiveReportReadiness(setup, result);
           if (!mounted) return;
@@ -635,6 +1062,30 @@ class _CompleteAssessmentWorkflowState
       default:
         _open(_Route.evaluations);
     }
+  }
+
+  Future<void> _changeDashboardClass() async {
+    AssessmentFormSetup setup;
+    try {
+      setup = await _assessmentFormSetup;
+    } on AssessmentApiException catch (error) {
+      if (mounted) _notice(error.message);
+      return;
+    } catch (_) {
+      if (mounted) _notice('Your teaching assignments could not be loaded.');
+      return;
+    }
+    if (!mounted || setup.streams.length < 2) return;
+    final result = await showDialog<String>(
+      context: context,
+      builder: (_) => _ClassSelectorDialog(
+        action: 'View assessments for',
+        streams: setup.streams,
+      ),
+    );
+    if (result == null || !mounted || result == _selectedClass) return;
+    setState(() => _selectedClass = result);
+    await _loadLiveAssessments();
   }
 
   Future<void> _openFinalReportManagement() async {
@@ -1163,9 +1614,12 @@ class _CompleteAssessmentWorkflowState
         _Route.evaluations => _evaluationStudents(),
         _Route.evaluationStudents => _evaluationStudents(),
         _Route.evaluationForm => _evaluationForm(),
-        _Route.reportCards => _reportCards(),
-        _Route.studentReport => _studentReportPage(),
-        _Route.finalReports => _finalReports(),
+        _Route.reportCards =>
+          _evaluationManager ? _reportCards() : _assessmentRegister(),
+        _Route.studentReport =>
+          _evaluationManager ? _studentReportPage() : _assessmentRegister(),
+        _Route.finalReports =>
+          _evaluationManager ? _finalReports() : _assessmentRegister(),
         _Route.classes => _classes(),
         _Route.classDetail => _classDetail(),
         _Route.studentProfile => _studentProfile(),
@@ -1194,40 +1648,75 @@ class _CompleteAssessmentWorkflowState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (showBack) ...[
-                    IconButton(
-                      tooltip: 'Back',
-                      onPressed: _back,
-                      icon: const Icon(Icons.arrow_back),
-                    ),
-                    const SizedBox(width: 4),
-                  ],
-                  Expanded(
-                    child: Column(
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final stackActions =
+                      actions.isNotEmpty && constraints.maxWidth < 820;
+                  final titleBlock = Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontSize: compactHeader ? 20 : 27,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.text,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        style: const TextStyle(color: AppColors.muted),
+                      ),
+                    ],
+                  );
+                  final heading = Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (showBack) ...[
+                        IconButton(
+                          tooltip: 'Back',
+                          onPressed: _back,
+                          icon: const Icon(Icons.arrow_back),
+                        ),
+                        const SizedBox(width: 4),
+                      ],
+                      Expanded(child: titleBlock),
+                    ],
+                  );
+                  if (actions.isEmpty) return heading;
+                  final actionWrap = Wrap(
+                    spacing: 10,
+                    runSpacing: 8,
+                    children: actions,
+                  );
+                  if (stackActions) {
+                    return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          title,
-                          style: TextStyle(
-                            fontSize: compactHeader ? 20 : 27,
-                            fontWeight: FontWeight.w800,
-                            color: AppColors.text,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          subtitle,
-                          style: const TextStyle(color: AppColors.muted),
-                        ),
+                        heading,
+                        const SizedBox(height: 12),
+                        actionWrap,
                       ],
-                    ),
-                  ),
-                  if (actions.isNotEmpty)
-                    Wrap(spacing: 10, runSpacing: 8, children: actions),
-                ],
+                    );
+                  }
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (showBack) ...[
+                        IconButton(
+                          tooltip: 'Back',
+                          onPressed: _back,
+                          icon: const Icon(Icons.arrow_back),
+                        ),
+                        const SizedBox(width: 4),
+                      ],
+                      Expanded(child: titleBlock),
+                      const SizedBox(width: 16),
+                      actionWrap,
+                    ],
+                  );
+                },
               ),
               SizedBox(height: compactHeader ? 14 : 20),
               ...children,
@@ -1257,17 +1746,82 @@ class _CompleteAssessmentWorkflowState
                 (total, assessment) => total + assessment.average,
               ) /
               _assessments.length;
+    final assignedClassCount = _loadedSetup?.streams.length ?? 0;
+    final selectedStream = _loadedSetup?.streams
+        .where((stream) => stream.label == _selectedClass)
+        .firstOrNull;
+    final assignedSubjectCount =
+        _loadedSetup?.subjects
+            .where((subject) => subject.isAvailableIn(selectedStream?.id))
+            .length ??
+        0;
     return _page(
-      title: 'Assessment Dashboard',
-      subtitle: '$_displayTerm - $_displayAcademicYear',
+      title: _teacherViewer ? 'My Assessments' : 'Assessment Dashboard',
+      subtitle: _teacherViewer && _selectedClass.isNotEmpty
+          ? '$_selectedClass • $_displayTerm • $_displayAcademicYear'
+          : '$_displayTerm - $_displayAcademicYear',
       showBack: false,
+      actions: [
+        if (_teacherViewer && assignedClassCount > 1)
+          _outlineButton(
+            'Change class',
+            Icons.swap_horiz_rounded,
+            _changeDashboardClass,
+          ),
+        TextButton.icon(
+          onPressed: _showTermReportGuide,
+          icon: const Icon(Icons.help_outline_rounded, size: 17),
+          label: const Text('How term reports work'),
+        ),
+        if (_teacherViewer)
+          FilledButton.icon(
+            onPressed: () {
+              _editingAssessment = false;
+              _open(_Route.assessmentForm);
+            },
+            icon: const Icon(Icons.add, size: 17),
+            label: const Text('New Assessment'),
+          ),
+      ],
       children: [
+        if (_teacherViewer) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+            decoration: BoxDecoration(
+              color: AppColors.greenSoft,
+              border: Border.all(color: AppColors.green.withValues(alpha: .25)),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.verified_user_outlined,
+                  color: AppColors.green,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    assignedClassCount == 0
+                        ? 'No active teaching assignment is connected to your account.'
+                        : 'Showing only your assigned class${assignedClassCount == 1 ? '' : 'es'} and $assignedSubjectCount available subject${assignedSubjectCount == 1 ? '' : 's'} for this class.',
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 18),
+        ],
         LayoutBuilder(
           builder: (_, constraints) => _statGrid(constraints.maxWidth, [
             (
-              'ACTIVE ASSESSMENTS',
+              _teacherViewer ? 'MY ASSESSMENTS' : 'ACTIVE ASSESSMENTS',
               '${_assessments.length}',
-              'For the selected term',
+              _teacherViewer ? 'For $_selectedClass' : 'For the selected term',
             ),
             ('FULLY GRADED', '$completed', 'Assessments with all scores'),
             (
@@ -1284,141 +1838,387 @@ class _CompleteAssessmentWorkflowState
             ),
           ]),
         ),
-        const SizedBox(height: 18),
-        _section(
-          title: 'Quick Actions',
-          child: LayoutBuilder(
-            builder: (_, c) {
-              final width = c.maxWidth >= 1000
-                  ? (c.maxWidth - 36) / 4
-                  : c.maxWidth >= 620
-                  ? (c.maxWidth - 12) / 2
-                  : c.maxWidth;
-              return Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: [
-                  _actionCard(
-                    width,
-                    'Enter Assessment',
-                    'Create and enter student scores',
-                    Icons.edit_note_outlined,
-                    AppColors.green,
-                    () => _selectClass('Enter Assessment'),
-                  ),
-                  _actionCard(
-                    width,
-                    'Manage Assessments',
-                    'View, edit and grade assessments',
-                    Icons.assignment_outlined,
-                    AppColors.blue,
-                    () => _selectClass('Manage Assessments'),
-                  ),
-                  if (!_evaluationManager)
+        if (_teacherViewer) ...[
+          const SizedBox(height: 18),
+          _teacherAssessmentRegisterPanel(),
+        ] else ...[
+          const SizedBox(height: 18),
+          _section(
+            title: 'Quick Actions',
+            child: LayoutBuilder(
+              builder: (_, c) {
+                final width = c.maxWidth >= 1000
+                    ? (c.maxWidth - 36) / 4
+                    : c.maxWidth >= 620
+                    ? (c.maxWidth - 12) / 2
+                    : c.maxWidth;
+                return Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: [
                     _actionCard(
                       width,
-                      'Student Evaluations',
-                      'Complete your assigned term-end evaluations',
-                      Icons.fact_check_outlined,
-                      AppColors.amber,
-                      _openTermEvaluations,
-                    ),
-                  if (_evaluationManager) ...[
-                    _actionCard(
-                      width,
-                      'Generate Report Cards',
-                      'Review readiness and publish',
-                      Icons.description_outlined,
-                      AppColors.purple,
-                      () => _selectClass('Generate Report Cards'),
-                    ),
-                    _actionCard(
-                      width,
-                      'Final Reports',
-                      'Manage reports across grades and streams',
-                      Icons.inventory_2_outlined,
+                      'Enter Assessment',
+                      'Create and enter student scores',
+                      Icons.edit_note_outlined,
                       AppColors.green,
-                      _openFinalReportManagement,
+                      () => _selectClass('Enter Assessment'),
+                    ),
+                    _actionCard(
+                      width,
+                      'Manage Assessments',
+                      'View, edit and grade assessments',
+                      Icons.assignment_outlined,
+                      AppColors.blue,
+                      () => _selectClass('Manage Assessments'),
+                    ),
+                    if (!_evaluationManager)
+                      _actionCard(
+                        width,
+                        'Evaluations & Comments',
+                        'Complete ratings and class-teacher comments',
+                        Icons.fact_check_outlined,
+                        AppColors.amber,
+                        _openTermEvaluations,
+                      ),
+                    if (_evaluationManager) ...[
+                      _actionCard(
+                        width,
+                        'Generate Report Cards',
+                        'Review readiness and generate reports',
+                        Icons.description_outlined,
+                        AppColors.purple,
+                        () => _selectClass('Generate Report Cards'),
+                      ),
+                      _actionCard(
+                        width,
+                        'Final Reports',
+                        'Manage reports across grades and streams',
+                        Icons.inventory_2_outlined,
+                        AppColors.green,
+                        _openFinalReportManagement,
+                      ),
+                    ],
+                  ],
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 18),
+          LayoutBuilder(
+            builder: (_, c) {
+              final stacked = c.maxWidth < 920;
+              final recent = _section(
+                title: _teacherViewer
+                    ? 'My Recent Assessments'
+                    : 'Recent Assessments',
+                action: TextButton(
+                  onPressed: () => _open(_Route.assessments),
+                  child: const Text('View all'),
+                ),
+                child: Column(
+                  children: _assessments
+                      .take(4)
+                      .map(
+                        (a) => _listTile(
+                          title: a.title,
+                          subtitle:
+                              '${a.subject} - ${a.entered}/${a.totalStudents} scores entered',
+                          badge: a.status,
+                          onTap: () => _openAssessment(a),
+                        ),
+                      )
+                      .toList(),
+                ),
+              );
+              final completion = _section(
+                title: 'Assessment Completion',
+                child: Column(
+                  children: [
+                    _ProgressRow(
+                      'Completed',
+                      completed,
+                      _assessments.length,
+                      AppColors.green,
+                    ),
+                    _ProgressRow(
+                      'In progress',
+                      _assessments
+                          .where(
+                            (assessment) =>
+                                assessment.entered > 0 &&
+                                assessment.entered < assessment.totalStudents,
+                          )
+                          .length,
+                      _assessments.length,
+                      AppColors.amber,
+                    ),
+                    _ProgressRow(
+                      'Not started',
+                      _assessments
+                          .where((assessment) => assessment.entered == 0)
+                          .length,
+                      _assessments.length,
+                      AppColors.red,
                     ),
                   ],
-                ],
+                ),
               );
+              return stacked
+                  ? Column(
+                      children: [
+                        recent,
+                        const SizedBox(height: 16),
+                        completion,
+                      ],
+                    )
+                  : Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(flex: 3, child: recent),
+                        const SizedBox(width: 16),
+                        Expanded(flex: 2, child: completion),
+                      ],
+                    );
             },
           ),
-        ),
-        const SizedBox(height: 18),
-        LayoutBuilder(
-          builder: (_, c) {
-            final stacked = c.maxWidth < 920;
-            final recent = _section(
-              title: 'Recent Assessments',
-              action: TextButton(
-                onPressed: () => _open(_Route.assessments),
-                child: const Text('View all'),
+        ],
+      ],
+    );
+  }
+
+  Widget _teacherAssessmentRegisterPanel() {
+    final visibleAssessments = _visibleAssessments();
+    return _section(
+      title: 'Assessment register',
+      action: OutlinedButton.icon(
+        onPressed: _showAssessmentReadiness,
+        icon: const Icon(Icons.fact_check_outlined, size: 16),
+        label: const Text('Check report readiness'),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _assessmentFilterBar(),
+          const SizedBox(height: 16),
+          _assessmentTable(visibleAssessments),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showTermReportGuide() async {
+    Widget step({
+      required String number,
+      required String title,
+      required String detail,
+      required Color color,
+    }) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: .12),
+                shape: BoxShape.circle,
               ),
-              child: Column(
-                children: _assessments
-                    .take(4)
-                    .map(
-                      (a) => _listTile(
-                        title: a.title,
-                        subtitle:
-                            '${a.subject} - ${a.entered}/${a.totalStudents} scores entered',
-                        badge: a.status,
-                        onTap: () => _openAssessment(a),
-                      ),
-                    )
-                    .toList(),
+              child: Text(
+                number,
+                style: TextStyle(
+                  color: color,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12,
+                ),
               ),
-            );
-            final completion = _section(
-              title: 'Assessment Completion',
+            ),
+            const SizedBox(width: 11),
+            Expanded(
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _ProgressRow(
-                    'Completed',
-                    completed,
-                    _assessments.length,
-                    AppColors.green,
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13,
+                    ),
                   ),
-                  _ProgressRow(
-                    'In progress',
-                    _assessments
-                        .where(
-                          (assessment) =>
-                              assessment.entered > 0 &&
-                              assessment.entered < assessment.totalStudents,
-                        )
-                        .length,
-                    _assessments.length,
-                    AppColors.amber,
-                  ),
-                  _ProgressRow(
-                    'Not started',
-                    _assessments
-                        .where((assessment) => assessment.entered == 0)
-                        .length,
-                    _assessments.length,
-                    AppColors.red,
+                  const SizedBox(height: 2),
+                  Text(
+                    detail,
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 12,
+                      height: 1.4,
+                    ),
                   ),
                 ],
               ),
-            );
-            return stacked
-                ? Column(
-                    children: [recent, const SizedBox(height: 16), completion],
-                  )
-                : Row(
+            ),
+          ],
+        ),
+      );
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        insetPadding: const EdgeInsets.all(20),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 660, maxHeight: 720),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(22, 18, 12, 16),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: AppColors.greenSoft,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(
+                        Icons.route_outlined,
+                        color: AppColors.green,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'From assessment to term report',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'How work moves from the teacher to the head teacher',
+                            style: TextStyle(
+                              color: AppColors.muted,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: () => Navigator.pop(dialogContext),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(flex: 3, child: recent),
-                      const SizedBox(width: 16),
-                      Expanded(flex: 2, child: completion),
+                      const Text(
+                        'TEACHER PREPARES THE RECORDS',
+                        style: TextStyle(
+                          color: AppColors.green,
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: .5,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      step(
+                        number: '1',
+                        title: 'Create the required assessments',
+                        detail:
+                            'Create the term-report assessments for each assigned class and subject.',
+                        color: AppColors.green,
+                      ),
+                      step(
+                        number: '2',
+                        title: 'Enter and verify every score',
+                        detail:
+                            'Complete score entry for every student. Correct mistakes before the assessment is treated as fully graded.',
+                        color: AppColors.green,
+                      ),
+                      step(
+                        number: '3',
+                        title: 'Complete evaluations and remarks',
+                        detail:
+                            'Submit the required student evaluations and class-teacher remarks for the term.',
+                        color: AppColors.green,
+                      ),
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 16),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFFBEB),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Text(
+                          'Handoff: when scores, evaluations and remarks are complete, the class becomes ready for the head teacher’s review.',
+                          style: TextStyle(
+                            color: Color(0xFF92400E),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                      const Text(
+                        'HEAD TEACHER COMPLETES THE REPORT',
+                        style: TextStyle(
+                          color: Color(0xFF2563EB),
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: .5,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      step(
+                        number: '4',
+                        title: 'Check readiness and resolve gaps',
+                        detail:
+                            'Open Generate Report Cards. Students under Needs Attention show what is still missing. Generate only when they are ready.',
+                        color: const Color(0xFF2563EB),
+                      ),
+                      step(
+                        number: '5',
+                        title: 'Review, then publish',
+                        detail:
+                            'Review the generated report, add any required head-teacher remark, and publish the approved report to make it official.',
+                        color: const Color(0xFF2563EB),
+                      ),
+                      const Text(
+                        'If scores, evaluations or remarks change after generation, regenerate the report before publishing the updated version.',
+                        style: TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 11.5,
+                          height: 1.4,
+                        ),
+                      ),
                     ],
-                  );
-          },
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
-      ],
+      ),
     );
   }
 
@@ -1444,23 +2244,7 @@ class _CompleteAssessmentWorkflowState
   }
 
   Widget _assessmentRegister() {
-    final visibleAssessments = _assessments.where((assessment) {
-      final query = _assessmentQuery.trim().toLowerCase();
-      final matchesQuery =
-          query.isEmpty ||
-          assessment.title.toLowerCase().contains(query) ||
-          assessment.id.toLowerCase().contains(query);
-      final matchesType =
-          _assessmentTypeFilter == 'All Types' ||
-          assessment.type == _assessmentTypeFilter;
-      final matchesSubject =
-          _assessmentSubjectFilter == 'All Subjects' ||
-          assessment.subject == _assessmentSubjectFilter;
-      final matchesStatus =
-          _assessmentStatusFilter == 'All Statuses' ||
-          assessment.status == _assessmentStatusFilter;
-      return matchesQuery && matchesType && matchesSubject && matchesStatus;
-    }).toList();
+    final visibleAssessments = _visibleAssessments();
     return SingleChildScrollView(
       padding: const EdgeInsets.all(10),
       child: Column(
@@ -1547,7 +2331,7 @@ class _CompleteAssessmentWorkflowState
                   OutlinedButton.icon(
                     onPressed: _showAssessmentReadiness,
                     icon: const Icon(Icons.fact_check_outlined, size: 15),
-                    label: const Text('Check Readiness'),
+                    label: const Text('Check report readiness'),
                   ),
                   const SizedBox(width: 8),
                   FilledButton.icon(
@@ -1577,60 +2361,103 @@ class _CompleteAssessmentWorkflowState
           const SizedBox(height: 15),
           _assessmentFilterBar(),
           const SizedBox(height: 16),
-          Container(
-            width: double.infinity,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border.all(color: const Color(0xFFE5E7EB)),
+          _assessmentTable(visibleAssessments),
+        ],
+      ),
+    );
+  }
+
+  List<_AssessmentRecord> _visibleAssessments() {
+    final visible = _assessments.where((assessment) {
+      final query = _assessmentQuery.trim().toLowerCase();
+      final matchesQuery =
+          query.isEmpty ||
+          assessment.title.toLowerCase().contains(query) ||
+          assessment.id.toLowerCase().contains(query);
+      final matchesType =
+          _assessmentTypeFilters.isEmpty ||
+          _assessmentTypeFilters.contains(assessment.type);
+      final matchesSubject =
+          _assessmentSubjectFilters.isEmpty ||
+          _assessmentSubjectFilters.contains(assessment.subject);
+      final matchesStatus =
+          _assessmentStatusFilters.isEmpty ||
+          _assessmentStatusFilters.contains(assessment.status);
+      return matchesQuery && matchesType && matchesSubject && matchesStatus;
+    }).toList();
+    visible.sort(_compareVisibleAssessments);
+    return visible;
+  }
+
+  Widget _assessmentTable(List<_AssessmentRecord> visibleAssessments) {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: _loadingAssessments
+          ? const Padding(
+              padding: EdgeInsets.all(46),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          : _assessmentLoadError != null
+          ? Padding(
+              padding: const EdgeInsets.all(40),
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _assessmentLoadError!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: AppColors.muted),
+                    ),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: _loadLiveAssessments,
+                      icon: const Icon(Icons.refresh, size: 17),
+                      label: const Text('Try again'),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          : visibleAssessments.isEmpty
+          ? const Padding(
+              padding: EdgeInsets.all(40),
+              child: Center(
+                child: Text(
+                  'No assessments match the selected filters.',
+                  style: TextStyle(color: Color(0xFF9CA3AF)),
+                ),
+              ),
+            )
+          : ClipRRect(
               borderRadius: BorderRadius.circular(12),
-            ),
-            child: _loadingAssessments
-                ? const Padding(
-                    padding: EdgeInsets.all(46),
-                    child: Center(child: CircularProgressIndicator()),
-                  )
-                : _assessmentLoadError != null
-                ? Padding(
-                    padding: const EdgeInsets.all(40),
-                    child: Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            _assessmentLoadError!,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: AppColors.muted),
-                          ),
-                          const SizedBox(height: 12),
-                          OutlinedButton.icon(
-                            onPressed: _loadLiveAssessments,
-                            icon: const Icon(Icons.refresh, size: 17),
-                            label: const Text('Try again'),
-                          ),
-                        ],
+              child: LayoutBuilder(
+                builder: (context, constraints) => Scrollbar(
+                  controller: _assessmentTableScrollController,
+                  thumbVisibility: true,
+                  trackVisibility: true,
+                  scrollbarOrientation: ScrollbarOrientation.bottom,
+                  child: SingleChildScrollView(
+                    controller: _assessmentTableScrollController,
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minWidth: constraints.maxWidth,
                       ),
-                    ),
-                  )
-                : visibleAssessments.isEmpty
-                ? const Padding(
-                    padding: EdgeInsets.all(40),
-                    child: Center(
-                      child: Text(
-                        'No assessments match the selected filters.',
-                        style: TextStyle(color: Color(0xFF9CA3AF)),
-                      ),
-                    ),
-                  )
-                : ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
                       child: DataTable(
+                        sortColumnIndex: _assessmentSortColumnIndex,
+                        sortAscending: _assessmentSortAscending,
                         headingRowHeight: 36,
                         dataRowMinHeight: 54,
                         dataRowMaxHeight: 62,
-                        horizontalMargin: 15,
-                        columnSpacing: 34,
+                        horizontalMargin: 14,
+                        columnSpacing: 20,
                         headingRowColor: WidgetStateProperty.all(
                           const Color(0xFFF9FAFB),
                         ),
@@ -1640,17 +2467,47 @@ class _CompleteAssessmentWorkflowState
                           fontWeight: FontWeight.w700,
                           letterSpacing: .4,
                         ),
-                        columns: const [
-                          DataColumn(label: Text('ASSESSMENT')),
-                          DataColumn(label: Text('TYPE')),
-                          DataColumn(label: Text('SUBJECT')),
-                          DataColumn(label: Text('DATE')),
-                          DataColumn(label: Text('MAX SCORE')),
-                          DataColumn(label: Text('SCORE ENTRY')),
-                          DataColumn(label: Text('AVG SCORE')),
-                          DataColumn(label: Text('PASS RATE')),
-                          DataColumn(label: Text('STATUS')),
-                          DataColumn(label: Text('GRADING')),
+                        columns: [
+                          DataColumn(
+                            label: const Text('ASSESSMENT'),
+                            onSort: _sortAssessmentRegister,
+                          ),
+                          DataColumn(
+                            label: const Text('TYPE'),
+                            onSort: _sortAssessmentRegister,
+                          ),
+                          DataColumn(
+                            label: const Text('SUBJECT'),
+                            onSort: _sortAssessmentRegister,
+                          ),
+                          DataColumn(
+                            label: const Text('DATE'),
+                            onSort: _sortAssessmentRegister,
+                          ),
+                          DataColumn(
+                            label: const Text('MAX SCORE'),
+                            onSort: _sortAssessmentRegister,
+                          ),
+                          DataColumn(
+                            label: const Text('SCORE ENTRY'),
+                            onSort: _sortAssessmentRegister,
+                          ),
+                          DataColumn(
+                            label: const Text('AVG SCORE'),
+                            onSort: _sortAssessmentRegister,
+                          ),
+                          DataColumn(
+                            label: const Text('PASS RATE'),
+                            onSort: _sortAssessmentRegister,
+                          ),
+                          DataColumn(
+                            label: const Text('STATUS'),
+                            onSort: _sortAssessmentRegister,
+                          ),
+                          DataColumn(
+                            label: const Text('GRADING'),
+                            onSort: _sortAssessmentRegister,
+                          ),
                         ],
                         rows: visibleAssessments
                             .map((assessment) => _oldAssessmentRow(assessment))
@@ -1658,30 +2515,198 @@ class _CompleteAssessmentWorkflowState
                       ),
                     ),
                   ),
+                ),
+              ),
+            ),
+    );
+  }
+
+  void _sortAssessmentRegister(int columnIndex, bool ascending) {
+    setState(() {
+      _assessmentSortColumnIndex = columnIndex;
+      _assessmentSortAscending = ascending;
+    });
+  }
+
+  int _compareVisibleAssessments(
+    _AssessmentRecord left,
+    _AssessmentRecord right,
+  ) {
+    final comparison = switch (_assessmentSortColumnIndex) {
+      0 => left.title.toLowerCase().compareTo(right.title.toLowerCase()),
+      1 => left.type.toLowerCase().compareTo(right.type.toLowerCase()),
+      2 => left.subject.toLowerCase().compareTo(right.subject.toLowerCase()),
+      3 => _apiDate(left.date).compareTo(_apiDate(right.date)),
+      4 => left.maxScore.compareTo(right.maxScore),
+      5 => _scoreEntryProgress(left).compareTo(_scoreEntryProgress(right)),
+      6 => left.average.compareTo(right.average),
+      7 => left.passRate.compareTo(right.passRate),
+      8 => left.status.toLowerCase().compareTo(right.status.toLowerCase()),
+      9 => _gradingLabel(left).compareTo(_gradingLabel(right)),
+      _ => 0,
+    };
+    final resolved = comparison == 0
+        ? left.title.toLowerCase().compareTo(right.title.toLowerCase())
+        : comparison;
+    return _assessmentSortAscending ? resolved : -resolved;
+  }
+
+  double _scoreEntryProgress(_AssessmentRecord assessment) =>
+      assessment.totalStudents == 0
+      ? 0
+      : assessment.entered / assessment.totalStudents;
+
+  String _gradingLabel(_AssessmentRecord assessment) => assessment.entered == 0
+      ? 'Not Started'
+      : assessment.entered == assessment.totalStudents
+      ? 'Fully Graded'
+      : 'In Progress';
+
+  Future<void> _showAssessmentMultiSelect({
+    required String title,
+    required List<String> options,
+    required Set<String> selected,
+  }) async {
+    final pending = Set<String>.from(selected);
+    var searchQuery = '';
+    final result = await showDialog<Set<String>>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final query = searchQuery.trim().toLowerCase();
+          final visible = options
+              .where((option) => option.toLowerCase().contains(query))
+              .toList();
+          return AlertDialog(
+            title: Text(title),
+            content: SizedBox(
+              width: 380,
+              height: 430,
+              child: Column(
+                children: [
+                  TextField(
+                    autofocus: true,
+                    onChanged: (value) =>
+                        setDialogState(() => searchQuery = value),
+                    decoration: const InputDecoration(
+                      hintText: 'Search...',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: visible.isEmpty
+                        ? const Center(child: Text('No matches found'))
+                        : ListView.builder(
+                            itemCount: visible.length,
+                            itemBuilder: (context, index) {
+                              final option = visible[index];
+                              return CheckboxListTile(
+                                value: pending.contains(option),
+                                title: Text(option),
+                                dense: true,
+                                controlAffinity:
+                                    ListTileControlAffinity.leading,
+                                contentPadding: EdgeInsets.zero,
+                                onChanged: (checked) => setDialogState(() {
+                                  if (checked == true) {
+                                    pending.add(option);
+                                  } else {
+                                    pending.remove(option);
+                                  }
+                                }),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => setDialogState(pending.clear),
+                child: const Text('Clear'),
+              ),
+              TextButton(
+                onPressed: () => setDialogState(() {
+                  pending
+                    ..clear()
+                    ..addAll(options);
+                }),
+                child: const Text('Select all'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, pending),
+                child: const Text('Apply'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      selected
+        ..clear()
+        ..addAll(result);
+    });
+  }
+
+  Widget _assessmentMultiSelectButton({
+    required String allLabel,
+    required String pluralLabel,
+    required List<String> options,
+    required Set<String> selected,
+    double width = 170,
+  }) {
+    final label = selected.isEmpty
+        ? allLabel
+        : selected.length == 1
+        ? selected.first
+        : '${selected.length} $pluralLabel selected';
+    return SizedBox(
+      width: width,
+      height: 56,
+      child: OutlinedButton(
+        onPressed: () => _showAssessmentMultiSelect(
+          title: 'Select $pluralLabel',
+          options: options,
+          selected: selected,
+        ),
+        style: OutlinedButton.styleFrom(
+          alignment: Alignment.centerLeft,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          side: const BorderSide(color: Color(0xFFD7DEE3)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
           ),
-        ],
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: AppColors.text),
+              ),
+            ),
+            const Icon(Icons.arrow_drop_down, color: AppColors.muted),
+          ],
+        ),
       ),
     );
   }
 
   Widget _assessmentFilterBar() {
-    Widget filter(
-      String value,
-      List<String> items,
-      ValueChanged<String?> onChanged,
-    ) {
-      return SizedBox(
-        width: 142,
-        child: DropdownButtonFormField<String>(
-          value: value,
-          isExpanded: true,
-          items: items
-              .map((item) => DropdownMenuItem(value: item, child: Text(item)))
-              .toList(),
-          onChanged: onChanged,
-        ),
-      );
-    }
+    final subjects =
+        _assessments.map((assessment) => assessment.subject).toSet().toList()
+          ..sort();
+    final hasActiveFilters =
+        _assessmentQuery.trim().isNotEmpty ||
+        _assessmentTypeFilters.isNotEmpty ||
+        _assessmentSubjectFilters.isNotEmpty ||
+        _assessmentStatusFilters.isNotEmpty;
 
     return Wrap(
       spacing: 10,
@@ -1690,6 +2715,7 @@ class _CompleteAssessmentWorkflowState
         SizedBox(
           width: 200,
           child: TextField(
+            controller: _assessmentSearchController,
             onChanged: (value) => setState(() => _assessmentQuery = value),
             decoration: const InputDecoration(
               hintText: 'Search...',
@@ -1697,53 +2723,55 @@ class _CompleteAssessmentWorkflowState
             ),
           ),
         ),
-        filter(
-          _assessmentTypeFilter,
-          const [
-            'All Types',
-            'CAT 1',
-            'CAT 2',
-            'CAT 3',
-            'CAT 4 – Project/Assignment',
-            'End-of-Term Exam',
-          ],
-          (value) => setState(() => _assessmentTypeFilter = value!),
+        _assessmentMultiSelectButton(
+          allLabel: 'All Types',
+          pluralLabel: 'types',
+          options: _allAssessmentTypes,
+          selected: _assessmentTypeFilters,
+          width: 220,
         ),
-        filter(
-          _assessmentSubjectFilter,
-          const [
-            'All Subjects',
-            'Mathematics',
-            'English Language',
-            'Integrated Science',
-            'Social Studies',
-          ],
-          (value) => setState(() => _assessmentSubjectFilter = value!),
+        _assessmentMultiSelectButton(
+          allLabel: 'All Subjects',
+          pluralLabel: 'subjects',
+          options: subjects,
+          selected: _assessmentSubjectFilters,
         ),
-        filter(
-          _assessmentStatusFilter,
-          const ['All Statuses', 'Open', 'Graded', 'Pending Review', 'Closed'],
-          (value) => setState(() => _assessmentStatusFilter = value!),
+        _assessmentMultiSelectButton(
+          allLabel: 'All Statuses',
+          pluralLabel: 'statuses',
+          options: const ['Not Started', 'In Progress', 'Graded', 'Closed'],
+          selected: _assessmentStatusFilters,
         ),
+        if (hasActiveFilters)
+          SizedBox(
+            height: 56,
+            child: TextButton.icon(
+              onPressed: () {
+                _assessmentSearchController.clear();
+                setState(() {
+                  _assessmentQuery = '';
+                  _assessmentTypeFilters.clear();
+                  _assessmentSubjectFilters.clear();
+                  _assessmentStatusFilters.clear();
+                });
+              },
+              icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
+              label: const Text('Clear all'),
+            ),
+          ),
       ],
     );
   }
 
   DataRow _oldAssessmentRow(_AssessmentRecord assessment) {
-    final progress = assessment.totalStudents == 0
-        ? 0.0
-        : assessment.entered / assessment.totalStudents;
-    final gradingLabel = assessment.entered == 0
-        ? 'Not Started'
-        : assessment.entered == assessment.totalStudents
-        ? 'Fully Graded'
-        : 'In Progress';
+    final progress = _scoreEntryProgress(assessment);
+    final gradingLabel = _gradingLabel(assessment);
     return DataRow(
       onSelectChanged: (_) => _openAssessment(assessment),
       cells: [
         DataCell(
           SizedBox(
-            width: 260,
+            width: 220,
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1847,16 +2875,16 @@ class _CompleteAssessmentWorkflowState
         DataCell(
           _oldRegisterBadge(
             assessment.status,
-            assessment.status == 'Open'
+            assessment.status == 'In Progress'
                 ? const Color(0xFFDFF7EC)
-                : assessment.status == 'Pending Review'
+                : assessment.status == 'Not Started'
                 ? const Color(0xFFFFF4D8)
                 : assessment.status == 'Closed'
                 ? const Color(0xFFE5E7EB)
                 : const Color(0xFFEFF6FF),
-            assessment.status == 'Open'
+            assessment.status == 'In Progress'
                 ? const Color(0xFF047857)
-                : assessment.status == 'Pending Review'
+                : assessment.status == 'Not Started'
                 ? const Color(0xFFB45309)
                 : assessment.status == 'Closed'
                 ? const Color(0xFF475569)
@@ -2585,9 +3613,7 @@ class _CompleteAssessmentWorkflowState
                 ? (snapshot.error! as AssessmentApiException).message
                 : 'Unable to load the assessment form.',
             onRetry: () => setState(() {
-              _assessmentFormSetup = _assessmentApi.getFormSetup(
-                widget.customSchoolId,
-              );
+              _assessmentFormSetup = _loadAssessmentSetup();
             }),
             onBack: _back,
           );
@@ -2638,6 +3664,7 @@ class _CompleteAssessmentWorkflowState
     final a = _selectedAssessment ?? _assessments.first;
     return _ScoreSheetPage(
       assessment: a,
+      gradingGradeLevelId: _gradingGradeLevelId(a),
       api: _assessmentApi,
       customSchoolId: widget.customSchoolId,
       submittedBy: widget.viewerName,
@@ -2659,6 +3686,25 @@ class _CompleteAssessmentWorkflowState
         _notice('Scores saved successfully.');
       },
     );
+  }
+
+  int _gradingGradeLevelId(_AssessmentRecord assessment) {
+    final gradeName = assessment.gradeName.trim().toLowerCase();
+    final isPreBasic =
+        gradeName.contains('creche') ||
+        gradeName.contains('nursery') ||
+        gradeName.contains('kindergarten') ||
+        RegExp(r'\bkg\s*[12]?\b').hasMatch(gradeName) ||
+        gradeName.contains('pre-basic') ||
+        gradeName.contains('pre basic');
+    if (isPreBasic) {
+      for (final grade in _loadedSetup?.gradeLevels ?? const []) {
+        final name = grade.name.trim().toLowerCase();
+        if (name == 'basic 1' || name == 'grade 1') return grade.id;
+      }
+      return 3;
+    }
+    return assessment.gradeLevelId;
   }
 
   String _assessmentCsvFileName(_AssessmentRecord assessment) {
@@ -2713,7 +3759,7 @@ class _CompleteAssessmentWorkflowState
         .length;
     final notStarted = _students.length - submitted - drafts;
     return _page(
-      title: 'Student Evaluations',
+      title: 'Evaluations & Comments',
       subtitle: '$_displayTerm - Conduct and terminal evaluation',
       actions: [
         _filledButton(
@@ -4302,6 +5348,13 @@ class _CompleteAssessmentWorkflowState
       compactHeader: true,
       maxContentWidth: 1700,
       pagePadding: 14,
+      actions: [
+        TextButton.icon(
+          onPressed: _showTermReportGuide,
+          icon: const Icon(Icons.help_outline_rounded, size: 16),
+          label: const Text('Report guide'),
+        ),
+      ],
       children: [
         LayoutBuilder(
           builder: (_, c) => _reportCardStatGrid(
@@ -4924,25 +5977,19 @@ class _CompleteAssessmentWorkflowState
         _gradesComplete(student),
         _gradesComplete(student)
             ? 'All required assessment components are complete.'
-            : (_reportMissingComponents[student.id] ?? const []).isEmpty
-            ? 'One or more required grade components are incomplete.'
-            : (_reportMissingComponents[student.id] ?? const []).join(', '),
+            : 'Academic grades not complete.',
       ),
       (
         'Student evaluation',
         _evaluationComplete(student),
-        _evaluationComplete(student)
-            ? 'The final conduct evaluation is complete.'
-            : student.evaluationBlockers.isEmpty
-            ? 'The final conduct evaluation is still pending.'
-            : student.evaluationBlockers.join(', '),
+        _evaluationComplete(student) ? 'Completed.' : 'Not completed.',
       ),
       (
         'Class-teacher remark',
         student.classTeacherCommentReady,
         student.classTeacherCommentReady
             ? 'The class teacher finalized the evaluation comment.'
-            : 'Finalize the class-teacher comment from Student Evaluations.',
+            : 'Finalize the class-teacher comment from Evaluations & Comments.',
       ),
       (
         'Progression decision',
@@ -5308,6 +6355,10 @@ class _CompleteAssessmentWorkflowState
   // ignore: unused_element
   Future<void> _openRemarksEditor(_StudentRecord student) async {
     final existing = _reportRemarks[student.id] ?? _ReportRemarksDraft.empty();
+    if (existing.reportStatus.toUpperCase() == 'PUBLISHED') {
+      _notice('Reopen the published report before making corrections.');
+      return;
+    }
     final classController = TextEditingController(
       text: _classTeacherCommentFor(student, existing),
     );
@@ -5315,13 +6366,8 @@ class _CompleteAssessmentWorkflowState
       text: existing.headTeacherRemarks,
     );
     var promotedTo = existing.promotedTo;
-    final role = widget.viewerRole.toLowerCase();
-    final isAdministrator = role.contains('admin');
-    final isAcademicManager =
-        isAdministrator ||
-        role.contains('headmaster') ||
-        role.contains('head teacher');
-    final canEditClass = isAcademicManager || role.contains('class teacher');
+    final isAcademicManager = _evaluationManager;
+    final canEditClass = isAcademicManager;
     final canEditHead = isAcademicManager;
     final drawerWidth = MediaQuery.sizeOf(context).width < 560
         ? MediaQuery.sizeOf(context).width
@@ -5398,7 +6444,7 @@ class _CompleteAssessmentWorkflowState
                                   labelText: 'Final Class Teacher Comment',
                                   hintText: 'Pending evaluation finalization',
                                   helperText:
-                                      'Created from Student Evaluations → Review class.',
+                                      'Created from Evaluations & Comments → Student comments.',
                                   suffixIcon: Icon(Icons.lock_outline),
                                   alignLabelWithHint: true,
                                 ),
@@ -5612,6 +6658,84 @@ class _CompleteAssessmentWorkflowState
     );
   }
 
+  Future<void> _reopenPublishedReport(_StudentRecord student) async {
+    final reasonController = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Reopen published report'),
+        content: SizedBox(
+          width: 480,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'The published report will remain in history. Enter why a corrected version is required.',
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: reasonController,
+                autofocus: true,
+                minLines: 3,
+                maxLines: 5,
+                decoration: const InputDecoration(
+                  labelText: 'Correction reason',
+                  hintText:
+                      'For example: progression decision corrected after academic review',
+                  alignLabelWithHint: true,
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final value = reasonController.text.trim();
+              if (value.length < 10) {
+                ScaffoldMessenger.of(dialogContext).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Enter a clear reason of at least 10 characters.',
+                    ),
+                  ),
+                );
+                return;
+              }
+              Navigator.pop(dialogContext, value);
+            },
+            child: const Text('Reopen report'),
+          ),
+        ],
+      ),
+    );
+    reasonController.dispose();
+    if (reason == null || !mounted) return;
+
+    try {
+      final setup = await _assessmentFormSetup;
+      await _assessmentApi.reopenPublishedReport(
+        customSchoolId: widget.customSchoolId,
+        customStudentId: student.id,
+        termId: setup.termId,
+        reason: reason,
+      );
+      await _loadLiveReportReadiness(setup, _selectedClass);
+      if (mounted) {
+        _notice(
+          '${student.name} report reopened. Make the correction, save it, regenerate, and publish the updated version.',
+        );
+      }
+    } on AssessmentApiException catch (error) {
+      if (mounted) _notice(error.message);
+    }
+  }
+
   Widget _reportCardStudentTile(_StudentRecord student) {
     final status = _reportStatusFor(student);
     final average = student.grade == '—'
@@ -5672,15 +6796,11 @@ class _CompleteAssessmentWorkflowState
     final status = _reportStatusFor(student);
     final generated = reportHasGeneratedVersion(status);
     final published = canDistributeReport(status);
-    final hasPublishedVersion = reportHasPublishedVersion(status);
-    final role = widget.viewerRole.toLowerCase();
-    final administrator = role.contains('admin');
-    final academicManager =
-        administrator ||
-        role.contains('headmaster') ||
-        role.contains('head teacher');
-    final canEditClass = academicManager || role.contains('class teacher');
+    final academicManager = _evaluationManager;
+    final canEditClass = academicManager;
     final canEditHead = academicManager;
+    final correctionPending =
+        remarks.reportStatus.toUpperCase() == 'CORRECTION_PENDING';
     final reportSubjects = _studentReportCards[student.id]?['subjects'];
     final generatedAcademicRows = reportSubjects is List
         ? reportSubjects.whereType<Map>().map((rawSubject) {
@@ -5728,20 +6848,25 @@ class _CompleteAssessmentWorkflowState
       compactHeader: true,
       maxContentWidth: 1320,
       actions: [
-        if (canEditClass || canEditHead)
+        if (academicManager &&
+            remarks.reportStatus.toUpperCase() == 'PUBLISHED')
           _outlineButton(
-            hasPublishedVersion ? 'Save Changes' : 'Save Draft',
+            'Reopen Report',
+            Icons.lock_open_outlined,
+            () => _reopenPublishedReport(student),
+          )
+        else if (academicManager)
+          _outlineButton(
+            correctionPending ? 'Save Correction' : 'Save Draft',
             Icons.save_outlined,
-            () {
-              _saveReportRemarks(
-                student,
-                classTeacherComment,
-                remarks.headTeacherRemarks,
-                remarks.promotedTo,
-                ignoreHeadTeacherRemark: false,
-                draft: !hasPublishedVersion,
-              );
-            },
+            () => _saveReportRemarks(
+              student,
+              classTeacherComment,
+              remarks.headTeacherRemarks,
+              remarks.promotedTo,
+              ignoreHeadTeacherRemark: false,
+              draft: !correctionPending,
+            ),
           ),
         _outlineButton(
           published ? 'View PDF' : 'Preview',
@@ -5796,7 +6921,7 @@ class _CompleteAssessmentWorkflowState
                 ? () => generated
                       ? _regenerateStudentReport(student)
                       : _generateReports([student])
-                : null,
+                : () => _showReportReadinessChecklist(student),
           ),
         if (!published && _readyToPublish(student))
           _filledButton(
@@ -5924,7 +7049,7 @@ class _CompleteAssessmentWorkflowState
     final status = _reportStatusFor(student);
     final checks = <(String, bool)>[
       ('All grades entered', _gradesComplete(student)),
-      ('Student evaluation finalized', _evaluationComplete(student)),
+      ('Student evaluation', _evaluationComplete(student)),
       ('Report generated', reportHasGeneratedVersion(status)),
       ('Class Teacher remark', student.classTeacherCommentReady),
       ('Progression selected', remarks.promotedTo.isNotEmpty),
@@ -6014,17 +7139,6 @@ class _CompleteAssessmentWorkflowState
                     const Icon(Icons.chevron_right, color: Color(0xFFD97706)),
                   ],
                 ),
-              ),
-            ),
-          ],
-          if (student.evaluationBlockers.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Text(
-              student.evaluationBlockers.join('\n'),
-              style: const TextStyle(
-                color: Color(0xFFB45309),
-                fontSize: 12,
-                height: 1.45,
               ),
             ),
           ],
@@ -6146,7 +7260,8 @@ class _CompleteAssessmentWorkflowState
             decoration: const InputDecoration(
               labelText: 'Final Class Teacher Comment',
               hintText: 'Pending evaluation finalization',
-              helperText: 'Created from Student Evaluations → Review class.',
+              helperText:
+                  'Created from Evaluations & Comments → Student comments.',
               suffixIcon: Icon(Icons.lock_outline),
               alignLabelWithHint: true,
             ),
@@ -6194,8 +7309,7 @@ class _CompleteAssessmentWorkflowState
               return DropdownMenuItem(value: grade, child: Text(grade));
             }).toList(),
             onChanged: canEdit
-                ? (value) =>
-                      _updateReportRemarks(student, promotedTo: value ?? '')
+                ? (value) => _saveProgressionSelection(student, value ?? '')
                 : null,
           ),
           const SizedBox(height: 18),
@@ -6310,6 +7424,23 @@ class _CompleteAssessmentWorkflowState
         ignoreHeadTeacherRemark: ignoreHeadTeacherRemark,
       );
     });
+  }
+
+  Future<void> _saveProgressionSelection(
+    _StudentRecord student,
+    String promotedTo,
+  ) async {
+    _updateReportRemarks(student, promotedTo: promotedTo);
+    if (promotedTo.trim().isEmpty) return;
+    final remarks = _reportRemarks[student.id] ?? _ReportRemarksDraft.empty();
+    await _saveReportRemarks(
+      student,
+      _classTeacherCommentFor(student, remarks),
+      remarks.headTeacherRemarks,
+      promotedTo,
+      ignoreHeadTeacherRemark: remarks.ignoreHeadTeacherRemark,
+      draft: true,
+    );
   }
 
   Future<void> _editEvaluationOnReport(_StudentRecord student) async {
@@ -6767,6 +7898,12 @@ class _CompleteAssessmentWorkflowState
                   final actions = Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      IconButton(
+                        tooltip: 'How term reports work',
+                        onPressed: _showTermReportGuide,
+                        icon: const Icon(Icons.help_outline_rounded, size: 19),
+                      ),
+                      const SizedBox(width: 4),
                       OutlinedButton.icon(
                         onPressed: _loadingFinalReports
                             ? null
@@ -7185,12 +8322,6 @@ class _CompleteAssessmentWorkflowState
         ),
       );
     }
-    final grouped = <String, List<_FinalReportStream>>{};
-    for (final stream in streams) {
-      final grade = stream.name.split(' - ').first;
-      grouped.putIfAbsent(grade, () => []).add(stream);
-    }
-
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
@@ -7213,77 +8344,33 @@ class _CompleteAssessmentWorkflowState
                   color: const Color(0xFFF9FAFB),
                   child: const Row(
                     children: [
-                      SizedBox(width: 20),
-                      Expanded(flex: 3, child: _FinalReportHeader('STREAM')),
+                      Expanded(flex: 4, child: _FinalReportHeader('CLASS')),
                       Expanded(
                         flex: 2,
                         child: _FinalReportHeader('STUDENTS', centered: true),
                       ),
                       Expanded(
                         flex: 2,
-                        child: _FinalReportHeader('EVALUATION', centered: true),
-                      ),
-                      Expanded(
-                        flex: 2,
-                        child: _FinalReportHeader('PUBLISHED', centered: true),
-                      ),
-                      Expanded(
-                        flex: 3,
                         child: _FinalReportHeader(
-                          'PENDING PUBLICATION',
-                          centered: true,
-                        ),
-                      ),
-                      Expanded(
-                        flex: 2,
-                        child: _FinalReportHeader(
-                          'UPDATE REQUIRED',
-                          centered: true,
-                        ),
-                      ),
-                      Expanded(
-                        flex: 2,
-                        child: _FinalReportHeader(
-                          'AWAITING GENERATION',
+                          'EVALUATION & COMMENTS',
                           centered: true,
                         ),
                       ),
                       Expanded(
                         flex: 3,
+                        child: _FinalReportHeader('REPORT STATUS'),
+                      ),
+                      Expanded(
+                        flex: 2,
                         child: _FinalReportHeader('ACTIONS', trailing: true),
                       ),
                     ],
                   ),
                 ),
-              for (final entry in grouped.entries) ...[
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 8,
-                  ),
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFF7F8F9),
-                    border: Border(
-                      top: BorderSide(color: Color(0xFFE5E7EB)),
-                      bottom: BorderSide(color: Color(0xFFE5E7EB)),
-                    ),
-                  ),
-                  child: Text(
-                    '${entry.key.toUpperCase()}  •  ${entry.value.length} STREAM${entry.value.length == 1 ? '' : 'S'}',
-                    style: const TextStyle(
-                      color: Color(0xFF8B95A5),
-                      fontSize: 10,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: .6,
-                    ),
-                  ),
-                ),
-                for (final stream in entry.value)
-                  mobile
-                      ? _finalReportMobileCard(stream)
-                      : _finalReportRow(stream),
-              ],
+              for (final stream in streams)
+                mobile
+                    ? _finalReportMobileCard(stream)
+                    : _finalReportRow(stream),
             ],
           );
         },
@@ -7292,13 +8379,6 @@ class _CompleteAssessmentWorkflowState
   }
 
   Widget _finalReportRow(_FinalReportStream stream) {
-    final color = stream.updateRequired > 0
-        ? const Color(0xFFD97706)
-        : stream.pendingPublication > 0
-        ? const Color(0xFFF59E0B)
-        : stream.published > 0
-        ? const Color(0xFF009688)
-        : const Color(0xFFD1D5DB);
     return Material(
       color: Colors.white,
       child: InkWell(
@@ -7312,32 +8392,14 @@ class _CompleteAssessmentWorkflowState
           ),
           child: Row(
             children: [
-              Container(
-                width: 8,
-                height: 8,
-                margin: const EdgeInsets.only(right: 12),
-                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-              ),
               Expanded(
-                flex: 3,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      stream.name.split(' - ').last,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 13.5,
-                      ),
-                    ),
-                    Text(
-                      stream.name.split(' - ').first,
-                      style: const TextStyle(
-                        color: Color(0xFF9CA3AF),
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
+                flex: 4,
+                child: Text(
+                  stream.displayName,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13.5,
+                  ),
                 ),
               ),
               _finalReportNumber(
@@ -7346,40 +8408,9 @@ class _CompleteAssessmentWorkflowState
                 2,
               ),
               Expanded(flex: 2, child: _streamEvaluationProgress(stream)),
-              _finalReportNumber(
-                stream.published > 0 ? '${stream.published}' : '—',
-                stream.published > 0
-                    ? const Color(0xFF009688)
-                    : const Color(0xFFD1D5DB),
-                2,
-              ),
-              _finalReportNumber(
-                stream.pendingPublication > 0
-                    ? '${stream.pendingPublication}'
-                    : '—',
-                stream.pendingPublication > 0
-                    ? const Color(0xFFD97706)
-                    : const Color(0xFFD1D5DB),
-                3,
-              ),
-              _finalReportNumber(
-                stream.updateRequired > 0 ? '${stream.updateRequired}' : '—',
-                stream.updateRequired > 0
-                    ? const Color(0xFFD97706)
-                    : const Color(0xFFD1D5DB),
-                2,
-              ),
-              _finalReportNumber(
-                stream.pendingGeneration > 0
-                    ? '${stream.pendingGeneration}'
-                    : '—',
-                stream.pendingGeneration > 0
-                    ? const Color(0xFFDC2626)
-                    : const Color(0xFFD1D5DB),
-                2,
-              ),
+              Expanded(flex: 3, child: _finalReportStatus(stream)),
               Expanded(
-                flex: 3,
+                flex: 2,
                 child: Wrap(
                   alignment: WrapAlignment.end,
                   spacing: 6,
@@ -7390,7 +8421,8 @@ class _CompleteAssessmentWorkflowState
                       icon: const Icon(Icons.visibility_outlined, size: 14),
                       label: const Text('View'),
                     ),
-                    _finalReportPublishAction(stream),
+                    if (stream.pendingPublication > 0 || stream.publishing)
+                      _finalReportPublishAction(stream),
                   ],
                 ),
               ),
@@ -7435,10 +8467,6 @@ class _CompleteAssessmentWorkflowState
                 stream.displayName,
                 style: const TextStyle(fontWeight: FontWeight.w800),
               ),
-              Text(
-                stream.name.split(' - ').first,
-                style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 11),
-              ),
               const SizedBox(height: 9),
               _streamEvaluationProgress(stream),
               const SizedBox(height: 12),
@@ -7447,30 +8475,7 @@ class _CompleteAssessmentWorkflowState
                   Expanded(
                     child: _finalMobileValue('Students', '${stream.students}'),
                   ),
-                  Expanded(
-                    child: _finalMobileValue(
-                      'Published',
-                      '${stream.published}',
-                    ),
-                  ),
-                  Expanded(
-                    child: _finalMobileValue(
-                      'Pending publication',
-                      '${stream.pendingPublication}',
-                    ),
-                  ),
-                  Expanded(
-                    child: _finalMobileValue(
-                      'Update required',
-                      '${stream.updateRequired}',
-                    ),
-                  ),
-                  Expanded(
-                    child: _finalMobileValue(
-                      'Awaiting generation',
-                      '${stream.pendingGeneration}',
-                    ),
-                  ),
+                  Expanded(flex: 2, child: _finalReportStatus(stream)),
                 ],
               ),
               const SizedBox(height: 12),
@@ -7483,8 +8488,10 @@ class _CompleteAssessmentWorkflowState
                       label: const Text('View'),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(child: _finalReportPublishAction(stream)),
+                  if (stream.pendingPublication > 0 || stream.publishing) ...[
+                    const SizedBox(width: 8),
+                    Expanded(child: _finalReportPublishAction(stream)),
+                  ],
                 ],
               ),
             ],
@@ -7534,6 +8541,73 @@ class _CompleteAssessmentWorkflowState
     );
   }
 
+  Widget _finalReportStatus(_FinalReportStream stream) {
+    late final String label;
+    late final String detail;
+    late final Color color;
+    late final Color background;
+    if (stream.updateRequired > 0) {
+      label = 'Update required';
+      detail =
+          '${stream.updateRequired} report${stream.updateRequired == 1 ? '' : 's'}';
+      color = const Color(0xFFB45309);
+      background = const Color(0xFFFFF7E6);
+    } else if (stream.pendingGeneration > 0) {
+      label = 'Awaiting generation';
+      detail =
+          '${stream.pendingGeneration} report${stream.pendingGeneration == 1 ? '' : 's'}';
+      color = const Color(0xFFB91C1C);
+      background = const Color(0xFFFEF2F2);
+    } else if (stream.pendingPublication > 0) {
+      label = 'Ready to publish';
+      detail =
+          '${stream.pendingPublication} report${stream.pendingPublication == 1 ? '' : 's'}';
+      color = const Color(0xFFB45309);
+      background = const Color(0xFFFFF7E6);
+    } else if (stream.published > 0) {
+      label = 'Published';
+      detail = '${stream.published} report${stream.published == 1 ? '' : 's'}';
+      color = const Color(0xFF047857);
+      background = const Color(0xFFECFDF5);
+    } else {
+      label = 'Not generated';
+      detail = 'No reports available';
+      color = const Color(0xFF64748B);
+      background = const Color(0xFFF1F5F9);
+    }
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: background,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            Text(
+              detail,
+              style: TextStyle(
+                color: color.withValues(alpha: .8),
+                fontSize: 9.5,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _finalReportPublishAction(_FinalReportStream stream) {
     final onPressed = stream.ready == 0 || stream.publishing
         ? null
@@ -7548,7 +8622,7 @@ class _CompleteAssessmentWorkflowState
         label: Text('Publish (${stream.pendingPublication})'),
       );
     }
-    return FilledButton(onPressed: null, child: const Text('Publish (0)'));
+    return const SizedBox.shrink();
   }
 
   Widget _finalMobileValue(String label, String value) {
@@ -7652,11 +8726,12 @@ class _CompleteAssessmentWorkflowState
           );
           _openParent(parent);
         }),
-        _filledButton(
-          'View Report Card',
-          Icons.description_outlined,
-          () => _showReportCard(student),
-        ),
+        if (_evaluationManager)
+          _filledButton(
+            'View Report Card',
+            Icons.description_outlined,
+            () => _showReportCard(student),
+          ),
       ],
       children: [
         _section(
@@ -7879,11 +8954,20 @@ class _CompleteAssessmentWorkflowState
   }
 
   String _curriculumGrade(String className) {
+    final normalized = className.trim().toLowerCase();
+    final isPreBasic =
+        normalized.contains('creche') ||
+        normalized.contains('nursery') ||
+        normalized.contains('kindergarten') ||
+        RegExp(r'\bkg\s*[12]?\b').hasMatch(normalized) ||
+        normalized.contains('pre-basic') ||
+        normalized.contains('pre basic');
+    if (isPreBasic) return 'Grade 1';
     final match = RegExp(
       r'(?:Grade|Basic|KG|JHS)\s*\d+',
       caseSensitive: false,
     ).firstMatch(className);
-    final value = match?.group(0) ?? 'Grade 5';
+    final value = match?.group(0) ?? className.trim();
     if (value.toLowerCase().startsWith('basic ')) {
       return 'Grade ${value.substring(6)}';
     }
@@ -7934,6 +9018,12 @@ class _CompleteAssessmentWorkflowState
   }
 
   Future<void> _showReportCard(_StudentRecord student) async {
+    if (!_evaluationManager) {
+      _notice(
+        'Official report cards are managed by authorized academic managers.',
+      );
+      return;
+    }
     final published = canDistributeReport(_reportStatusFor(student));
     final classTeacherComment = _classTeacherCommentFor(
       student,
@@ -8654,17 +9744,25 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
   late final TextEditingController _description;
   late final TextEditingController _indicatorSearch;
   String? _selectedClass;
+  String? _assessmentCategory;
   String? _type;
   String? _subject;
   String? _term;
   String? _academicYear;
   String? _status;
   DateTime? _dateGiven;
-  bool _officialSba = false;
   bool _saving = false;
   String? _saveError;
   String? _indicatorError;
   final List<_CurriculumIndicator> _selectedIndicators = [];
+
+  bool get _hasEnteredScores => (widget.source?.entered ?? 0) > 0;
+
+  bool get _gradedAssessment =>
+      widget.source?.status == 'Graded' ||
+      (widget.source != null &&
+          widget.source!.totalStudents > 0 &&
+          widget.source!.entered >= widget.source!.totalStudents);
 
   @override
   void initState() {
@@ -8677,13 +9775,13 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
     _indicatorSearch = TextEditingController();
     if (widget.source != null) {
       _selectedClass = widget.source!.className;
-      _type = widget.source!.type;
+      _type = _canonicalAssessmentTypeLabel(widget.source!.type);
+      _assessmentCategory = _categoryForAssessmentType(_type);
       _subject = widget.source!.subject;
       _term = widget.source!.term;
       _academicYear = widget.source!.academicYear;
       _status = widget.source!.status;
       _dateGiven = _parseAssessmentDate(widget.source!.date);
-      _officialSba = widget.source!.officialSba;
       _description.text = widget.source!.description;
       _selectedIndicators.addAll(widget.source!.curriculumIndicators);
     } else {
@@ -8691,6 +9789,25 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
       _term = widget.setup.termName;
       _academicYear = widget.setup.academicYearName;
     }
+  }
+
+  void _selectAssessmentCategory(String? category) {
+    setState(() {
+      _assessmentCategory = category;
+      if (!_typesForAssessmentCategory(category).contains(_type)) {
+        _type = null;
+      }
+    });
+  }
+
+  void _selectSubject(String? subject) {
+    setState(() {
+      if (_subject != subject) {
+        _selectedIndicators.clear();
+        _indicatorError = null;
+      }
+      _subject = subject;
+    });
   }
 
   @override
@@ -8749,6 +9866,8 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
                   _assessmentDetailsCard(),
                   const SizedBox(height: 16),
                   _curriculumCard(),
+                  const SizedBox(height: 16),
+                  _formActions(),
                 ],
               ),
             ),
@@ -8880,33 +9999,56 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
                                 : null,
                           ),
                           const SizedBox(height: 14),
+                          _dropdown(
+                            label: 'Assessment Category',
+                            hint: 'Select category',
+                            value: _assessmentCategory,
+                            values: _assessmentCategories,
+                            onChanged: _hasEnteredScores
+                                ? null
+                                : _selectAssessmentCategory,
+                          ),
+                          if (_hasEnteredScores) ...[
+                            const SizedBox(height: 8),
+                            const Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                'Category, type, subject, term and maximum score are locked because scores have been entered.',
+                                style: TextStyle(
+                                  color: AppColors.muted,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 14),
                           _responsivePair(
                             _dropdown(
-                              label: 'Type',
-                              hint: 'Select type',
+                              label: 'Assessment Type',
+                              hint: _assessmentCategory == null
+                                  ? 'Select category first'
+                                  : 'Select type',
                               value: _type,
-                              values: const [
-                                'CAT 1',
-                                'CAT 2',
-                                'CAT 3',
-                                'CAT 4 – Project/Assignment',
-                                'End-of-Term Exam',
-                              ],
-                              onChanged: (value) =>
-                                  setState(() => _type = value),
+                              values: _typesForAssessmentCategory(
+                                _assessmentCategory,
+                              ),
+                              onChanged:
+                                  _assessmentCategory == null ||
+                                      _hasEnteredScores
+                                  ? null
+                                  : (value) => setState(() => _type = value),
                             ),
-                            _dropdown(
-                              label: 'Status',
-                              hint: 'Select status',
-                              value: _status,
-                              values: const [
-                                'Open',
-                                'Closed',
-                                'Graded',
-                                'Pending Review',
-                              ],
-                              onChanged: (value) =>
-                                  setState(() => _status = value),
+                            InputDecorator(
+                              decoration: const InputDecoration(
+                                labelText: 'Status',
+                                suffixIcon: Icon(Icons.lock_outline_rounded),
+                              ),
+                              child: Text(
+                                _status ?? 'Not Started',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
                             ),
                           ),
                           const SizedBox(height: 14),
@@ -8915,11 +10057,11 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
                             TextFormField(
                               controller: _maxScore,
                               keyboardType: TextInputType.number,
-                              readOnly: (widget.source?.entered ?? 0) > 0,
+                              readOnly: _hasEnteredScores,
                               decoration: InputDecoration(
                                 labelText: 'Max Score',
                                 hintText: 'Max marks',
-                                helperText: (widget.source?.entered ?? 0) > 0
+                                helperText: _hasEnteredScores
                                     ? 'Reset entered scores before changing this value.'
                                     : null,
                               ),
@@ -8938,16 +10080,18 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
                               hint: 'Select subject',
                               value: _subject,
                               values: _subjectOptions,
-                              onChanged: (value) =>
-                                  setState(() => _subject = value),
+                              onChanged: _hasEnteredScores
+                                  ? null
+                                  : _selectSubject,
                             ),
                             _dropdown(
                               label: 'Term',
                               hint: 'Select term',
                               value: _term,
                               values: [widget.setup.termName],
-                              onChanged: (value) =>
-                                  setState(() => _term = value),
+                              onChanged: _hasEnteredScores
+                                  ? null
+                                  : (value) => setState(() => _term = value),
                             ),
                           ),
                         ],
@@ -9130,88 +10274,111 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
   }
 
   Widget _pageToolbar() {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final compact = constraints.maxWidth < 720;
-        final breadcrumb = Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            InkWell(
-              onTap: widget.onBack,
-              borderRadius: BorderRadius.circular(6),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.chevron_left,
-                      size: 18,
-                      color: AppColors.green,
-                    ),
-                    Text(
+    return Row(
+      children: [
+        Flexible(
+          child: InkWell(
+            onTap: widget.onBack,
+            borderRadius: BorderRadius.circular(6),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.chevron_left,
+                    size: 18,
+                    color: AppColors.green,
+                  ),
+                  Flexible(
+                    child: Text(
                       widget.subtitle,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: AppColors.green,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                  ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 10),
+          child: Text('/', style: TextStyle(color: AppColors.muted)),
+        ),
+        Flexible(
+          child: Text(
+            widget.title,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _formActions() {
+    final actions = Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      alignment: WrapAlignment.end,
+      children: [
+        OutlinedButton(
+          onPressed: _saving ? null : widget.onBack,
+          child: const Text('Cancel'),
+        ),
+        FilledButton.icon(
+          onPressed: _saving || widget.setup.termClosed ? null : _submit,
+          icon: _saving
+              ? const SizedBox.square(
+                  dimension: 17,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.check_rounded, size: 18),
+          label: Text(_saving ? 'Creating…' : 'Create Assessment'),
+        ),
+      ],
+    );
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 560) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Review the details above before creating this assessment.',
+                  style: TextStyle(color: AppColors.muted, fontSize: 12.5),
+                ),
+                const SizedBox(height: 12),
+                Align(alignment: Alignment.centerRight, child: actions),
+              ],
+            );
+          }
+          return Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Review the details above before creating this assessment.',
+                  style: TextStyle(color: AppColors.muted, fontSize: 12.5),
                 ),
               ),
-            ),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 10),
-              child: Text('/', style: TextStyle(color: AppColors.muted)),
-            ),
-            Text(
-              widget.title,
-              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
-            ),
-          ],
-        );
-        final actions = Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            OutlinedButton(
-              onPressed: widget.onBack,
-              child: const Text('Cancel'),
-            ),
-            const SizedBox(width: 10),
-            FilledButton.icon(
-              onPressed: _saving || widget.setup.termClosed ? null : _submit,
-              icon: _saving
-                  ? const SizedBox.square(
-                      dimension: 17,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.save_outlined, size: 17),
-              label: Text(
-                _saving
-                    ? 'Saving…'
-                    : widget.source == null
-                    ? 'Create Assessment'
-                    : 'Save Changes',
-              ),
-            ),
-          ],
-        );
-        if (compact) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              breadcrumb,
-              const SizedBox(height: 12),
-              Align(alignment: Alignment.centerRight, child: actions),
+              const SizedBox(width: 16),
+              actions,
             ],
           );
-        }
-        return Row(
-          children: [
-            Expanded(child: breadcrumb),
-            actions,
-          ],
-        );
-      },
+        },
+      ),
     );
   }
 
@@ -9297,7 +10464,7 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
             ],
             if (_selectedClass != null && _subjectOptions.isEmpty) ...[
               _formNotice(
-                'No active subjects are configured for this grade. Ask an administrator to configure subjects.',
+                'No subjects are available for this class in the current term or your teaching allocation. Ask an administrator to review the class subject availability.',
                 const Color(0xFFFFFBEB),
                 const Color(0xFF92400E),
               ),
@@ -9316,23 +10483,27 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
               hint: 'Select Subject',
               value: _subject,
               values: _subjectOptions,
-              onChanged: _selectedClass == null
-                  ? null
-                  : (value) => setState(() => _subject = value),
+              onChanged: _selectedClass == null ? null : _selectSubject,
+            ),
+            const SizedBox(height: 14),
+            _dropdown(
+              label: 'Assessment Category',
+              hint: 'Select Category',
+              value: _assessmentCategory,
+              values: _assessmentCategories,
+              onChanged: _selectAssessmentCategory,
             ),
             const SizedBox(height: 14),
             _dropdown(
               label: 'Assessment Type',
-              hint: 'Select Type',
+              hint: _assessmentCategory == null
+                  ? 'Select a category first'
+                  : 'Select Type',
               value: _type,
-              values: const [
-                'CAT 1',
-                'CAT 2',
-                'CAT 3',
-                'CAT 4 – Project/Assignment',
-                'End-of-Term Exam',
-              ],
-              onChanged: (value) => setState(() => _type = value),
+              values: _typesForAssessmentCategory(_assessmentCategory),
+              onChanged: _assessmentCategory == null
+                  ? null
+                  : (value) => setState(() => _type = value),
             ),
             const SizedBox(height: 14),
             _responsivePair(
@@ -9373,15 +10544,26 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
                 border: Border.all(color: const Color(0xFFB8E7E1)),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: const Row(
+              child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.info_outline, size: 17, color: AppColors.green),
-                  SizedBox(width: 9),
+                  const Icon(
+                    Icons.info_outline,
+                    size: 17,
+                    color: AppColors.green,
+                  ),
+                  const SizedBox(width: 9),
                   Expanded(
                     child: Text(
-                      'Scores are normalized from this assessment maximum to the official GES cap for CAT 1, CAT 2, CAT 3, CAT 4, or the end-of-term exam.',
-                      style: TextStyle(
+                      switch (_assessmentCategory) {
+                        _practiceBasedAssessmentCategory =>
+                          'This assessment records practice and classroom progress. It does not automatically affect the term report.',
+                        _reportBasedAssessmentCategory =>
+                          'This is an official CAT or examination score used for the term report.',
+                        _ =>
+                          'Select an assessment category to see how the score will be used.',
+                      },
+                      style: const TextStyle(
                         fontSize: 12.5,
                         color: Color(0xFF245F59),
                       ),
@@ -9432,42 +10614,6 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
                   ],
                 );
               },
-            ),
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF8FAFC),
-                border: Border.all(color: AppColors.border),
-                borderRadius: BorderRadius.circular(9),
-              ),
-              child: Row(
-                children: [
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Official SBA Assessment',
-                          style: TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        SizedBox(height: 3),
-                        Text(
-                          'Mark as an official GES School-Based Assessment record',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.muted,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Switch(
-                    value: _officialSba,
-                    onChanged: (value) => setState(() => _officialSba = value),
-                  ),
-                ],
-              ),
             ),
             const SizedBox(height: 14),
             TextFormField(
@@ -9801,7 +10947,7 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
   }
 
   AssessmentSubjectOption? get _selectedSubject {
-    if (widget.source != null) {
+    if (widget.source != null && _subject == widget.source!.subject) {
       for (final subject in widget.setup.subjects) {
         if (subject.id == widget.source!.schoolSubjectId) return subject;
       }
@@ -9818,9 +10964,31 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
     return null;
   }
 
-  Future<void> _submit() => _submitWithReason(null);
+  Future<void> _submit() async {
+    String? changeReason;
+    final sourceDate = widget.source == null
+        ? null
+        : _parseAssessmentDate(widget.source!.date);
+    final dateChanged =
+        sourceDate != null &&
+        _dateGiven != null &&
+        (sourceDate.year != _dateGiven!.year ||
+            sourceDate.month != _dateGiven!.month ||
+            sourceDate.day != _dateGiven!.day);
+    if (_gradedAssessment || (_hasEnteredScores && dateChanged)) {
+      changeReason = await _requestAssessmentChangeReason(
+        dateChanged: dateChanged,
+        graded: _gradedAssessment,
+      );
+      if (changeReason == null || !mounted) return;
+    }
+    await _submitWithReason(null, changeReason: changeReason);
+  }
 
-  Future<void> _submitWithReason(String? vacationOverrideReason) async {
+  Future<void> _submitWithReason(
+    String? vacationOverrideReason, {
+    String? changeReason,
+  }) async {
     final detailsAreValid = _key.currentState!.validate();
     final indicatorsAreValid = _selectedIndicators.isNotEmpty;
     setState(() {
@@ -9842,7 +11010,7 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
     final date = _dateGiven!;
     final body = <String, dynamic>{
       if (widget.source == null) 'streamId': stream.id,
-      if (widget.source == null) 'schoolSubjectId': subject.id,
+      'schoolSubjectId': subject.id,
       'type': _assessmentTypeValue(_type!),
       'title': _title.text.trim(),
       'date':
@@ -9851,12 +11019,14 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
       'term': widget.setup.termSequence,
       if (widget.source == null) 'academicYearId': widget.setup.academicYearId,
       'description': _description.text.trim(),
-      'isOfficialSBA': _officialSba,
+      'isOfficialSBA': _schoolBasedAssessmentTypes.contains(_type),
       'curriculumIndicatorCodes': _selectedIndicators
           .map((indicator) => indicator.code)
           .toList(),
       if (vacationOverrideReason?.trim().isNotEmpty == true)
         'vacationOverrideReason': vacationOverrideReason!.trim(),
+      if (changeReason?.trim().isNotEmpty == true)
+        'changeReason': changeReason!.trim(),
     };
 
     setState(() {
@@ -9908,7 +11078,7 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
           description: _description.text.trim(),
           term: _term!,
           academicYear: _academicYear!,
-          officialSba: _officialSba,
+          officialSba: _schoolBasedAssessmentTypes.contains(_type),
           curriculumIndicators: List.of(_selectedIndicators),
         ),
       );
@@ -9919,7 +11089,7 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
         setState(() => _saving = false);
         final reason = await _requestEarlyAcademicReason(error.message);
         if (reason != null && mounted) {
-          await _submitWithReason(reason);
+          await _submitWithReason(reason, changeReason: changeReason);
         }
         return;
       }
@@ -9927,6 +11097,73 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  Future<String?> _requestAssessmentChangeReason({
+    required bool dateChanged,
+    required bool graded,
+  }) async {
+    final controller = TextEditingController();
+    String? validation;
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          icon: const Icon(Icons.history_rounded, color: AppColors.green),
+          title: Text(
+            graded
+                ? 'Reason for changing this graded assessment'
+                : 'Reason for changing the assessment date',
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                graded
+                    ? 'This assessment already has completed scores. Explain why the change is needed.'
+                    : 'Scores have already been entered. Explain why the assessment date is changing.',
+              ),
+              if (dateChanged && graded) ...[
+                const SizedBox(height: 8),
+                const Text('The assessment date is also being changed.'),
+              ],
+              const SizedBox(height: 16),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                minLines: 3,
+                maxLines: 5,
+                decoration: InputDecoration(
+                  labelText: 'Reason for change',
+                  hintText: 'Enter a clear reason',
+                  errorText: validation,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final value = controller.text.trim();
+                if (value.length < 5) {
+                  setDialogState(() => validation = 'Enter a clear reason.');
+                  return;
+                }
+                Navigator.pop(dialogContext, value);
+              },
+              child: const Text('Save changes'),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+    return result;
   }
 
   Future<String?> _requestEarlyAcademicReason(String warning) async {
@@ -9983,8 +11220,19 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
     'CAT 1' => 'CAT1',
     'CAT 2' => 'CAT2',
     'CAT 3' => 'CAT3',
-    'CAT 4' || 'CAT 4 – Project/Assignment' || 'Project' => 'CAT4',
-    'Exam' || 'End of Term' || 'End-of-Term Exam' => 'END_OF_TERM_EXAM',
+    'CAT 4' || 'CAT 4 – Project/Assignment' => 'CAT4',
+    'Exam' ||
+    'End of Term' ||
+    'End-of-Term Exam' ||
+    'End-of-Term Examination' => 'END_OF_TERM_EXAM',
+    'Class Exercise' => 'CLASS_EXERCISE',
+    'Homework' => 'HOMEWORK',
+    'Quiz' => 'QUIZ',
+    'Project' => 'PROJECT',
+    'Practical' => 'PRACTICAL',
+    'Experiment' => 'EXPERIMENT',
+    'Oral Assessment' => 'ORAL',
+    'Performance Assessment' => 'PERFORMANCE',
     _ => 'CLASS_TEST',
   };
 
@@ -10034,6 +11282,7 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
 class _ScoreSheetPage extends StatefulWidget {
   const _ScoreSheetPage({
     required this.assessment,
+    required this.gradingGradeLevelId,
     required this.api,
     required this.customSchoolId,
     required this.submittedBy,
@@ -10043,6 +11292,7 @@ class _ScoreSheetPage extends StatefulWidget {
   });
 
   final _AssessmentRecord assessment;
+  final int gradingGradeLevelId;
   final AssessmentApiClient api;
   final String customSchoolId;
   final String submittedBy;
@@ -10063,6 +11313,7 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
   bool _loading = true;
   bool _saving = false;
   String? _error;
+  AssessmentGradingScale? _gradingScale;
   final Set<String> _resettingStudents = {};
 
   @override
@@ -10084,11 +11335,20 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
       return;
     }
     try {
+      if (widget.gradingGradeLevelId <= 0) {
+        throw const AssessmentApiException(
+          'The grading scale could not be resolved for this class.',
+        );
+      }
+      final gradingScale = await widget.api.getActiveGradingScale(
+        gradeLevelId: widget.gradingGradeLevelId,
+      );
       final sheet = await widget.api.getScoreSheet(
         customSchoolId: widget.customSchoolId,
         assessmentId: widget.assessment.id,
       );
       if (!mounted) return;
+      _gradingScale = gradingScale;
       _replaceStudents(sheet.students);
     } on AssessmentApiException catch (error) {
       if (!mounted) return;
@@ -10137,6 +11397,68 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
     }
     super.dispose();
   }
+
+  Future<void> _showGradingScale() => showDialog<void>(
+    context: context,
+    builder: (dialogContext) {
+      final scale = _gradingScale!;
+      return AlertDialog(
+        title: const Text('Grading scale'),
+        content: SizedBox(
+          width: 300,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final item in scale.items)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 7),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 36,
+                        child: Text(
+                          item.grade,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.text,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Text(
+                          '${_formatPercentage(item.minPercentage)}–${_formatPercentage(item.maxPercentage)}%  ${item.descriptor}',
+                          style: const TextStyle(color: AppColors.muted),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              const Divider(height: 22),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  scale.gradeLevelName.isEmpty
+                      ? 'School grading scale'
+                      : '${scale.gradeLevelName} grading scale',
+                  style: const TextStyle(color: AppColors.muted, fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Close'),
+          ),
+        ],
+      );
+    },
+  );
+
+  String _formatPercentage(double value) => value == value.roundToDouble()
+      ? value.toInt().toString()
+      : value.toStringAsFixed(2);
 
   @override
   Widget build(BuildContext context) {
@@ -10226,15 +11548,20 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
                       ),
                     ],
                   );
-                  final actions = Row(
-                    mainAxisSize: MainAxisSize.min,
+                  final actions = Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
+                      TextButton(
+                        onPressed: _showGradingScale,
+                        child: const Text('View grading scale'),
+                      ),
                       OutlinedButton.icon(
                         onPressed: () => widget.onExport(_buildCsv()),
                         icon: const Icon(Icons.download_outlined, size: 16),
                         label: const Text('Export CSV'),
                       ),
-                      const SizedBox(width: 8),
                       FilledButton.icon(
                         onPressed: _saving ? null : _save,
                         icon: _saving
@@ -10463,11 +11790,12 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
   String _gradeFor(double? score) {
     if (score == null) return '—';
     final percent = score / widget.assessment.maxScore * 100;
-    if (percent >= 80) return 'A';
-    if (percent >= 70) return 'B';
-    if (percent >= 60) return 'C';
-    if (percent >= 50) return 'D';
-    return 'F';
+    for (final item in _gradingScale!.items) {
+      if (percent >= item.minPercentage && percent <= item.maxPercentage) {
+        return item.grade;
+      }
+    }
+    return '—';
   }
 
   Widget _oldScoreInput(AssessmentStudentScore student) {
@@ -10733,6 +12061,130 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
     }
   }
 
+  List<AssessmentStudentScore> _changedStudents() {
+    return _students.where((student) {
+      final proposed = double.tryParse(
+        _controllers[student.studentId]?.text.trim() ?? '',
+      );
+      final proposedRemark =
+          _remarkControllers[student.studentId]?.text.trim() ?? '';
+      final scoreChanged =
+          proposed != null &&
+          (student.score == null || (proposed - student.score!).abs() > 0.0001);
+      return scoreChanged || proposedRemark != student.remarks.trim();
+    }).toList();
+  }
+
+  Future<void> _requestScoreCorrection(AssessmentStudentScore student) async {
+    final proposed = double.tryParse(
+      _controllers[student.studentId]?.text.trim() ?? '',
+    );
+    if (proposed == null) return;
+    final reason = TextEditingController();
+    final approver = TextEditingController();
+    final submit = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Request report correction'),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 540),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${student.name}: ${student.score?.toStringAsFixed(2) ?? 'Not entered'} → ${proposed.toStringAsFixed(2)}',
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'The official score will not change now. Leadership must approve this proposal; approval applies it and regenerates the student report.',
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                key: const ValueKey('score-correction-reason'),
+                controller: reason,
+                autofocus: true,
+                minLines: 3,
+                maxLines: 5,
+                decoration: const InputDecoration(
+                  labelText: 'Reason for correction',
+                  hintText:
+                      'Explain what was wrong and why this value is correct',
+                  alignLabelWithHint: true,
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const ValueKey('score-correction-approver'),
+                controller: approver,
+                decoration: const InputDecoration(
+                  labelText: 'Assigned approver (optional)',
+                  hintText: 'Head teacher or administrator username',
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const ValueKey('submit-score-correction'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Send for approval'),
+          ),
+        ],
+      ),
+    );
+    if (submit != true || !mounted) {
+      reason.dispose();
+      approver.dispose();
+      return;
+    }
+    final correctionReason = reason.text.trim();
+    final assignedApprover = approver.text.trim();
+    reason.dispose();
+    approver.dispose();
+    if (correctionReason.length < 5) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enter a clear reason of at least 5 characters.'),
+        ),
+      );
+      return;
+    }
+    try {
+      await widget.api.requestReportScoreCorrection(
+        customSchoolId: widget.customSchoolId,
+        studentId: student.studentId,
+        assessmentId: widget.assessment.id,
+        proposedScore: proposed,
+        proposedRemarks:
+            _remarkControllers[student.studentId]?.text.trim() ?? '',
+        reason: correctionReason,
+        assignedApprover: assignedApprover,
+      );
+      if (!mounted) return;
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Correction sent for approval. The official score is unchanged until it is approved.',
+          ),
+        ),
+      );
+    } on AssessmentApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
+
   Future<void> _save() async {
     final scores = <Map<String, dynamic>>[];
     for (final entry in _controllers.entries) {
@@ -10776,6 +12228,21 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
       widget.onSaved();
     } on AssessmentApiException catch (error) {
       if (!mounted) return;
+      if (error.message.toLowerCase().contains('report has been generated')) {
+        final changed = _changedStudents();
+        if (changed.length == 1) {
+          await _requestScoreCorrection(changed.single);
+          return;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Generated reports are locked. Change one student at a time to submit a correction request.',
+            ),
+          ),
+        );
+        return;
+      }
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(error.message)));
@@ -10956,17 +12423,22 @@ class _CurriculumDialogState extends State<_CurriculumDialog> {
         subject: widget.subject,
       );
       if (!mounted) return;
+      final indicators = result
+          .map(
+            (item) => _CurriculumIndicator(
+              code: item.code,
+              text: item.description,
+              strand: item.strand,
+              subStrand: item.substrand,
+            ),
+          )
+          .toList();
+      final validCodes = indicators.map((indicator) => indicator.code).toSet();
       setState(() {
-        _indicators = result
-            .map(
-              (item) => _CurriculumIndicator(
-                code: item.code,
-                text: item.description,
-                strand: item.strand,
-                subStrand: item.substrand,
-              ),
-            )
-            .toList();
+        _indicators = indicators;
+        _selected.removeWhere(
+          (indicator) => !validCodes.contains(indicator.code),
+        );
         _loading = false;
       });
     } on AssessmentApiException catch (error) {

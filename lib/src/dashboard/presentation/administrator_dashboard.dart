@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../theme/app_theme.dart';
-import '../data/api_dashboard_repository.dart';
 import '../data/dashboard_repository.dart';
+import '../data/teacher_dashboard_summary.dart';
+import '../data/teacher_workspace_api_client.dart';
 import '../domain/dashboard_models.dart';
 import '../../admissions/presentation/admissions_screen.dart';
 import '../../admissions/data/admissions_api_client.dart';
@@ -13,13 +16,16 @@ import '../../audit/data/audit_api_client.dart';
 import '../../audit/presentation/audit_activity_screen.dart';
 import '../../attendance/data/attendance_api_client.dart';
 import '../../attendance/presentation/attendance_dashboard_screen.dart';
+import '../../assessments/data/assessment_api_client.dart';
 import '../../assessments/presentation/assessment_dashboard_screen.dart';
 import '../../assessments/presentation/evaluation_management_screen.dart';
 import '../../classes/presentation/grade_streams_screen.dart';
+import '../../classes/presentation/teacher_classes_screen.dart';
 import '../../expenses/presentation/expenses_screen.dart';
 import '../../fees/presentation/fee_management_screen.dart';
 import '../../fees/data/fee_api_client.dart';
 import '../../fees/domain/fee_models.dart' hide FeeSummary;
+import '../../incidents/data/incident_api_client.dart';
 import '../../incidents/presentation/incidents_screen.dart';
 import '../../settings/presentation/school_settings_screen.dart';
 import '../../term_review/presentation/term_review_screen.dart';
@@ -83,6 +89,7 @@ class AdministratorDashboard extends StatefulWidget {
     this.onRefreshAccessToken,
     this.onLogout,
     this.readinessRepository,
+    this.teacherDashboardLoader,
   });
 
   final DashboardRepository repository;
@@ -96,6 +103,7 @@ class AdministratorDashboard extends StatefulWidget {
   final Future<String?> Function()? onRefreshAccessToken;
   final VoidCallback? onLogout;
   final SchoolReadinessRepository? readinessRepository;
+  final Future<TeacherDashboardSummary> Function()? teacherDashboardLoader;
 
   @override
   State<AdministratorDashboard> createState() => _AdministratorDashboardState();
@@ -107,6 +115,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   late Future<FeeWorkflowSummary?> _feeWorkflowSummary;
   late Future<ApprovalInbox?> _approvalInbox;
   late Future<SchoolNotificationInbox?> _notifications;
+  late Future<bool> _shopAccess;
   bool _sidebarCollapsed = false;
   _SchoolAdminPage _selectedPage = _SchoolAdminPage.dashboard;
   bool _openStartAdmissionOnNextAdmissions = false;
@@ -118,6 +127,11 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   bool _openAddEventOnNextCalendar = false;
   bool _openAddStaffOnNextStaff = false;
   bool _openFeeStructureOnNextFees = false;
+  int? _assessmentStreamId;
+  int? _evaluationStreamId;
+  String? _evaluationStreamName;
+  int? _teacherClassStreamId;
+  bool _selectingTeacherClass = false;
   late String _activeRole;
 
   @override
@@ -131,6 +145,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
     _feeWorkflowSummary = _loadFeeWorkflowSummary();
     _approvalInbox = _loadApprovalInbox();
     _notifications = _loadNotifications();
+    _shopAccess = _loadShopAccess();
   }
 
   @override
@@ -143,6 +158,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
       _feeWorkflowSummary = _loadFeeWorkflowSummary();
       _approvalInbox = _loadApprovalInbox();
       _notifications = _loadNotifications();
+      _shopAccess = _loadShopAccess();
     }
   }
 
@@ -173,7 +189,32 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
       _feeWorkflowSummary = _loadFeeWorkflowSummary();
       _approvalInbox = _loadApprovalInbox();
       _notifications = _loadNotifications();
+      _shopAccess = _loadShopAccess();
     });
+  }
+
+  Future<bool> _loadShopAccess() async {
+    if (_schoolId.isEmpty || widget.accessToken?.isNotEmpty != true) {
+      return false;
+    }
+    try {
+      final context = await ShopApiClient(
+        schoolId: _schoolId,
+        accessToken: widget.accessToken,
+        onRefreshAccessToken: widget.onRefreshAccessToken,
+      ).context();
+      return context['isAdmin'] == true ||
+          context['canSell'] == true ||
+          context['canTakePayment'] == true ||
+          context['canRelease'] == true ||
+          context['canHoldStock'] == true ||
+          context['canBuy'] == true ||
+          context['canConsign'] == true ||
+          context['canReceiveStaffReturns'] == true ||
+          context['canIssueRefunds'] == true;
+    } catch (_) {
+      return false;
+    }
   }
 
   void _refresh() {
@@ -270,11 +311,18 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   }
 
   void _selectPage(_SchoolAdminPage page) {
+    if (_isTeachingRole(_activeRole) && page == _SchoolAdminPage.assessments) {
+      unawaited(_openTeacherScopedPage(page));
+      return;
+    }
     setState(() {
       _openFeeStructureOnNextFees = false;
       _focusStudentSearchOnNextStudents = false;
       _studentProfileToOpenId = null;
       _openNewRequisitionOnNextExpenses = false;
+      _assessmentStreamId = null;
+      _evaluationStreamId = null;
+      _evaluationStreamName = null;
       _selectedPage = page;
       _feeWorkflowSummary = _loadFeeWorkflowSummary();
       _approvalInbox = _loadApprovalInbox();
@@ -286,6 +334,83 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
             : widget.readinessRepository!.getReadiness(_schoolId);
       }
     });
+  }
+
+  void _openAssessmentsForStream(int streamId) {
+    setState(() {
+      _assessmentStreamId = streamId;
+      _selectedPage = _SchoolAdminPage.assessments;
+    });
+  }
+
+  void _openTeacherClass(TeacherClassAssignment assignment) {
+    setState(() {
+      _teacherClassStreamId = assignment.streamId;
+      _selectedPage = _SchoolAdminPage.classes;
+    });
+  }
+
+  Future<void> _openTeacherScopedPage(_SchoolAdminPage page) async {
+    if (_selectingTeacherClass) return;
+    _selectingTeacherClass = true;
+    try {
+      final workspace = await TeacherWorkspaceApiClient(
+        accessToken: widget.accessToken,
+        onRefreshAccessToken: widget.onRefreshAccessToken,
+      ).get(_schoolId);
+      if (!mounted) return;
+
+      final classes = workspace.assignedClasses;
+      if (classes.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No classes are assigned to you yet. Ask an administrator to add a class or subject assignment.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      final selected = classes.length == 1
+          ? classes.first
+          : await showTeacherClassChooser(
+              context: context,
+              classes: classes,
+              selectedStreamId: page == _SchoolAdminPage.assessments
+                  ? _assessmentStreamId
+                  : _evaluationStreamId,
+              title: page == _SchoolAdminPage.assessments
+                  ? 'Choose a class for assessments'
+                  : 'Choose a class for evaluations',
+              message: page == _SchoolAdminPage.assessments
+                  ? 'Assessments will open for the class you select.'
+                  : 'Evaluations will open for the class you select.',
+            );
+      if (!mounted || selected == null) return;
+
+      setState(() {
+        if (page == _SchoolAdminPage.assessments) {
+          _assessmentStreamId = selected.streamId;
+          _evaluationStreamId = null;
+          _evaluationStreamName = null;
+        } else {
+          _assessmentStreamId = null;
+          _evaluationStreamId = selected.streamId;
+          _evaluationStreamName = selected.label;
+        }
+        _selectedPage = page;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Your assigned classes could not be loaded.'),
+        ),
+      );
+    } finally {
+      _selectingTeacherClass = false;
+    }
   }
 
   void _openFeeWorkflow() {
@@ -398,6 +523,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                       onRoleChanged: _changeWorkspace,
                       selectedPage: _selectedPage,
                       approvalInbox: _approvalInbox,
+                      shopAccess: _shopAccess,
                       onSelectPage: _selectPage,
                       onLogout: widget.onLogout,
                       onCollapse: () => setState(
@@ -407,6 +533,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                     Expanded(
                       child: _DashboardBody(
                         data: data,
+                        repository: widget.repository,
                         feeWorkflowSummary: _feeWorkflowSummary,
                         approvalInbox: _approvalInbox,
                         notifications: _notifications,
@@ -418,6 +545,12 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                         userId: widget.userId,
                         selectedPage: _selectedPage,
                         onSelectPage: _selectPage,
+                        assessmentStreamId: _assessmentStreamId,
+                        evaluationStreamId: _evaluationStreamId,
+                        evaluationStreamName: _evaluationStreamName,
+                        teacherClassStreamId: _teacherClassStreamId,
+                        onOpenTeacherClass: _openTeacherClass,
+                        onOpenAssessmentsForStream: _openAssessmentsForStream,
                         onOpenFeeWorkflow: _openFeeWorkflow,
                         onFeeWorkflowChanged: _refreshFeeWorkflowSummary,
                         openFeeStructureOnNextFees: _openFeeStructureOnNextFees,
@@ -459,6 +592,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                         onRecordExpense: _openRecordExpense,
                         onAddCalendarEvent: _openAddCalendarEvent,
                         onAddStaff: _openAddStaff,
+                        teacherDashboardLoader: widget.teacherDashboardLoader,
                       ),
                     ),
                   ],
@@ -480,6 +614,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                   onRoleChanged: _changeWorkspace,
                   selectedPage: _selectedPage,
                   approvalInbox: _approvalInbox,
+                  shopAccess: _shopAccess,
                   onSelectPage: (page) {
                     _selectPage(page);
                     Navigator.pop(context);
@@ -489,6 +624,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
               ),
               body: _DashboardBody(
                 data: data,
+                repository: widget.repository,
                 feeWorkflowSummary: _feeWorkflowSummary,
                 approvalInbox: _approvalInbox,
                 notifications: _notifications,
@@ -501,6 +637,12 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                 showMenu: true,
                 selectedPage: _selectedPage,
                 onSelectPage: _selectPage,
+                assessmentStreamId: _assessmentStreamId,
+                evaluationStreamId: _evaluationStreamId,
+                evaluationStreamName: _evaluationStreamName,
+                teacherClassStreamId: _teacherClassStreamId,
+                onOpenTeacherClass: _openTeacherClass,
+                onOpenAssessmentsForStream: _openAssessmentsForStream,
                 onOpenFeeWorkflow: _openFeeWorkflow,
                 onFeeWorkflowChanged: _refreshFeeWorkflowSummary,
                 openFeeStructureOnNextFees: _openFeeStructureOnNextFees,
@@ -539,6 +681,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                 onRecordExpense: _openRecordExpense,
                 onAddCalendarEvent: _openAddCalendarEvent,
                 onAddStaff: _openAddStaff,
+                teacherDashboardLoader: widget.teacherDashboardLoader,
               ),
             );
           },
@@ -576,6 +719,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
 class _DashboardBody extends StatelessWidget {
   const _DashboardBody({
     required this.data,
+    required this.repository,
     required this.feeWorkflowSummary,
     required this.approvalInbox,
     required this.notifications,
@@ -588,6 +732,12 @@ class _DashboardBody extends StatelessWidget {
     this.showMenu = false,
     required this.selectedPage,
     required this.onSelectPage,
+    this.assessmentStreamId,
+    this.evaluationStreamId,
+    this.evaluationStreamName,
+    this.teacherClassStreamId,
+    required this.onOpenTeacherClass,
+    required this.onOpenAssessmentsForStream,
     required this.onOpenFeeWorkflow,
     required this.onFeeWorkflowChanged,
     required this.openFeeStructureOnNextFees,
@@ -616,9 +766,11 @@ class _DashboardBody extends StatelessWidget {
     required this.onRecordExpense,
     required this.onAddCalendarEvent,
     required this.onAddStaff,
+    this.teacherDashboardLoader,
   });
 
   final DashboardSnapshot data;
+  final DashboardRepository repository;
   final Future<FeeWorkflowSummary?> feeWorkflowSummary;
   final Future<ApprovalInbox?> approvalInbox;
   final Future<SchoolNotificationInbox?> notifications;
@@ -631,6 +783,12 @@ class _DashboardBody extends StatelessWidget {
   final bool showMenu;
   final _SchoolAdminPage selectedPage;
   final ValueChanged<_SchoolAdminPage> onSelectPage;
+  final int? assessmentStreamId;
+  final int? evaluationStreamId;
+  final String? evaluationStreamName;
+  final int? teacherClassStreamId;
+  final ValueChanged<TeacherClassAssignment> onOpenTeacherClass;
+  final ValueChanged<int> onOpenAssessmentsForStream;
   final VoidCallback onOpenFeeWorkflow;
   final VoidCallback onFeeWorkflowChanged;
   final bool openFeeStructureOnNextFees;
@@ -659,6 +817,7 @@ class _DashboardBody extends StatelessWidget {
   final VoidCallback onRecordExpense;
   final VoidCallback onAddCalendarEvent;
   final VoidCallback onAddStaff;
+  final Future<TeacherDashboardSummary> Function()? teacherDashboardLoader;
 
   @override
   Widget build(BuildContext context) {
@@ -757,6 +916,7 @@ class _DashboardBody extends StatelessWidget {
     if (selectedPage == _SchoolAdminPage.students) {
       return StudentsScreen(
         customSchoolId: schoolId,
+        viewerRole: role,
         admissionsApi: AdmissionsApiClient(
           accessToken: accessToken,
           onRefreshAccessToken: onRefreshAccessToken,
@@ -767,6 +927,7 @@ class _DashboardBody extends StatelessWidget {
         initialStudentId: studentProfileToOpenId,
         repository: ApiStudentsRepository(
           customSchoolId: schoolId,
+          viewerRole: role,
           accessToken: accessToken,
           onRefreshAccessToken: onRefreshAccessToken,
         ),
@@ -781,18 +942,23 @@ class _DashboardBody extends StatelessWidget {
     if (selectedPage == _SchoolAdminPage.attendance) {
       return AttendanceDashboardScreen(
         customSchoolId: schoolId,
+        schoolName: schoolName,
+        viewerRole: role,
         term: data.term,
         academicYear: data.academicYear,
         repository: AttendanceApiClient(
           accessToken: accessToken,
           onRefreshAccessToken: onRefreshAccessToken,
         ),
+        onOpenCalendar: () => onSelectPage(_SchoolAdminPage.calendar),
+        canAcknowledge: _canAcknowledgeAttendance(role),
       );
     }
 
     if (selectedPage == _SchoolAdminPage.staffAttendance) {
       return StaffAttendanceScreen(
         schoolId: schoolId,
+        schoolName: schoolName,
         repository: StaffAttendanceApiClient(
           accessToken: accessToken,
           onRefreshAccessToken: onRefreshAccessToken,
@@ -822,7 +988,7 @@ class _DashboardBody extends StatelessWidget {
 
     if (selectedPage == _SchoolAdminPage.evaluations) {
       return EvaluationManagementScreen(
-        key: const ValueKey('evaluation-management-screen'),
+        key: ValueKey('evaluation-management-screen-$evaluationStreamId'),
         schoolId: schoolId,
         accessToken: accessToken,
         onRefreshAccessToken: onRefreshAccessToken,
@@ -832,13 +998,15 @@ class _DashboardBody extends StatelessWidget {
         viewerName: userDisplayName?.trim().isNotEmpty == true
             ? userDisplayName!.trim()
             : data.administratorName,
+        initialStreamId: evaluationStreamId,
+        initialStreamName: evaluationStreamName,
       );
     }
 
     if (selectedPage == _SchoolAdminPage.assessments ||
         selectedPage == _SchoolAdminPage.finalReports) {
       return AssessmentDashboardScreen(
-        key: ValueKey(selectedPage),
+        key: ValueKey('${selectedPage.name}-$assessmentStreamId'),
         schoolName: schoolName?.trim().isNotEmpty == true
             ? schoolName!.trim()
             : data.schoolName,
@@ -852,6 +1020,7 @@ class _DashboardBody extends StatelessWidget {
         viewerName: userDisplayName?.trim().isNotEmpty == true
             ? userDisplayName!.trim()
             : data.administratorName,
+        initialStreamId: assessmentStreamId,
         openFinalReportsOnLoad: selectedPage == _SchoolAdminPage.finalReports,
         onRefreshAccessToken: onRefreshAccessToken,
       );
@@ -925,6 +1094,23 @@ class _DashboardBody extends StatelessWidget {
     }
 
     if (selectedPage == _SchoolAdminPage.classes) {
+      if (_isTeachingRole(role)) {
+        return TeacherClassesScreen(
+          schoolId: schoolId,
+          displayName: userDisplayName?.trim().isNotEmpty == true
+              ? userDisplayName!.trim()
+              : data.administratorName,
+          accessToken: accessToken,
+          onRefreshAccessToken: onRefreshAccessToken,
+          onOpenAttendance: () => onSelectPage(_SchoolAdminPage.attendance),
+          onOpenAssessments: onOpenAssessmentsForStream,
+          onOpenEvaluations: () => onSelectPage(_SchoolAdminPage.evaluations),
+          onOpenIncidents: () => onSelectPage(_SchoolAdminPage.incidents),
+          onOpenCalendar: () => onSelectPage(_SchoolAdminPage.calendar),
+          initialStreamId: teacherClassStreamId,
+          onBack: () => onSelectPage(_SchoolAdminPage.dashboard),
+        );
+      }
       return GradeStreamsScreen(
         customSchoolId: schoolId,
         accessToken: accessToken,
@@ -939,13 +1125,9 @@ class _DashboardBody extends StatelessWidget {
     if (selectedPage == _SchoolAdminPage.calendar) {
       return _SchoolCalendarPage(
         data: data,
-        repository: ApiDashboardRepository(
-          accessToken: accessToken,
-          administratorName: data.administratorName,
-          schoolName: schoolName,
-          onRefreshAccessToken: onRefreshAccessToken,
-        ),
+        repository: repository,
         schoolId: schoolId,
+        role: role,
         onBack: () => onSelectPage(_SchoolAdminPage.dashboard),
         onRefresh: onRefresh,
         openAddEventOnLoad: openAddEventOnNextCalendar,
@@ -1022,7 +1204,46 @@ class _DashboardBody extends StatelessWidget {
         displayName: userDisplayName?.trim().isNotEmpty == true
             ? userDisplayName!.trim()
             : data.administratorName,
+        role: role,
+        schoolId: schoolId,
+        loadSummary:
+            teacherDashboardLoader ??
+            TeacherDashboardSummaryLoader(
+              schoolId: schoolId,
+              displayName: userDisplayName?.trim().isNotEmpty == true
+                  ? userDisplayName!.trim()
+                  : data.administratorName,
+              workspaceApi: TeacherWorkspaceApiClient(
+                accessToken: accessToken,
+                onRefreshAccessToken: onRefreshAccessToken,
+              ),
+              attendanceApi: AttendanceApiClient(
+                accessToken: accessToken,
+                onRefreshAccessToken: onRefreshAccessToken,
+              ),
+              assessmentApi: AssessmentApiClient(
+                accessToken: accessToken,
+                onRefreshAccessToken: onRefreshAccessToken,
+              ),
+              leaveApi: LeaveApiClient(
+                schoolId: schoolId,
+                accessToken: accessToken,
+                onRefreshAccessToken: onRefreshAccessToken,
+              ),
+              incidentApi: IncidentApiClient(
+                customSchoolId: schoolId,
+                accessToken: accessToken,
+                onRefreshAccessToken: onRefreshAccessToken,
+              ),
+            ).load,
+        events: data.events,
+        onOpenClasses: () => onSelectPage(_SchoolAdminPage.classes),
+        onOpenClass: onOpenTeacherClass,
+        onOpenAttendance: () => onSelectPage(_SchoolAdminPage.attendance),
         onOpenAssessments: () => onSelectPage(_SchoolAdminPage.assessments),
+        onOpenIncidents: () => onSelectPage(_SchoolAdminPage.incidents),
+        onOpenMyLeave: () => onSelectPage(_SchoolAdminPage.myLeave),
+        onOpenCalendar: () => onSelectPage(_SchoolAdminPage.calendar),
         onOpenTermReview: () => onSelectPage(_SchoolAdminPage.termReview),
       );
     }
@@ -2269,7 +2490,7 @@ class _AttendanceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _SectionCard(
-      title: "Today's attendance",
+      title: 'Student attendance',
       action: 'Full report →',
       onAction: onOpenAttendance,
       child: Column(
@@ -2289,7 +2510,7 @@ class _AttendanceCard extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(bottom: 7),
                 child: Text(
-                  '${attendance.present} of ${attendance.total} present',
+                  'Term-to-date attendance',
                   style: const TextStyle(color: AppColors.muted, fontSize: 12),
                 ),
               ),
@@ -2303,71 +2524,40 @@ class _AttendanceCard extends StatelessWidget {
             color: AppColors.green,
             backgroundColor: AppColors.greenSoft,
           ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: _AttendanceValue(
-                  value: attendance.present,
-                  label: 'Present',
-                  color: AppColors.green,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _AttendanceValue(
-                  value: attendance.absent,
-                  label: 'Absent',
-                  color: AppColors.red,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _AttendanceValue(
-                  value: attendance.late,
-                  label: 'Late',
-                  color: AppColors.amber,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _AttendanceValue extends StatelessWidget {
-  const _AttendanceValue({
-    required this.value,
-    required this.label,
-    required this.color,
-  });
-  final int value;
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      decoration: BoxDecoration(
-        color: AppColors.background,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Column(
-        children: [
-          Text(
-            '$value',
-            style: TextStyle(
-              color: color,
-              fontSize: 17,
-              fontWeight: FontWeight.w800,
+          const SizedBox(height: 14),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+            decoration: BoxDecoration(
+              color: AppColors.background,
+              borderRadius: BorderRadius.circular(10),
             ),
-          ),
-          Text(
-            label,
-            style: const TextStyle(color: AppColors.muted, fontSize: 10),
+            child: Row(
+              children: [
+                Icon(
+                  attendance.studentsNeedingAttention == 0
+                      ? Icons.check_circle_outline_rounded
+                      : Icons.warning_amber_rounded,
+                  size: 18,
+                  color: attendance.studentsNeedingAttention == 0
+                      ? AppColors.green
+                      : AppColors.amber,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    attendance.studentsNeedingAttention == 0
+                        ? 'No attendance concerns'
+                        : '${attendance.studentsNeedingAttention} student${attendance.studentsNeedingAttention == 1 ? '' : 's'} need follow-up',
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -2511,6 +2701,7 @@ class _QuickActionsCard extends StatelessWidget {
     final financialRole = _canSeeFinancialNotices(normalizedRole);
     final managesSchool = const {
       'ADMINISTRATOR',
+      'ADMIN',
       'HEAD_TEACHER',
       'HEADMASTER',
     }.contains(normalizedRole);
@@ -2916,6 +3107,7 @@ class _SchoolCalendarPage extends StatefulWidget {
     required this.data,
     required this.repository,
     required this.schoolId,
+    required this.role,
     required this.onBack,
     required this.onRefresh,
     this.openAddEventOnLoad = false,
@@ -2925,6 +3117,7 @@ class _SchoolCalendarPage extends StatefulWidget {
   final DashboardSnapshot data;
   final DashboardRepository repository;
   final String schoolId;
+  final String? role;
   final VoidCallback onBack;
   final VoidCallback onRefresh;
   final bool openAddEventOnLoad;
@@ -2942,6 +3135,8 @@ class _SchoolCalendarPageState extends State<_SchoolCalendarPage> {
   bool _showPastEvents = false;
   bool _eventActionBusy = false;
   bool _openingAddEventRequest = false;
+
+  bool get _canManage => _canManageCalendar(widget.role);
 
   @override
   void initState() {
@@ -2972,7 +3167,7 @@ class _SchoolCalendarPageState extends State<_SchoolCalendarPage> {
     _openingAddEventRequest = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       widget.onAddEventRequestConsumed?.call();
-      if (mounted) await _addEvent();
+      if (mounted && _canManage) await _addEvent();
       _openingAddEventRequest = false;
     });
   }
@@ -3007,6 +3202,7 @@ class _SchoolCalendarPageState extends State<_SchoolCalendarPage> {
           _CalendarHeader(
             data: widget.data,
             visibleMonth: _visibleMonth,
+            canManage: _canManage,
             onBack: widget.onBack,
             onPrevious: () => setState(() {
               _visibleMonth = DateTime(
@@ -3020,7 +3216,9 @@ class _SchoolCalendarPageState extends State<_SchoolCalendarPage> {
                 _visibleMonth.month + 1,
               );
             }),
-            onAddEvent: _eventActionBusy ? null : _addEvent,
+            onAddEvent: !_canManage || _eventActionBusy
+                ? null
+                : () => _addEvent(),
           ),
           const SizedBox(height: 14),
           _CalendarSearchBar(
@@ -3049,6 +3247,14 @@ class _SchoolCalendarPageState extends State<_SchoolCalendarPage> {
             visibleMonth: _visibleMonth,
             events: allEvents,
             highlightedEventKey: _highlightedEventKey,
+            onOpenEvent: _openEvent,
+            onOpenDay: _openDayEvents,
+            onAddEvent: !_canManage || _eventActionBusy
+                ? null
+                : _addEventForDate,
+            onDeleteDay: !_canManage || _eventActionBusy
+                ? null
+                : _deleteEventsForDate,
           ),
           const SizedBox(height: 18),
           _CalendarEventList(
@@ -3058,8 +3264,8 @@ class _SchoolCalendarPageState extends State<_SchoolCalendarPage> {
             showPastEvents: _showPastEvents,
             onTogglePast: () =>
                 setState(() => _showPastEvents = !_showPastEvents),
-            onEdit: _eventActionBusy ? null : _editEvent,
-            onDelete: _eventActionBusy ? null : _deleteEvent,
+            onEdit: !_canManage || _eventActionBusy ? null : _editEvent,
+            onDelete: !_canManage || _eventActionBusy ? null : _deleteEvent,
           ),
         ],
       ),
@@ -3074,6 +3280,44 @@ class _SchoolCalendarPageState extends State<_SchoolCalendarPage> {
       _showSearchSuggestions = false;
       _showPastEvents = event.endDate.isBefore(_dateOnly(DateTime.now()));
     });
+  }
+
+  Future<void> _openEvent(SchoolEvent event) async {
+    final eventId = (event.id ?? '').trim();
+    final history = eventId.isEmpty
+        ? Future.value(const <CalendarEventChange>[])
+        : widget.repository.getCalendarEventHistory(
+            schoolId: widget.schoolId,
+            eventId: eventId,
+          );
+    final action = await showDialog<_CalendarEventDetailsAction>(
+      context: context,
+      builder: (context) => _CalendarEventDetailsDialog(
+        event: event,
+        canManage: _canManage,
+        history: history,
+      ),
+    );
+    if (!mounted) return;
+    switch (action) {
+      case _CalendarEventDetailsAction.edit:
+        await _editEvent(event);
+        return;
+      case _CalendarEventDetailsAction.delete:
+        await _deleteEvent(event);
+        return;
+      case null:
+        return;
+    }
+  }
+
+  Future<void> _openDayEvents(DateTime date, List<SchoolEvent> events) async {
+    final selected = await showDialog<SchoolEvent>(
+      context: context,
+      builder: (context) =>
+          _CalendarDayEventsDialog(date: date, events: events),
+    );
+    if (selected != null && mounted) await _openEvent(selected);
   }
 
   List<SchoolEvent> _filteredEvents(List<SchoolEvent> events) {
@@ -3101,7 +3345,7 @@ class _SchoolCalendarPageState extends State<_SchoolCalendarPage> {
     return DateTime(_visibleMonth.year, _visibleMonth.month);
   }
 
-  Future<void> _addEvent() async {
+  Future<void> _addEvent({DateTime? initialDate}) async {
     try {
       final types = await widget.repository.getCalendarEventTypes();
       if (!mounted) return;
@@ -3119,7 +3363,7 @@ class _SchoolCalendarPageState extends State<_SchoolCalendarPage> {
           alignment: Alignment.centerRight,
           child: _CalendarEventEditor(
             eventTypes: types,
-            initialDate: _defaultEventDate(),
+            initialDate: initialDate ?? _defaultEventDate(),
             academicTermId: widget.data.academicTermId,
           ),
         ),
@@ -3152,6 +3396,48 @@ class _SchoolCalendarPageState extends State<_SchoolCalendarPage> {
     } finally {
       if (mounted) setState(() => _eventActionBusy = false);
     }
+  }
+
+  void _addEventForDate(DateTime date) {
+    _addEvent(initialDate: _dateOnly(date));
+  }
+
+  Future<void> _deleteEventsForDate(
+    DateTime date,
+    List<SchoolEvent> events,
+  ) async {
+    if (events.isEmpty) return;
+    SchoolEvent? selected;
+    if (events.length == 1) {
+      selected = events.single;
+    } else {
+      selected = await showDialog<SchoolEvent>(
+        context: context,
+        builder: (context) => SimpleDialog(
+          title: Text(
+            'Choose an event to delete · ${_formatCalendarDate(date)}',
+          ),
+          children: [
+            for (final event in events)
+              SimpleDialogOption(
+                onPressed: () => Navigator.of(context).pop(event),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.remove_circle_outline_rounded,
+                      color: AppColors.red,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(child: Text(event.title)),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      );
+    }
+    if (selected != null && mounted) await _deleteEvent(selected);
   }
 
   Future<void> _editEvent(SchoolEvent event) async {
@@ -3265,6 +3551,7 @@ class _CalendarHeader extends StatelessWidget {
   const _CalendarHeader({
     required this.data,
     required this.visibleMonth,
+    required this.canManage,
     required this.onBack,
     required this.onPrevious,
     required this.onNext,
@@ -3273,6 +3560,7 @@ class _CalendarHeader extends StatelessWidget {
 
   final DashboardSnapshot data;
   final DateTime visibleMonth;
+  final bool canManage;
   final VoidCallback onBack;
   final VoidCallback onPrevious;
   final VoidCallback onNext;
@@ -3332,11 +3620,17 @@ class _CalendarHeader extends StatelessWidget {
           onPressed: onNext,
           label: 'Next month',
         ),
-        FilledButton.icon(
-          onPressed: onAddEvent,
-          icon: const Icon(Icons.add_rounded, size: 18),
-          label: const Text('Add Event'),
-        ),
+        if (canManage)
+          FilledButton.icon(
+            onPressed: onAddEvent,
+            icon: const Icon(Icons.add_rounded, size: 18),
+            label: const Text('Add Event'),
+          )
+        else
+          const Chip(
+            avatar: Icon(Icons.visibility_outlined, size: 17),
+            label: Text('View only'),
+          ),
       ],
     );
   }
@@ -3553,6 +3847,347 @@ class _CalendarSearchSuggestion extends StatelessWidget {
   }
 }
 
+enum _CalendarEventDetailsAction { edit, delete }
+
+class _CalendarEventDetailsDialog extends StatelessWidget {
+  const _CalendarEventDetailsDialog({
+    required this.event,
+    required this.canManage,
+    required this.history,
+  });
+
+  final SchoolEvent event;
+  final bool canManage;
+  final Future<List<CalendarEventChange>> history;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = _eventStyle(event.category);
+    final start = _formatCalendarDate(event.startDate);
+    final end = _formatCalendarDate(event.endDate);
+    final dateRange = _dateOnly(event.startDate) == _dateOnly(event.endDate)
+        ? start
+        : '$start – $end';
+
+    return AlertDialog(
+      key: const ValueKey('calendar-event-details'),
+      title: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: style.background,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(Icons.event_outlined, color: style.foreground),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              event.title,
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 480,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _CalendarDetailChip(
+                  label: _eventTypeLabel(event.category),
+                  color: style.foreground,
+                  background: style.background,
+                ),
+                _CalendarDetailChip(
+                  label: event.isSchoolDay ? 'School day' : 'Non-school day',
+                  color: event.isSchoolDay ? AppColors.green : AppColors.red,
+                  background: event.isSchoolDay
+                      ? AppColors.greenSoft
+                      : const Color(0xFFFFF0F0),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            _CalendarDetailRow(
+              icon: Icons.calendar_today_outlined,
+              label: 'Date',
+              value: dateRange,
+            ),
+            if (event.description.trim().isNotEmpty) ...[
+              const SizedBox(height: 16),
+              const Text(
+                'Details',
+                style: TextStyle(
+                  color: AppColors.muted,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: .5,
+                ),
+              ),
+              const SizedBox(height: 5),
+              Text(event.description.trim()),
+            ],
+            const SizedBox(height: 14),
+            const Divider(height: 1),
+            _CalendarChangeHistory(history: history),
+          ],
+        ),
+      ),
+      actions: [
+        if (canManage && (event.id ?? '').trim().isNotEmpty)
+          TextButton.icon(
+            style: TextButton.styleFrom(foregroundColor: AppColors.red),
+            onPressed: () =>
+                Navigator.of(context).pop(_CalendarEventDetailsAction.delete),
+            icon: const Icon(Icons.delete_outline_rounded, size: 18),
+            label: const Text('Delete event'),
+          ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+        if (canManage && (event.id ?? '').trim().isNotEmpty)
+          FilledButton.icon(
+            onPressed: () =>
+                Navigator.of(context).pop(_CalendarEventDetailsAction.edit),
+            icon: const Icon(Icons.edit_outlined, size: 18),
+            label: const Text('Edit event'),
+          ),
+      ],
+    );
+  }
+}
+
+class _CalendarChangeHistory extends StatelessWidget {
+  const _CalendarChangeHistory({required this.history});
+
+  final Future<List<CalendarEventChange>> history;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<CalendarEventChange>>(
+      future: history,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            title: Text('Loading change history…'),
+          );
+        }
+        if (snapshot.hasError) {
+          return const ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.history_rounded, color: AppColors.muted),
+            title: Text('Change history unavailable'),
+          );
+        }
+        final changes = snapshot.data ?? const <CalendarEventChange>[];
+        if (changes.isEmpty) {
+          return const ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.history_rounded, color: AppColors.muted),
+            title: Text('Change history'),
+            subtitle: Text('No recorded changes yet'),
+          );
+        }
+        final visibleChanges = changes.take(5).toList();
+        return ExpansionTile(
+          key: const ValueKey('calendar-change-history'),
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.history_rounded, color: AppColors.green),
+          title: const Text(
+            'Change history',
+            style: TextStyle(fontWeight: FontWeight.w800),
+          ),
+          subtitle: Text(
+            '${changes.length} recorded ${changes.length == 1 ? 'change' : 'changes'}',
+          ),
+          children: [
+            for (final change in visibleChanges)
+              ListTile(
+                dense: true,
+                contentPadding: const EdgeInsets.only(left: 12),
+                leading: Icon(
+                  change.action.toUpperCase() == 'CREATED'
+                      ? Icons.add_circle_outline_rounded
+                      : Icons.edit_note_rounded,
+                  size: 19,
+                  color: AppColors.muted,
+                ),
+                title: Text(
+                  change.summary,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                subtitle: Text(
+                  [
+                    change.actorName,
+                    if (change.actorRole.trim().isNotEmpty)
+                      _calendarRoleLabel(change.actorRole),
+                    if (change.changedAt != null)
+                      _formatCalendarChangeTime(change.changedAt!),
+                  ].join(' · '),
+                ),
+              ),
+            if (changes.length > visibleChanges.length)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  '${changes.length - visibleChanges.length} earlier changes are available in Audit & Activity.',
+                  style: const TextStyle(color: AppColors.muted, fontSize: 11),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _CalendarDayEventsDialog extends StatelessWidget {
+  const _CalendarDayEventsDialog({required this.date, required this.events});
+
+  final DateTime date;
+  final List<SchoolEvent> events;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      key: ValueKey('calendar-day-events-${_calendarDayKey(date)}'),
+      title: Text('Events on ${_formatCalendarDate(date)}'),
+      content: SizedBox(
+        width: 500,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 420),
+          child: ListView.separated(
+            shrinkWrap: true,
+            itemCount: events.length,
+            separatorBuilder: (_, _) => const Divider(height: 1),
+            itemBuilder: (context, index) {
+              final event = events[index];
+              final style = _eventStyle(event.category);
+              return ListTile(
+                key: ValueKey('calendar-day-event-${_calendarEventKey(event)}'),
+                contentPadding: EdgeInsets.zero,
+                leading: Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: style.background,
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: Icon(
+                    Icons.event_outlined,
+                    color: style.foreground,
+                    size: 20,
+                  ),
+                ),
+                title: Text(
+                  event.title,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                subtitle: Text(_eventTypeLabel(event.category)),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () => Navigator.of(context).pop(event),
+              );
+            },
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+}
+
+class _CalendarDetailChip extends StatelessWidget {
+  const _CalendarDetailChip({
+    required this.label,
+    required this.color,
+    required this.background,
+  });
+
+  final String label;
+  final Color color;
+  final Color background;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+class _CalendarDetailRow extends StatelessWidget {
+  const _CalendarDetailRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: AppColors.green, size: 20),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  color: AppColors.muted,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(value, style: const TextStyle(fontWeight: FontWeight.w700)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _CalendarIconButton extends StatelessWidget {
   const _CalendarIconButton({
     required this.icon,
@@ -3585,11 +4220,19 @@ class _CalendarGrid extends StatelessWidget {
     required this.visibleMonth,
     required this.events,
     required this.highlightedEventKey,
+    required this.onOpenEvent,
+    required this.onOpenDay,
+    required this.onAddEvent,
+    required this.onDeleteDay,
   });
 
   final DateTime visibleMonth;
   final List<SchoolEvent> events;
   final String? highlightedEventKey;
+  final ValueChanged<SchoolEvent> onOpenEvent;
+  final void Function(DateTime date, List<SchoolEvent> events) onOpenDay;
+  final ValueChanged<DateTime>? onAddEvent;
+  final void Function(DateTime date, List<SchoolEvent> events)? onDeleteDay;
 
   @override
   Widget build(BuildContext context) {
@@ -3626,7 +4269,7 @@ class _CalendarGrid extends StatelessWidget {
             itemCount: cells.length,
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 7,
-              mainAxisExtent: 92,
+              mainAxisExtent: 116,
             ),
             itemBuilder: (context, index) {
               final date = cells[index];
@@ -3638,6 +4281,12 @@ class _CalendarGrid extends StatelessWidget {
                 isCurrentMonth: date.month == visibleMonth.month,
                 events: dateEvents,
                 highlightedEventKey: highlightedEventKey,
+                onOpenEvent: onOpenEvent,
+                onOpenDay: () => onOpenDay(date, dateEvents),
+                onAddEvent: onAddEvent == null ? null : () => onAddEvent!(date),
+                onDelete: onDeleteDay == null || dateEvents.isEmpty
+                    ? null
+                    : () => onDeleteDay!(date, dateEvents),
               );
             },
           ),
@@ -3680,95 +4329,228 @@ class _WeekdayLabel extends StatelessWidget {
   }
 }
 
-class _CalendarDayCell extends StatelessWidget {
+class _CalendarDayCell extends StatefulWidget {
   const _CalendarDayCell({
     required this.date,
     required this.isCurrentMonth,
     required this.events,
     required this.highlightedEventKey,
+    required this.onOpenEvent,
+    required this.onOpenDay,
+    required this.onAddEvent,
+    required this.onDelete,
   });
 
   final DateTime date;
   final bool isCurrentMonth;
   final List<SchoolEvent> events;
   final String? highlightedEventKey;
+  final ValueChanged<SchoolEvent> onOpenEvent;
+  final VoidCallback onOpenDay;
+  final VoidCallback? onAddEvent;
+  final VoidCallback? onDelete;
+
+  @override
+  State<_CalendarDayCell> createState() => _CalendarDayCellState();
+}
+
+class _CalendarDayCellState extends State<_CalendarDayCell> {
+  bool _hovered = false;
 
   @override
   Widget build(BuildContext context) {
-    final visibleEvents = events.take(2).toList();
-    final extra = events.length - visibleEvents.length;
-    return Container(
-      padding: const EdgeInsets.all(8),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(
-          top: BorderSide(color: AppColors.border),
-          right: BorderSide(color: AppColors.border),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '${date.day}',
-            style: TextStyle(
-              color: isCurrentMonth ? AppColors.text : AppColors.muted,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-            ),
+    final visibleEvents = widget.events.take(2).toList();
+    final extra = widget.events.length - visibleEvents.length;
+    final showActions = _hovered || MediaQuery.sizeOf(context).width < 700;
+    return MouseRegion(
+      key: ValueKey('calendar-day-${_calendarDayKey(widget.date)}'),
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: _hovered
+              ? AppColors.green.withValues(alpha: .025)
+              : Colors.white,
+          border: const Border(
+            top: BorderSide(color: AppColors.border),
+            right: BorderSide(color: AppColors.border),
           ),
-          const SizedBox(height: 6),
-          for (final event in visibleEvents) ...[
-            _CalendarEventPill(
-              event: event,
-              isHighlighted: highlightedEventKey == _calendarEventKey(event),
-            ),
-            const SizedBox(height: 4),
-          ],
-          if (extra > 0)
-            Text(
-              '+$extra more',
-              style: const TextStyle(
-                color: AppColors.green,
-                fontSize: 10,
-                fontWeight: FontWeight.w800,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              height: 22,
+              child: Row(
+                children: [
+                  Text(
+                    '${widget.date.day}',
+                    style: TextStyle(
+                      color: widget.isCurrentMonth
+                          ? AppColors.text
+                          : AppColors.muted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const Spacer(),
+                  IgnorePointer(
+                    ignoring: !showActions || widget.onDelete == null,
+                    child: AnimatedOpacity(
+                      key: ValueKey(
+                        'calendar-delete-visibility-${_calendarDayKey(widget.date)}',
+                      ),
+                      opacity: showActions && widget.onDelete != null ? 1 : 0,
+                      duration: const Duration(milliseconds: 120),
+                      child: Tooltip(
+                        message:
+                            'Delete event on ${_formatCalendarDate(widget.date)}',
+                        child: InkWell(
+                          key: ValueKey(
+                            'calendar-delete-${_calendarDayKey(widget.date)}',
+                          ),
+                          onTap: widget.onDelete,
+                          borderRadius: BorderRadius.circular(999),
+                          child: Container(
+                            width: 22,
+                            height: 22,
+                            decoration: BoxDecoration(
+                              color: AppColors.red.withValues(alpha: .1),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.remove_rounded,
+                              size: 16,
+                              color: AppColors.red,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (widget.onDelete != null) const SizedBox(width: 4),
+                  IgnorePointer(
+                    ignoring: !showActions || widget.onAddEvent == null,
+                    child: AnimatedOpacity(
+                      key: ValueKey(
+                        'calendar-add-visibility-${_calendarDayKey(widget.date)}',
+                      ),
+                      opacity: showActions && widget.onAddEvent != null ? 1 : 0,
+                      duration: const Duration(milliseconds: 120),
+                      child: Tooltip(
+                        message:
+                            'Add event on ${_formatCalendarDate(widget.date)}',
+                        child: InkWell(
+                          key: ValueKey(
+                            'calendar-add-${_calendarDayKey(widget.date)}',
+                          ),
+                          onTap: widget.onAddEvent,
+                          borderRadius: BorderRadius.circular(999),
+                          child: Container(
+                            width: 22,
+                            height: 22,
+                            decoration: BoxDecoration(
+                              color: AppColors.green.withValues(alpha: .1),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.add_rounded,
+                              size: 16,
+                              color: AppColors.green,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-        ],
+            const SizedBox(height: 4),
+            for (final event in visibleEvents) ...[
+              _CalendarEventPill(
+                event: event,
+                isHighlighted:
+                    widget.highlightedEventKey == _calendarEventKey(event),
+                date: widget.date,
+                onTap: () => widget.onOpenEvent(event),
+              ),
+              const SizedBox(height: 4),
+            ],
+            if (extra > 0)
+              InkWell(
+                key: ValueKey('calendar-more-${_calendarDayKey(widget.date)}'),
+                onTap: widget.onOpenDay,
+                borderRadius: BorderRadius.circular(4),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 3,
+                    vertical: 2,
+                  ),
+                  child: Text(
+                    '+$extra more',
+                    style: const TextStyle(
+                      color: AppColors.green,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
 }
 
 class _CalendarEventPill extends StatelessWidget {
-  const _CalendarEventPill({required this.event, required this.isHighlighted});
+  const _CalendarEventPill({
+    required this.event,
+    required this.isHighlighted,
+    required this.date,
+    required this.onTap,
+  });
 
   final SchoolEvent event;
   final bool isHighlighted;
+  final DateTime date;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final style = _eventStyle(event.category);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-      decoration: BoxDecoration(
-        color: isHighlighted
-            ? AppColors.amber.withValues(alpha: .22)
-            : style.background,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        key: ValueKey(
+          'calendar-event-${_calendarDayKey(date)}-${_calendarEventKey(event)}',
+        ),
+        onTap: onTap,
         borderRadius: BorderRadius.circular(4),
-        border: isHighlighted
-            ? Border.all(color: AppColors.amber, width: 1.4)
-            : null,
-      ),
-      child: Text(
-        event.title,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          color: style.foreground,
-          fontSize: 10,
-          fontWeight: FontWeight.w700,
+        child: Ink(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+          decoration: BoxDecoration(
+            color: isHighlighted
+                ? AppColors.amber.withValues(alpha: .22)
+                : style.background,
+            borderRadius: BorderRadius.circular(4),
+            border: isHighlighted
+                ? Border.all(color: AppColors.amber, width: 1.4)
+                : null,
+          ),
+          child: Text(
+            event.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: style.foreground,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
         ),
       ),
     );
@@ -4060,18 +4842,22 @@ class _CalendarFullEventRow extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(width: 8),
-            _CalendarRowIcon(
-              icon: Icons.edit_outlined,
-              label: 'Edit event',
-              onTap: onEdit == null ? null : () => onEdit!(event),
-            ),
-            const SizedBox(width: 6),
-            _CalendarRowIcon(
-              icon: Icons.delete_outline_rounded,
-              label: 'Delete event',
-              onTap: onDelete == null ? null : () => onDelete!(event),
-            ),
+            if (onEdit != null) ...[
+              const SizedBox(width: 8),
+              _CalendarRowIcon(
+                icon: Icons.edit_outlined,
+                label: 'Edit event',
+                onTap: () => onEdit!(event),
+              ),
+            ],
+            if (onDelete != null) ...[
+              const SizedBox(width: 6),
+              _CalendarRowIcon(
+                icon: Icons.delete_outline_rounded,
+                label: 'Delete event',
+                onTap: () => onDelete!(event),
+              ),
+            ],
           ],
         ),
       ),
@@ -4440,7 +5226,9 @@ _EventVisualStyle _eventStyle(String category) {
       AppColors.amber.withValues(alpha: .14),
     );
   }
-  if (normalized.contains('holiday') || normalized.contains('break')) {
+  if (normalized.contains('holiday') ||
+      normalized.contains('vacation') ||
+      normalized.contains('break')) {
     return _EventVisualStyle(
       AppColors.purple,
       AppColors.purple.withValues(alpha: .12),
@@ -4462,6 +5250,9 @@ String _eventTypeLabel(String category) {
   }
   if (normalized.contains('payment') || normalized.contains('fee')) {
     return 'Payment';
+  }
+  if (normalized.contains('vacation')) {
+    return 'Vacation';
   }
   if (normalized.contains('holiday') || normalized.contains('break')) {
     return 'Holiday';
@@ -4495,6 +5286,12 @@ String _calendarEventKey(SchoolEvent event) {
   ].join('|');
 }
 
+String _calendarDayKey(DateTime date) {
+  return '${date.year.toString().padLeft(4, '0')}-'
+      '${date.month.toString().padLeft(2, '0')}-'
+      '${date.day.toString().padLeft(2, '0')}';
+}
+
 DateTime _dateOnly(DateTime value) {
   return DateTime(value.year, value.month, value.day);
 }
@@ -4502,6 +5299,24 @@ DateTime _dateOnly(DateTime value) {
 String _formatCalendarDate(DateTime value) {
   return '${value.day} ${_monthName(value.month).substring(0, 3)} ${value.year}';
 }
+
+String _formatCalendarChangeTime(DateTime value) {
+  final hour = value.hour == 0
+      ? 12
+      : value.hour > 12
+      ? value.hour - 12
+      : value.hour;
+  final minute = value.minute.toString().padLeft(2, '0');
+  final period = value.hour >= 12 ? 'PM' : 'AM';
+  return '${_formatCalendarDate(value)} · $hour:$minute $period';
+}
+
+String _calendarRoleLabel(String role) => role
+    .trim()
+    .split('_')
+    .where((part) => part.isNotEmpty)
+    .map((part) => '${part[0]}${part.substring(1).toLowerCase()}')
+    .join(' ');
 
 String _monthName(int month) {
   const months = [
@@ -4540,6 +5355,20 @@ bool _canManageLeave(String? role) => const {
   'OWNER',
 }.contains(role?.trim().toUpperCase());
 
+bool _canAcknowledgeAttendance(String? role) => const {
+  'ADMINISTRATOR',
+  'HEAD_TEACHER',
+  'ADMIN',
+  'HEADMASTER',
+}.contains(role?.trim().toUpperCase());
+
+bool _canManageCalendar(String? role) => const {
+  'ADMINISTRATOR',
+  'ADMIN',
+  'HEADMASTER',
+  'HEAD_TEACHER',
+}.contains(role?.trim().toUpperCase());
+
 bool _canSeeFinancialNotices(String? role) {
   final normalized = role?.trim().toUpperCase() ?? '';
   return const {
@@ -4551,124 +5380,508 @@ bool _canSeeFinancialNotices(String? role) {
   }.contains(normalized);
 }
 
-class _TeacherWorkspaceLanding extends StatelessWidget {
+class _TeacherWorkspaceLanding extends StatefulWidget {
   const _TeacherWorkspaceLanding({
     required this.displayName,
+    required this.role,
+    required this.schoolId,
+    required this.loadSummary,
+    required this.events,
+    required this.onOpenClasses,
+    required this.onOpenClass,
+    required this.onOpenAttendance,
     required this.onOpenAssessments,
+    required this.onOpenIncidents,
+    required this.onOpenMyLeave,
+    required this.onOpenCalendar,
     required this.onOpenTermReview,
   });
 
   final String displayName;
+  final String? role;
+  final String schoolId;
+  final Future<TeacherDashboardSummary> Function() loadSummary;
+  final List<SchoolEvent> events;
+  final VoidCallback onOpenClasses;
+  final ValueChanged<TeacherClassAssignment> onOpenClass;
+  final VoidCallback onOpenAttendance;
   final VoidCallback onOpenAssessments;
+  final VoidCallback onOpenIncidents;
+  final VoidCallback onOpenMyLeave;
+  final VoidCallback onOpenCalendar;
   final VoidCallback onOpenTermReview;
 
   @override
+  State<_TeacherWorkspaceLanding> createState() =>
+      _TeacherWorkspaceLandingState();
+}
+
+class _TeacherWorkspaceLandingState extends State<_TeacherWorkspaceLanding> {
+  late Future<TeacherDashboardSummary> _summary = widget.loadSummary();
+
+  Future<void> _reload() async {
+    final next = widget.loadSummary();
+    setState(() => _summary = next);
+    await next;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(28),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 900),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              displayName.isEmpty
-                  ? 'Teacher workspace'
-                  : 'Welcome, $displayName',
-              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                fontWeight: FontWeight.w800,
-                color: AppColors.navyDark,
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Complete your teaching records and end-of-term responsibilities.',
-              style: TextStyle(color: Color(0xFF718096), fontSize: 16),
-            ),
-            const SizedBox(height: 28),
-            Wrap(
-              spacing: 18,
-              runSpacing: 18,
+    return RefreshIndicator(
+      onRefresh: _reload,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(24),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1320),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _TeacherWorkspaceCard(
-                  icon: Icons.assessment_outlined,
-                  title: 'Assessments & evaluations',
-                  description:
-                      'Enter academic records and complete student evaluations assigned to you.',
-                  actionLabel: 'Open assessments',
-                  onTap: onOpenAssessments,
+                Text(
+                  'Teacher dashboard',
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.navyDark,
+                  ),
                 ),
-                _TeacherWorkspaceCard(
-                  icon: Icons.fact_check_outlined,
-                  title: 'Term review',
-                  description:
-                      'Complete your term-closing declarations and recommendations.',
-                  actionLabel: 'Open term review',
-                  onTap: onOpenTermReview,
+                const SizedBox(height: 8),
+                const Text(
+                  'Your classes, attendance, grading and upcoming updates in one place.',
+                  style: TextStyle(color: Color(0xFF718096), fontSize: 16),
+                ),
+                const SizedBox(height: 26),
+                FutureBuilder<TeacherDashboardSummary>(
+                  future: _summary,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState != ConnectionState.done) {
+                      return const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 80),
+                        child: Center(child: CircularProgressIndicator()),
+                      );
+                    }
+                    if (snapshot.hasError || !snapshot.hasData) {
+                      return _TeacherDashboardLoadError(onRetry: _reload);
+                    }
+                    return _dashboard(snapshot.data!);
+                  },
                 ),
               ],
             ),
-          ],
+          ),
         ),
       ),
     );
   }
+
+  Widget _dashboard(TeacherDashboardSummary summary) {
+    final workspace = summary.workspace;
+    final classes = workspace.assignedClasses;
+    final classNames = classes.map((item) => item.label).toList();
+    final classCaption = classNames.isEmpty
+        ? 'No active classes assigned'
+        : '${classNames.take(2).join(' · ')}${classNames.length > 2 ? ' · +${classNames.length - 2} more' : ''}';
+    final attendance = summary.attendance;
+    final classTeacherAssignments = workspace.classes
+        .where((assignment) => assignment.active && assignment.classTeacher)
+        .toList();
+    final hasAttendanceResponsibility = attendance != null
+        ? attendance.assignedClasses > 0
+        : classTeacherAssignments.isNotEmpty;
+    final attendanceTitle = hasAttendanceResponsibility
+        ? 'Today’s attendance'
+        : 'Class attendance';
+    final attendanceValue = attendance == null
+        ? hasAttendanceResponsibility
+              ? '—'
+              : 'View attendance'
+        : attendance.assignedClasses == 0
+        ? 'View attendance'
+        : attendance.schoolDay
+        ? '${attendance.submittedClasses}/${attendance.assignedClasses} submitted'
+        : 'Non-school day';
+    final attendanceCaption = attendance == null
+        ? hasAttendanceResponsibility
+              ? 'Attendance status unavailable'
+              : 'Take attendance when properly authorized'
+        : attendance.assignedClasses == 0
+        ? 'Take attendance when properly authorized'
+        : attendance.schoolDay
+        ? attendance.pendingClasses == 0
+              ? 'All assigned registers completed'
+              : '${attendance.pendingClasses} register${attendance.pendingClasses == 1 ? '' : 's'} still pending'
+        : attendance.calendarMessage.isEmpty
+        ? 'Today is not an official school day'
+        : attendance.calendarMessage;
+    final assessments = summary.assessments;
+    final assessmentValue = assessments == null
+        ? '—'
+        : '${assessments.incompleteAssessments} incomplete';
+    final assessmentCaption = assessments == null
+        ? 'Assessment status unavailable'
+        : '${assessments.outstandingScores} scores outstanding · ${assessments.totalAssessments} assessments';
+    final concerns = summary.lateConcerns;
+    final concernValue = concerns == null ? '—' : '${concerns.length} students';
+    final concernCaption = concerns == null
+        ? 'Student attention status unavailable'
+        : concerns.isEmpty
+        ? 'No repeated-lateness concerns'
+        : 'Late for 2 consecutive school days or more';
+
+    final tasks = <Widget>[];
+    if (attendance != null &&
+        attendance.schoolDay &&
+        attendance.pendingClasses > 0) {
+      tasks.add(
+        _TeacherDashboardListItem(
+          icon: Icons.fact_check_outlined,
+          color: AppColors.amber,
+          title:
+              'Submit attendance for ${attendance.pendingClasses} class${attendance.pendingClasses == 1 ? '' : 'es'}',
+          subtitle: 'Today’s attendance is still incomplete.',
+          onTap: widget.onOpenAttendance,
+        ),
+      );
+    }
+    if (assessments != null && assessments.incompleteAssessments > 0) {
+      tasks.add(
+        _TeacherDashboardListItem(
+          icon: Icons.assignment_outlined,
+          color: AppColors.blue,
+          title:
+              '${assessments.incompleteAssessments} assessment${assessments.incompleteAssessments == 1 ? '' : 's'} need scores',
+          subtitle:
+              '${assessments.outstandingScores} student score${assessments.outstandingScores == 1 ? '' : 's'} remaining.',
+          onTap: widget.onOpenAssessments,
+        ),
+      );
+    }
+    if (concerns != null && concerns.isNotEmpty) {
+      tasks.add(
+        _TeacherDashboardListItem(
+          icon: Icons.person_search_outlined,
+          color: AppColors.red,
+          title:
+              '${concerns.length} student${concerns.length == 1 ? '' : 's'} need attendance follow-up',
+          subtitle: 'Review repeated lateness and escalate when necessary.',
+          onTap: widget.onOpenAttendance,
+        ),
+      );
+    }
+    final followUps =
+        summary.myIncidents
+            ?.where((incident) => incident.followUpRequired)
+            .length ??
+        0;
+    if (followUps > 0) {
+      tasks.add(
+        _TeacherDashboardListItem(
+          icon: Icons.report_problem_outlined,
+          color: AppColors.purple,
+          title:
+              '$followUps incident follow-up${followUps == 1 ? '' : 's'} due',
+          subtitle: 'Open your reported incidents to continue the follow-up.',
+          onTap: widget.onOpenIncidents,
+        ),
+      );
+    }
+
+    late final IconData focusIcon;
+    late final String focusTitle;
+    late final String focusSubtitle;
+    late final String focusActionLabel;
+    late final VoidCallback focusAction;
+    if (attendance != null &&
+        attendance.schoolDay &&
+        attendance.pendingClasses > 0) {
+      focusIcon = Icons.fact_check_outlined;
+      focusTitle =
+          'Attendance is pending for ${attendance.pendingClasses} class${attendance.pendingClasses == 1 ? '' : 'es'}';
+      focusSubtitle =
+          'Complete today’s class registers before moving to assessment work.';
+      focusActionLabel = 'Take attendance';
+      focusAction = widget.onOpenAttendance;
+    } else if (assessments != null && assessments.incompleteAssessments > 0) {
+      focusIcon = Icons.assignment_turned_in_outlined;
+      focusTitle =
+          '${assessments.incompleteAssessments} assessment${assessments.incompleteAssessments == 1 ? '' : 's'} still need scores';
+      focusSubtitle =
+          '${assessments.outstandingScores} student score${assessments.outstandingScores == 1 ? '' : 's'} remain before grading is complete.';
+      focusActionLabel = 'Continue grading';
+      focusAction = widget.onOpenAssessments;
+    } else if (concerns != null && concerns.isNotEmpty) {
+      focusIcon = Icons.person_search_outlined;
+      focusTitle =
+          '${concerns.length} student${concerns.length == 1 ? '' : 's'} need attendance follow-up';
+      focusSubtitle =
+          'Review repeated lateness and escalate only when follow-up is needed.';
+      focusActionLabel = 'Review students';
+      focusAction = widget.onOpenAttendance;
+    } else {
+      focusIcon = Icons.check_circle_outline_rounded;
+      focusTitle = 'You are up to date';
+      focusSubtitle =
+          'There are no urgent attendance, grading or student follow-up tasks.';
+      focusActionLabel = 'Open my classes';
+      focusAction = widget.onOpenClasses;
+    }
+
+    final updates = <Widget>[];
+    for (final leave
+        in (summary.upcomingLeave ?? const <TeacherLeaveUpdate>[]).take(2)) {
+      updates.add(
+        _TeacherDashboardListItem(
+          icon: Icons.event_available_outlined,
+          color: AppColors.green,
+          title: leave.typeName,
+          subtitle:
+              '${_teacherDateRange(leave.startDate, leave.endDate)} · ${_teacherStatusLabel(leave.status)}',
+          onTap: widget.onOpenMyLeave,
+        ),
+      );
+    }
+    final openIncidents =
+        summary.myIncidents
+            ?.where((incident) => _teacherIncidentIsOpen(incident.status))
+            .take(2) ??
+        const Iterable.empty();
+    for (final incident in openIncidents) {
+      updates.add(
+        _TeacherDashboardListItem(
+          icon: Icons.report_outlined,
+          color: AppColors.red,
+          title: incident.title,
+          subtitle:
+              'Incident · ${_teacherStatusLabel(incident.status)} · ${_teacherShortDate(incident.incidentDate)}',
+          onTap: widget.onOpenIncidents,
+        ),
+      );
+    }
+    final today = DateTime.now();
+    final upcomingEvents =
+        widget.events
+            .where(
+              (event) => !event.endDate.isBefore(
+                DateTime(today.year, today.month, today.day),
+              ),
+            )
+            .toList()
+          ..sort((left, right) => left.startDate.compareTo(right.startDate));
+    for (final event in upcomingEvents.take(2)) {
+      updates.add(
+        _TeacherDashboardListItem(
+          icon: Icons.calendar_month_outlined,
+          color: AppColors.blue,
+          title: event.title,
+          subtitle:
+              '${_teacherDateRange(event.startDate, event.endDate)} · ${event.category}',
+          onTap: widget.onOpenCalendar,
+        ),
+      );
+    }
+
+    final subjectsByStream = <int, List<String>>{};
+    for (final subject in workspace.subjects.where((item) => item.active)) {
+      subjectsByStream
+          .putIfAbsent(subject.streamId, () => <String>[])
+          .add(subject.subjectName);
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) => _TeacherSummaryGrid(
+            width: constraints.maxWidth,
+            cards: [
+              _TeacherSummaryCard(
+                icon: Icons.groups_2_outlined,
+                title: 'Classes assigned',
+                value: '${classes.length}',
+                caption: classCaption,
+                onTap: widget.onOpenClasses,
+              ),
+              _TeacherSummaryCard(
+                icon: Icons.fact_check_outlined,
+                title: attendanceTitle,
+                value: attendanceValue,
+                caption: attendanceCaption,
+                onTap: widget.onOpenAttendance,
+              ),
+              _TeacherSummaryCard(
+                icon: Icons.assignment_outlined,
+                title: 'Assessment tasks',
+                value: assessmentValue,
+                caption: assessmentCaption,
+                onTap: widget.onOpenAssessments,
+              ),
+              _TeacherSummaryCard(
+                icon: Icons.person_search_outlined,
+                title: 'Students needing attention',
+                value: concernValue,
+                caption: concernCaption,
+                onTap: widget.onOpenAttendance,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 18),
+        _TeacherFocusBanner(
+          icon: focusIcon,
+          title: focusTitle,
+          subtitle: focusSubtitle,
+          actionLabel: focusActionLabel,
+          onAction: focusAction,
+        ),
+        const SizedBox(height: 18),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final stacked = constraints.maxWidth < 820;
+            final nextTasks = _TeacherDashboardSection(
+              title: 'Your next tasks',
+              actionLabel: 'Term review',
+              onAction: widget.onOpenTermReview,
+              emptyText: 'You are up to date. No immediate teaching tasks.',
+              children: tasks.take(5).toList(),
+            );
+            final updateSection = _TeacherDashboardSection(
+              title: 'Updates & notices',
+              actionLabel: 'Calendar',
+              onAction: widget.onOpenCalendar,
+              emptyText: 'No upcoming leave, open incidents or events.',
+              children: updates.take(5).toList(),
+            );
+            return stacked
+                ? Column(
+                    children: [
+                      nextTasks,
+                      const SizedBox(height: 18),
+                      updateSection,
+                    ],
+                  )
+                : Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(child: nextTasks),
+                      const SizedBox(width: 18),
+                      Expanded(child: updateSection),
+                    ],
+                  );
+          },
+        ),
+        const SizedBox(height: 18),
+        _TeacherClassesPanel(
+          classes: classes,
+          subjectsByStream: subjectsByStream,
+          onOpenAll: widget.onOpenClasses,
+          onOpenClass: widget.onOpenClass,
+        ),
+      ],
+    );
+  }
 }
 
-class _TeacherWorkspaceCard extends StatelessWidget {
-  const _TeacherWorkspaceCard({
+class _TeacherSummaryGrid extends StatelessWidget {
+  const _TeacherSummaryGrid({required this.width, required this.cards});
+
+  final double width;
+  final List<Widget> cards;
+
+  @override
+  Widget build(BuildContext context) {
+    final columns = width >= 1080
+        ? 4
+        : width >= 620
+        ? 2
+        : 1;
+    const gap = 16.0;
+    final cardWidth = (width - gap * (columns - 1)) / columns;
+    return Wrap(
+      spacing: gap,
+      runSpacing: gap,
+      children: cards
+          .map((card) => SizedBox(width: cardWidth, child: card))
+          .toList(),
+    );
+  }
+}
+
+class _TeacherSummaryCard extends StatelessWidget {
+  const _TeacherSummaryCard({
     required this.icon,
     required this.title,
-    required this.description,
-    required this.actionLabel,
+    required this.value,
+    required this.caption,
     required this.onTap,
   });
 
   final IconData icon;
   final String title;
-  final String description;
-  final String actionLabel;
+  final String value;
+  final String caption;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 390,
-      child: Card(
-        margin: EdgeInsets.zero,
+    return Card(
+      margin: EdgeInsets.zero,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.all(22),
+          padding: const EdgeInsets.all(18),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 46,
-                height: 46,
-                decoration: BoxDecoration(
-                  color: AppColors.green.withValues(alpha: .12),
-                  borderRadius: BorderRadius.circular(13),
-                ),
-                child: Icon(icon, color: AppColors.green),
+              Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: AppColors.green.withValues(alpha: .1),
+                      borderRadius: BorderRadius.circular(11),
+                    ),
+                    child: Icon(icon, color: AppColors.green, size: 21),
+                  ),
+                  const Spacer(),
+                  const Icon(
+                    Icons.arrow_outward_rounded,
+                    size: 17,
+                    color: Color(0xFF94A3B8),
+                  ),
+                ],
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 13),
+              Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: AppColors.navyDark,
+                  fontSize: 23,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 2),
               Text(
                 title,
                 style: const TextStyle(
-                  fontWeight: FontWeight.w800,
-                  fontSize: 18,
-                  color: AppColors.navyDark,
+                  color: AppColors.text,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 7),
               Text(
-                description,
-                style: const TextStyle(color: Color(0xFF718096), height: 1.45),
-              ),
-              const SizedBox(height: 18),
-              FilledButton.icon(
-                onPressed: onTap,
-                icon: const Icon(Icons.arrow_forward_rounded),
-                label: Text(actionLabel),
+                caption,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: AppColors.muted,
+                  fontSize: 11.5,
+                  height: 1.3,
+                ),
               ),
             ],
           ),
@@ -4676,6 +5889,444 @@ class _TeacherWorkspaceCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class _TeacherFocusBanner extends StatelessWidget {
+  const _TeacherFocusBanner({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.actionLabel,
+    required this.onAction,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final String actionLabel;
+  final VoidCallback onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18),
+      decoration: BoxDecoration(
+        color: AppColors.navyDark,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 640;
+          final message = Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: .1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: Colors.white, size: 22),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        color: Color(0xFFB8C4D6),
+                        fontSize: 12.5,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+          final action = FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.green,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: onAction,
+            icon: const Icon(Icons.arrow_forward_rounded, size: 17),
+            label: Text(actionLabel),
+          );
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                message,
+                const SizedBox(height: 14),
+                Align(alignment: Alignment.centerRight, child: action),
+              ],
+            );
+          }
+          return Row(
+            children: [
+              Expanded(child: message),
+              const SizedBox(width: 22),
+              action,
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _TeacherClassesPanel extends StatelessWidget {
+  const _TeacherClassesPanel({
+    required this.classes,
+    required this.subjectsByStream,
+    required this.onOpenAll,
+    required this.onOpenClass,
+  });
+
+  final List<TeacherClassAssignment> classes;
+  final Map<int, List<String>> subjectsByStream;
+  final VoidCallback onOpenAll;
+  final ValueChanged<TeacherClassAssignment> onOpenClass;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'My classes',
+                    style: TextStyle(
+                      color: AppColors.navyDark,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                TextButton(onPressed: onOpenAll, child: const Text('View all')),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (classes.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 22),
+                child: Center(
+                  child: Text(
+                    'No active classes are assigned.',
+                    style: TextStyle(color: AppColors.muted),
+                  ),
+                ),
+              )
+            else
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final columns = constraints.maxWidth >= 960
+                      ? 3
+                      : constraints.maxWidth >= 580
+                      ? 2
+                      : 1;
+                  const gap = 12.0;
+                  final width =
+                      (constraints.maxWidth - gap * (columns - 1)) / columns;
+                  return Wrap(
+                    spacing: gap,
+                    runSpacing: gap,
+                    children: classes.map((assignment) {
+                      final subjects =
+                          subjectsByStream[assignment.streamId] ?? const [];
+                      final detail = subjects.isNotEmpty
+                          ? subjects.take(3).join(' · ')
+                          : assignment.classTeacher
+                          ? 'Class teacher'
+                          : 'Subject teacher';
+                      final gradeParts = assignment.gradeName
+                          .trim()
+                          .split(RegExp(r'\s+'))
+                          .where((part) => part.isNotEmpty)
+                          .toList();
+                      final initials = gradeParts.length > 1
+                          ? gradeParts
+                                .take(2)
+                                .map((part) => part[0])
+                                .join()
+                                .toUpperCase()
+                          : gradeParts.isEmpty
+                          ? 'CL'
+                          : gradeParts.first.length > 1
+                          ? gradeParts.first.substring(0, 2).toUpperCase()
+                          : gradeParts.first.toUpperCase();
+                      return SizedBox(
+                        width: width,
+                        child: Material(
+                          color: const Color(0xFFF8FAFC),
+                          borderRadius: BorderRadius.circular(12),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: () => onOpenClass(assignment),
+                            child: Padding(
+                              padding: const EdgeInsets.all(14),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 38,
+                                    height: 38,
+                                    alignment: Alignment.center,
+                                    decoration: BoxDecoration(
+                                      color: AppColors.greenSoft,
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Text(
+                                      initials,
+                                      style: const TextStyle(
+                                        color: AppColors.green,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 11),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          assignment.label,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w800,
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 3),
+                                        Text(
+                                          detail,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            color: AppColors.muted,
+                                            fontSize: 11.5,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const Icon(
+                                    Icons.chevron_right_rounded,
+                                    color: Color(0xFF94A3B8),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  );
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TeacherDashboardSection extends StatelessWidget {
+  const _TeacherDashboardSection({
+    required this.title,
+    required this.emptyText,
+    required this.children,
+    this.actionLabel,
+    this.onAction,
+  });
+
+  final String title;
+  final String emptyText;
+  final List<Widget> children;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: const TextStyle(
+                      color: AppColors.navyDark,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                if (actionLabel != null && onAction != null)
+                  TextButton(onPressed: onAction, child: Text(actionLabel!)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (children.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Center(
+                  child: Text(
+                    emptyText,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: AppColors.muted),
+                  ),
+                ),
+              )
+            else
+              ...children,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TeacherDashboardListItem extends StatelessWidget {
+  const _TeacherDashboardListItem({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      minLeadingWidth: 36,
+      leading: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: .11),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Icon(icon, color: color, size: 19),
+      ),
+      title: Text(
+        title,
+        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+      ),
+      subtitle: Text(
+        subtitle,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(color: AppColors.muted, fontSize: 12),
+      ),
+      trailing: const Icon(Icons.chevron_right_rounded),
+      onTap: onTap,
+    );
+  }
+}
+
+class _TeacherDashboardLoadError extends StatelessWidget {
+  const _TeacherDashboardLoadError({required this.onRetry});
+
+  final Future<void> Function() onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off_outlined, color: AppColors.muted),
+              const SizedBox(height: 10),
+              const Text('Your dashboard summaries could not be loaded.'),
+              const SizedBox(height: 14),
+              OutlinedButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('Try again'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+bool _teacherIncidentIsOpen(String status) => !const {
+  'CLOSED',
+  'RESOLVED',
+  'CLOSED_RESOLVED',
+  'CLOSED_UNRESOLVED',
+}.contains(status.trim().toUpperCase());
+
+String _teacherStatusLabel(String value) => value
+    .trim()
+    .toLowerCase()
+    .split('_')
+    .where((part) => part.isNotEmpty)
+    .map((part) => '${part[0].toUpperCase()}${part.substring(1)}')
+    .join(' ');
+
+String _teacherDateRange(DateTime start, DateTime end) {
+  final first = _teacherShortDate(start);
+  final last = _teacherShortDate(end);
+  return first == last ? first : '$first – $last';
+}
+
+String _teacherShortDate(DateTime value) {
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  return '${value.day} ${months[value.month - 1]} ${value.year}';
 }
 
 class _Sidebar extends StatelessWidget {
@@ -4689,6 +6340,7 @@ class _Sidebar extends StatelessWidget {
     this.onRoleChanged,
     required this.selectedPage,
     this.approvalInbox,
+    this.shopAccess,
     required this.onSelectPage,
     this.onLogout,
     this.onCollapse,
@@ -4702,6 +6354,7 @@ class _Sidebar extends StatelessWidget {
   final ValueChanged<String>? onRoleChanged;
   final _SchoolAdminPage selectedPage;
   final Future<ApprovalInbox?>? approvalInbox;
+  final Future<bool>? shopAccess;
   final ValueChanged<_SchoolAdminPage> onSelectPage;
   final VoidCallback? onLogout;
   final VoidCallback? onCollapse;
@@ -4892,7 +6545,7 @@ class _Sidebar extends StatelessWidget {
                       active: selectedPage == _SchoolAdminPage.admissions,
                       onTap: () => onSelectPage(_SchoolAdminPage.admissions),
                     ),
-                  if (!isBursar)
+                  if (!isBursar && !isTeacher)
                     _SidebarButton(
                       icon: Icons.school_rounded,
                       label: 'Students',
@@ -4900,15 +6553,46 @@ class _Sidebar extends StatelessWidget {
                       active: selectedPage == _SchoolAdminPage.students,
                       onTap: () => onSelectPage(_SchoolAdminPage.students),
                     ),
-                  if (!isBursar && !isTeacher) ...[
-                    // Review permissions are enforced by the leave API.
+                  if (isTeacher)
+                    _SidebarButton(
+                      icon: Icons.class_outlined,
+                      label: 'Classes',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.classes,
+                      onTap: () => onSelectPage(_SchoolAdminPage.classes),
+                    ),
+                  if (isTeacher) ...[
+                    _SidebarButton(
+                      icon: Icons.assessment_outlined,
+                      label: 'Assessments',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.assessments,
+                      onTap: () => onSelectPage(_SchoolAdminPage.assessments),
+                    ),
                     _SidebarButton(
                       icon: Icons.fact_check_outlined,
-                      label: 'Attendance',
+                      label: 'Evaluations & Comments',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.evaluations,
+                      onTap: () => onSelectPage(_SchoolAdminPage.evaluations),
+                    ),
+                  ],
+                  if (!isTeacher)
+                    _SidebarButton(
+                      icon: Icons.fact_check_outlined,
+                      label: 'Student Attendance',
                       collapsed: collapsed,
                       active: selectedPage == _SchoolAdminPage.attendance,
                       onTap: () => onSelectPage(_SchoolAdminPage.attendance),
                     ),
+                  _SidebarButton(
+                    icon: Icons.calendar_month_outlined,
+                    label: 'School Calendar',
+                    collapsed: collapsed,
+                    active: selectedPage == _SchoolAdminPage.calendar,
+                    onTap: () => onSelectPage(_SchoolAdminPage.calendar),
+                  ),
+                  if (!isBursar && !isTeacher) ...[
                     _SidebarButton(
                       icon: Icons.badge_outlined,
                       label: 'Staff Attendance',
@@ -4954,7 +6638,7 @@ class _Sidebar extends StatelessWidget {
                       active: selectedPage == _SchoolAdminPage.leave,
                       onTap: () => onSelectPage(_SchoolAdminPage.leave),
                     ),
-                  if (!isBursar)
+                  if (!isBursar && !isTeacher)
                     _SidebarButton(
                       icon: Icons.assessment_outlined,
                       label: 'Assessments',
@@ -4965,7 +6649,7 @@ class _Sidebar extends StatelessWidget {
                   if (!isBursar && !isTeacher)
                     _SidebarButton(
                       icon: Icons.fact_check_outlined,
-                      label: 'Evaluation Management',
+                      label: 'Evaluations & Comments',
                       collapsed: collapsed,
                       active: selectedPage == _SchoolAdminPage.evaluations,
                       onTap: () => onSelectPage(_SchoolAdminPage.evaluations),
@@ -4986,16 +6670,32 @@ class _Sidebar extends StatelessWidget {
                       active: selectedPage == _SchoolAdminPage.fees,
                       onTap: () => onSelectPage(_SchoolAdminPage.fees),
                     ),
-                  _SidebarButton(
-                    icon: Icons.storefront_outlined,
-                    label: 'School Shop',
-                    collapsed: collapsed,
-                    active: selectedPage == _SchoolAdminPage.shop,
-                    onTap: () => onSelectPage(_SchoolAdminPage.shop),
-                  ),
+                  if (!isTeacher)
+                    _SidebarButton(
+                      icon: Icons.storefront_outlined,
+                      label: 'School Shop',
+                      collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.shop,
+                      onTap: () => onSelectPage(_SchoolAdminPage.shop),
+                    )
+                  else
+                    FutureBuilder<bool>(
+                      future: shopAccess,
+                      builder: (context, snapshot) => snapshot.data == true
+                          ? _SidebarButton(
+                              icon: Icons.storefront_outlined,
+                              label: 'School Shop',
+                              collapsed: collapsed,
+                              active: selectedPage == _SchoolAdminPage.shop,
+                              onTap: () => onSelectPage(_SchoolAdminPage.shop),
+                            )
+                          : const SizedBox.shrink(),
+                    ),
                   _SidebarButton(
                     icon: Icons.receipt_long_rounded,
-                    label: 'Expenses & Petty Cash',
+                    label: isTeacher
+                        ? 'My Requisitions & Expenses'
+                        : 'Expenses & Petty Cash',
                     collapsed: collapsed,
                     active: selectedPage == _SchoolAdminPage.expenses,
                     onTap: () => onSelectPage(_SchoolAdminPage.expenses),
@@ -5003,7 +6703,7 @@ class _Sidebar extends StatelessWidget {
                   if (!isBursar) ...[
                     _SidebarButton(
                       icon: Icons.warning_amber_rounded,
-                      label: 'Incident Management',
+                      label: isTeacher ? 'My Incidents' : 'Incident Management',
                       collapsed: collapsed,
                       active: selectedPage == _SchoolAdminPage.incidents,
                       onTap: () => onSelectPage(_SchoolAdminPage.incidents),

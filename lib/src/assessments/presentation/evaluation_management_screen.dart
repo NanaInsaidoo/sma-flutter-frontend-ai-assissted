@@ -10,6 +10,8 @@ class EvaluationManagementScreen extends StatefulWidget {
     required this.viewerName,
     required this.viewerRole,
     required this.accessToken,
+    this.initialStreamId,
+    this.initialStreamName,
     this.onRefreshAccessToken,
   });
 
@@ -17,6 +19,8 @@ class EvaluationManagementScreen extends StatefulWidget {
   final String viewerName;
   final String viewerRole;
   final String? accessToken;
+  final int? initialStreamId;
+  final String? initialStreamName;
   final Future<String?> Function()? onRefreshAccessToken;
 
   @override
@@ -95,6 +99,8 @@ class _EvaluationManagementScreenState
           viewerName: widget.viewerName,
           viewerRole: widget.viewerRole,
           setup: snapshot.requireData,
+          initialStreamId: widget.initialStreamId,
+          initialStreamName: widget.initialStreamName,
           managementProgressOnly: true,
         );
       },

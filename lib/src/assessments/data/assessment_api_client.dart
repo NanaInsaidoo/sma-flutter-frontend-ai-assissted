@@ -240,6 +240,40 @@ class AssessmentApiClient {
     );
   }
 
+  Future<AssessmentGradingScale> getActiveGradingScale({
+    required int gradeLevelId,
+  }) async {
+    final query = Uri(queryParameters: {'gradeLevelId': '$gradeLevelId'}).query;
+    final decoded = _map(
+      _decodeBody(await _send('/api/grading-scales/active?$query')),
+    );
+    final items =
+        _list(decoded['items'])
+            .map(_map)
+            .map(
+              (item) => AssessmentGradingScaleItem(
+                grade: _string(item['grade']),
+                descriptor: _string(item['descriptor']),
+                minPercentage: _double(item['minPercentage']) ?? 0,
+                maxPercentage: _double(item['maxPercentage']) ?? 100,
+                displayOrder: _int(item['displayOrder']) ?? 0,
+              ),
+            )
+            .where((item) => item.grade.isNotEmpty)
+            .toList()
+          ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
+    if (items.isEmpty) {
+      throw const AssessmentApiException(
+        'No grading scale is configured for this grade level.',
+      );
+    }
+    return AssessmentGradingScale(
+      gradeLevelId: _int(decoded['gradeLevelId']) ?? gradeLevelId,
+      gradeLevelName: _string(decoded['gradeLevelName']),
+      items: items,
+    );
+  }
+
   Future<void> deleteAssessment({
     required String customSchoolId,
     required String assessmentId,
@@ -323,6 +357,68 @@ class AssessmentApiClient {
         await _send(
           '/api/sba-new/schools/$schoolPath/assessments/$assessmentPath/scores/$studentPath',
           method: 'DELETE',
+        ),
+      ),
+    );
+  }
+
+  Future<Map<String, dynamic>> requestReportScoreCorrection({
+    required String customSchoolId,
+    required String studentId,
+    required String assessmentId,
+    required double proposedScore,
+    required String proposedRemarks,
+    required String reason,
+    String? assignedApprover,
+  }) async {
+    final schoolPath = Uri.encodeComponent(customSchoolId);
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/report-corrections/schools/$schoolPath/score-requests',
+          method: 'POST',
+          body: {
+            'customStudentId': studentId,
+            'assessmentId': assessmentId,
+            'proposedScore': proposedScore,
+            'proposedRemarks': proposedRemarks,
+            'reason': reason,
+            if (assignedApprover != null && assignedApprover.trim().isNotEmpty)
+              'assignedApprover': assignedApprover.trim(),
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getReportCorrections({
+    required String customSchoolId,
+    String? status,
+  }) async {
+    final schoolPath = Uri.encodeComponent(customSchoolId);
+    final query = status == null || status.trim().isEmpty
+        ? ''
+        : '?status=${Uri.encodeQueryComponent(status)}';
+    return _list(
+      _decodeBody(
+        await _send('/api/report-corrections/schools/$schoolPath$query'),
+      ),
+    ).map(_map).toList();
+  }
+
+  Future<Map<String, dynamic>> decideReportCorrection({
+    required String customSchoolId,
+    required int requestId,
+    required bool approve,
+    required String note,
+  }) async {
+    final schoolPath = Uri.encodeComponent(customSchoolId);
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/report-corrections/schools/$schoolPath/$requestId/${approve ? 'approve' : 'reject'}',
+          method: 'POST',
+          body: {'note': note},
         ),
       ),
     );
@@ -606,6 +702,27 @@ class AssessmentApiClient {
     );
   }
 
+  Future<Map<String, dynamic>> reopenPublishedReport({
+    required String customSchoolId,
+    required String customStudentId,
+    required int termId,
+    required String reason,
+  }) async {
+    final studentPath = Uri.encodeComponent(customStudentId);
+    final query = Uri(
+      queryParameters: {'customSchoolId': customSchoolId, 'termId': '$termId'},
+    ).query;
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/report-card-remarks/student/$studentPath/reopen?$query',
+          method: 'POST',
+          body: {'reason': reason.trim()},
+        ),
+      ),
+    );
+  }
+
   Future<http.Response> _send(
     String path, {
     String method = 'GET',
@@ -692,6 +809,24 @@ class AssessmentApiClient {
     );
   }
 
+  Future<Map<String, dynamic>> syncTermEvaluations({
+    required String schoolId,
+    required int termId,
+  }) async {
+    final q = Uri(
+      queryParameters: {'customSchoolId': schoolId, 'termId': '$termId'},
+    ).query;
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/term-evaluations/sync?$q',
+          method: 'POST',
+          body: const {},
+        ),
+      ),
+    );
+  }
+
   Future<Map<String, dynamic>> lockTermEvaluations({
     required String schoolId,
     required int termId,
@@ -765,6 +900,17 @@ class AssessmentApiClient {
       '/api/term-evaluations/assignments/$assignmentId/submit?$q',
       method: 'POST',
       body: const {},
+    );
+  }
+
+  Future<void> clearTermEvaluationAssignment({
+    required int assignmentId,
+    required String schoolId,
+  }) async {
+    final q = Uri(queryParameters: {'customSchoolId': schoolId}).query;
+    await _send(
+      '/api/term-evaluations/assignments/$assignmentId/responses?$q',
+      method: 'DELETE',
     );
   }
 
@@ -863,6 +1009,104 @@ class AssessmentApiClient {
       '/api/term-evaluations/students/${Uri.encodeComponent(studentId)}/finalize?$q',
       method: 'POST',
       body: {'finalRatings': finalRatings, 'comment': comment},
+    );
+  }
+
+  Future<void> saveTermEvaluationComment({
+    required String studentId,
+    required String schoolId,
+    required int termId,
+    required String comment,
+  }) async {
+    final q = Uri(
+      queryParameters: {'customSchoolId': schoolId, 'termId': '$termId'},
+    ).query;
+    await _send(
+      '/api/term-evaluations/students/${Uri.encodeComponent(studentId)}/comment?$q',
+      method: 'PUT',
+      body: {'comment': comment.trim()},
+    );
+  }
+
+  Future<Map<String, dynamic>> submitTermEvaluationClassComments({
+    required int assignmentId,
+    required String schoolId,
+  }) async {
+    final q = Uri(queryParameters: {'customSchoolId': schoolId}).query;
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/term-evaluations/assignments/$assignmentId/submit-comments?$q',
+          method: 'POST',
+          body: const {},
+        ),
+      ),
+    );
+  }
+
+  Future<void> startTermEvaluationLeadershipReview({
+    required String studentId,
+    required String schoolId,
+    required int termId,
+  }) async {
+    final q = Uri(
+      queryParameters: {'customSchoolId': schoolId, 'termId': '$termId'},
+    ).query;
+    await _send(
+      '/api/term-evaluations/students/${Uri.encodeComponent(studentId)}/leadership-review/start?$q',
+      method: 'POST',
+      body: const {},
+    );
+  }
+
+  Future<void> approveTermEvaluationLeadershipReview({
+    required String studentId,
+    required String schoolId,
+    required int termId,
+    String? note,
+  }) async {
+    final q = Uri(
+      queryParameters: {'customSchoolId': schoolId, 'termId': '$termId'},
+    ).query;
+    await _send(
+      '/api/term-evaluations/students/${Uri.encodeComponent(studentId)}/leadership-review/approve?$q',
+      method: 'POST',
+      body: {'note': note},
+    );
+  }
+
+  Future<Map<String, dynamic>> approveTermEvaluationLeadershipReviews({
+    required String schoolId,
+    required int termId,
+    required List<String> studentIds,
+  }) async {
+    final q = Uri(
+      queryParameters: {'customSchoolId': schoolId, 'termId': '$termId'},
+    ).query;
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/term-evaluations/leadership-review/approve-batch?$q',
+          method: 'POST',
+          body: {'studentIds': studentIds},
+        ),
+      ),
+    );
+  }
+
+  Future<void> requestTermEvaluationChanges({
+    required String studentId,
+    required String schoolId,
+    required int termId,
+    required String reason,
+  }) async {
+    final q = Uri(
+      queryParameters: {'customSchoolId': schoolId, 'termId': '$termId'},
+    ).query;
+    await _send(
+      '/api/term-evaluations/students/${Uri.encodeComponent(studentId)}/leadership-review/request-changes?$q',
+      method: 'POST',
+      body: {'reason': reason.trim()},
     );
   }
 
@@ -1051,6 +1295,34 @@ class AssessmentStudentScore {
       [firstName, lastName].where((part) => part.trim().isNotEmpty).join(' ');
 }
 
+class AssessmentGradingScale {
+  const AssessmentGradingScale({
+    required this.gradeLevelId,
+    required this.gradeLevelName,
+    required this.items,
+  });
+
+  final int gradeLevelId;
+  final String gradeLevelName;
+  final List<AssessmentGradingScaleItem> items;
+}
+
+class AssessmentGradingScaleItem {
+  const AssessmentGradingScaleItem({
+    required this.grade,
+    required this.descriptor,
+    required this.minPercentage,
+    required this.maxPercentage,
+    required this.displayOrder,
+  });
+
+  final String grade;
+  final String descriptor;
+  final double minPercentage;
+  final double maxPercentage;
+  final int displayOrder;
+}
+
 class AssessmentFormSetup {
   const AssessmentFormSetup({
     required this.streams,
@@ -1104,10 +1376,14 @@ class AssessmentStreamOption {
   final String streamName;
   final int studentCount;
 
-  String get label => [
-    gradeName,
-    streamName,
-  ].where((part) => part.trim().isNotEmpty).join(' - ');
+  String get label {
+    final grade = gradeName.trim();
+    final stream = streamName.trim();
+    if (grade.isEmpty) return stream;
+    if (stream.isEmpty) return grade;
+    if (stream.toLowerCase().startsWith(grade.toLowerCase())) return stream;
+    return '$grade - $stream';
+  }
 }
 
 class AssessmentSubjectOption {

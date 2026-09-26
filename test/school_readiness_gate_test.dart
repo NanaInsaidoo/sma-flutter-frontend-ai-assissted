@@ -179,6 +179,12 @@ class _TrackingDashboardRepository implements DashboardRepository {
   Future<List<CalendarEventType>> getCalendarEventTypes() async => const [];
 
   @override
+  Future<List<CalendarEventChange>> getCalendarEventHistory({
+    required String schoolId,
+    required String eventId,
+  }) async => const [];
+
+  @override
   Future<SchoolEvent> createCalendarEvent({
     required String schoolId,
     required CalendarEventPayload event,

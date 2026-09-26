@@ -6,20 +6,6 @@ import '../domain/attendance_models.dart';
 
 enum _AttendanceFilter { all, present, absent, late, unmarked }
 
-class _StudentAttentionItem {
-  const _StudentAttentionItem({
-    required this.student,
-    required this.label,
-    required this.detail,
-    required this.color,
-  });
-
-  final AttendanceStudent student;
-  final String label;
-  final String detail;
-  final Color color;
-}
-
 class AttendanceScreen extends StatefulWidget {
   const AttendanceScreen({
     super.key,
@@ -33,6 +19,7 @@ class AttendanceScreen extends StatefulWidget {
     this.initialStreamId,
     this.initialDate,
     this.onBack,
+    this.onOpenCalendar,
     this.showClassSelectors = true,
   });
 
@@ -46,6 +33,7 @@ class AttendanceScreen extends StatefulWidget {
   final int? initialStreamId;
   final DateTime? initialDate;
   final VoidCallback? onBack;
+  final VoidCallback? onOpenCalendar;
   final bool showClassSelectors;
 
   @override
@@ -59,16 +47,23 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   List<AttendanceGradeLevel> _grades = const [];
   List<AttendanceStream> _streams = const [];
   List<AttendanceEntry> _entries = const [];
+  List<AttendanceEntry> _originalEntries = const [];
+  List<AttendanceLateConcern> _lateConcerns = const [];
   AttendanceGradeLevel? _selectedGrade;
   AttendanceStream? _selectedStream;
   DateTime _selectedDate = DateUtils.dateOnly(DateTime.now());
   _AttendanceFilter _filter = _AttendanceFilter.all;
   bool _loadingOptions = true;
   bool _loadingRoster = false;
+  bool _loadingAttention = false;
   bool _saving = false;
   bool _hasExistingAttendance = false;
+  bool _editingSubmitted = false;
+  AttendanceEntryContext? _entryContext;
   String? _optionsError;
   String? _rosterError;
+  String? _attentionError;
+  final Set<String> _escalatingStudentIds = {};
 
   @override
   void initState() {
@@ -127,6 +122,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       _streams = const [];
       _selectedStream = null;
       _entries = const [];
+      _originalEntries = const [];
+      _lateConcerns = const [];
+      _editingSubmitted = false;
+      _entryContext = null;
+      _attentionError = null;
       _rosterError = null;
       _loadingOptions = true;
     });
@@ -164,18 +164,30 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       _entries = const [];
     });
     try {
-      final roster = await _repository.getRoster(
-        customSchoolId: widget.customSchoolId,
-        gradeLevelId: grade.id,
-        streamId: stream.id,
-        date: _selectedDate,
-      );
+      final results = await Future.wait([
+        _repository.getRoster(
+          customSchoolId: widget.customSchoolId,
+          gradeLevelId: grade.id,
+          streamId: stream.id,
+          date: _selectedDate,
+        ),
+        _repository.getEntryContext(
+          customSchoolId: widget.customSchoolId,
+          streamId: stream.id,
+          date: _selectedDate,
+        ),
+      ]);
+      final roster = results[0] as AttendanceRoster;
+      final entryContext = results[1] as AttendanceEntryContext;
       final records = {
         for (final record in roster.records) record.customStudentId: record,
       };
       if (!mounted) return;
       setState(() {
-        _hasExistingAttendance = roster.hasExistingAttendance;
+        _hasExistingAttendance =
+            roster.hasExistingAttendance || entryContext.submitted;
+        _editingSubmitted = false;
+        _entryContext = entryContext;
         _entries = roster.students.map((student) {
           final record = records[student.customStudentId];
           return AttendanceEntry(
@@ -186,12 +198,48 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
             remarks: record?.remarks ?? '',
           );
         }).toList();
+        _originalEntries = [..._entries];
       });
+      await _loadLateConcerns(grade, stream);
     } catch (error) {
       if (!mounted) return;
       setState(() => _rosterError = '$error');
     } finally {
       if (mounted) setState(() => _loadingRoster = false);
+    }
+  }
+
+  Future<void> _loadLateConcerns(
+    AttendanceGradeLevel grade,
+    AttendanceStream stream,
+  ) async {
+    if (mounted) {
+      setState(() {
+        _loadingAttention = true;
+        _attentionError = null;
+      });
+    }
+    try {
+      final concerns = await _repository.getLateConcerns(
+        customSchoolId: widget.customSchoolId,
+        gradeLevelId: grade.id,
+        streamId: stream.id,
+        date: _selectedDate,
+      );
+      if (!mounted ||
+          _selectedGrade?.id != grade.id ||
+          _selectedStream?.id != stream.id) {
+        return;
+      }
+      setState(() => _lateConcerns = concerns);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _lateConcerns = const [];
+        _attentionError = '$error';
+      });
+    } finally {
+      if (mounted) setState(() => _loadingAttention = false);
     }
   }
 
@@ -211,6 +259,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                 _header(),
                 const SizedBox(height: 14),
                 _attendanceDateBanner(),
+                if (_entryContext?.schoolDay == false) ...[
+                  const SizedBox(height: 12),
+                  _nonSchoolDayBanner(),
+                ],
                 if (widget.showClassSelectors) ...[
                   const SizedBox(height: 20),
                   _selectionCard(),
@@ -302,10 +354,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           ),
         ),
         if (_hasExistingAttendance && !_loadingRoster)
-          const _StatusPill(
-            label: 'Attendance recorded',
-            color: AppColors.green,
-            background: AppColors.greenSoft,
+          _StatusPill(
+            label: _registerStatusLabel,
+            color: _registerStatusColor,
+            background: _registerStatusColor.withValues(alpha: .1),
           ),
       ],
     );
@@ -367,17 +419,18 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   }
 
   Widget _attendanceDateBanner() {
-    final today = DateUtils.dateOnly(DateTime.now());
+    final today = DateUtils.dateOnly(
+      _entryContext?.currentDate ?? DateTime.now(),
+    );
     final selected = DateUtils.dateOnly(_selectedDate);
+    final future = selected.isAfter(today);
     final relation = selected == today
         ? 'Today'
         : selected.isBefore(today)
         ? 'Past attendance date'
         : 'Future attendance date';
-    final color = selected.isAfter(today) ? AppColors.amber : AppColors.green;
-    final background = selected.isAfter(today)
-        ? const Color(0xFFFFF7E7)
-        : AppColors.greenSoft;
+    final color = future ? AppColors.amber : AppColors.green;
+    final background = future ? const Color(0xFFFFF7E7) : AppColors.greenSoft;
     return Semantics(
       container: true,
       label: 'Attendance date ${_friendlyDate(_selectedDate)}',
@@ -423,6 +476,18 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                       fontSize: 12,
                     ),
                   ),
+                  if (future) ...[
+                    const SizedBox(height: 3),
+                    const Text(
+                      'You can view the class, but attendance cannot be marked or submitted for a future date.',
+                      key: ValueKey('future-attendance-blocked-message'),
+                      style: TextStyle(
+                        color: AppColors.amber,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -438,9 +503,47 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     );
   }
 
+  Widget _nonSchoolDayBanner() {
+    final message = _entryContext?.calendarMessage.trim();
+    return Container(
+      key: const ValueKey('non-school-day-banner'),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF0F0),
+        border: Border.all(color: AppColors.red.withValues(alpha: .3)),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 12,
+        runSpacing: 8,
+        children: [
+          const Icon(Icons.event_busy_outlined, color: AppColors.red),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 850),
+            child: Text(
+              message?.isNotEmpty == true
+                  ? message!
+                  : 'This date is not an official school day per the school calendar.',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+          TextButton.icon(
+            key: const ValueKey('view-non-school-days'),
+            onPressed: widget.onOpenCalendar,
+            icon: const Icon(Icons.calendar_month_outlined, size: 18),
+            label: const Text('View non-school days'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _gradeDropdown() {
     return DropdownButtonFormField<int>(
       key: ValueKey('grade-${_selectedGrade?.id}'),
+      isExpanded: true,
       value: _selectedGrade?.id,
       decoration: const InputDecoration(labelText: 'Grade level'),
       hint: const Text('Select grade level'),
@@ -464,6 +567,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   Widget _streamDropdown() {
     return DropdownButtonFormField<int>(
       key: ValueKey('stream-${_selectedStream?.id}-${_streams.length}'),
+      isExpanded: true,
       value: _selectedStream?.id,
       decoration: const InputDecoration(labelText: 'Class stream'),
       hint: Text(
@@ -552,6 +656,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   }
 
   Widget _rosterCard() {
+    final canEdit = _canEditAttendance;
     return Card(
       child: Column(
         children: [
@@ -582,27 +687,98 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                     ),
                   ],
                 ),
+                if (_hasExistingAttendance) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 13,
+                      vertical: 11,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _editingSubmitted
+                          ? const Color(0xFFFFF7E8)
+                          : const Color(0xFFF3F6F5),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          _editingSubmitted
+                              ? Icons.edit_outlined
+                              : Icons.lock_outline_rounded,
+                          size: 18,
+                          color: _editingSubmitted
+                              ? AppColors.amber
+                              : AppColors.muted,
+                        ),
+                        const SizedBox(width: 9),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _editingSubmitted
+                                    ? 'Editing submitted attendance. A reason is required when you save changes.'
+                                    : 'Submitted attendance is read-only. Select Edit attendance before making changes.',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              if (!_editingSubmitted &&
+                                  _entryContext?.registerStatus ==
+                                      AttendanceRegisterStatus.complete) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  _entryContext!.acknowledgedBy.isEmpty
+                                      ? 'Acknowledged by school management.'
+                                      : 'Acknowledged by ${_entryContext!.acknowledgedBy}.',
+                                  style: const TextStyle(
+                                    color: AppColors.green,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                if (_entryContext!
+                                    .acknowledgmentNote
+                                    .isNotEmpty)
+                                  Text(
+                                    'Note: ${_entryContext!.acknowledgmentNote}',
+                                    style: const TextStyle(
+                                      color: AppColors.muted,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 14),
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
                   children: [
                     OutlinedButton.icon(
-                      onPressed: _entries.isEmpty
+                      onPressed: _entries.isEmpty || !canEdit
                           ? null
                           : () => _markAll(AttendanceMark.present),
                       icon: const Icon(Icons.done_all_rounded, size: 18),
                       label: const Text('Mark all present'),
                     ),
                     OutlinedButton.icon(
-                      onPressed: _entries.isEmpty
+                      onPressed: _entries.isEmpty || !canEdit
                           ? null
                           : () => _markAll(AttendanceMark.absent),
                       icon: const Icon(Icons.person_off_outlined, size: 18),
                       label: const Text('Mark all absent'),
                     ),
                     TextButton.icon(
-                      onPressed: _entries.isEmpty
+                      onPressed: _entries.isEmpty || !canEdit
                           ? null
                           : () => _markAll(AttendanceMark.unmarked),
                       icon: const Icon(Icons.restart_alt_rounded, size: 18),
@@ -771,7 +947,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
             tooltip: 'Present',
             color: AppColors.green,
             selected: entry.mark == AttendanceMark.present,
-            onTap: () => _setMark(index, AttendanceMark.present),
+            onTap: _canEditAttendance
+                ? () => _setMark(index, AttendanceMark.present)
+                : null,
           ),
           const SizedBox(width: 7),
           _MarkButton(
@@ -779,7 +957,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
             tooltip: 'Absent',
             color: AppColors.red,
             selected: entry.mark == AttendanceMark.absent,
-            onTap: () => _setMark(index, AttendanceMark.absent),
+            onTap: _canEditAttendance
+                ? () => _setMark(index, AttendanceMark.absent)
+                : null,
           ),
           const SizedBox(width: 7),
           _MarkButton(
@@ -787,7 +967,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
             tooltip: 'Late',
             color: AppColors.amber,
             selected: entry.mark == AttendanceMark.late,
-            onTap: () => _markLate(index),
+            onTap: _canEditAttendance ? () => _markLate(index) : null,
           ),
         ],
       ),
@@ -796,6 +976,18 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
   Widget _submitBar() {
     final complete = _unmarkedCount() == 0;
+    final readOnly = _hasExistingAttendance && !_editingSubmitted;
+    final blockedMessage = _entryContext == null
+        ? 'Checking attendance rules...'
+        : _entryContext!.futureDate
+        ? 'Attendance cannot be taken for a future date.'
+        : !_entryContext!.schoolDay
+        ? 'Attendance cannot be taken because this is not an official school day.'
+        : readOnly
+        ? 'This submitted register is read-only.'
+        : _hasExistingAttendance && !_hasAttendanceChanges
+        ? 'Make a change before saving this register.'
+        : null;
     return Padding(
       padding: const EdgeInsets.all(20),
       child: Row(
@@ -805,9 +997,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  complete
-                      ? 'All students have been marked.'
-                      : 'Mark ${_unmarkedCount()} more student${_unmarkedCount() == 1 ? '' : 's'} to submit.',
+                  blockedMessage ??
+                      (complete
+                          ? 'All students have been marked.'
+                          : 'Mark ${_unmarkedCount()} more student${_unmarkedCount() == 1 ? '' : 's'} to submit.'),
                   style: TextStyle(
                     color: complete ? AppColors.green : AppColors.muted,
                     fontWeight: FontWeight.w600,
@@ -825,38 +1018,108 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
               ],
             ),
           ),
-          OutlinedButton(
-            onPressed: _entries.isEmpty ? null : _retainDraft,
-            child: const Text('Save draft'),
-          ),
-          const SizedBox(width: 10),
-          FilledButton.icon(
-            key: const ValueKey('submit-attendance'),
-            onPressed: complete && !_saving ? () => _saveAttendance() : null,
-            icon: _saving
-                ? const SizedBox.square(
-                    dimension: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : Icon(
-                    _hasExistingAttendance
-                        ? Icons.sync_rounded
-                        : Icons.check_rounded,
-                  ),
-            label: Text(
-              _saving
-                  ? 'Saving...'
-                  : _hasExistingAttendance
-                  ? 'Update attendance'
-                  : 'Submit attendance',
+          if (readOnly)
+            FilledButton.icon(
+              key: const ValueKey('edit-submitted-attendance'),
+              onPressed: _canOpenSubmittedForEditing
+                  ? () => setState(() => _editingSubmitted = true)
+                  : null,
+              icon: const Icon(Icons.edit_outlined),
+              label: const Text('Edit attendance'),
+            )
+          else ...[
+            if (_hasExistingAttendance)
+              OutlinedButton(
+                onPressed: _saving ? null : _cancelSubmittedEdit,
+                child: const Text('Cancel edit'),
+              )
+            else
+              OutlinedButton(
+                onPressed: _entries.isEmpty || !_canEditAttendance
+                    ? null
+                    : _retainDraft,
+                child: const Text('Save draft'),
+              ),
+            const SizedBox(width: 10),
+            FilledButton.icon(
+              key: const ValueKey('submit-attendance'),
+              onPressed:
+                  complete &&
+                      !_saving &&
+                      _canEditAttendance &&
+                      (!_hasExistingAttendance || _hasAttendanceChanges)
+                  ? () => _prepareAttendanceSubmission()
+                  : null,
+              icon: _saving
+                  ? const SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(
+                      _hasExistingAttendance
+                          ? Icons.save_outlined
+                          : Icons.check_rounded,
+                    ),
+              label: Text(
+                _saving
+                    ? 'Saving...'
+                    : _hasExistingAttendance
+                    ? 'Save changes'
+                    : 'Submit attendance',
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );
   }
 
-  Future<void> _saveAttendance({String? vacationOverrideReason}) async {
+  Future<void> _prepareAttendanceSubmission() async {
+    final entryContext = _entryContext;
+    if (entryContext == null ||
+        entryContext.futureDate ||
+        !entryContext.schoolDay) {
+      return;
+    }
+    if (_hasExistingAttendance &&
+        (!_editingSubmitted || !_hasAttendanceChanges)) {
+      return;
+    }
+
+    var permissionAffirmed = false;
+    String? authorizationStatement;
+    if (entryContext.permissionAffirmationRequired) {
+      final affirmed = await _requestPermissionAffirmation();
+      if (affirmed != true || !mounted) return;
+      permissionAffirmed = true;
+      authorizationStatement =
+          'I confirm that I have the proper authorization to take attendance for this class.';
+    }
+
+    String? correctionReason;
+    if (_hasExistingAttendance) {
+      correctionReason = await _requestCorrectionReason();
+      if (correctionReason == null || !mounted) return;
+    } else if (_selectedDate.isBefore(
+      DateUtils.dateOnly(entryContext.currentDate),
+    )) {
+      correctionReason = await _requestPastAttendanceReason();
+      if (correctionReason == null || !mounted) return;
+    }
+
+    await _saveAttendance(
+      permissionAffirmed: permissionAffirmed,
+      authorizationStatement: authorizationStatement,
+      correctionReason: correctionReason,
+    );
+  }
+
+  Future<void> _saveAttendance({
+    String? vacationOverrideReason,
+    bool permissionAffirmed = false,
+    String? authorizationStatement,
+    String? correctionReason,
+  }) async {
     final grade = _selectedGrade;
     final stream = _selectedStream;
     if (grade == null || stream == null || _unmarkedCount() != 0) return;
@@ -870,6 +1133,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         entries: _entries,
         updateExisting: _hasExistingAttendance,
         vacationOverrideReason: vacationOverrideReason,
+        permissionAffirmed: permissionAffirmed,
+        authorizationStatement: authorizationStatement,
+        correctionReason: correctionReason,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -889,7 +1155,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         setState(() => _saving = false);
         final reason = await _requestVacationOverrideReason(error.toString());
         if (reason != null && mounted) {
-          await _saveAttendance(vacationOverrideReason: reason);
+          await _saveAttendance(
+            vacationOverrideReason: reason,
+            permissionAffirmed: permissionAffirmed,
+            authorizationStatement: authorizationStatement,
+            correctionReason: correctionReason,
+          );
         }
         return;
       }
@@ -901,31 +1172,30 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     }
   }
 
-  Future<String?> _requestVacationOverrideReason(String warning) async {
-    final controller = TextEditingController();
-    String? validation;
-    final result = await showDialog<String>(
+  Future<bool?> _requestPermissionAffirmation() async {
+    var affirmed = false;
+    return showDialog<bool>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          icon: const Icon(Icons.warning_amber_rounded, color: Colors.orange),
-          title: const Text('Teaching has not started'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(warning.replaceFirst('AttendanceApiException: ', '')),
-              const SizedBox(height: 16),
-              TextField(
-                controller: controller,
-                autofocus: true,
-                maxLines: 3,
-                decoration: InputDecoration(
-                  labelText: 'Reason for recording attendance early',
-                  errorText: validation,
-                ),
+          icon: const Icon(
+            Icons.verified_user_outlined,
+            color: AppColors.green,
+          ),
+          title: const Text('Confirm authorization'),
+          content: SizedBox(
+            width: 480,
+            child: CheckboxListTile(
+              key: const ValueKey('attendance-permission-affirmation'),
+              value: affirmed,
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: const Text(
+                'I confirm that I have the proper authorization to take attendance for this class.',
               ),
-            ],
+              onChanged: (value) =>
+                  setDialogState(() => affirmed = value == true),
+            ),
           ),
           actions: [
             TextButton(
@@ -933,22 +1203,63 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
               child: const Text('Cancel'),
             ),
             FilledButton(
-              onPressed: () {
-                final value = controller.text.trim();
-                if (value.length < 5) {
-                  setDialogState(() => validation = 'Enter a clear reason.');
-                  return;
-                }
-                Navigator.pop(dialogContext, value);
-              },
-              child: const Text('Continue and record'),
+              key: const ValueKey('confirm-attendance-permission'),
+              onPressed: affirmed
+                  ? () => Navigator.pop(dialogContext, true)
+                  : null,
+              child: const Text('Confirm and Submit'),
             ),
           ],
         ),
       ),
     );
-    controller.dispose();
-    return result;
+  }
+
+  Future<String?> _requestPastAttendanceReason() {
+    return showDialog<String>(
+      context: context,
+      builder: (_) => const _AttendanceReasonDialog(
+        icon: Icons.history_rounded,
+        iconColor: AppColors.amber,
+        title: 'Reason for past attendance',
+        fieldKey: ValueKey('past-attendance-reason'),
+        confirmKey: ValueKey('confirm-past-attendance-reason'),
+        label: 'Reason for late entry or correction',
+        helper: 'This reason will be kept in the audit trail.',
+        actionLabel: 'Continue',
+      ),
+    );
+  }
+
+  Future<String?> _requestCorrectionReason() {
+    return showDialog<String>(
+      context: context,
+      builder: (_) => const _AttendanceReasonDialog(
+        icon: Icons.edit_note_rounded,
+        iconColor: AppColors.amber,
+        title: 'Reason for attendance change',
+        fieldKey: ValueKey('attendance-change-reason'),
+        confirmKey: ValueKey('confirm-attendance-change-reason'),
+        label: 'What changed and why?',
+        helper:
+            'The reason, changes, your identity, and time will be kept in the audit trail.',
+        actionLabel: 'Save changes',
+      ),
+    );
+  }
+
+  Future<String?> _requestVacationOverrideReason(String warning) {
+    return showDialog<String>(
+      context: context,
+      builder: (_) => _AttendanceReasonDialog(
+        icon: Icons.warning_amber_rounded,
+        iconColor: Colors.orange,
+        title: 'Teaching has not started',
+        warning: warning.replaceFirst('AttendanceApiException: ', ''),
+        label: 'Reason for recording attendance early',
+        actionLabel: 'Continue and record',
+      ),
+    );
   }
 
   void _markAll(AttendanceMark mark) {
@@ -972,9 +1283,15 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     );
   }
 
+  void _cancelSubmittedEdit() {
+    setState(() {
+      _entries = [..._originalEntries];
+      _editingSubmitted = false;
+    });
+  }
+
   Widget _attentionPanel({bool horizontal = false}) {
-    final concerns = _attentionItems();
-    final cards = concerns.map((concern) {
+    final cards = _lateConcerns.map((concern) {
       return Container(
         width: horizontal ? 250 : double.infinity,
         decoration: BoxDecoration(
@@ -982,22 +1299,17 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           border: Border.all(color: AppColors.border),
           borderRadius: BorderRadius.circular(12),
         ),
-        child: InkWell(
-          key: ValueKey(
-            'attention-${concern.student.customStudentId}-${concern.label}',
-          ),
-          borderRadius: BorderRadius.circular(12),
-          onTap: () => _focusStudent(concern.student),
-          child: Padding(
-            padding: const EdgeInsets.all(13),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        padding: const EdgeInsets.all(13),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               children: [
                 CircleAvatar(
                   radius: 18,
-                  backgroundColor: concern.color,
+                  backgroundColor: AppColors.amber,
                   child: Text(
-                    _initials(concern.student.fullName),
+                    _initials(concern.fullName),
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 10,
@@ -1007,57 +1319,52 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        concern.student.fullName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                      const SizedBox(height: 7),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: concern.color.withValues(alpha: 0.11),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          concern.label,
-                          style: TextStyle(
-                            color: concern.color,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 7),
-                      Text(
-                        concern.detail,
-                        style: const TextStyle(
-                          color: AppColors.muted,
-                          fontSize: 11,
-                          height: 1.35,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const Padding(
-                  padding: EdgeInsets.only(top: 2),
-                  child: Icon(
-                    Icons.chevron_right_rounded,
-                    size: 18,
-                    color: AppColors.muted,
+                  child: Text(
+                    concern.fullName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                 ),
               ],
             ),
-          ),
+            const SizedBox(height: 10),
+            Text(
+              'Late for ${concern.consecutiveLateDays} consecutive school days',
+              style: const TextStyle(color: AppColors.muted, fontSize: 12),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: concern.escalated
+                  ? OutlinedButton.icon(
+                      onPressed: null,
+                      icon: const Icon(Icons.check_rounded, size: 17),
+                      label: const Text('Escalated'),
+                    )
+                  : OutlinedButton.icon(
+                      key: ValueKey(
+                        'escalate-lateness-${concern.customStudentId}',
+                      ),
+                      onPressed:
+                          _escalatingStudentIds.contains(
+                            concern.customStudentId,
+                          )
+                          ? null
+                          : () => _escalateLateness(concern),
+                      icon:
+                          _escalatingStudentIds.contains(
+                            concern.customStudentId,
+                          )
+                          ? const SizedBox.square(
+                              dimension: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.arrow_upward_rounded, size: 17),
+                      label: const Text('Escalate to headmaster'),
+                    ),
+            ),
+          ],
         ),
       );
     }).toList();
@@ -1082,17 +1389,31 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
             ),
             const SizedBox(height: 5),
             const Text(
-              'Attendance patterns that may need follow-up.',
+              'Only students late on 2 or more consecutive school days.',
               style: TextStyle(color: AppColors.muted, fontSize: 12),
             ),
             const SizedBox(height: 14),
-            if (cards.isEmpty)
+            if (_loadingAttention)
+              const LinearProgressIndicator(minHeight: 2)
+            else if (_attentionError != null)
+              TextButton.icon(
+                onPressed: () {
+                  final grade = _selectedGrade;
+                  final stream = _selectedStream;
+                  if (grade != null && stream != null) {
+                    _loadLateConcerns(grade, stream);
+                  }
+                },
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('Retry repeated lateness'),
+              )
+            else if (cards.isEmpty)
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(vertical: 24),
                 alignment: Alignment.center,
                 child: const Text(
-                  'No concerns yet.',
+                  'No repeated lateness.',
                   style: TextStyle(color: AppColors.muted),
                 ),
               )
@@ -1106,36 +1427,58 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     );
   }
 
-  List<_StudentAttentionItem> _attentionItems() {
-    if (_entries.isEmpty) return const [];
-
-    final items = <_StudentAttentionItem>[];
-    final currentConcernIds = <String>{};
-    for (final entry in _entries) {
-      if (entry.mark != AttendanceMark.absent &&
-          entry.mark != AttendanceMark.late) {
-        continue;
-      }
-      currentConcernIds.add(entry.student.customStudentId);
-      final absent = entry.mark == AttendanceMark.absent;
-      items.add(
-        _StudentAttentionItem(
-          student: entry.student,
-          label: absent ? 'Absent today' : 'Late today',
-          detail: absent
-              ? 'Marked absent in today\'s register.'
-              : 'Arrived ${entry.minutesLate} minutes late today.',
-          color: absent ? AppColors.red : AppColors.amber,
-        ),
+  Future<void> _escalateLateness(AttendanceLateConcern concern) async {
+    final note = await showDialog<String>(
+      context: context,
+      builder: (_) => const _AttendanceReasonDialog(
+        icon: Icons.arrow_upward_rounded,
+        iconColor: AppColors.amber,
+        title: 'Escalate to headmaster',
+        fieldKey: ValueKey('lateness-escalation-note'),
+        confirmKey: ValueKey('confirm-lateness-escalation'),
+        label: 'Note for the headmaster',
+        helper:
+            'Briefly explain the repeated lateness or any follow-up already made.',
+        actionLabel: 'Escalate',
+      ),
+    );
+    if (note == null || !mounted) return;
+    final grade = _selectedGrade;
+    final stream = _selectedStream;
+    if (grade == null || stream == null) return;
+    setState(() => _escalatingStudentIds.add(concern.customStudentId));
+    try {
+      final updated = await _repository.escalateLateConcern(
+        customSchoolId: widget.customSchoolId,
+        gradeLevelId: grade.id,
+        streamId: stream.id,
+        customStudentId: concern.customStudentId,
+        date: _selectedDate,
+        note: note,
       );
+      if (!mounted) return;
+      setState(() {
+        _lateConcerns = [
+          for (final item in _lateConcerns)
+            if (item.customStudentId == updated.customStudentId)
+              updated
+            else
+              item,
+        ];
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Escalated to the headmaster.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not escalate repeated lateness. $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _escalatingStudentIds.remove(concern.customStudentId));
+      }
     }
-
-    return items;
-  }
-
-  void _focusStudent(AttendanceStudent student) {
-    _searchController.text = student.fullName;
-    setState(() => _filter = _AttendanceFilter.all);
   }
 
   static Color _markColor(AttendanceMark mark) => switch (mark) {
@@ -1187,6 +1530,52 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   int _count(AttendanceMark mark) =>
       _entries.where((entry) => entry.mark == mark).length;
   int _unmarkedCount() => _count(AttendanceMark.unmarked);
+
+  bool get _canEditAttendance {
+    final entryContext = _entryContext;
+    return entryContext != null &&
+        !entryContext.futureDate &&
+        entryContext.schoolDay &&
+        (!_hasExistingAttendance || _editingSubmitted);
+  }
+
+  bool get _canOpenSubmittedForEditing {
+    final entryContext = _entryContext;
+    return entryContext != null &&
+        !entryContext.futureDate &&
+        entryContext.schoolDay &&
+        !_saving;
+  }
+
+  bool get _hasAttendanceChanges {
+    if (_entries.length != _originalEntries.length) return true;
+    for (var index = 0; index < _entries.length; index++) {
+      final current = _entries[index];
+      final original = _originalEntries[index];
+      if (current.student.customStudentId != original.student.customStudentId ||
+          current.mark != original.mark ||
+          current.minutesLate != original.minutesLate ||
+          current.remarks != original.remarks) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  String get _registerStatusLabel => switch (_entryContext?.registerStatus) {
+    AttendanceRegisterStatus.complete => 'Complete',
+    AttendanceRegisterStatus.nonSchoolDay => 'Non-school day',
+    AttendanceRegisterStatus.awaitingAcknowledgment =>
+      'Awaiting acknowledgment',
+    _ => 'Submitted',
+  };
+
+  Color get _registerStatusColor => switch (_entryContext?.registerStatus) {
+    AttendanceRegisterStatus.complete => AppColors.green,
+    AttendanceRegisterStatus.nonSchoolDay => AppColors.muted,
+    AttendanceRegisterStatus.awaitingAcknowledgment => AppColors.amber,
+    _ => AppColors.blue,
+  };
 
   Widget _inlineError(String message, VoidCallback retry) {
     return Container(
@@ -1345,7 +1734,7 @@ class _MarkButton extends StatelessWidget {
   final String tooltip;
   final Color color;
   final bool selected;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -1360,14 +1749,28 @@ class _MarkButton extends StatelessWidget {
           height: 38,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: selected ? color : Colors.white,
-            border: Border.all(color: selected ? color : AppColors.border),
+            color: onTap == null
+                ? const Color(0xFFF4F5F5)
+                : selected
+                ? color
+                : Colors.white,
+            border: Border.all(
+              color: onTap == null
+                  ? AppColors.border
+                  : selected
+                  ? color
+                  : AppColors.border,
+            ),
             borderRadius: BorderRadius.circular(9),
           ),
           child: Text(
             label,
             style: TextStyle(
-              color: selected ? Colors.white : AppColors.muted,
+              color: onTap == null
+                  ? AppColors.muted.withValues(alpha: .55)
+                  : selected
+                  ? Colors.white
+                  : AppColors.muted,
               fontWeight: FontWeight.w800,
             ),
           ),
@@ -1400,6 +1803,96 @@ class _StatusPill extends StatelessWidget {
         label,
         style: TextStyle(color: color, fontWeight: FontWeight.w700),
       ),
+    );
+  }
+}
+
+class _AttendanceReasonDialog extends StatefulWidget {
+  const _AttendanceReasonDialog({
+    required this.icon,
+    required this.iconColor,
+    required this.title,
+    required this.label,
+    required this.actionLabel,
+    this.warning,
+    this.helper,
+    this.fieldKey,
+    this.confirmKey,
+  });
+
+  final IconData icon;
+  final Color iconColor;
+  final String title;
+  final String label;
+  final String actionLabel;
+  final String? warning;
+  final String? helper;
+  final Key? fieldKey;
+  final Key? confirmKey;
+
+  @override
+  State<_AttendanceReasonDialog> createState() =>
+      _AttendanceReasonDialogState();
+}
+
+class _AttendanceReasonDialogState extends State<_AttendanceReasonDialog> {
+  final _controller = TextEditingController();
+  String? _validation;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      icon: Icon(widget.icon, color: widget.iconColor),
+      title: Text(widget.title),
+      content: SizedBox(
+        width: 460,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (widget.warning?.isNotEmpty == true) ...[
+              Text(widget.warning!),
+              const SizedBox(height: 16),
+            ],
+            TextField(
+              key: widget.fieldKey,
+              controller: _controller,
+              autofocus: true,
+              maxLength: 1000,
+              maxLines: 3,
+              decoration: InputDecoration(
+                labelText: widget.label,
+                helperText: widget.helper,
+                errorText: _validation,
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          key: widget.confirmKey,
+          onPressed: () {
+            final value = _controller.text.trim();
+            if (value.length < 5) {
+              setState(() => _validation = 'Enter a clear reason.');
+              return;
+            }
+            Navigator.pop(context, value);
+          },
+          child: Text(widget.actionLabel),
+        ),
+      ],
     );
   }
 }

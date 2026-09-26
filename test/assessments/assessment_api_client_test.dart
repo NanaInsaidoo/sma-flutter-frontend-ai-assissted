@@ -249,6 +249,28 @@ void main() {
       expect(readiness['totalStudents'], 2);
     });
 
+    test('loads the active backend grading scale by grade level', () async {
+      late http.Request request;
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((value) async {
+          request = value;
+          return http.Response(
+            '{"gradeLevelId":3,"gradeLevelName":"Basic 1","items":[{"grade":"HP","minPercentage":80,"maxPercentage":100,"descriptor":"Highly Proficient","displayOrder":1},{"grade":"P","minPercentage":66,"maxPercentage":79.99,"descriptor":"Proficient","displayOrder":2}]}',
+            200,
+          );
+        }),
+      );
+
+      final scale = await api.getActiveGradingScale(gradeLevelId: 3);
+
+      expect(request.url.path, endsWith('/api/grading-scales/active'));
+      expect(request.url.queryParameters['gradeLevelId'], '3');
+      expect(scale.gradeLevelName, 'Basic 1');
+      expect(scale.items.map((item) => item.grade), ['HP', 'P']);
+      expect(scale.items.last.minPercentage, 66);
+    });
+
     test('loads grades and generates selected student reports', () async {
       final requests = <http.Request>[];
       final api = AssessmentApiClient(
@@ -536,6 +558,31 @@ void main() {
   });
 
   group('AssessmentApiClient term evaluations', () {
+    test(
+      'updates evaluation records from the current teaching setup',
+      () async {
+        late http.Request request;
+        final api = AssessmentApiClient(
+          accessToken: 'test-token',
+          client: MockClient((value) async {
+            request = value;
+            return http.Response('{"assignmentsCreated":1}', 200);
+          }),
+        );
+
+        final result = await api.syncTermEvaluations(
+          schoolId: 'SCHOOL-1',
+          termId: 7,
+        );
+
+        expect(request.method, 'POST');
+        expect(request.url.path, endsWith('/term-evaluations/sync'));
+        expect(request.url.queryParameters['customSchoolId'], 'SCHOOL-1');
+        expect(request.url.queryParameters['termId'], '7');
+        expect(result['assignmentsCreated'], 1);
+      },
+    );
+
     test('loads an assignment with its saved student ratings', () async {
       late http.Request request;
       final api = AssessmentApiClient(
@@ -594,6 +641,29 @@ void main() {
       },
     );
 
+    test('clears every response in an evaluation assignment', () async {
+      late http.Request request;
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((value) async {
+          request = value;
+          return http.Response('', 204);
+        }),
+      );
+
+      await api.clearTermEvaluationAssignment(
+        assignmentId: 14,
+        schoolId: 'SCHOOL-1',
+      );
+
+      expect(request.method, 'DELETE');
+      expect(
+        request.url.path,
+        endsWith('/term-evaluations/assignments/14/responses'),
+      );
+      expect(request.url.queryParameters['customSchoolId'], 'SCHOOL-1');
+    });
+
     test('finalizes the class-teacher wording and comment', () async {
       late http.Request request;
       final api = AssessmentApiClient(
@@ -619,6 +689,82 @@ void main() {
       expect(request.url.queryParameters['staffId'], 'CLASS-1');
       expect(request.body, contains('"ATTENTIVENESS":"Excellent"'));
       expect(request.body, contains('"comment":"Consistent progress."'));
+    });
+
+    test('saves a student comment without sending it to leadership', () async {
+      late http.Request request;
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((value) async {
+          request = value;
+          return http.Response('{"status":"COMMENTS_IN_PROGRESS"}', 200);
+        }),
+      );
+
+      await api.saveTermEvaluationComment(
+        studentId: 'STU/1',
+        schoolId: 'SCHOOL-1',
+        termId: 7,
+        comment: 'Consistent progress.',
+      );
+
+      expect(request.method, 'PUT');
+      expect(request.url.path, endsWith('/students/STU%2F1/comment'));
+      expect(request.body, contains('"comment":"Consistent progress."'));
+    });
+
+    test('sends all saved class comments to leadership', () async {
+      late http.Request request;
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((value) async {
+          request = value;
+          return http.Response(
+            '{"status":"READY_FOR_LEADERSHIP","studentsSubmitted":2}',
+            200,
+          );
+        }),
+      );
+
+      final result = await api.submitTermEvaluationClassComments(
+        assignmentId: 14,
+        schoolId: 'SCHOOL-1',
+      );
+
+      expect(request.method, 'POST');
+      expect(
+        request.url.path,
+        endsWith('/term-evaluations/assignments/14/submit-comments'),
+      );
+      expect(result['studentsSubmitted'], 2);
+    });
+
+    test('bulk approves selected student evaluations', () async {
+      late http.Request request;
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((value) async {
+          request = value;
+          return http.Response(
+            '{"approved":2,"skipped":[],"requested":2}',
+            200,
+          );
+        }),
+      );
+
+      final result = await api.approveTermEvaluationLeadershipReviews(
+        schoolId: 'SCHOOL-1',
+        termId: 7,
+        studentIds: ['STU-1', 'STU-2'],
+      );
+
+      expect(request.method, 'POST');
+      expect(
+        request.url.path,
+        endsWith('/term-evaluations/leadership-review/approve-batch'),
+      );
+      expect(request.body, contains('STU-1'));
+      expect(result['approved'], 2);
     });
 
     test('sends an audited headmaster final-wording correction', () async {
@@ -683,5 +829,64 @@ void main() {
         expect(result['suggestion'], 'A positive comment.');
       },
     );
+  });
+
+  group('AssessmentApiClient report corrections', () {
+    test('submits the proposed score without directly changing it', () async {
+      late http.Request request;
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((value) async {
+          request = value;
+          return http.Response('{"id":4,"status":"PENDING"}', 200);
+        }),
+      );
+
+      final result = await api.requestReportScoreCorrection(
+        customSchoolId: 'SCHOOL-1',
+        studentId: 'STU-1',
+        assessmentId: 'ASM-1',
+        proposedScore: 18,
+        proposedRemarks: 'Corrected',
+        reason: 'Transcription error',
+        assignedApprover: 'head@example.com',
+      );
+
+      expect(request.method, 'POST');
+      expect(
+        request.url.path,
+        endsWith('/report-corrections/schools/SCHOOL-1/score-requests'),
+      );
+      expect(request.body, contains('"proposedScore":18.0'));
+      expect(request.body, contains('"reason":"Transcription error"'));
+      expect(request.body, contains('"assignedApprover":"head@example.com"'));
+      expect(result['status'], 'PENDING');
+    });
+
+    test('approves a correction and requests regeneration', () async {
+      late http.Request request;
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((value) async {
+          request = value;
+          return http.Response('{"id":4,"status":"APPROVED_REGENERATED"}', 200);
+        }),
+      );
+
+      final result = await api.decideReportCorrection(
+        customSchoolId: 'SCHOOL-1',
+        requestId: 4,
+        approve: true,
+        note: 'Verified',
+      );
+
+      expect(request.method, 'POST');
+      expect(
+        request.url.path,
+        endsWith('/report-corrections/schools/SCHOOL-1/4/approve'),
+      );
+      expect(request.body, contains('"note":"Verified"'));
+      expect(result['status'], 'APPROVED_REGENERATED');
+    });
   });
 }

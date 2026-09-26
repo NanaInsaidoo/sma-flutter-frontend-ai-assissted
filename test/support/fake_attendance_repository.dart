@@ -48,6 +48,7 @@ class FakeAttendanceRepository implements AttendanceRepository {
   @override
   Future<AttendanceDashboardOverview> getOverview(String customSchoolId) async {
     await _pause();
+    final currentDate = DateTime.now();
     final classes = streams
         .map(
           (stream) => AttendanceClassSummary(
@@ -68,7 +69,7 @@ class FakeAttendanceRepository implements AttendanceRepository {
         )
         .toList();
     return AttendanceDashboardOverview(
-      currentDate: DateTime.now(),
+      currentDate: currentDate,
       schoolDay: true,
       today: const AttendancePeriodSummary(
         attendanceRate: 0,
@@ -94,7 +95,62 @@ class FakeAttendanceRepository implements AttendanceRepository {
       classes: classes,
       alerts: const [],
       streamsPending: classes.length,
+      recentSchoolDates: _recentWeekdays(currentDate),
     );
+  }
+
+  @override
+  Future<List<AttendanceLateConcern>> getLateConcerns({
+    required String customSchoolId,
+    required int gradeLevelId,
+    required int streamId,
+    required DateTime date,
+  }) async => const [];
+
+  @override
+  Future<AttendanceLateConcern> escalateLateConcern({
+    required String customSchoolId,
+    required int gradeLevelId,
+    required int streamId,
+    required String customStudentId,
+    required DateTime date,
+    required String note,
+  }) => throw UnimplementedError('No repeated-lateness concerns in this fake.');
+
+  @override
+  Future<AttendanceDashboardOverview> getOverviewForDate(
+    String customSchoolId,
+    DateTime date,
+  ) async {
+    final overview = await getOverview(customSchoolId);
+    return AttendanceDashboardOverview(
+      currentDate: date,
+      schoolDay: date.weekday <= DateTime.friday,
+      today: overview.today,
+      week: overview.week,
+      month: overview.month,
+      classes: overview.classes,
+      alerts: overview.alerts,
+      streamsPending: overview.streamsPending,
+      recentSchoolDates: overview.recentSchoolDates,
+      calendarMessage: date.weekday <= DateTime.friday
+          ? ''
+          : 'This date is not an official school day per the school calendar.',
+    );
+  }
+
+  static List<DateTime> _recentWeekdays(DateTime today) {
+    final dates = <DateTime>[];
+    var date = DateTime(
+      today.year,
+      today.month,
+      today.day,
+    ).subtract(const Duration(days: 1));
+    while (dates.length < 5) {
+      if (date.weekday <= DateTime.friday) dates.add(date);
+      date = date.subtract(const Duration(days: 1));
+    }
+    return dates;
   }
 
   @override
@@ -145,6 +201,27 @@ class FakeAttendanceRepository implements AttendanceRepository {
   }
 
   @override
+  Future<AttendanceEntryContext> getEntryContext({
+    required String customSchoolId,
+    required int streamId,
+    required DateTime date,
+  }) async {
+    final submitted = _savedRecords.containsKey(_key(streamId, date));
+    return AttendanceEntryContext(
+      date: date,
+      currentDate: DateTime(date.year, date.month, date.day),
+      futureDate: false,
+      schoolDay: true,
+      assignedClassTeacher: true,
+      permissionAffirmationRequired: false,
+      submitted: submitted,
+      registerStatus: submitted
+          ? AttendanceRegisterStatus.awaitingAcknowledgment
+          : AttendanceRegisterStatus.notSubmitted,
+    );
+  }
+
+  @override
   Future<AttendanceTermHistory> getTermHistory({
     required String customSchoolId,
     required int gradeLevelId,
@@ -177,6 +254,14 @@ class FakeAttendanceRepository implements AttendanceRepository {
   }) async {}
 
   @override
+  Future<void> acknowledgeAttendance({
+    required String customSchoolId,
+    required DateTime date,
+    required List<int> streamIds,
+    String? note,
+  }) async {}
+
+  @override
   Future<void> saveAttendance({
     required String customSchoolId,
     required int gradeLevelId,
@@ -185,6 +270,9 @@ class FakeAttendanceRepository implements AttendanceRepository {
     required List<AttendanceEntry> entries,
     required bool updateExisting,
     String? vacationOverrideReason,
+    bool permissionAffirmed = false,
+    String? authorizationStatement,
+    String? correctionReason,
   }) async {
     await _pause();
     _savedRecords[_key(streamId, date)] = entries

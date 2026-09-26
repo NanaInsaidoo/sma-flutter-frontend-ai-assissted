@@ -6,7 +6,8 @@ import 'package:http/http.dart' as http;
 import '../../config/api_config.dart';
 import '../domain/attendance_models.dart';
 
-class AttendanceApiClient implements AttendanceRepository {
+class AttendanceApiClient
+    implements AttendanceRepository, AttendanceReportRepository {
   AttendanceApiClient({
     required this.accessToken,
     this.onRefreshAccessToken,
@@ -21,9 +22,28 @@ class AttendanceApiClient implements AttendanceRepository {
 
   @override
   Future<AttendanceDashboardOverview> getOverview(String customSchoolId) async {
+    return _getOverview(customSchoolId);
+  }
+
+  @override
+  Future<AttendanceDashboardOverview> getOverviewForDate(
+    String customSchoolId,
+    DateTime date,
+  ) async {
+    return _getOverview(customSchoolId, date: date);
+  }
+
+  Future<AttendanceDashboardOverview> _getOverview(
+    String customSchoolId, {
+    DateTime? date,
+  }) async {
     final response = await _send(
       'GET',
-      '/api/schools/$customSchoolId/attendance/overview',
+      date == null
+          ? '/api/schools/$customSchoolId/attendance/overview'
+          : _withQuery('/api/schools/$customSchoolId/attendance/overview', {
+              'date': _date(date),
+            }),
     );
     final json = _map(_decode(response));
     if (json == null) {
@@ -38,12 +58,14 @@ class AttendanceApiClient implements AttendanceRepository {
     final todayStats = _map(schoolStats['today']) ?? const {};
     final weekStats = _map(schoolStats['week']) ?? const {};
     final monthStats = _map(schoolStats['month']) ?? const {};
+    final termStats = _map(schoolStats['term']) ?? const {};
 
     final classes = _list(json['gradeStreamBreakdown'])
         .whereType<Map<String, dynamic>>()
         .map((item) {
           final teacher = _map(item['teacher']) ?? const {};
           final stats = _map(item['todayStats']) ?? const {};
+          final submitted = stats['submitted'] == true;
           return AttendanceClassSummary(
             gradeId: _integer(item['gradeId']),
             gradeName: _string(item['grade']),
@@ -55,7 +77,18 @@ class AttendanceApiClient implements AttendanceRepository {
             absent: _integer(stats['absent']),
             late: _integer(stats['late']),
             attendanceRate: _decimal(stats['rate']),
-            submitted: stats['submitted'] == true,
+            submitted: submitted,
+            registerStatus: _registerStatus(
+              stats['registerStatus'],
+              submitted: submitted,
+              schoolDay: json['schoolDay'] != false,
+            ),
+            revision: _integer(stats['revision']),
+            submittedAt: _dateTime(stats['submittedAt']),
+            submittedBy: _string(stats['submittedBy']),
+            acknowledgedAt: _dateTime(stats['acknowledgedAt']),
+            acknowledgedBy: _string(stats['acknowledgedBy']),
+            acknowledgmentNote: _string(stats['acknowledgmentNote']),
           );
         })
         .where((item) => item.gradeId > 0 && item.streamId > 0)
@@ -111,9 +144,23 @@ class AttendanceApiClient implements AttendanceRepository {
         late: _integer(monthStats['totalLateArrivals']),
         totalStudents: _integer(monthStats['totalStudents']),
       ),
+      term: AttendancePeriodSummary(
+        attendanceRate: _decimal(termStats['attendanceRate']),
+        present: _integer(termStats['present']),
+        absent: _integer(termStats['absent']),
+        late: _integer(termStats['late']),
+        totalStudents: _integer(termStats['totalRecords']),
+        studentsNeedingAttention: _integer(
+          termStats['studentsNeedingAttention'],
+        ),
+      ),
       classes: classes,
       alerts: alerts,
       streamsPending: _integer(todaySummary['streamsPending']),
+      calendarMessage: _string(json['calendarMessage']),
+      recentSchoolDates: _list(
+        json['recentSchoolDates'],
+      ).map(_dateTime).whereType<DateTime>().toList(),
     );
   }
 
@@ -216,6 +263,8 @@ class AttendanceApiClient implements AttendanceRepository {
             ),
             streamId: _integer(json['streamId'], fallback: streamId),
             streamName: _string(json['streamName']),
+            gender: _string(json['gender']),
+            dateOfBirth: _dateTime(json['dateOfBirth']),
           ),
         )
         .where(
@@ -233,6 +282,97 @@ class AttendanceApiClient implements AttendanceRepository {
               .toList();
 
     return AttendanceRoster(students: students, records: records);
+  }
+
+  @override
+  Future<AttendanceEntryContext> getEntryContext({
+    required String customSchoolId,
+    required int streamId,
+    required DateTime date,
+  }) async {
+    final response = await _send(
+      'GET',
+      _withQuery(
+        '/api/schools/$customSchoolId/attendance/streams/$streamId/entry-context',
+        {'date': _date(date)},
+      ),
+    );
+    final json = _map(_decode(response));
+    if (json == null) {
+      throw const AttendanceApiException(
+        'The attendance rules could not be loaded.',
+      );
+    }
+    return AttendanceEntryContext(
+      date: _dateTime(json['date']) ?? date,
+      currentDate: _dateTime(json['currentDate']) ?? DateTime.now(),
+      futureDate: json['futureDate'] == true,
+      schoolDay: json['schoolDay'] == true,
+      assignedClassTeacher: json['assignedClassTeacher'] == true,
+      permissionAffirmationRequired:
+          json['permissionAffirmationRequired'] == true,
+      calendarMessage: _string(json['calendarMessage']),
+      submitted: json['submitted'] == true,
+      registerStatus: _registerStatus(
+        json['registerStatus'],
+        submitted: json['submitted'] == true,
+        schoolDay: json['schoolDay'] == true,
+      ),
+      revision: _integer(json['revision']),
+      submittedAt: _dateTime(json['submittedAt']),
+      submittedBy: _string(json['submittedBy']),
+      acknowledgedAt: _dateTime(json['acknowledgedAt']),
+      acknowledgedBy: _string(json['acknowledgedBy']),
+      acknowledgmentNote: _string(json['acknowledgmentNote']),
+    );
+  }
+
+  @override
+  Future<List<AttendanceLateConcern>> getLateConcerns({
+    required String customSchoolId,
+    required int gradeLevelId,
+    required int streamId,
+    required DateTime date,
+  }) async {
+    final response = await _send(
+      'GET',
+      _withQuery(
+        '/api/schools/$customSchoolId/attendance/streams/$streamId/late-attention',
+        {'gradeLevelId': '$gradeLevelId', 'date': _date(date)},
+      ),
+    );
+    return _extractList(_decode(response))
+        .whereType<Map<String, dynamic>>()
+        .map(_lateConcernFromJson)
+        .where((item) => item.customStudentId.isNotEmpty)
+        .toList();
+  }
+
+  @override
+  Future<AttendanceLateConcern> escalateLateConcern({
+    required String customSchoolId,
+    required int gradeLevelId,
+    required int streamId,
+    required String customStudentId,
+    required DateTime date,
+    required String note,
+  }) async {
+    final response = await _send(
+      'POST',
+      _withQuery(
+        '/api/schools/$customSchoolId/attendance/streams/$streamId/'
+        'late-attention/$customStudentId/escalations',
+        {'gradeLevelId': '$gradeLevelId', 'date': _date(date)},
+      ),
+      body: {'note': note.trim()},
+    );
+    final json = _map(_decode(response));
+    if (json == null) {
+      throw const AttendanceApiException(
+        'The repeated-lateness escalation response was empty.',
+      );
+    }
+    return _lateConcernFromJson(json);
   }
 
   @override
@@ -279,6 +419,101 @@ class AttendanceApiClient implements AttendanceRepository {
   }
 
   @override
+  Future<List<AttendanceReportOption>> getAttendanceReportOptions({
+    required String customSchoolId,
+  }) async {
+    final response = await _send(
+      'GET',
+      '/api/schools/$customSchoolId/attendance/report/options',
+    );
+    return _extractList(_decode(response))
+        .whereType<Map<String, dynamic>>()
+        .map(
+          (item) => AttendanceReportOption(
+            customStudentId: _string(item['customStudentId']),
+            studentName: _string(item['studentName']),
+            gradeLevelId: _integer(item['gradeLevelId']),
+            gradeName: _string(item['gradeName']),
+            streamId: _integer(item['streamId']),
+            streamName: _string(item['streamName']),
+            householdId: _nullableInteger(item['householdId']),
+            householdName: _string(item['householdName']),
+          ),
+        )
+        .where((item) => item.customStudentId.isNotEmpty)
+        .toList();
+  }
+
+  @override
+  Future<AttendanceGeneratedReport> generateAttendanceReport({
+    required String customSchoolId,
+    required String criterion,
+    List<int> streamIds = const [],
+    List<String> studentIds = const [],
+    int? householdId,
+    DateTime? startDate,
+    DateTime? endDate,
+    double? absenteeismThreshold,
+  }) async {
+    final query = <String, String>{
+      'criterion': criterion,
+      if (streamIds.isNotEmpty) 'streamIds': streamIds.join(','),
+      if (studentIds.isNotEmpty) 'studentIds': studentIds.join(','),
+      if (householdId != null) 'householdId': '$householdId',
+      if (startDate != null) 'startDate': _date(startDate),
+      if (endDate != null) 'endDate': _date(endDate),
+      if (absenteeismThreshold != null)
+        'absenteeismThreshold': '$absenteeismThreshold',
+    };
+    final response = await _send(
+      'GET',
+      _withQuery('/api/schools/$customSchoolId/attendance/report', query),
+    );
+    final json = _map(_decode(response));
+    if (json == null) {
+      throw const AttendanceApiException(
+        'The attendance report response was empty.',
+      );
+    }
+    final students = _list(json['students'])
+        .whereType<Map<String, dynamic>>()
+        .map(
+          (item) => AttendanceReportStudent(
+            customStudentId: _string(item['customStudentId']),
+            studentName: _string(item['studentName']),
+            gradeLevelId: _integer(item['gradeLevelId']),
+            gradeName: _string(item['gradeName']),
+            streamId: _integer(item['streamId']),
+            streamName: _string(item['streamName']),
+            markedDays: _integer(item['markedDays']),
+            present: _integer(item['present']),
+            absent: _integer(item['absent']),
+            late: _integer(item['late']),
+            lateMinutes: _integer(item['lateMinutes']),
+            attendanceRate: _decimal(item['attendanceRate']),
+            absenceRate: _decimal(item['absenceRate']),
+            householdId: _nullableInteger(item['householdId']),
+            householdName: _string(item['householdName']),
+            matchingDates: _list(
+              item['matchingDates'],
+            ).map((value) => _dateTime(value)).whereType<DateTime>().toList(),
+          ),
+        )
+        .toList();
+    return AttendanceGeneratedReport(
+      startDate: _dateTime(json['startDate']) ?? DateTime.now(),
+      endDate: _dateTime(json['endDate']) ?? DateTime.now(),
+      criterion: _string(json['criterion']),
+      studentsIncluded: _integer(json['studentsIncluded']),
+      present: _integer(json['present']),
+      absent: _integer(json['absent']),
+      late: _integer(json['late']),
+      attendanceRate: _decimal(json['attendanceRate']),
+      students: students,
+    );
+  }
+
+  @override
   Future<void> markNonSchoolDay({
     required String customSchoolId,
     required int termId,
@@ -303,6 +538,24 @@ class AttendanceApiClient implements AttendanceRepository {
   }
 
   @override
+  Future<void> acknowledgeAttendance({
+    required String customSchoolId,
+    required DateTime date,
+    required List<int> streamIds,
+    String? note,
+  }) async {
+    await _send(
+      'POST',
+      '/api/schools/$customSchoolId/attendance/acknowledgments',
+      body: {
+        'date': _date(date),
+        'streamIds': streamIds,
+        if (note?.trim().isNotEmpty == true) 'note': note!.trim(),
+      },
+    );
+  }
+
+  @override
   Future<void> saveAttendance({
     required String customSchoolId,
     required int gradeLevelId,
@@ -311,6 +564,9 @@ class AttendanceApiClient implements AttendanceRepository {
     required List<AttendanceEntry> entries,
     required bool updateExisting,
     String? vacationOverrideReason,
+    bool permissionAffirmed = false,
+    String? authorizationStatement,
+    String? correctionReason,
   }) async {
     Map<String, dynamic> payload(AttendanceEntry entry) {
       final present = entry.mark != AttendanceMark.absent;
@@ -328,6 +584,11 @@ class AttendanceApiClient implements AttendanceRepository {
         'attendanceDate': _date(date),
         if (vacationOverrideReason?.trim().isNotEmpty == true)
           'vacationOverrideReason': vacationOverrideReason!.trim(),
+        'permissionAffirmed': permissionAffirmed,
+        if (authorizationStatement?.trim().isNotEmpty == true)
+          'authorizationStatement': authorizationStatement!.trim(),
+        if (correctionReason?.trim().isNotEmpty == true)
+          'correctionReason': correctionReason!.trim(),
         if (entry.remarks.trim().isNotEmpty) 'remarks': entry.remarks.trim(),
       };
     }
@@ -338,21 +599,7 @@ class AttendanceApiClient implements AttendanceRepository {
       return;
     }
 
-    final existing = entries
-        .where((entry) => entry.attendanceId?.isNotEmpty == true)
-        .map(payload)
-        .toList();
-    final newEntries = entries
-        .where((entry) => entry.attendanceId?.isNotEmpty != true)
-        .map(payload)
-        .toList();
-
-    if (existing.isNotEmpty) {
-      await _send('PATCH', endpoint, body: existing);
-    }
-    if (newEntries.isNotEmpty) {
-      await _send('POST', endpoint, body: newEntries);
-    }
+    await _send('PATCH', endpoint, body: entries.map(payload).toList());
   }
 
   AttendanceRecord _recordFromJson(Map<String, dynamic> json) {
@@ -371,6 +618,19 @@ class AttendanceApiClient implements AttendanceRepository {
       mark: mark,
       minutesLate: _integer(json['minutesLate']),
       remarks: _string(json['remarks']),
+    );
+  }
+
+  AttendanceLateConcern _lateConcernFromJson(Map<String, dynamic> json) {
+    return AttendanceLateConcern(
+      customStudentId: _string(json['customStudentId']),
+      fullName: _string(json['fullName']),
+      consecutiveLateDays: _integer(json['consecutiveLateDays']),
+      totalMinutesLate: _integer(json['totalMinutesLate']),
+      latestLateDate: _dateTime(json['latestLateDate']) ?? DateTime.now(),
+      escalated: json['escalated'] == true,
+      escalationId: _nullableInteger(json['escalationId']),
+      escalatedAt: _dateTime(json['escalatedAt']),
     );
   }
 
@@ -509,6 +769,24 @@ class AttendanceApiClient implements AttendanceRepository {
       );
     }
     return DateTime.tryParse(_string(value));
+  }
+
+  static AttendanceRegisterStatus _registerStatus(
+    dynamic value, {
+    required bool submitted,
+    required bool schoolDay,
+  }) {
+    if (!schoolDay) return AttendanceRegisterStatus.nonSchoolDay;
+    return switch (_string(value).toUpperCase()) {
+      'AWAITING_ACKNOWLEDGMENT' =>
+        AttendanceRegisterStatus.awaitingAcknowledgment,
+      'COMPLETE' => AttendanceRegisterStatus.complete,
+      'NON_SCHOOL_DAY' => AttendanceRegisterStatus.nonSchoolDay,
+      _ =>
+        submitted
+            ? AttendanceRegisterStatus.awaitingAcknowledgment
+            : AttendanceRegisterStatus.notSubmitted,
+    };
   }
 }
 
