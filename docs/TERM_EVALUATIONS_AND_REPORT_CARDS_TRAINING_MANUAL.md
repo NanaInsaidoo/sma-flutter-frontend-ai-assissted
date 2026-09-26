@@ -220,14 +220,33 @@ Common messages:
 
 Only authorized leadership users generate and publish report cards.
 
-1. Open **Report readiness**.
-2. Filter to **Ready**.
-3. Open the student report.
+The **Final Report Management** overview shows one row per class with these checks:
+
+| Column | Meaning |
+|---|---|
+| Academic grades | Complete only when every required assessment score is present for every student |
+| Evaluations & comments | Incomplete, Not submitted, Awaiting approval, Approved, or Rejected |
+| Progression | Selected only when every student has a progression decision |
+| Report status | Not generated, Partially generated, Generated, Published, or Update required |
+
+**Ready to submit** is a teacher-facing instruction and is not shown as an administrator status. Administrators see **Not submitted** until the teacher sends the completed ratings and comments for approval.
+
+Select **Open class** to see each student’s four checks in separate columns: **Academic grades**, **Evaluations & comments**, **Progression**, and **Report status**. The **Generate report** button remains visible but disabled until the first three checks are complete. It changes to **View report** after generation and **Regenerate** when source data has changed.
+
+1. Open a class from **Final Report Management**.
+2. Complete any missing academic grades.
+3. Ensure the student’s evaluations and comments have been approved.
 4. Select the progression decision: promote, repeat, review, or graduate.
-5. Save the draft.
-6. Generate the report.
-7. Preview the report.
-8. Publish it when confirmed.
+5. Select **Generate report** for one student, or select several students and use **Generate selected**.
+6. Open **View report** to preview the generated report.
+7. Publish the individual report from its preview page when confirmed.
+
+For bulk publication, return to **Final Report Management**:
+
+- Select one or more eligible classes and choose **Publish selected**. Every generated, unpublished report in those classes is included.
+- Choose **Publish all generated** to publish every eligible generated report for the term.
+- Classes with no generated, unpublished reports cannot be selected.
+- The confirmation message states the exact number of reports and classes before publication.
 
 Generation captures a version of academic scores, evaluation results, comment, attendance, student/class profile, and progression information. If one of those sources changes later, the report becomes out of date and must be regenerated.
 
@@ -251,12 +270,15 @@ If a generated report is found to be wrong:
 
 1. Leadership opens the student report.
 2. Select **Reopen report**.
-3. Enter the reason for correction.
-4. The report becomes **Correction pending** and is no longer counted as safely published for term closure.
-5. Correct the authorized source information.
-6. Regenerate only the affected student.
-7. Preview the corrected version.
-8. Republish it.
+3. The published progression decision and head teacher comment become editable. The published version remains in history.
+4. Make the correction and select **Save Correction**.
+5. Enter the correction reason. The reason and saved changes are recorded in the audit log.
+6. The report becomes **Correction pending** and is no longer counted as safely published for term closure.
+7. Regenerate only the affected student.
+8. Preview the corrected version.
+9. Republish it.
+
+Published reports are read-only before **Reopen report** is selected. Reopening by itself does not change the stored report and does not require a reason; the reason is required when the correction is saved.
 
 The audit history records who reopened, why, when, and when the corrected version was republished. The original published history is retained; corrections create a newer controlled version.
 
