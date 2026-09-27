@@ -38,7 +38,7 @@ const _ratings = <String>[
 String _termEvaluationReviewStatusLabel(String status) {
   return switch (status.toUpperCase()) {
     'SUBMITTED' || 'FINALIZED' => 'Awaiting approval',
-    'COMMENTS_IN_PROGRESS' => 'Comment saved',
+    'COMMENTS_IN_PROGRESS' => 'Pending teacher submission',
     'UNDER_REVIEW' => 'Under review',
     'CHANGES_REQUESTED' => 'Rejected',
     'APPROVED' => 'Approved',
@@ -82,6 +82,7 @@ class _EvaluationProgressGroup {
     required this.commentsSubmitted,
     required this.commentsUnderReview,
     required this.commentsApproved,
+    required this.commentsRejected,
   });
 
   final String name;
@@ -96,6 +97,7 @@ class _EvaluationProgressGroup {
   final int commentsSubmitted;
   final int commentsUnderReview;
   final int commentsApproved;
+  final int commentsRejected;
 
   int get completedPercent => requiredCriteria == 0
       ? 0
@@ -115,10 +117,15 @@ class _EvaluationProgressGroup {
 
   String get approvalStatus {
     if (commentStudents == 0) return 'Not required';
+    if (commentsRejected > 0) return 'Rejected';
     if (commentsApproved == commentStudents) return 'Approved';
     if (commentsUnderReview > 0) return 'Under review';
     if (commentsAwaitingApproval > 0) return 'Awaiting approval';
-    if (commentsCompleted == commentStudents) return 'Ready to submit';
+    // This status is shown to leadership. "Ready to submit" is a teacher
+    // action, while leadership is waiting for that submission to happen.
+    if (commentsCompleted == commentStudents) {
+      return 'Pending teacher submission';
+    }
     if (commentsCompleted > 0) return 'Comments in progress';
     return 'Not started';
   }
@@ -135,6 +142,8 @@ class TermEvaluationWorkflowScreen extends StatefulWidget {
     this.initialStreamId,
     this.initialStreamName,
     this.managementProgressOnly = false,
+    this.initialManagerView,
+    this.dedicatedManagerWorkspace = false,
   });
 
   final AssessmentApiClient api;
@@ -145,6 +154,8 @@ class TermEvaluationWorkflowScreen extends StatefulWidget {
   final int? initialStreamId;
   final String? initialStreamName;
   final bool managementProgressOnly;
+  final String? initialManagerView;
+  final bool dedicatedManagerWorkspace;
 
   @override
   State<TermEvaluationWorkflowScreen> createState() =>
@@ -160,7 +171,7 @@ class _TermEvaluationWorkflowScreenState
   bool _loading = true;
   bool _updatingWindow = false;
   bool _syncingEvaluations = false;
-  String _managerView = 'Teacher progress';
+  String _managerView = 'Approval';
   String _overviewView = 'By class';
   String _readinessFilter = 'All students';
   String _classFilter = 'All classes';
@@ -171,7 +182,9 @@ class _TermEvaluationWorkflowScreenState
   String _teacherProgressSort = 'Teacher A–Z';
   bool _teacherProgressSortAscending = true;
   String _teacherClassFilter = 'All classes';
+  String _teacherStage = 'Ratings';
   List<Map<String, dynamic>> _pendingCorrections = const [];
+  final Set<int> _submittingClassAssignments = <int>{};
 
   bool get _manager {
     final role = widget.viewerRole.toLowerCase();
@@ -197,7 +210,11 @@ class _TermEvaluationWorkflowScreenState
   @override
   void initState() {
     super.initState();
-    if (widget.managementProgressOnly) _managerView = 'Overview';
+    if (widget.initialManagerView != null) {
+      _managerView = widget.initialManagerView!;
+    } else if (widget.managementProgressOnly) {
+      _managerView = 'Approval';
+    }
     _load();
   }
 
@@ -371,18 +388,27 @@ class _TermEvaluationWorkflowScreenState
       }.contains(status);
     }).length;
     final managerWorkspace = _manager && !focusedStream;
-    final progress = _evaluationProgress(rows);
-    final readiness = _readiness;
-    final readyStudents = (readiness?['readyStudents'] as num?)?.toInt() ?? 0;
+    final dedicatedManagerWorkspace =
+        managerWorkspace && widget.dedicatedManagerWorkspace;
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          managerWorkspace
+          dedicatedManagerWorkspace
+              ? _managerView
+              : managerWorkspace
               ? 'Evaluations & comments'
               : focusedStream
               ? 'Ratings & comments progress'
               : 'Evaluations & comments',
         ),
+        actions: dedicatedManagerWorkspace
+            ? [
+                Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: _managerWorkspaceMenu(),
+                ),
+              ]
+            : null,
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -395,107 +421,103 @@ class _TermEvaluationWorkflowScreenState
                 child: ListView(
                   padding: const EdgeInsets.all(24),
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                managerWorkspace
-                                    ? 'Evaluations & comments'
-                                    : focusedStream
-                                    ? 'Ratings & comments progress — $_focusedStreamName'
-                                    : 'My evaluation responsibilities',
-                                style: const TextStyle(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.w800,
+                    if (dedicatedManagerWorkspace)
+                      Text(
+                        '${widget.setup.termName} · ${widget.setup.academicYearName}',
+                        style: const TextStyle(color: Colors.blueGrey),
+                      )
+                    else
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  managerWorkspace
+                                      ? 'Leadership approval'
+                                      : focusedStream
+                                      ? 'Ratings & comments progress — $_focusedStreamName'
+                                      : 'My evaluation responsibilities',
+                                  style: const TextStyle(
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.w800,
+                                  ),
                                 ),
-                              ),
-                              Text(
-                                '${widget.setup.termName} · ${widget.setup.academicYearName}',
-                                style: const TextStyle(color: Colors.blueGrey),
-                              ),
-                            ],
+                                Text(
+                                  '${widget.setup.termName} · ${widget.setup.academicYearName}',
+                                  style: const TextStyle(
+                                    color: Colors.blueGrey,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                        if (_manager)
-                          _evaluationWindowControls()
-                        else
-                          _evaluationWindowStatusBadge(),
-                      ],
-                    ),
-                    if (managerWorkspace && _pendingCorrections.isNotEmpty) ...[
+                          if (managerWorkspace)
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 8,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                _managerWorkspaceMenu(),
+                                _evaluationWindowControls(),
+                              ],
+                            )
+                          else if (_manager)
+                            _evaluationWindowControls()
+                          else
+                            _evaluationWindowStatusBadge(),
+                        ],
+                      ),
+                    if (managerWorkspace &&
+                        !dedicatedManagerWorkspace &&
+                        _pendingCorrections.isNotEmpty) ...[
                       const SizedBox(height: 14),
                       _correctionBanner(),
                     ],
                     if (managerWorkspace &&
+                        !dedicatedManagerWorkspace &&
                         _data?['setupChangesDetected'] == true) ...[
                       const SizedBox(height: 14),
                       _evaluationSetupChangesBanner(),
                     ],
                     const SizedBox(height: 20),
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: managerWorkspace
-                          ? [
-                              _metric(
-                                'Ratings complete',
-                                '${progress.completedEvaluations} / ${progress.assignedEvaluations}',
-                              ),
-                              _metric(
-                                'Comments complete',
-                                '${progress.commentsCompleted} / ${progress.commentStudents}',
-                              ),
-                              _metric(
-                                'Submitted for approval',
-                                '${progress.commentsSubmitted} / ${progress.commentStudents}',
-                              ),
-                              _metric('Ready for reports', '$readyStudents'),
-                            ]
-                          : _manager
-                          ? [
-                              _metric(
-                                'Teacher responsibilities',
-                                '${rows.length}',
-                              ),
-                              _metric('Submitted', '$submittedAssignments'),
-                              _metric('Pending', '$incompleteAssignments'),
-                            ]
-                          : [
-                              _metric('Responsibilities', '${rows.length}'),
-                              _metric(
-                                'Ratings complete',
-                                '$submittedAssignments / ${rows.length}',
-                              ),
-                              _metric(
-                                'Student comments',
-                                '$completedStudentComments / $commentStudentCount',
-                              ),
-                              _metric(
-                                'Submitted for approval',
-                                '$sentToLeadership / ${classTeacherAssignments.length}',
-                              ),
-                            ],
-                    ),
-                    const SizedBox(height: 22),
-                    if (managerWorkspace) ...[
-                      _workspaceTabs(),
-                      const SizedBox(height: 16),
-                      if (_managerView == 'Overview')
-                        _overviewWorkspace(rows)
-                      else if (_managerView == 'Report readiness')
-                        _readinessView()
-                      else
-                        _assignmentsView(rows),
-                    ] else
+                    if (managerWorkspace)
+                      dedicatedManagerWorkspace
+                          ? _managerWorkspaceBody(rows)
+                          : _approvalWorkspace(rows, showHeading: false)
+                    else ...[
+                      _metricGrid(
+                        _manager
+                            ? [
+                                ('Teacher responsibilities', '${rows.length}'),
+                                ('Submitted', '$submittedAssignments'),
+                                ('Pending', '$incompleteAssignments'),
+                              ]
+                            : [
+                                ('Responsibilities', '${rows.length}'),
+                                (
+                                  'Ratings complete',
+                                  '$submittedAssignments / ${rows.length}',
+                                ),
+                                (
+                                  'Student comments',
+                                  '$completedStudentComments / $commentStudentCount',
+                                ),
+                                (
+                                  'Submitted for approval',
+                                  '$sentToLeadership / ${classTeacherAssignments.length}',
+                                ),
+                              ],
+                      ),
+                      const SizedBox(height: 22),
                       _assignmentsView(
                         rows,
                         streamName: focusedStream
                             ? widget.initialStreamName
                             : null,
                       ),
+                    ],
                   ],
                 ),
               ),
@@ -596,8 +618,29 @@ class _TermEvaluationWorkflowScreenState
     return subjects.isEmpty ? role : '$role · ${subjects.join(', ')}';
   }
 
-  Widget _metric(String label, String value) => SizedBox(
-    width: 190,
+  Widget _metricGrid(List<(String, String)> metrics) => LayoutBuilder(
+    builder: (context, constraints) {
+      const spacing = 12.0;
+      final columns = constraints.maxWidth >= 900
+          ? metrics.length.clamp(1, 4)
+          : constraints.maxWidth >= 520
+          ? 2
+          : 1;
+      final cardWidth =
+          (constraints.maxWidth - (spacing * (columns - 1))) / columns;
+      return Wrap(
+        spacing: spacing,
+        runSpacing: spacing,
+        children: [
+          for (final metric in metrics)
+            _metric(metric.$1, metric.$2, width: cardWidth),
+        ],
+      );
+    },
+  );
+
+  Widget _metric(String label, String value, {double width = 190}) => SizedBox(
+    width: width,
     child: Card(
       child: Padding(
         padding: const EdgeInsets.all(18),
@@ -862,28 +905,107 @@ class _TermEvaluationWorkflowScreenState
           )
           .toList();
 
-  Widget _workspaceTabs() => SegmentedButton<String>(
-    key: const ValueKey('evaluation-workspace-tabs'),
-    segments: const [
-      ButtonSegment(
-        value: 'Overview',
-        icon: Icon(Icons.dashboard_outlined),
-        label: Text('Overview'),
+  Widget _managerWorkspaceBody(List<Map<String, dynamic>> rows) =>
+      switch (_managerView) {
+        'Teacher progress' => _assignmentsView(rows),
+        'Approval' => _approvalWorkspace(rows),
+        'Report readiness' => _readinessView(),
+        _ => _overviewWorkspace(rows),
+      };
+
+  Widget _managerWorkspaceMenu() {
+    const choices = [
+      ('Approval', Icons.approval_outlined),
+      ('Overview', Icons.dashboard_outlined),
+      ('Teacher progress', Icons.assignment_ind_outlined),
+      ('Report readiness', Icons.fact_check_outlined),
+    ];
+    return PopupMenuButton<String>(
+      key: const ValueKey('evaluation-workspace-menu'),
+      tooltip: 'Open another evaluations workspace',
+      onSelected: _openManagerWorkspace,
+      itemBuilder: (context) => [
+        for (final choice in choices)
+          PopupMenuItem<String>(
+            value: choice.$1,
+            child: Row(
+              children: [
+                Icon(
+                  choice.$1 == _managerView ? Icons.check : choice.$2,
+                  size: 20,
+                  color: choice.$1 == _managerView
+                      ? const Color(0xFF00796B)
+                      : null,
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  choice.$1,
+                  style: TextStyle(
+                    fontWeight: choice.$1 == _managerView
+                        ? FontWeight.w800
+                        : FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: const Color(0xFF94A3B8)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.menu, size: 19, color: Color(0xFF00796B)),
+            const SizedBox(width: 8),
+            Text(
+              'View: $_managerView',
+              style: const TextStyle(
+                color: Color(0xFF0F766E),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(width: 5),
+            const Icon(Icons.arrow_drop_down, color: Color(0xFF00796B)),
+          ],
+        ),
       ),
-      ButtonSegment(
-        value: 'Teacher progress',
-        icon: Icon(Icons.assignment_ind_outlined),
-        label: Text('Teacher progress'),
-      ),
-      ButtonSegment(
-        value: 'Report readiness',
-        icon: Icon(Icons.fact_check_outlined),
-        label: Text('Report readiness'),
-      ),
-    ],
-    selected: {_managerView},
-    onSelectionChanged: (value) => setState(() => _managerView = value.first),
-  );
+    );
+  }
+
+  MaterialPageRoute<void> _managerWorkspaceRoute(String view) =>
+      MaterialPageRoute<void>(
+        builder: (_) => TermEvaluationWorkflowScreen(
+          key: ValueKey('evaluation-$view-workspace-page'),
+          api: widget.api,
+          schoolId: widget.schoolId,
+          viewerName: widget.viewerName,
+          viewerRole: widget.viewerRole,
+          setup: widget.setup,
+          managementProgressOnly: true,
+          initialManagerView: view,
+          dedicatedManagerWorkspace: true,
+        ),
+      );
+
+  Future<void> _openManagerWorkspace(String view) async {
+    if (view == _managerView) return;
+    final navigator = Navigator.of(context, rootNavigator: true);
+    if (view == 'Approval') {
+      if (widget.dedicatedManagerWorkspace) navigator.pop();
+      return;
+    }
+    if (widget.dedicatedManagerWorkspace) {
+      navigator.pushReplacement<void, void>(_managerWorkspaceRoute(view));
+      return;
+    }
+    await navigator.push<void>(_managerWorkspaceRoute(view));
+    if (mounted) await _load();
+  }
 
   Widget _overviewTabs() => SegmentedButton<String>(
     key: const ValueKey('evaluation-overview-tabs'),
@@ -937,6 +1059,69 @@ class _TermEvaluationWorkflowScreenState
     ],
   );
 
+  Widget _approvalWorkspace(
+    List<Map<String, dynamic>> rows, {
+    bool showHeading = true,
+  }) {
+    final groups = _sortProgressGroups(
+      _groupEvaluationProgress(
+        rows,
+        byStaff: false,
+      ).where((group) => group.commentStudents > 0).toList(),
+      byStaff: false,
+    );
+    return Column(
+      key: const ValueKey('evaluation-approval-workspace'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (showHeading) ...[
+          const Text(
+            'Leadership approval',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Review classes submitted by class teachers. Open a class to approve students individually or in a group.',
+            style: TextStyle(color: Colors.blueGrey),
+          ),
+          const SizedBox(height: 12),
+        ] else ...[
+          const Text(
+            'Review classes submitted by class teachers. Open a class to approve students individually or in a group.',
+            style: TextStyle(color: Colors.blueGrey),
+          ),
+          const SizedBox(height: 12),
+        ],
+        if (groups.isEmpty)
+          const Card(
+            child: Padding(
+              padding: EdgeInsets.all(28),
+              child: Text(
+                'No class-teacher comments are available for approval yet.',
+              ),
+            ),
+          )
+        else
+          LayoutBuilder(
+            builder: (context, constraints) => constraints.maxWidth < 820
+                ? Column(
+                    children: groups
+                        .map(
+                          (group) => _progressCard(
+                            group,
+                            byStaff: false,
+                            onTap: () =>
+                                _openClassEvaluations(group.name, rows),
+                          ),
+                        )
+                        .toList(),
+                  )
+                : _progressTable(groups, byStaff: false, sourceRows: rows),
+          ),
+      ],
+    );
+  }
+
   Widget _progressDashboard(List<Map<String, dynamic>> rows, {String? view}) {
     final selectedView = view ?? _managerView;
     if (selectedView == 'Insights') {
@@ -945,6 +1130,7 @@ class _TermEvaluationWorkflowScreenState
     final byStaff = selectedView == 'By staff';
     final groups = _sortProgressGroups(
       _groupEvaluationProgress(rows, byStaff: byStaff),
+      byStaff: byStaff,
     );
     return Column(
       key: ValueKey(byStaff ? 'evaluation-by-staff' : 'evaluation-by-class'),
@@ -983,6 +1169,7 @@ class _TermEvaluationWorkflowScreenState
                         .map(
                           (group) => _progressCard(
                             group,
+                            byStaff: byStaff,
                             onTap: byStaff
                                 ? null
                                 : () => _openClassEvaluations(group.name, rows),
@@ -1515,9 +1702,14 @@ class _TermEvaluationWorkflowScreenState
           SizedBox(
             width: 190,
             child: group.commentStudents == 0
-                ? const Text(
-                    'Not required',
-                    style: TextStyle(color: Colors.blueGrey),
+                ? Text(
+                    byStaff ? 'Not required' : 'Class teacher not assigned',
+                    style: TextStyle(
+                      color: byStaff
+                          ? Colors.blueGrey
+                          : const Color(0xFFB45309),
+                      fontWeight: byStaff ? FontWeight.normal : FontWeight.w700,
+                    ),
                   )
                 : _adminProgressIndicator(
                     completed: group.commentsCompleted,
@@ -1527,7 +1719,9 @@ class _TermEvaluationWorkflowScreenState
                   ),
           ),
         ),
-        DataCell(_adminApprovalBadge(group.approvalStatus)),
+        DataCell(
+          _adminApprovalBadge(_progressApprovalStatus(group, byStaff: byStaff)),
+        ),
         if (!byStaff)
           DataCell(
             TextButton.icon(
@@ -1575,20 +1769,31 @@ class _TermEvaluationWorkflowScreenState
   Widget _adminApprovalBadge(String label) {
     final approved = label == 'Approved';
     final pending = label == 'Awaiting approval' || label == 'Under review';
+    final actionRequired = label == 'Pending teacher submission';
+    final rejected = label == 'Rejected';
+    final setupRequired = label == 'Setup required';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: approved
             ? const Color(0xFFECFDF5)
+            : rejected || setupRequired
+            ? const Color(0xFFFEF2F2)
             : pending
             ? const Color(0xFFEFF6FF)
+            : actionRequired
+            ? const Color(0xFFFFFBEB)
             : const Color(0xFFF8FAFC),
         borderRadius: BorderRadius.circular(999),
         border: Border.all(
           color: approved
               ? const Color(0xFFA7F3D0)
+              : rejected || setupRequired
+              ? const Color(0xFFFECACA)
               : pending
               ? const Color(0xFFBFDBFE)
+              : actionRequired
+              ? const Color(0xFFFDE68A)
               : const Color(0xFFCBD5E1),
         ),
       ),
@@ -1597,8 +1802,12 @@ class _TermEvaluationWorkflowScreenState
         style: TextStyle(
           color: approved
               ? const Color(0xFF047857)
+              : rejected || setupRequired
+              ? const Color(0xFFB91C1C)
               : pending
               ? const Color(0xFF1D4ED8)
+              : actionRequired
+              ? const Color(0xFFB45309)
               : const Color(0xFF475569),
           fontSize: 11,
           fontWeight: FontWeight.w800,
@@ -1609,6 +1818,7 @@ class _TermEvaluationWorkflowScreenState
 
   Widget _progressCard(
     _EvaluationProgressGroup group, {
+    required bool byStaff,
     VoidCallback? onTap,
   }) => Card(
     margin: const EdgeInsets.only(bottom: 10),
@@ -1659,8 +1869,22 @@ class _TermEvaluationWorkflowScreenState
                 comment: true,
               ),
               const SizedBox(height: 10),
+            ] else ...[
+              Text(
+                byStaff
+                    ? 'Comments not required'
+                    : 'Class teacher not assigned',
+                style: TextStyle(
+                  color: byStaff ? Colors.blueGrey : const Color(0xFFB45309),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 10),
             ],
-            _adminApprovalBadge(group.approvalStatus),
+            _adminApprovalBadge(
+              _progressApprovalStatus(group, byStaff: byStaff),
+            ),
           ],
         ),
       ),
@@ -1721,15 +1945,26 @@ class _TermEvaluationWorkflowScreenState
     });
   }
 
+  String _progressApprovalStatus(
+    _EvaluationProgressGroup group, {
+    required bool byStaff,
+  }) => !byStaff && group.commentStudents == 0
+      ? 'Setup required'
+      : group.approvalStatus;
+
   List<_EvaluationProgressGroup> _sortProgressGroups(
-    List<_EvaluationProgressGroup> groups,
-  ) {
+    List<_EvaluationProgressGroup> groups, {
+    required bool byStaff,
+  }) {
     final sorted = [...groups];
     sorted.sort((left, right) {
       final comparison = switch (_progressSortColumn) {
         'ratings' => left.completedPercent.compareTo(right.completedPercent),
         'comments' => left.commentPercent.compareTo(right.commentPercent),
-        'approval' => left.approvalStatus.compareTo(right.approvalStatus),
+        'approval' => _progressApprovalStatus(
+          left,
+          byStaff: byStaff,
+        ).compareTo(_progressApprovalStatus(right, byStaff: byStaff)),
         _ => left.name.toLowerCase().compareTo(right.name.toLowerCase()),
       };
       if (comparison != 0) {
@@ -1792,6 +2027,7 @@ class _TermEvaluationWorkflowScreenState
     var commentsSubmitted = 0;
     var commentsUnderReview = 0;
     var commentsApproved = 0;
+    var commentsRejected = 0;
     for (final row in rows) {
       final students = _intValue(row['studentCount']);
       final rowRequired = _intValue(row['requiredCount']) > 0
@@ -1828,6 +2064,9 @@ class _TermEvaluationWorkflowScreenState
         commentsApproved += _intValue(
           row['commentsApproved'],
         ).clamp(0, students);
+        commentsRejected += _intValue(
+          row['commentsRejected'],
+        ).clamp(0, students);
       }
     }
     return _EvaluationProgressGroup(
@@ -1843,6 +2082,7 @@ class _TermEvaluationWorkflowScreenState
       commentsSubmitted: commentsSubmitted,
       commentsUnderReview: commentsUnderReview,
       commentsApproved: commentsApproved,
+      commentsRejected: commentsRejected,
     );
   }
 
@@ -1854,8 +2094,15 @@ class _TermEvaluationWorkflowScreenState
     String? streamName,
   }) {
     final personalDashboard = streamName == null && !_manager;
+    final stageRows = personalDashboard && _teacherStage == 'Student comments'
+        ? rows
+              .where(
+                (row) => row['assignmentType']?.toString() == 'CLASS_TEACHER',
+              )
+              .toList()
+        : rows;
     final classNames =
-        rows
+        stageRows
             .map((row) => row['streamName']?.toString().trim() ?? '')
             .where((name) => name.isNotEmpty)
             .toSet()
@@ -1868,7 +2115,7 @@ class _TermEvaluationWorkflowScreenState
       _teacherClassFilter = 'All classes';
     }
     final query = _teacherProgressSearch.text.trim().toLowerCase();
-    final visible = rows.where((row) {
+    final visible = stageRows.where((row) {
       final matchesClass =
           _teacherClassFilter == 'All classes' ||
           row['streamName']?.toString() == _teacherClassFilter;
@@ -1935,6 +2182,8 @@ class _TermEvaluationWorkflowScreenState
             'One responsibility per class. Subjects taught in the same class are grouped together.',
             style: TextStyle(color: Colors.blueGrey),
           ),
+          const SizedBox(height: 16),
+          _teacherStageTabs(rows),
         ] else if (streamName != null) ...[
           const SizedBox(height: 4),
           Text(
@@ -1944,62 +2193,94 @@ class _TermEvaluationWorkflowScreenState
         ],
         const SizedBox(height: 10),
         if (rows.isNotEmpty) ...[
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              SizedBox(
-                width: 340,
-                child: TextField(
-                  controller: _teacherProgressSearch,
-                  onChanged: (_) => setState(() {}),
-                  decoration: InputDecoration(
-                    prefixIcon: const Icon(Icons.search),
-                    hintText: personalDashboard
-                        ? 'Search class or role'
-                        : 'Search teacher, class or responsibility',
-                  ),
-                ),
-              ),
-              if (streamName == null && classNames.length > 1)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFE2E8F0)),
+            ),
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
                 SizedBox(
-                  width: 250,
-                  child: DropdownButtonFormField<String>(
-                    key: const ValueKey('teacher-responsibility-class-filter'),
-                    value: _teacherClassFilter,
-                    isExpanded: true,
-                    decoration: const InputDecoration(labelText: 'Class'),
-                    items: ['All classes', ...classNames]
-                        .map(
-                          (value) => DropdownMenuItem(
-                            value: value,
-                            child: Text(value),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) => setState(
-                      () => _teacherClassFilter = value ?? 'All classes',
+                  width: 310,
+                  child: TextField(
+                    controller: _teacherProgressSearch,
+                    onChanged: (_) => setState(() {}),
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(Icons.search),
+                      hintText: personalDashboard
+                          ? 'Search class or role'
+                          : 'Search teacher, class or responsibility',
+                      filled: true,
+                      fillColor: Colors.white,
+                      isDense: true,
                     ),
                   ),
                 ),
-              Text(
-                '${visible.length} of ${rows.length} responsibilities',
-                style: const TextStyle(
-                  color: Colors.blueGrey,
-                  fontWeight: FontWeight.w700,
+                if (streamName == null && classNames.length > 1)
+                  SizedBox(
+                    width: 225,
+                    child: DropdownButtonFormField<String>(
+                      key: const ValueKey(
+                        'teacher-responsibility-class-filter',
+                      ),
+                      value: _teacherClassFilter,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Class',
+                        filled: true,
+                        fillColor: Colors.white,
+                        isDense: true,
+                      ),
+                      items: ['All classes', ...classNames]
+                          .map(
+                            (value) => DropdownMenuItem(
+                              value: value,
+                              child: Text(value),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) => setState(
+                        () => _teacherClassFilter = value ?? 'All classes',
+                      ),
+                    ),
+                  ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 9,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: const Color(0xFFE2E8F0)),
+                  ),
+                  child: Text(
+                    '${visible.length} of ${stageRows.length}',
+                    style: const TextStyle(
+                      color: Color(0xFF475569),
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
           const SizedBox(height: 12),
         ],
-        if (rows.isEmpty)
+        if (stageRows.isEmpty)
           Card(
             child: Padding(
               padding: const EdgeInsets.all(28),
               child: Text(
-                _data?['released'] == true
+                personalDashboard && _teacherStage == 'Student comments'
+                    ? 'Student comments are only required for classes where you are the class teacher.'
+                    : _data?['released'] == true
                     ? 'No teacher evaluations were created. Add active subject-teacher and class-teacher allocations, then refresh this page.'
                     : 'The headmaster must release the exercise before teachers can evaluate students.',
               ),
@@ -2018,6 +2299,108 @@ class _TermEvaluationWorkflowScreenState
     );
   }
 
+  Widget _teacherStageTabs(List<Map<String, dynamic>> rows) {
+    final ratingResponsibilities = rows.length;
+    final commentResponsibilities = rows
+        .where((row) => row['assignmentType']?.toString() == 'CLASS_TEACHER')
+        .length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF8FAFC),
+            border: Border.all(color: const Color(0xFFE2E8F0)),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: _teacherWorkflowStage(
+                  number: '1',
+                  title: 'Ratings',
+                  detail: 'Subject and class teachers',
+                  active: _teacherStage == 'Ratings',
+                ),
+              ),
+              const Icon(
+                Icons.arrow_forward_rounded,
+                color: Color(0xFF94A3B8),
+                size: 20,
+              ),
+              Expanded(
+                child: _teacherWorkflowStage(
+                  number: '2',
+                  title: 'Student comments',
+                  detail: 'Class teacher only',
+                  active: _teacherStage == 'Student comments',
+                ),
+              ),
+              const Icon(
+                Icons.arrow_forward_rounded,
+                color: Color(0xFF94A3B8),
+                size: 20,
+              ),
+              const Expanded(
+                child: _TeacherWorkflowStageDisplay(
+                  number: '3',
+                  title: 'Approval',
+                  detail: 'Leadership only',
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        SegmentedButton<String>(
+          key: const ValueKey('teacher-evaluation-stage-tabs'),
+          segments: [
+            ButtonSegment(
+              value: 'Ratings',
+              icon: const Icon(Icons.star_outline_rounded),
+              label: Text(
+                'Ratings ($ratingResponsibilities)',
+                key: const ValueKey('teacher-stage-ratings'),
+              ),
+            ),
+            ButtonSegment(
+              value: 'Student comments',
+              icon: const Icon(Icons.comment_outlined),
+              label: Text(
+                'Student comments ($commentResponsibilities)',
+                key: const ValueKey('teacher-stage-comments'),
+              ),
+              enabled: commentResponsibilities > 0,
+            ),
+          ],
+          selected: {_teacherStage},
+          onSelectionChanged: (selection) => setState(() {
+            _teacherStage = selection.first;
+            _teacherClassFilter = 'All classes';
+            _teacherProgressSort = _teacherStage == 'Ratings'
+                ? 'Class A–Z'
+                : 'Comments';
+            _teacherProgressSortAscending = true;
+          }),
+        ),
+      ],
+    );
+  }
+
+  Widget _teacherWorkflowStage({
+    required String number,
+    required String title,
+    required String detail,
+    required bool active,
+  }) => _TeacherWorkflowStageDisplay(
+    number: number,
+    title: title,
+    detail: detail,
+    active: active,
+  );
+
   int get _teacherProgressSortColumn => switch (_teacherProgressSort) {
     'Subject A–Z' => 1,
     'Class A–Z' => 2,
@@ -2027,12 +2410,18 @@ class _TermEvaluationWorkflowScreenState
     _ => 0,
   };
 
-  int get _personalResponsibilitySortColumn => switch (_teacherProgressSort) {
-    'Completion' => 1,
-    'Comments' => 2,
-    'Status' => 3,
-    _ => 0,
-  };
+  int get _personalResponsibilitySortColumn =>
+      _teacherStage == 'Student comments'
+      ? switch (_teacherProgressSort) {
+          'Comments' => 1,
+          'Status' => 2,
+          _ => 0,
+        }
+      : switch (_teacherProgressSort) {
+          'Completion' => 2,
+          'Status' => 3,
+          _ => 0,
+        };
 
   void _sortTeacherProgress(String field, bool ascending) {
     setState(() {
@@ -2181,133 +2570,109 @@ class _TermEvaluationWorkflowScreenState
   }
 
   Widget _personalResponsibilitiesTable(List<Map<String, dynamic>> rows) =>
-      LayoutBuilder(
-        builder: (context, constraints) => Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            border: Border.all(color: const Color(0xFFE2E8F0)),
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x0A0F172A),
-                blurRadius: 18,
-                offset: Offset(0, 6),
-              ),
-            ],
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(minWidth: constraints.maxWidth),
-              child: DataTable(
-                key: const ValueKey('teacher-responsibilities-table'),
-                sortColumnIndex: _personalResponsibilitySortColumn,
-                sortAscending: _teacherProgressSortAscending,
-                showCheckboxColumn: false,
-                headingRowHeight: 48,
-                dataRowMinHeight: 78,
-                dataRowMaxHeight: 92,
-                horizontalMargin: 18,
-                columnSpacing: 28,
-                dividerThickness: .75,
-                headingRowColor: WidgetStateProperty.all(
-                  const Color(0xFFF8FAFC),
+      _personalStageTable(
+        columns: _teacherStage == 'Student comments'
+            ? [
+                DataColumn(
+                  label: const Text('CLASS'),
+                  onSort: (_, ascending) =>
+                      _sortTeacherProgress('Class A–Z', ascending),
                 ),
-                headingTextStyle: _progressHeaderStyle,
-                columns: [
-                  DataColumn(
-                    label: const Text('CLASS'),
-                    onSort: (_, ascending) =>
-                        _sortTeacherProgress('Class A–Z', ascending),
-                  ),
-                  DataColumn(
-                    label: const Text('RATINGS'),
-                    onSort: (_, ascending) =>
-                        _sortTeacherProgress('Completion', ascending),
-                  ),
-                  DataColumn(
-                    label: const Text('COMMENTS'),
-                    onSort: (_, ascending) =>
-                        _sortTeacherProgress('Comments', ascending),
-                  ),
-                  DataColumn(
-                    label: const Text('APPROVAL STATUS'),
-                    onSort: (_, ascending) =>
-                        _sortTeacherProgress('Status', ascending),
-                  ),
-                  const DataColumn(label: Text('ACTION')),
-                ],
-                rows: [
-                  for (var index = 0; index < rows.length; index++)
-                    _personalResponsibilityDataRow(rows[index], index),
-                ],
-              ),
-            ),
-          ),
-        ),
+                DataColumn(
+                  label: const Text('COMMENTS'),
+                  onSort: (_, ascending) =>
+                      _sortTeacherProgress('Comments', ascending),
+                ),
+                DataColumn(
+                  label: const Text('APPROVAL STATUS'),
+                  onSort: (_, ascending) =>
+                      _sortTeacherProgress('Status', ascending),
+                ),
+                const DataColumn(label: Text('ACTION')),
+              ]
+            : [
+                DataColumn(
+                  label: const Text('CLASS'),
+                  onSort: (_, ascending) =>
+                      _sortTeacherProgress('Class A–Z', ascending),
+                ),
+                const DataColumn(label: Text('ROLE')),
+                DataColumn(
+                  label: const Text('RATINGS'),
+                  onSort: (_, ascending) =>
+                      _sortTeacherProgress('Completion', ascending),
+                ),
+                DataColumn(
+                  label: const Text('STATUS'),
+                  onSort: (_, ascending) =>
+                      _sortTeacherProgress('Status', ascending),
+                ),
+                const DataColumn(label: Text('ACTION')),
+              ],
+        rows: [
+          for (var index = 0; index < rows.length; index++)
+            _teacherStage == 'Student comments'
+                ? _personalCommentDataRow(rows[index], index)
+                : _personalRatingDataRow(rows[index], index),
+        ],
       );
 
-  DataRow _personalResponsibilityDataRow(
-    Map<String, dynamic> assignment,
-    int index,
-  ) {
+  Widget _personalStageTable({
+    required List<DataColumn> columns,
+    required List<DataRow> rows,
+  }) => LayoutBuilder(
+    builder: (context, constraints) => Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0A0F172A),
+            blurRadius: 18,
+            offset: Offset(0, 6),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minWidth: constraints.maxWidth),
+          child: DataTable(
+            key: const ValueKey('teacher-responsibilities-table'),
+            sortColumnIndex: _personalResponsibilitySortColumn,
+            sortAscending: _teacherProgressSortAscending,
+            showCheckboxColumn: false,
+            headingRowHeight: 48,
+            dataRowMinHeight: 72,
+            dataRowMaxHeight: 82,
+            horizontalMargin: 18,
+            columnSpacing: 28,
+            dividerThickness: .75,
+            headingRowColor: WidgetStateProperty.all(const Color(0xFFF8FAFC)),
+            headingTextStyle: _progressHeaderStyle,
+            columns: columns,
+            rows: rows,
+          ),
+        ),
+      ),
+    ),
+  );
+
+  DataRow _personalRatingDataRow(Map<String, dynamic> assignment, int index) {
     final progress = _intValue(assignment['completionPercent']).clamp(0, 100);
-    final className =
-        assignment['streamName']?.toString().trim() ?? 'Unassigned class';
     final students = _intValue(assignment['studentCount']);
-    final subjectCount = _teacherResponsibilitySubjects(assignment).length;
     final role = _teacherResponsibilityRole(assignment);
-    final classTeacher = assignment['assignmentType'] == 'CLASS_TEACHER';
-    final commentsCompleted = _intValue(
-      assignment['commentsCompleted'],
-    ).clamp(0, students);
     final ratingsCompleted = students == 0
         ? 0
         : (students * progress / 100).round().clamp(0, students).toInt();
-
     return DataRow(
-      color: WidgetStateProperty.resolveWith((states) {
-        if (states.contains(WidgetState.hovered)) {
-          return const Color(0xFFF0FDFA);
-        }
-        return index.isOdd ? const Color(0xFFFCFDFE) : Colors.white;
-      }),
+      color: _personalRowColor(index),
       cells: [
+        DataCell(_personalClassCell(assignment, includeRole: false)),
         DataCell(
-          SizedBox(
-            width: 275,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  className,
-                  key: ValueKey('responsibility-class-$className'),
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFF1E293B),
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  [
-                    role,
-                    '$students ${students == 1 ? 'student' : 'students'}',
-                    if (subjectCount > 0)
-                      '$subjectCount ${subjectCount == 1 ? 'subject' : 'subjects'}',
-                  ].join(' · '),
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFF64748B),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
+          Text(role, style: const TextStyle(fontWeight: FontWeight.w700)),
         ),
         DataCell(
           SizedBox(
@@ -2319,31 +2684,49 @@ class _TermEvaluationWorkflowScreenState
             ),
           ),
         ),
+        DataCell(_personalRatingStatus(assignment)),
+        DataCell(
+          Align(
+            alignment: Alignment.centerRight,
+            child: _personalRatingActions(assignment),
+          ),
+        ),
+      ],
+    );
+  }
+
+  DataRow _personalCommentDataRow(Map<String, dynamic> assignment, int index) {
+    final students = _intValue(assignment['studentCount']);
+    final commentsCompleted = _intValue(
+      assignment['commentsCompleted'],
+    ).clamp(0, students);
+    return DataRow(
+      color: _personalRowColor(index),
+      cells: [
+        DataCell(_personalClassCell(assignment, includeRole: false)),
         DataCell(
           SizedBox(
-            width: 190,
-            child: classTeacher
-                ? _adminProgressIndicator(
-                    completed: commentsCompleted,
-                    total: students,
-                    percent: students == 0
-                        ? 0
-                        : (commentsCompleted * 100 / students).round(),
-                    comment: true,
-                  )
-                : const Text(
-                    'Not required',
-                    style: TextStyle(color: Colors.blueGrey),
-                  ),
+            width: 225,
+            child: _adminProgressIndicator(
+              completed: commentsCompleted,
+              total: students,
+              percent: students == 0
+                  ? 0
+                  : (commentsCompleted * 100 / students).round(),
+              comment: true,
+            ),
           ),
         ),
         DataCell(_personalApprovalStatus(assignment)),
         DataCell(
           SizedBox(
-            width: 270,
+            width: 310,
             child: Align(
               alignment: Alignment.centerRight,
-              child: _personalResponsibilityActions(assignment),
+              child: _personalResponsibilityActions(
+                assignment,
+                showRatingShortcut: false,
+              ),
             ),
           ),
         ),
@@ -2351,12 +2734,77 @@ class _TermEvaluationWorkflowScreenState
     );
   }
 
+  WidgetStateProperty<Color?> _personalRowColor(int index) =>
+      WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.hovered)) {
+          return const Color(0xFFF0FDFA);
+        }
+        return index.isOdd ? const Color(0xFFFCFDFE) : Colors.white;
+      });
+
+  Widget _personalClassCell(
+    Map<String, dynamic> assignment, {
+    required bool includeRole,
+  }) {
+    final className =
+        assignment['streamName']?.toString().trim() ?? 'Unassigned class';
+    final students = _intValue(assignment['studentCount']);
+    final subjectCount = _teacherResponsibilitySubjects(assignment).length;
+    final role = _teacherResponsibilityRole(assignment);
+    return SizedBox(
+      width: 275,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            className,
+            key: ValueKey('responsibility-class-$className'),
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Color(0xFF1E293B),
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            [
+              if (includeRole) role,
+              '$students ${students == 1 ? 'student' : 'students'}',
+              if (subjectCount > 0)
+                '$subjectCount ${subjectCount == 1 ? 'subject' : 'subjects'}',
+            ].join(' · '),
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Color(0xFF64748B),
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _personalRatingStatus(Map<String, dynamic> assignment) {
+    if (assignment['pendingGeneration'] == true) {
+      return _adminApprovalBadge('Available after release');
+    }
+    if (assignment['status'] == 'SUBMITTED') {
+      return _adminApprovalBadge('Complete');
+    }
+    return _adminApprovalBadge(
+      _intValue(assignment['completionPercent']) > 0
+          ? 'In progress'
+          : 'Not started',
+    );
+  }
+
   Widget _personalApprovalStatus(Map<String, dynamic> assignment) {
     if (assignment['assignmentType']?.toString() != 'CLASS_TEACHER') {
       return _adminApprovalBadge('Not required');
     }
-    return _approvalStatusBadge(assignment) ??
-        _adminApprovalBadge('Not submitted');
+    return _approvalStatusBadge(assignment) ?? _adminApprovalBadge('Not ready');
   }
 
   Widget? _approvalStatusBadge(Map<String, dynamic> assignment) {
@@ -2367,6 +2815,10 @@ class _TermEvaluationWorkflowScreenState
     final label = pendingGeneration
         ? 'Available after release'
         : switch (workflowStatus) {
+            'RATINGS_IN_PROGRESS' => 'Not ready',
+            'RATINGS_COMPLETE' => 'Comments not started',
+            'COMMENTS_IN_PROGRESS' => 'Comments in progress',
+            'COMMENTS_COMPLETE' => 'Ready to submit',
             'READY_FOR_LEADERSHIP' => 'Awaiting approval',
             'UNDER_REVIEW' => 'Under review',
             'APPROVED' => 'Approved',
@@ -2390,6 +2842,11 @@ class _TermEvaluationWorkflowScreenState
         const Color(0xFFEFF6FF),
         const Color(0xFFBFDBFE),
         const Color(0xFF1D4ED8),
+      ),
+      'ready to submit' => (
+        const Color(0xFFFFFBEB),
+        const Color(0xFFFDE68A),
+        const Color(0xFFB45309),
       ),
       'rejected' => (
         const Color(0xFFFEF2F2),
@@ -2420,7 +2877,71 @@ class _TermEvaluationWorkflowScreenState
     );
   }
 
-  Widget _personalResponsibilityActions(Map<String, dynamic> assignment) {
+  Widget _personalRatingActions(Map<String, dynamic> assignment) {
+    final own =
+        assignment['staffName'].toString().trim().toLowerCase() ==
+        widget.viewerName.trim().toLowerCase();
+    final submitted = assignment['status'] == 'SUBMITTED';
+    final pendingGeneration = assignment['pendingGeneration'] == true;
+    final progress = _intValue(assignment['completionPercent']);
+    final workflowStatus = assignment['workflowStatus']
+        ?.toString()
+        .toUpperCase();
+    final leadershipLocked = const {
+      'UNDER_REVIEW',
+      'APPROVED',
+    }.contains(workflowStatus);
+
+    if (pendingGeneration) {
+      return const Text(
+        'Available after release',
+        style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w700),
+      );
+    }
+    if (!own) return const SizedBox.shrink();
+    if (!submitted) {
+      if (!_teacherEntryOpen) {
+        return const Text(
+          'Entry locked',
+          style: TextStyle(
+            color: Color(0xFF64748B),
+            fontWeight: FontWeight.w700,
+          ),
+        );
+      }
+      return FilledButton.icon(
+        style: _responsibilityActionStyle(filled: true),
+        onPressed: () => _openAssignment(assignment),
+        icon: Icon(
+          progress == 0 ? Icons.play_arrow_rounded : Icons.arrow_forward,
+          size: 18,
+        ),
+        label: Text(progress == 0 ? 'Start ratings' : 'Continue ratings'),
+      );
+    }
+    return OutlinedButton.icon(
+      style: _responsibilityActionStyle(),
+      onPressed: leadershipLocked || !_teacherEntryOpen
+          ? () => _viewAssignment(assignment)
+          : () => _openAssignment(assignment),
+      icon: Icon(
+        leadershipLocked || !_teacherEntryOpen
+            ? Icons.visibility_outlined
+            : Icons.edit_outlined,
+        size: 17,
+      ),
+      label: Text(
+        leadershipLocked || !_teacherEntryOpen
+            ? 'View ratings'
+            : 'Edit ratings',
+      ),
+    );
+  }
+
+  Widget _personalResponsibilityActions(
+    Map<String, dynamic> assignment, {
+    bool showRatingShortcut = true,
+  }) {
     final own =
         assignment['staffName'].toString().trim().toLowerCase() ==
         widget.viewerName.trim().toLowerCase();
@@ -2429,61 +2950,138 @@ class _TermEvaluationWorkflowScreenState
     final progress = _intValue(assignment['completionPercent']);
     final classTeacher = assignment['assignmentType'] == 'CLASS_TEACHER';
     final commentsCompleted = _intValue(assignment['commentsCompleted']);
-    final actions = <Widget>[];
+    final workflowStatus = assignment['workflowStatus']
+        ?.toString()
+        .toUpperCase();
+    final leadershipLocked = const {
+      'UNDER_REVIEW',
+      'APPROVED',
+    }.contains(workflowStatus);
+    final readyToSubmit = workflowStatus == 'COMMENTS_COMPLETE';
+    final awaitingApproval = workflowStatus == 'READY_FOR_LEADERSHIP';
+    final assignmentId = _intValue(assignment['id']);
+    final submitting = _submittingClassAssignments.contains(assignmentId);
 
-    if (own && !submitted && !pendingGeneration && _teacherEntryOpen) {
-      actions.add(
-        FilledButton(
-          onPressed: () => _openAssignment(assignment),
-          child: Text(progress == 0 ? 'Start' : 'Continue'),
-        ),
+    if (pendingGeneration) {
+      return const Text(
+        'Available after release',
+        style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w700),
       );
     }
-    if (own && !submitted && !pendingGeneration && !_teacherEntryOpen) {
-      actions.add(
-        const Text(
+    if (!own) return const SizedBox.shrink();
+    if (!submitted) {
+      if (!_teacherEntryOpen) {
+        return const Text(
           'Entry locked',
           style: TextStyle(
             color: Color(0xFF64748B),
             fontWeight: FontWeight.w700,
           ),
+        );
+      }
+      return FilledButton.icon(
+        style: _responsibilityActionStyle(filled: true),
+        onPressed: () => _openAssignment(assignment),
+        icon: Icon(
+          progress == 0 ? Icons.play_arrow_rounded : Icons.arrow_forward,
+          size: 18,
         ),
+        label: Text(progress == 0 ? 'Start ratings' : 'Continue ratings'),
       );
     }
-    if (own && submitted && classTeacher) {
-      actions.add(
-        FilledButton.tonal(
-          onPressed: () => _review(assignment),
-          child: Text(
-            commentsCompleted == 0
-                ? 'Add student comments'
-                : 'Continue student comments',
-          ),
-        ),
-      );
-    }
-    if (own && submitted && !pendingGeneration && _teacherEntryOpen) {
-      actions.add(
-        OutlinedButton(
-          onPressed: () => _openAssignment(assignment),
-          child: const Text('Edit ratings'),
-        ),
-      );
-    }
-    if (pendingGeneration) {
-      actions.add(
-        const Text('No action yet', style: TextStyle(color: Color(0xFF64748B))),
+    if (!classTeacher) {
+      return OutlinedButton.icon(
+        style: _responsibilityActionStyle(),
+        onPressed: _teacherEntryOpen ? () => _openAssignment(assignment) : null,
+        icon: const Icon(Icons.edit_outlined, size: 17),
+        label: const Text('Edit ratings'),
       );
     }
 
+    final rejected = workflowStatus == 'REJECTED';
+    final primaryLabel = leadershipLocked
+        ? 'View comments'
+        : readyToSubmit
+        ? 'Submit for approval'
+        : rejected
+        ? 'Fix comments'
+        : awaitingApproval
+        ? 'Review comments'
+        : commentsCompleted == 0
+        ? 'Add comments'
+        : 'Continue comments';
     return Wrap(
-      spacing: 8,
-      runSpacing: 8,
+      spacing: 4,
+      runSpacing: 4,
       alignment: WrapAlignment.end,
       crossAxisAlignment: WrapCrossAlignment.center,
-      children: actions,
+      children: [
+        if (leadershipLocked)
+          OutlinedButton.icon(
+            style: _responsibilityActionStyle(),
+            onPressed: () => _review(assignment),
+            icon: const Icon(Icons.visibility_outlined, size: 17),
+            label: Text(primaryLabel),
+          )
+        else if (readyToSubmit)
+          FilledButton.icon(
+            key: ValueKey('submit-responsibility-$assignmentId'),
+            style: _responsibilityActionStyle(filled: true),
+            onPressed: submitting
+                ? null
+                : () => _submitClassForApproval(assignment),
+            icon: submitting
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.send_outlined, size: 17),
+            label: Text(submitting ? 'Submitting…' : primaryLabel),
+          )
+        else
+          FilledButton.tonalIcon(
+            style: _responsibilityActionStyle(filled: true),
+            onPressed: () => _review(assignment),
+            icon: Icon(
+              rejected ? Icons.edit_note_outlined : Icons.comment_outlined,
+              size: 17,
+            ),
+            label: Text(primaryLabel),
+          ),
+        if (showRatingShortcut && !leadershipLocked && _teacherEntryOpen) ...[
+          PopupMenuButton<String>(
+            key: ValueKey('responsibility-more-${assignment['id']}'),
+            tooltip: 'More actions',
+            onSelected: (value) {
+              if (value == 'edit-ratings') _openAssignment(assignment);
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: 'edit-ratings',
+                child: Row(
+                  children: [
+                    Icon(Icons.edit_outlined, size: 18),
+                    SizedBox(width: 9),
+                    Text('Edit ratings'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ],
     );
   }
+
+  ButtonStyle _responsibilityActionStyle({bool filled = false}) =>
+      (filled ? FilledButton.styleFrom() : OutlinedButton.styleFrom()).copyWith(
+        minimumSize: const WidgetStatePropertyAll(Size(0, 40)),
+        padding: const WidgetStatePropertyAll(
+          EdgeInsets.symmetric(horizontal: 14),
+        ),
+        visualDensity: VisualDensity.compact,
+      );
 
   DataRow _teacherProgressRow(Map<String, dynamic> assignment) {
     final own =
@@ -3331,6 +3929,54 @@ class _TermEvaluationWorkflowScreenState
     }
   }
 
+  Future<void> _submitClassForApproval(Map<String, dynamic> assignment) async {
+    final assignmentId = _intValue(assignment['id']);
+    if (assignmentId <= 0 ||
+        _submittingClassAssignments.contains(assignmentId)) {
+      return;
+    }
+    final students = _intValue(assignment['studentCount']);
+    final className =
+        assignment['streamName']?.toString().trim() ?? 'this class';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Submit class evaluation for approval?'),
+        content: Text(
+          'The completed ratings and comments for $students '
+          '${students == 1 ? 'student' : 'students'} in $className will be sent to leadership.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.send_outlined),
+            label: const Text('Submit for approval'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _submittingClassAssignments.add(assignmentId));
+    try {
+      await widget.api.submitTermEvaluationClassComments(
+        assignmentId: assignmentId,
+        schoolId: widget.schoolId,
+      );
+      await _load();
+      _message('Class evaluation submitted for approval.');
+    } on AssessmentApiException catch (error) {
+      _message(error.message);
+    } finally {
+      if (mounted) {
+        setState(() => _submittingClassAssignments.remove(assignmentId));
+      }
+    }
+  }
+
   Future<void> _review(
     Map<String, dynamic> assignment, {
     bool leadershipReview = false,
@@ -3379,6 +4025,72 @@ class _TermEvaluationWorkflowScreenState
     );
     _message('Reminder recorded for ${assignment['staffName']}.');
   }
+}
+
+class _TeacherWorkflowStageDisplay extends StatelessWidget {
+  const _TeacherWorkflowStageDisplay({
+    required this.number,
+    required this.title,
+    required this.detail,
+    this.active = false,
+  });
+
+  final String number;
+  final String title;
+  final String detail;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    child: Row(
+      children: [
+        Container(
+          width: 30,
+          height: 30,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: active ? const Color(0xFF0F766E) : const Color(0xFFE2E8F0),
+            shape: BoxShape.circle,
+          ),
+          child: Text(
+            number,
+            style: TextStyle(
+              color: active ? Colors.white : const Color(0xFF475569),
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  color: active
+                      ? const Color(0xFF0F766E)
+                      : const Color(0xFF1E293B),
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                detail,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFF64748B),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _ClassEvaluationResultsView extends StatefulWidget {
@@ -3437,8 +4149,11 @@ class _ClassEvaluationResultsViewState
     }),
   );
 
-  bool _awaitingApproval(String status) =>
-      const {'SUBMITTED', 'FINALIZED'}.contains(status.toUpperCase());
+  bool _awaitingApproval(String status) => const {
+    'SUBMITTED',
+    'FINALIZED',
+    'UNDER_REVIEW',
+  }.contains(status.toUpperCase());
 
   String _rowStatus(Map<String, dynamic> row) =>
       ((row['review'] as Map?)?['status']?.toString() ?? 'PENDING')
@@ -3559,7 +4274,7 @@ class _ClassEvaluationResultsViewState
     }
     setState(() => _busy = true);
     try {
-      if (_awaitingApproval(status)) {
+      if (const {'SUBMITTED', 'FINALIZED'}.contains(status.toUpperCase())) {
         await widget.api.startTermEvaluationLeadershipReview(
           studentId: studentId,
           schoolId: widget.schoolId,

@@ -130,6 +130,9 @@ class _CompleteAssessmentWorkflowState
   AssessmentFormSetup? _loadedSetup;
   bool _loadingAssessments = true;
   String? _assessmentLoadError;
+  _GradingRequirementsSnapshot? _gradingRequirements;
+  bool _checkingGradingRequirements = false;
+  String? _gradingRequirementsError;
   _Route _route = _Route.dashboard;
   final List<_Route> _history = [];
   _AssessmentRecord? _selectedAssessment;
@@ -325,6 +328,9 @@ class _CompleteAssessmentWorkflowState
         }
         _loadingAssessments = false;
       });
+      if (_teacherViewer) {
+        await _refreshGradingRequirements();
+      }
     } on AssessmentApiException catch (error) {
       if (!mounted) return;
       setState(() {
@@ -637,239 +643,285 @@ class _CompleteAssessmentWorkflowState
     }
   }
 
-  Future<void> _showAssessmentReadiness() async {
-    var ready = false;
-    var totalStudents = 0;
-    var missingScores = 0;
-    final missingAssessments = <String>[];
-    final subjectReadinessDetails = <Map<String, dynamic>>[];
-    var evaluationPending = 0;
-    var finalReviewPending = 0;
-
-    if (widget.customSchoolId.trim().isNotEmpty) {
-      try {
-        final setup = await _assessmentFormSetup;
-        final streams = setup.streams.where(
-          (stream) => stream.label == _selectedClass,
-        );
-        if (streams.isEmpty) {
-          throw const AssessmentApiException(
-            'The selected class could not be resolved.',
-          );
-        }
-        final response = await _assessmentApi.getStreamReportReadiness(
-          customSchoolId: widget.customSchoolId,
-          streamId: streams.first.id,
-          term: setup.termSequence,
-          academicYearId: setup.academicYearId,
-          academicTermId: setup.termId,
-        );
-        final overall = response['overallStatus'] is Map
-            ? Map<String, dynamic>.from(response['overallStatus'] as Map)
-            : const <String, dynamic>{};
-        final details =
-            (response['studentReadinessDetails'] as List? ?? const [])
-                .whereType<Map>()
-                .map((item) => Map<String, dynamic>.from(item))
-                .toList();
-        totalStudents = _jsonInt(response['totalStudents']);
-        if (totalStudents == 0) totalStudents = details.length;
-        final subjectBreakdown =
-            (response['subjectBreakdown'] as List? ?? const [])
-                .whereType<Map>()
-                .map((item) => Map<String, dynamic>.from(item))
-                .toList();
-        var foundAssessmentBreakdown = false;
-        for (final subject in subjectBreakdown) {
-          final subjectName = subject['subjectName']?.toString() ?? 'Subject';
-          final rawBreakdown = subject['assessmentBreakdown'];
-          if (rawBreakdown is! Map) continue;
-          foundAssessmentBreakdown = true;
-          final missingComponents = <String>[];
-          var subjectMissingScores = 0;
-          for (final entry in rawBreakdown.entries) {
-            if (entry.value is! Map) continue;
-            final component = Map<String, dynamic>.from(entry.value as Map);
-            final required = _jsonInt(component['totalStudents']);
-            final entered = _jsonInt(component['studentsScored']);
-            final scoreGap = (required - entered).clamp(0, required);
-            subjectMissingScores += scoreGap;
-            missingScores += scoreGap;
-            if (component['exists'] != true) {
-              final componentLabel = _readinessAssessmentTypeLabel(
-                entry.key.toString(),
-              );
-              missingComponents.add(componentLabel);
-              missingAssessments.add(
-                '$subjectName $componentLabel assessment is missing.',
-              );
-            }
-          }
-          if (missingComponents.isNotEmpty || subjectMissingScores > 0) {
-            subjectReadinessDetails.add({
-              'subjectName': subjectName,
-              'missingComponents': missingComponents,
-              'missingScores': subjectMissingScores,
-            });
-          }
-        }
-        if (!foundAssessmentBreakdown) {
-          missingScores = details.fold<int>(
-            0,
-            (total, student) => total + _jsonInt(student['assessmentsMissing']),
-          );
-        }
-        evaluationPending = details
-            .where((student) => student['evaluationReady'] == false)
-            .length;
-        finalReviewPending = details
-            .where(
-              (student) =>
-                  student['canGenerateReport'] != true &&
-                  student['assessmentDataReady'] == true &&
-                  student['evaluationReady'] != false,
-            )
-            .length;
-        ready = overall['canGenerateForAllStudents'] == true;
-      } on AssessmentApiException catch (error) {
-        if (mounted) _notice(error.message);
-        return;
-      }
-    } else {
-      totalStudents = _assessments
-          .map((assessment) => assessment.totalStudents)
-          .fold<int>(0, (largest, value) => value > largest ? value : largest);
-      missingScores = _assessments.fold<int>(
-        0,
-        (total, assessment) =>
-            total +
-            (assessment.totalStudents - assessment.entered).clamp(
-              0,
-              assessment.totalStudents,
-            ),
-      );
-      ready = _assessments.isNotEmpty && missingScores == 0;
+  Future<_GradingRequirementsSnapshot?> _refreshGradingRequirements() async {
+    if (mounted) {
+      setState(() {
+        _checkingGradingRequirements = true;
+        _gradingRequirementsError = null;
+      });
     }
-    if (!mounted) return;
+    try {
+      final snapshot = await _fetchGradingRequirements();
+      if (!mounted) return snapshot;
+      setState(() {
+        _gradingRequirements = snapshot;
+        _checkingGradingRequirements = false;
+      });
+      return snapshot;
+    } on AssessmentApiException catch (error) {
+      if (!mounted) return null;
+      setState(() {
+        _checkingGradingRequirements = false;
+        _gradingRequirementsError = error.message;
+      });
+      return null;
+    } catch (_) {
+      if (!mounted) return null;
+      setState(() {
+        _checkingGradingRequirements = false;
+        _gradingRequirementsError =
+            'Grading requirements could not be checked. Please try again.';
+      });
+      return null;
+    }
+  }
 
-    final blockers = <String>[
-      if (missingAssessments.isNotEmpty)
-        '${missingAssessments.length} required assessment${missingAssessments.length == 1 ? ' is' : 's are'} missing.',
-      if (missingScores > 0)
-        '$missingScores required score${missingScores == 1 ? ' is' : 's are'} missing.',
-      if (evaluationPending > 0)
-        '$evaluationPending student evaluation${evaluationPending == 1 ? ' is' : 's are'} not completed.',
-      if (finalReviewPending > 0)
-        '$finalReviewPending report${finalReviewPending == 1 ? ' needs' : 's need'} final review.',
-    ];
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(ready ? 'Reports are ready' : 'Reports are not ready'),
-        content: SizedBox(
-          width: 400,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (ready)
-                _reportReadinessChecklistItem(
-                  'All $totalStudents student report${totalStudents == 1 ? '' : 's'} can be generated.',
-                  complete: true,
-                )
-              else if (blockers.isEmpty)
-                _reportReadinessChecklistItem(
-                  'Required report information is incomplete.',
-                )
-              else
-                for (final blocker in blockers)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: _reportReadinessChecklistItem(blocker),
-                  ),
-            ],
-          ),
-        ),
-        actions: [
-          if (!ready &&
-              (subjectReadinessDetails.isNotEmpty ||
-                  evaluationPending > 0 ||
-                  finalReviewPending > 0))
-            TextButton(
-              onPressed: () => _showReportReadinessDetails(
-                dialogContext,
-                subjects: subjectReadinessDetails,
-                evaluationPending: evaluationPending,
-                finalReviewPending: finalReviewPending,
-              ),
-              child: const Text('More details'),
-            ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Done'),
-          ),
-        ],
-      ),
+  Future<_GradingRequirementsSnapshot> _fetchGradingRequirements() async {
+    if (widget.customSchoolId.trim().isEmpty) {
+      return _localGradingRequirementsSnapshot();
+    }
+    final setup = await _assessmentFormSetup;
+    final streams = setup.streams.where(
+      (stream) => stream.label == _selectedClass,
+    );
+    if (streams.isEmpty) {
+      throw const AssessmentApiException(
+        'The selected class could not be resolved.',
+      );
+    }
+    final response = await _assessmentApi.getStreamReportReadiness(
+      customSchoolId: widget.customSchoolId,
+      streamId: streams.first.id,
+      term: setup.termSequence,
+      academicYearId: setup.academicYearId,
+      academicTermId: setup.termId,
+    );
+    final subjects = (response['subjectBreakdown'] as List? ?? const [])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
+    final duplicates = _duplicateReportComponentsBySubject();
+    final issues = <_GradingSubjectIssue>[];
+    var requiredAssessments = 0;
+    var presentAssessments = 0;
+    var requiredScores = 0;
+    var enteredScores = 0;
+    var completeSubjects = 0;
+    final classStudentCount = _jsonInt(response['totalStudents']);
+
+    for (final subject in subjects) {
+      final subjectName =
+          subject['subjectName']?.toString().trim().isNotEmpty == true
+          ? subject['subjectName'].toString().trim()
+          : 'Subject';
+      final rawBreakdown = subject['assessmentBreakdown'];
+      final missingComponents = <String>[];
+      var missingScores = 0;
+      if (rawBreakdown is Map && rawBreakdown.isNotEmpty) {
+        for (final entry in rawBreakdown.entries) {
+          if (entry.value is! Map) continue;
+          final component = Map<String, dynamic>.from(entry.value as Map);
+          final componentLabel = _readinessAssessmentTypeLabel(
+            entry.key.toString(),
+          );
+          final required = _jsonInt(component['totalStudents']);
+          final entered = _jsonInt(
+            component['studentsScored'],
+          ).clamp(0, required);
+          requiredAssessments++;
+          requiredScores += required;
+          enteredScores += entered;
+          if (component['exists'] == true) {
+            presentAssessments++;
+            missingScores += (required - entered).clamp(0, required);
+          } else {
+            missingComponents.add(componentLabel);
+          }
+        }
+      } else {
+        missingComponents.addAll(_reportBasedAssessmentTypes);
+        requiredAssessments += _reportBasedAssessmentTypes.length;
+        requiredScores +=
+            _reportBasedAssessmentTypes.length * classStudentCount;
+      }
+      final duplicateComponents =
+          duplicates[subjectName.toLowerCase()] ?? const <String>[];
+      final issue = _GradingSubjectIssue(
+        subjectName: subjectName,
+        missingComponents: missingComponents,
+        missingScores: missingScores,
+        duplicateComponents: duplicateComponents,
+      );
+      if (issue.hasIssues) {
+        issues.add(issue);
+      } else {
+        completeSubjects++;
+      }
+    }
+
+    return _GradingRequirementsSnapshot(
+      totalSubjects: subjects.length,
+      completeSubjects: completeSubjects,
+      requiredAssessments: requiredAssessments,
+      presentAssessments: presentAssessments,
+      requiredScores: requiredScores,
+      enteredScores: enteredScores,
+      subjectIssues: issues,
     );
   }
 
-  Future<void> _showReportReadinessDetails(
-    BuildContext parentDialogContext, {
-    required List<Map<String, dynamic>> subjects,
-    required int evaluationPending,
-    required int finalReviewPending,
-  }) async {
-    final totalMissingScores = subjects.fold<int>(
-      0,
-      (total, subject) => total + _jsonInt(subject['missingScores']),
+  _GradingRequirementsSnapshot _localGradingRequirementsSnapshot() {
+    final reportAssessments = _assessments.where((assessment) {
+      final type = _canonicalAssessmentTypeLabel(assessment.type);
+      return _reportBasedAssessmentTypes.contains(type);
+    }).toList();
+    final subjectNames = reportAssessments
+        .map((assessment) => assessment.subject.trim())
+        .where((subject) => subject.isNotEmpty)
+        .toSet();
+    final duplicates = _duplicateReportComponentsBySubject();
+    final issues = <_GradingSubjectIssue>[];
+    var completeSubjects = 0;
+    var presentAssessments = 0;
+    var requiredScores = 0;
+    var enteredScores = 0;
+    for (final subjectName in subjectNames) {
+      final subjectAssessments = reportAssessments
+          .where((assessment) => assessment.subject == subjectName)
+          .toList();
+      final presentTypes = subjectAssessments
+          .map((assessment) => _canonicalAssessmentTypeLabel(assessment.type))
+          .toSet();
+      final missingComponents = _reportBasedAssessmentTypes
+          .where((component) => !presentTypes.contains(component))
+          .toList();
+      var missingScores = 0;
+      for (final assessment in subjectAssessments) {
+        presentAssessments++;
+        requiredScores += assessment.totalStudents;
+        enteredScores += assessment.entered.clamp(0, assessment.totalStudents);
+        missingScores += (assessment.totalStudents - assessment.entered).clamp(
+          0,
+          assessment.totalStudents,
+        );
+      }
+      final issue = _GradingSubjectIssue(
+        subjectName: subjectName,
+        missingComponents: missingComponents,
+        missingScores: missingScores,
+        duplicateComponents:
+            duplicates[subjectName.toLowerCase()] ?? const <String>[],
+      );
+      if (issue.hasIssues) {
+        issues.add(issue);
+      } else {
+        completeSubjects++;
+      }
+    }
+    return _GradingRequirementsSnapshot(
+      totalSubjects: subjectNames.length,
+      completeSubjects: completeSubjects,
+      requiredAssessments:
+          subjectNames.length * _reportBasedAssessmentTypes.length,
+      presentAssessments: presentAssessments,
+      requiredScores: requiredScores,
+      enteredScores: enteredScores,
+      subjectIssues: issues,
     );
+  }
 
+  Map<String, List<String>> _duplicateReportComponentsBySubject() {
+    final counts = <String, Map<String, int>>{};
+    for (final assessment in _assessments) {
+      final type = _canonicalAssessmentTypeLabel(assessment.type);
+      if (!_reportBasedAssessmentTypes.contains(type)) continue;
+      final subject = assessment.subject.trim().toLowerCase();
+      if (subject.isEmpty) continue;
+      final subjectCounts = counts.putIfAbsent(subject, () => {});
+      subjectCounts[type] = (subjectCounts[type] ?? 0) + 1;
+    }
+    return {
+      for (final entry in counts.entries)
+        entry.key: entry.value.entries
+            .where((component) => component.value > 1)
+            .map((component) => component.key)
+            .toList(),
+    };
+  }
+
+  Future<void> _showGradingRequirements() async {
+    final snapshot = await _refreshGradingRequirements();
+    if (!mounted) return;
+    if (snapshot == null) {
+      _notice(
+        _gradingRequirementsError ??
+            'Grading requirements could not be checked. Please try again.',
+      );
+      return;
+    }
     await showDialog<void>(
-      context: parentDialogContext,
-      builder: (detailsContext) => AlertDialog(
-        title: const Text('What is missing'),
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        titlePadding: const EdgeInsets.fromLTRB(24, 22, 24, 0),
+        title: Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: snapshot.met
+                    ? const Color(0xFFDCFCE7)
+                    : const Color(0xFFFFF3D6),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                snapshot.met
+                    ? Icons.celebration_outlined
+                    : Icons.warning_amber_rounded,
+                color: snapshot.met
+                    ? const Color(0xFF087A5B)
+                    : const Color(0xFFB65B00),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                snapshot.met
+                    ? 'Grading requirements met'
+                    : 'Grading requirements not met',
+              ),
+            ),
+          ],
+        ),
         content: SizedBox(
-          width: 540,
+          width: 620,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 520),
+            constraints: const BoxConstraints(maxHeight: 600),
             child: ListView(
               shrinkWrap: true,
               children: [
-                if (totalMissingScores > 0) ...[
-                  Text(
-                    '$totalMissingScores required score${totalMissingScores == 1 ? ' is' : 's are'} missing.',
-                    style: const TextStyle(
-                      color: AppColors.muted,
-                      fontWeight: FontWeight.w600,
-                    ),
+                const SizedBox(height: 8),
+                Text(
+                  snapshot.met
+                      ? 'Great work! All required assessments and student scores are complete for $_selectedClass and meet the configured GES grading requirements.'
+                      : _gradingRequirementsLead(snapshot),
+                  style: const TextStyle(
+                    color: AppColors.text,
+                    fontWeight: FontWeight.w600,
+                    height: 1.4,
                   ),
-                  const SizedBox(height: 16),
-                ],
-                for (final subject in subjects)
-                  _subjectReadinessSummaryCard(subject),
-                if (evaluationPending > 0)
-                  _aggregateReadinessCard(
-                    title: 'Evaluations',
-                    detail:
-                        '$evaluationPending evaluation${evaluationPending == 1 ? ' is' : 's are'} not completed',
-                  ),
-                if (finalReviewPending > 0)
-                  _aggregateReadinessCard(
-                    title: 'Final review',
-                    detail:
-                        '$finalReviewPending report${finalReviewPending == 1 ? ' needs' : 's need'} final review',
-                  ),
-                if (subjects.isEmpty &&
-                    evaluationPending == 0 &&
-                    finalReviewPending == 0)
-                  const Text('No detailed blockers were returned.'),
+                ),
+                const SizedBox(height: 16),
+                _gradingRequirementChecks(snapshot),
+                const SizedBox(height: 12),
+                _gradingRequirementDetails(snapshot),
               ],
             ),
           ),
         ),
         actions: [
           FilledButton(
-            onPressed: () => Navigator.pop(detailsContext),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('Close'),
           ),
         ],
@@ -877,71 +929,198 @@ class _CompleteAssessmentWorkflowState
     );
   }
 
-  Widget _subjectReadinessSummaryCard(Map<String, dynamic> subject) {
-    final subjectName = subject['subjectName']?.toString() ?? 'Subject';
-    final missingScores = _jsonInt(subject['missingScores']);
-    final components = (subject['missingComponents'] as List? ?? const [])
-        .map((item) => item.toString())
-        .toList();
-    final detail = components.isEmpty
-        ? '$missingScores score${missingScores == 1 ? '' : 's'} missing'
-        : '${components.length} assessment${components.length == 1 ? '' : 's'} missing · '
-              '$missingScores score${missingScores == 1 ? '' : 's'} affected';
-    return _aggregateReadinessCard(
-      title: subjectName,
-      detail: detail,
-      components: components,
+  String _gradingRequirementsLead(_GradingRequirementsSnapshot snapshot) {
+    if (snapshot.totalSubjects == 0) {
+      return 'No grading requirements are available for this class yet.';
+    }
+    if (snapshot.noAssessmentsCreated) {
+      return 'No grading data has been entered for this class.';
+    }
+    if (snapshot.noScoresEntered) {
+      return 'No student scores have been entered for this class.';
+    }
+    final count = snapshot.subjectIssues.length;
+    return '$count subject${count == 1 ? '' : 's'} need attention before the configured GES grading requirements are met.';
+  }
+
+  Widget _gradingRequirementTotals(_GradingRequirementsSnapshot snapshot) {
+    final color = snapshot.met
+        ? const Color(0xFF087A5B)
+        : const Color(0xFFB65B00);
+    final background = snapshot.met
+        ? const Color(0xFFECFDF5)
+        : const Color(0xFFFFF8E8);
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${snapshot.totalSubjects} subject${snapshot.totalSubjects == 1 ? '' : 's'} checked',
+            style: TextStyle(color: color, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            '${snapshot.presentAssessments} of ${snapshot.requiredAssessments} required assessments created',
+            style: const TextStyle(color: AppColors.text),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            '${snapshot.enteredScores} of ${snapshot.requiredScores} required scores entered',
+            style: const TextStyle(color: AppColors.text),
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _aggregateReadinessCard({
-    required String title,
-    required String detail,
-    List<String> components = const [],
-  }) => Container(
-    width: double.infinity,
-    margin: const EdgeInsets.only(bottom: 8),
-    padding: const EdgeInsets.all(12),
+  Widget _gradingRequirementChecks(
+    _GradingRequirementsSnapshot snapshot,
+  ) => Container(
     decoration: BoxDecoration(
-      color: const Color(0xFFF8FAFC),
       border: Border.all(color: AppColors.border),
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(12),
     ),
     child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
-        const SizedBox(height: 3),
-        Text(detail, style: const TextStyle(color: AppColors.muted)),
-        if (components.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: components
-                .map(
-                  (component) => Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 9,
-                      vertical: 5,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFF7ED),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Text(
-                      component,
-                      style: const TextStyle(
-                        color: Color(0xFF9A4D08),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                )
-                .toList(),
+        _gradingRequirementCheckRow(
+          complete: snapshot.assessmentComponentsComplete,
+          title: 'Required assessments',
+          detail:
+              'All subjects have CAT 1, CAT 2, CAT 3, CAT 4 and Examination.',
+        ),
+        const Divider(height: 1),
+        _gradingRequirementCheckRow(
+          complete: snapshot.allScoresEntered,
+          title: 'Score entry',
+          detail: 'All required assessments are fully graded.',
+        ),
+      ],
+    ),
+  );
+
+  Widget _gradingRequirementCheckRow({
+    required bool complete,
+    required String title,
+    required String detail,
+  }) {
+    final color = complete ? const Color(0xFF087A5B) : const Color(0xFFB65B00);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            complete
+                ? Icons.check_circle_rounded
+                : Icons.radio_button_unchecked_rounded,
+            color: color,
+            size: 21,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 2),
+                Text(detail, style: const TextStyle(color: AppColors.muted)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            complete ? 'Complete' : 'Incomplete',
+            style: TextStyle(color: color, fontWeight: FontWeight.w800),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _gradingRequirementDetails(_GradingRequirementsSnapshot snapshot) =>
+      Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFFF8FAFC),
+          border: Border.all(color: AppColors.border),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: ExpansionTile(
+          shape: const Border(),
+          collapsedShape: const Border(),
+          title: const Text(
+            'View details',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+          subtitle: const Text('Show subjects and grading totals'),
+          childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          children: [
+            _gradingRequirementTotals(snapshot),
+            if (snapshot.subjectIssues.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              _gradingSubjectDetails(snapshot.subjectIssues),
+            ],
+          ],
+        ),
+      );
+
+  Widget _gradingSubjectDetails(List<_GradingSubjectIssue> issues) => Container(
+    decoration: BoxDecoration(
+      border: Border.all(color: AppColors.border),
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Column(
+      children: [
+        for (var index = 0; index < issues.length; index++) ...[
+          _gradingSubjectIssueRow(issues[index]),
+          if (index < issues.length - 1) const Divider(height: 1),
+        ],
+      ],
+    ),
+  );
+
+  Widget _gradingSubjectIssueRow(_GradingSubjectIssue issue) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Icon(
+          Icons.warning_amber_rounded,
+          color: Color(0xFFB65B00),
+          size: 20,
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                issue.subjectName,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                issue.detail,
+                style: const TextStyle(color: AppColors.muted),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 10),
+        const Text(
+          'Incomplete',
+          style: TextStyle(
+            color: Color(0xFFB65B00),
+            fontWeight: FontWeight.w800,
+          ),
+        ),
       ],
     ),
   );
@@ -955,45 +1134,6 @@ class _CompleteAssessmentWorkflowState
         'EXAM' || 'END_OF_TERM_EXAM' => 'End-of-Term Examination',
         _ => value,
       };
-
-  Widget _reportReadinessChecklistItem(
-    String message, {
-    bool complete = false,
-  }) {
-    final color = complete ? AppColors.green : const Color(0xFFD97706);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-      decoration: BoxDecoration(
-        color: complete ? const Color(0xFFECFDF5) : const Color(0xFFFFF7ED),
-        border: Border.all(
-          color: complete ? const Color(0xFFA7F3D0) : const Color(0xFFFED7AA),
-        ),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            complete
-                ? Icons.check_box_rounded
-                : Icons.check_box_outline_blank_rounded,
-            color: color,
-            size: 21,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              message,
-              style: const TextStyle(
-                color: AppColors.text,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
   void _openStudent(_StudentRecord student) {
     _selectedStudent = student;
@@ -1835,6 +1975,10 @@ class _CompleteAssessmentWorkflowState
           ]),
         ),
         if (_teacherViewer) ...[
+          if (_gradingRequirements?.met == true) ...[
+            const SizedBox(height: 18),
+            _gradingRequirementsBanner(),
+          ],
           const SizedBox(height: 18),
           _teacherAssessmentRegisterPanel(),
         ] else ...[
@@ -1988,9 +2132,11 @@ class _CompleteAssessmentWorkflowState
     return _section(
       title: 'Assessment register',
       action: OutlinedButton.icon(
-        onPressed: _showAssessmentReadiness,
+        onPressed: _checkingGradingRequirements
+            ? null
+            : _showGradingRequirements,
         icon: const Icon(Icons.fact_check_outlined, size: 16),
-        label: const Text('Check report readiness'),
+        label: const Text('Check grading requirements'),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1999,6 +2145,84 @@ class _CompleteAssessmentWorkflowState
           const SizedBox(height: 16),
           _assessmentTable(visibleAssessments),
         ],
+      ),
+    );
+  }
+
+  Widget _gradingRequirementsBanner() {
+    const color = Color(0xFF087A5B);
+    const background = Color(0xFFECFDF5);
+    const border = Color(0xFFA7F3D0);
+    return Container(
+      key: const ValueKey('grading-requirements-banner'),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+      decoration: BoxDecoration(
+        color: background,
+        border: Border.all(color: border),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: LayoutBuilder(
+        builder: (_, constraints) {
+          final content = Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.celebration_outlined, color: color, size: 25),
+              const SizedBox(width: 13),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Grading requirements met',
+                      style: TextStyle(
+                        color: color,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Great work! All required assessments and student scores are complete.',
+                      style: const TextStyle(color: AppColors.text),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      'Required CAT 1–4 and Examination complete · All assessments fully graded',
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+          final action = OutlinedButton(
+            onPressed: _checkingGradingRequirements
+                ? null
+                : _showGradingRequirements,
+            child: const Text('View grading summary'),
+          );
+          if (constraints.maxWidth < 760) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                content,
+                const SizedBox(height: 12),
+                Align(alignment: Alignment.centerRight, child: action),
+              ],
+            );
+          }
+          return Row(
+            children: [
+              Expanded(child: content),
+              const SizedBox(width: 18),
+              action,
+            ],
+          );
+        },
       ),
     );
   }
@@ -2325,9 +2549,11 @@ class _CompleteAssessmentWorkflowState
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   OutlinedButton.icon(
-                    onPressed: _showAssessmentReadiness,
+                    onPressed: _checkingGradingRequirements
+                        ? null
+                        : _showGradingRequirements,
                     icon: const Icon(Icons.fact_check_outlined, size: 15),
-                    label: const Text('Check report readiness'),
+                    label: const Text('Check grading requirements'),
                   ),
                   const SizedBox(width: 8),
                   FilledButton.icon(
@@ -13280,6 +13506,90 @@ class _FinalReportHeader extends StatelessWidget {
         letterSpacing: .35,
       ),
     );
+  }
+}
+
+class _GradingRequirementsSnapshot {
+  const _GradingRequirementsSnapshot({
+    required this.totalSubjects,
+    required this.completeSubjects,
+    required this.requiredAssessments,
+    required this.presentAssessments,
+    required this.requiredScores,
+    required this.enteredScores,
+    required this.subjectIssues,
+  });
+
+  final int totalSubjects;
+  final int completeSubjects;
+  final int requiredAssessments;
+  final int presentAssessments;
+  final int requiredScores;
+  final int enteredScores;
+  final List<_GradingSubjectIssue> subjectIssues;
+
+  bool get met =>
+      totalSubjects > 0 &&
+      completeSubjects == totalSubjects &&
+      assessmentComponentsComplete &&
+      allScoresEntered &&
+      subjectIssues.isEmpty;
+
+  bool get assessmentComponentsComplete =>
+      totalSubjects > 0 &&
+      requiredAssessments > 0 &&
+      presentAssessments == requiredAssessments &&
+      !subjectIssues.any((issue) => issue.duplicateComponents.isNotEmpty);
+
+  bool get allScoresEntered =>
+      requiredScores > 0 &&
+      enteredScores == requiredScores &&
+      assessmentComponentsComplete;
+
+  bool get noAssessmentsCreated => presentAssessments == 0;
+  bool get noScoresEntered => enteredScores == 0;
+}
+
+class _GradingSubjectIssue {
+  const _GradingSubjectIssue({
+    required this.subjectName,
+    required this.missingComponents,
+    required this.missingScores,
+    required this.duplicateComponents,
+  });
+
+  final String subjectName;
+  final List<String> missingComponents;
+  final int missingScores;
+  final List<String> duplicateComponents;
+
+  bool get hasIssues =>
+      missingComponents.isNotEmpty ||
+      missingScores > 0 ||
+      duplicateComponents.isNotEmpty;
+
+  String get summary {
+    final parts = <String>[
+      if (missingComponents.isNotEmpty)
+        '${missingComponents.length} assessment${missingComponents.length == 1 ? '' : 's'} missing',
+      if (missingScores > 0)
+        '$missingScores score${missingScores == 1 ? '' : 's'} missing',
+      if (duplicateComponents.isNotEmpty)
+        '${duplicateComponents.length} duplicate${duplicateComponents.length == 1 ? '' : 's'}',
+    ];
+    return parts.join(' · ');
+  }
+
+  String get detail {
+    final parts = <String>[
+      if (missingComponents.isNotEmpty)
+        'Missing ${missingComponents.join(', ')}',
+      if (missingScores > 0)
+        '$missingScores score${missingScores == 1 ? '' : 's'} missing',
+      if (duplicateComponents.isNotEmpty)
+        'Duplicate ${duplicateComponents.join(', ')}',
+    ];
+    return parts.join(' · ');
   }
 }
 

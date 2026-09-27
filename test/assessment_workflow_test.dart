@@ -83,15 +83,68 @@ void main() {
     expect(find.text('My Assessments'), findsOneWidget);
     expect(find.text('Assessment register'), findsOneWidget);
     expect(find.text('New Assessment'), findsOneWidget);
-    expect(find.text('Check report readiness'), findsOneWidget);
+    expect(find.text('Check grading requirements'), findsOneWidget);
     expect(find.text('Quick Actions'), findsNothing);
     expect(find.text('My Recent Assessments'), findsNothing);
     expect(find.text('Assessment Completion'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('grading-requirements-banner')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('grading-requirements-loading')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('grading-requirements-unavailable')),
+      findsNothing,
+    );
 
-    await tester.tap(find.text('Check report readiness'));
+    await tester.tap(find.text('Check grading requirements'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Reports are not ready'), findsOneWidget);
+    final dialog = find.byType(AlertDialog);
+    expect(dialog, findsOneWidget);
+    expect(
+      find.descendant(
+        of: dialog,
+        matching: find.text('Grading requirements not met'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: dialog, matching: find.text('Required assessments')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: dialog, matching: find.text('Score entry')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: dialog, matching: find.text('View details')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: dialog, matching: find.text('Incomplete')),
+      findsNWidgets(2),
+    );
+    expect(
+      find.descendant(
+        of: dialog,
+        matching: find.text(
+          'No grading requirements are available for this class yet.',
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: dialog, matching: find.textContaining('evaluation')),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: dialog, matching: find.textContaining('progression')),
+      findsNothing,
+    );
   });
 
   testWidgets('assessment filters allow multiple selections', (tester) async {

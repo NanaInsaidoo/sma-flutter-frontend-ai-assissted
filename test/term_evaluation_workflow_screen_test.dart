@@ -25,6 +25,18 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
   }
 
+  Future<void> openManagerWorkspace(
+    WidgetTester tester,
+    String workspace,
+  ) async {
+    await tester.tap(
+      find.byKey(const ValueKey('evaluation-workspace-menu')).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(workspace).last);
+    await tester.pumpAndSettle();
+  }
+
   testWidgets(
     'teacher answers one visible criterion per student and draft auto-saves',
     (tester) async {
@@ -93,7 +105,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Start'));
+      await tester.tap(find.text('Start ratings'));
       await tester.pumpAndSettle();
 
       expect(
@@ -330,8 +342,10 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Edit ratings'), findsOneWidget);
-    await tester.tap(find.text('Add student comments'));
+    await tester.tap(find.byKey(const ValueKey('teacher-stage-comments')));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('More actions'), findsNothing);
+    await tester.tap(find.text('Add comments'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Ama Mensah'));
     await tester.pumpAndSettle();
@@ -462,6 +476,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await openManagerWorkspace(tester, 'Teacher progress');
     await tester.tap(find.text('Review results'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Ama Mensah'));
@@ -587,6 +602,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      await openManagerWorkspace(tester, 'Teacher progress');
       expect(find.text('Review results'), findsOneWidget);
       expect(find.text('Reopen'), findsNothing);
 
@@ -703,8 +719,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Report readiness'));
-      await tester.pumpAndSettle();
+      await openManagerWorkspace(tester, 'Report readiness');
 
       expect(
         find.text('1 student blocked from report generation'),
@@ -813,6 +828,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await openManagerWorkspace(tester, 'Teacher progress');
     await tester.tap(find.text('Review results'));
     await tester.pumpAndSettle();
 
@@ -1056,12 +1072,18 @@ void main() {
       );
       expect(find.text('CLASS'), findsOneWidget);
       expect(find.text('RATINGS'), findsOneWidget);
-      expect(find.text('COMMENTS'), findsOneWidget);
-      expect(find.text('APPROVAL STATUS'), findsOneWidget);
+      expect(find.text('ROLE'), findsOneWidget);
+      expect(find.text('STATUS'), findsOneWidget);
       expect(find.text('ACTION'), findsOneWidget);
-      expect(find.text('Not required'), findsWidgets);
       expect(find.text('1 / 2'), findsOneWidget);
-      expect(find.text('0 / 3'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('teacher-evaluation-stage-tabs')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('teacher-stage-comments')),
+        findsOneWidget,
+      );
       expect(
         find.byKey(const ValueKey('teacher-responsibility-class-filter')),
         findsOneWidget,
@@ -1076,6 +1098,16 @@ void main() {
         find.byKey(const ValueKey('responsibility-class-JHS 1 - Section 3')),
         findsOneWidget,
       );
+
+      await tester.tap(find.byKey(const ValueKey('teacher-stage-comments')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('COMMENTS'), findsOneWidget);
+      expect(find.text('APPROVAL STATUS'), findsOneWidget);
+      expect(find.text('0 of 3 complete'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('teacher-stage-ratings')));
+      await tester.pumpAndSettle();
 
       await tester.tap(
         find.byKey(const ValueKey('teacher-responsibility-class-filter')),
@@ -1095,6 +1127,136 @@ void main() {
         findsNothing,
       );
       expect(find.text('English Language, Mathematics'), findsNothing);
+    },
+  );
+
+  testWidgets('approved class responsibility has one view-only action', (
+    tester,
+  ) async {
+    await useWideScreen(tester);
+    final api = AssessmentApiClient(
+      accessToken: 'token',
+      client: MockClient(
+        (_) async => http.Response(
+          jsonEncode({
+            'released': true,
+            'teacherEntryOpen': true,
+            'assignments': [
+              {
+                'id': 71,
+                'streamId': 12,
+                'staffId': 'T-1',
+                'staffName': 'Sena Owusu',
+                'subjectName': 'Class-teacher evaluation',
+                'streamName': 'Creche - Section 1',
+                'assignmentType': 'CLASS_TEACHER',
+                'status': 'SUBMITTED',
+                'workflowStatus': 'APPROVED',
+                'studentCount': 3,
+                'commentsCompleted': 3,
+                'completionPercent': 100,
+              },
+            ],
+          }),
+          200,
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: TermEvaluationWorkflowScreen(
+          api: api,
+          schoolId: 'SCHOOL-1',
+          viewerName: 'Sena Owusu',
+          viewerRole: 'CLASS_TEACHER',
+          setup: setup,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('teacher-stage-comments')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('View comments'), findsOneWidget);
+    expect(find.text('Continue comments'), findsNothing);
+    expect(find.byTooltip('More actions'), findsNothing);
+    expect(find.text('Edit ratings'), findsNothing);
+  });
+
+  testWidgets(
+    'completed class comments can be submitted from the responsibility row',
+    (tester) async {
+      await useWideScreen(tester);
+      http.Request? submission;
+      final api = AssessmentApiClient(
+        accessToken: 'token',
+        client: MockClient((request) async {
+          if (request.method == 'POST' &&
+              request.url.path.endsWith('/submit-comments')) {
+            submission = request;
+            return http.Response(
+              '{"status":"READY_FOR_LEADERSHIP","studentsSubmitted":2}',
+              200,
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'released': true,
+              'teacherEntryOpen': true,
+              'assignments': [
+                {
+                  'id': 72,
+                  'streamId': 13,
+                  'staffId': 'T-1',
+                  'staffName': 'Sena Owusu',
+                  'subjectName': 'Class-teacher evaluation',
+                  'streamName': 'KG1 - Section 1',
+                  'assignmentType': 'CLASS_TEACHER',
+                  'status': 'SUBMITTED',
+                  'workflowStatus': 'COMMENTS_COMPLETE',
+                  'studentCount': 2,
+                  'commentsCompleted': 2,
+                  'completionPercent': 100,
+                },
+              ],
+            }),
+            200,
+          );
+        }),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TermEvaluationWorkflowScreen(
+            api: api,
+            schoolId: 'SCHOOL-1',
+            viewerName: 'Sena Owusu',
+            viewerRole: 'CLASS_TEACHER',
+            setup: setup,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('teacher-stage-comments')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('submit-responsibility-72')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Submit class evaluation for approval?'),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Submit for approval').last);
+      await tester.pumpAndSettle();
+
+      expect(submission, isNotNull);
+      expect(
+        find.text('Class evaluation submitted for approval.'),
+        findsOneWidget,
+      );
     },
   );
 
@@ -1159,6 +1321,8 @@ void main() {
                   'ratedCount': 12,
                   'requiredCount': 30,
                   'completionPercent': 40,
+                  'commentsCompleted': 5,
+                  'commentsSubmitted': 0,
                 },
               ],
               'insights': {
@@ -1210,18 +1374,31 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Evaluations & comments'), findsNWidgets(2));
-      expect(find.text('RATINGS COMPLETE'), findsOneWidget);
-      expect(find.text('COMMENTS COMPLETE'), findsOneWidget);
-      expect(find.text('SUBMITTED FOR APPROVAL'), findsOneWidget);
-      expect(find.text('7 / 14'), findsOneWidget);
-      expect(find.text('0 / 5'), findsNWidgets(2));
+      expect(find.text('Evaluations & comments'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('evaluation-approval-workspace')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('evaluation-workspace-menu')),
+        findsOneWidget,
+      );
+      expect(find.text('Leadership approval'), findsOneWidget);
+      expect(find.byKey(const ValueKey('evaluation-by-class')), findsNothing);
+
+      await openManagerWorkspace(tester, 'Overview');
+
       expect(find.byKey(const ValueKey('evaluation-by-class')), findsOneWidget);
+      expect(find.byTooltip('Back'), findsOneWidget);
       expect(find.text('Ratings & comments progress by class'), findsOneWidget);
       expect(find.text('Grade 1 - Stream A'), findsOneWidget);
       expect(find.text('Grade 1 - Stream B'), findsOneWidget);
       expect(find.text('3 of 10 complete'), findsOneWidget);
-      expect(find.text('0 of 5 complete'), findsOneWidget);
+      expect(find.text('5 of 5 complete'), findsOneWidget);
+      expect(find.text('Pending teacher submission'), findsOneWidget);
+      expect(find.text('Class teacher not assigned'), findsOneWidget);
+      expect(find.text('Setup required'), findsOneWidget);
+      expect(find.text('Ready to submit'), findsNothing);
       expect(find.text('Remind'), findsNothing);
 
       final progressTable = find.byKey(
@@ -1314,6 +1491,7 @@ void main() {
                 ? 'APPROVED'
                 : switch (studentId) {
                     'STU-1' => 'APPROVED',
+                    'STU-3' => 'UNDER_REVIEW',
                     'STU-4' => 'CHANGES_REQUESTED',
                     _ => 'SUBMITTED',
                   };
@@ -1354,7 +1532,8 @@ void main() {
                   'commentsCompleted': 4,
                   'commentsSubmitted': 3,
                   'commentsApproved': 1,
-                  'workflowStatus': 'READY_FOR_LEADERSHIP',
+                  'commentsRejected': 1,
+                  'workflowStatus': 'REJECTED',
                   'students': students,
                 },
               ],
@@ -1378,6 +1557,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      expect(find.text('Rejected'), findsOneWidget);
       await tester.tap(find.text('View'));
       await tester.pumpAndSettle();
 

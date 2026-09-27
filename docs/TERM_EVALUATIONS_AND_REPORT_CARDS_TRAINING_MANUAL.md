@@ -2,7 +2,21 @@
 
 ## Training manual for teachers, head teachers, and administrators
 
+**Updated:** 26 September 2026<br>
+**Applies to:** Evaluations & Comments, assessment grading, report readiness, progression, report generation, publication, corrections, and term closure
+
 This guide explains the complete end-of-term workflow, who is responsible for each step, what becomes locked, and how to resolve the most common blockers.
+
+Use this manual by goal:
+
+- **Enter marks** — go to Section 3.
+- **Complete teacher ratings** — go to Section 5.
+- **Write class-teacher comments** — go to Section 5, under Class-teacher student comments.
+- **Approve or reject ratings and comments** — go to Section 6.
+- **Find what is blocking a report** — go to Section 7.
+- **Generate or publish report cards** — go to Section 8.
+- **Correct a generated or published report** — go to Section 9.
+- **Close the term safely** — go to Section 11.
 
 ---
 
@@ -56,6 +70,20 @@ An administrator must confirm the following setup:
 
 If a teacher cannot see a subject, check the class-subject allocation first. If a class appears only as “Section 2” or “Section 3,” correct the class display name so it includes its grade, for example **JHS 1 - Section 2**.
 
+### Complete workflow at a glance
+
+1. Administration activates the term, classes, subjects, students and teacher allocations.
+2. Leadership releases **Evaluations & Comments** for the term.
+3. Subject teachers create assessments, enter every required score and complete their ratings.
+4. The class teacher completes class-teacher ratings and writes one final comment for each student.
+5. The class teacher selects **Submit for approval**.
+6. Leadership reviews the submitted ratings and comments together, then approves or rejects each student.
+7. Leadership selects each student’s progression decision.
+8. When academic grades, evaluations and comments, leadership approval, and progression are complete, leadership generates the report.
+9. Leadership previews the generated report and publishes it individually, by selected classes, or as part of all eligible generated reports.
+10. Any later correction uses the controlled reopen, save-reason, regenerate and republish process.
+11. Leadership closes the term only when every required report is current and published and no correction is pending.
+
 ---
 
 ## 3. Record academic assessments and scores
@@ -67,12 +95,15 @@ For each allocated subject:
 3. Create each required CAT, project, practical, or end-of-term examination.
 4. Enter a score for every active student.
 5. Confirm that the assessment displays **Fully graded**.
-6. Use **Check report readiness** to identify missing scores or other work.
+6. Review the automatic **Grading requirements** banner. Use **Check grading requirements** to see missing assessment components, missing student scores, or duplicate report assessments grouped by subject.
 
 Important rules:
 
 - A score cannot be negative or exceed the assessment maximum.
 - A student must belong to the assessment class.
+- The grading-requirements check covers academic marks only. It verifies the required report assessments and student score entry against the configured GES grading scheme. It does not check evaluations, comments, leadership approval, progression, report generation, or publication.
+- The check refreshes automatically when the assessment register loads or saved assessment work is refreshed. It does not interrupt the teacher with a popup. The summary first shows only two checks: whether every subject has **CAT 1, CAT 2, CAT 3, CAT 4 and Examination**, and whether all required assessments are **fully graded**. Select **View details** only when counts or subject-level information are needed.
+- If nothing has been entered, the summary shows aggregate totals instead of a long repeated list. When some work exists, expand a subject to see the exact missing assessment or score issue.
 - “100% score entry” confirms score rows are present; it does not confirm evaluation review, progression, generation, or publication.
 - After report generation, source records are controlled. Corrections must use the authorized correction process rather than silently changing the published result.
 
@@ -100,11 +131,16 @@ If a teacher allocation is added after release, refresh or release synchronizati
 
 ## 5. Teacher evaluation workflow
 
-Opening **Evaluations & Comments** takes the teacher directly to one dashboard containing all of their evaluation responsibilities. The teacher is not asked to choose a class first. Use the **Class** filter on the dashboard to focus on one class when needed.
+Opening **Evaluations & Comments** takes the teacher directly to one dashboard containing all of their evaluation responsibilities. The teacher is not asked to choose a class first. The dashboard separates the work into two stages:
+
+- **Ratings** lists every subject-teacher and class-teacher rating responsibility.
+- **Student comments** lists only classes where the user is the class teacher.
+
+The workflow guide also shows the final **Approval** stage, which is completed by leadership. Use the **Class** filter within the selected stage to focus on one class when needed.
 
 ### Save and submit ratings
 
-1. Open **Evaluations & Comments**.
+1. Open **Evaluations & Comments**, then select **Ratings**.
 2. Open one of the teacher’s class responsibilities. All subjects taught in that class are shown together.
 3. Rate every student against every criterion.
 4. Use **Not observed** only when the criterion genuinely could not be observed. It is a valid final rating and must not be treated as missing.
@@ -115,13 +151,15 @@ Opening **Evaluations & Comments** takes the teacher directly to one dashboard c
 
 Submission sends the work forward but does not immediately make it permanent.
 
-- Before leadership starts reviewing a student, the teacher selects **Edit ratings**, changes the rating, and resubmits. No administrator reopening step is required.
+- Before leadership starts reviewing a student, the teacher opens the **Ratings** stage and selects **Edit ratings**. The teacher changes the rating and resubmits; no administrator reopening step is required.
 - When leadership starts reviewing that student, only that student’s evaluation becomes locked.
 - Other students remain editable until their own review begins.
 
 ### Class-teacher student comments
 
-After the class teacher submits all ratings, the screen immediately offers **Continue to student comments**. Subject teachers finish after submitting ratings; they do not write the final class-teacher comments.
+After the class teacher submits all ratings, select **Student comments** to continue. Subject teachers finish after submitting ratings; they do not write the final class-teacher comments.
+
+On the responsibility dashboard, the main class-teacher action follows the next required step: **Add comments**, **Continue comments**, or **Submit for approval**. Submission can be completed directly from the dashboard after confirmation. After leadership begins review, the action changes to **View comments** because the affected records are locked.
 
 The class teacher follows this sequence:
 
@@ -135,13 +173,19 @@ The class teacher follows this sequence:
 
 If another required teacher evaluation is still outstanding, the screen explains how many teacher evaluations are pending. Saved comments remain available, but the class evaluation cannot be sent until the required work is complete.
 
-The visible workflow stages are:
+The teacher’s visible workflow stages are:
 
-| Stage | Typical status |
-|---|---|
-| Teacher ratings | In progress or Ratings complete |
-| Student comments | Missing, Comments in progress, or Comments complete |
-| Approval | Not ready, Ready to submit, Awaiting approval, Under review, Rejected, or Approved |
+| Stage | Status | Meaning / next action |
+|---|---|---|
+| Teacher ratings | Not started | Open the responsibility and begin rating students |
+| Teacher ratings | Ratings in progress | Finish every student and criterion |
+| Teacher ratings | Ratings complete | Subject teachers are finished; the class teacher continues to comments |
+| Student comments | Comments in progress | Continue saving the remaining student comments |
+| Approval | Ready to submit | Ratings and comments are complete; select **Submit for approval** |
+| Approval | Awaiting approval | Leadership has received the work but has not started reviewing it |
+| Approval | Under review | Leadership has started reviewing; the affected student is locked |
+| Approval | Rejected | Read the reason, correct the affected student and submit again |
+| Approval | Approved | The evaluation-and-comment requirement is complete |
 
 Before leadership starts reviewing a student, the class teacher may edit and save the comment again. The teacher does not need to repeat every criterion simply to update a saved comment.
 
@@ -149,7 +193,34 @@ Before leadership starts reviewing a student, the class teacher may edit and sav
 
 ## 6. Leadership evaluation review
 
-Open **Evaluations & Comments > Overview > By class**, then select **View** for the class. The class approval register keeps each student’s ratings, class-teacher comment and approval status together. Only students marked **Awaiting approval** can be selected for bulk approval.
+Open **Evaluations & Comments**. Leadership approval is the main page, so select **View** for the class that needs review. The class approval register keeps each student’s ratings, class-teacher comment and approval status together. Students marked **Awaiting approval** or **Under review** can be selected for approval.
+
+Use the compact **View** menu beside the page heading to open another workspace:
+
+- **Overview** — compare ratings, comments and approval progress by class or staff.
+- **Teacher progress** — find incomplete responsibilities and the teacher who needs to act.
+- **Approval** — review submitted ratings and class-teacher comments.
+- **Report readiness** — identify students whose evaluation requirement is complete or blocked.
+
+Overview, Teacher progress and Report readiness open as focused pages without the dashboard sidebar. Use the back arrow to return directly to the main Approval page.
+
+### How to read the administrator overview
+
+The **Ratings** and **Comments** columns show whether the content has been completed. The **Approval status** column shows whose action is still required.
+
+| Administrator status | Meaning | Who acts next? |
+|---|---|---|
+| Setup required | The class has students but no active class-teacher evaluation responsibility | Administrator assigns a class teacher and synchronizes evaluations |
+| Not started | No usable class-teacher work has been started | Teacher |
+| Comments in progress | Some comments are saved, but the class is not ready to send | Class teacher |
+| Pending teacher submission | Ratings and comments are complete, but **Submit for approval** has not been selected | Class teacher |
+| Awaiting approval | The teacher submitted the work; leadership has not started review | Leadership |
+| Under review | Leadership is actively reviewing at least one student | Leadership |
+| Rejected | At least one student was rejected with a reason | Class teacher |
+| Approved | Every required student evaluation in the class is approved | No evaluation action remains |
+| Not required | This is an individual subject-teacher responsibility in the **By staff** view; final comments and leadership approval belong to the class teacher | None for this row |
+
+**Pending teacher submission does not mean that ratings or comments are missing or that data is corrupted.** It means the content is complete but has not yet been formally handed to leadership. **Ready to submit** remains teacher-facing wording and must not appear as the administrator’s status.
 
 Comments are limited to a three-line preview so the register stays readable. Expand a student row to read the complete comment and the full rating names before deciding.
 
@@ -161,7 +232,7 @@ Comments are limited to a three-line preview so the register stays readable. Exp
 
 ### Approve several evaluations
 
-1. Select the checkbox beside each eligible student, or use the header checkbox to select all awaiting students in the filtered class.
+1. Select the checkbox beside each eligible student, or use the header checkbox to select all awaiting or under-review students in the filtered class.
 2. Select **Approve selected**.
 3. Confirm the decision.
 4. The system approves every eligible selected evaluation and reports any item that was skipped because its status changed.
@@ -175,6 +246,8 @@ Approved and rejected students remain visible for reference, but their checkboxe
 3. Enter a clear, specific reason.
 4. The teacher sees the reason, corrects the ratings or comment, and sends the class evaluation to leadership again.
 
+If a class contains both approved and rejected students, the teacher corrects and resubmits only the rejected students. Approved and under-review students remain locked and are not changed or submitted again.
+
 Status meanings:
 
 | Status | Meaning | Teacher can edit? | Leadership action |
@@ -182,6 +255,7 @@ Status meanings:
 | Not started / In progress | Ratings are incomplete | Yes | Monitor or remind |
 | Ratings complete | Teacher ratings are complete | Yes | Wait for student comments |
 | Comments in progress | At least one final comment is saved | Yes | Finish remaining comments |
+| Pending teacher submission | Every rating and comment is complete, but the class teacher has not selected Submit for approval | Yes | Wait for teacher submission or remind the teacher |
 | Awaiting approval | Ratings and comments were submitted for approval | Yes, until review starts | Start review, or include in mass approval |
 | Under review | Leadership is actively reviewing | No | Approve or reject |
 | Rejected | Rejected with a recorded reason | Yes | Wait for correction and resubmission |
@@ -225,11 +299,11 @@ The **Final Report Management** overview shows one row per class with these chec
 | Column | Meaning |
 |---|---|
 | Academic grades | Complete only when every required assessment score is present for every student |
-| Evaluations & comments | Incomplete, Not submitted, Awaiting approval, Approved, or Rejected |
+| Evaluations & comments | Incomplete, Pending teacher submission, Awaiting approval, Under review, Approved, or Rejected |
 | Progression | Selected only when every student has a progression decision |
 | Report status | Not generated, Partially generated, Generated, Published, or Update required |
 
-**Ready to submit** is a teacher-facing instruction and is not shown as an administrator status. Administrators see **Not submitted** until the teacher sends the completed ratings and comments for approval.
+**Ready to submit** is a teacher-facing instruction and is not shown as an administrator status. When every rating and comment is complete but the teacher has not sent the work, administrators see **Pending teacher submission**. After the teacher selects **Submit for approval**, the administrator sees **Awaiting approval**.
 
 Select **Open class** to see each student’s four checks in separate columns: **Academic grades**, **Evaluations & comments**, **Progression**, and **Report status**. The **Generate report** button remains visible but disabled until the first three checks are complete. It changes to **View report** after generation and **Regenerate** when source data has changed.
 
@@ -329,6 +403,8 @@ The system blocks term closure when a blocking section is incomplete.
 
 Expected: ratings and comments display their own progress. When both are complete, the workflow moves to Ready to submit, then Awaiting approval after submission.
 
+Administrator check: before the teacher submits, the class must show **Pending teacher submission**, not Ready to submit. After submission, it must show **Awaiting approval**.
+
 ### Scenario B — leadership starts review
 
 1. Start review for Student A.
@@ -345,6 +421,8 @@ Expected: Student A is locked; Student B remains editable.
 4. Correct and resubmit.
 
 Expected: editing is restored and leadership must start a new review before approval.
+
+Mixed-class check: if other students are already Approved or Under review, correcting and resubmitting the rejected student must not change those locked students.
 
 ### Scenario D — mass approval
 
@@ -411,10 +489,13 @@ Expected: closure is blocked and identifies the unresolved section.
 | Problem | Check first | Resolution |
 |---|---|---|
 | Teacher cannot see a subject | Class-subject teacher allocation | Assign the teacher to the subject and class; a role alone is insufficient |
+| A class shows Class teacher not assigned / Setup required | Active class-teacher allocation | Assign the class teacher, then synchronize the released evaluation exercise |
 | Assessments say no subjects configured | Active subjects for the selected grade/class | Activate/assign subjects and confirm the correct class is carried from My Classes |
 | Scores show 100% but report is blocked | Evaluation approval and progression | Open readiness details; complete leadership approval and progression |
 | Preview is disabled | Remaining blockers | Complete the listed readiness requirements |
-| Ready-for-leadership evaluation can still be edited | Leadership has not started review | This is expected; Start review or approve to lock that student |
+| Ratings and comments are complete, but admin sees Pending teacher submission | Teacher has not selected Submit for approval | Ask the class teacher to open the class responsibility and submit it |
+| Awaiting-approval evaluation can still be edited | Leadership has not started review | This is expected; start review or approve to lock that student |
+| A rejected student cannot be resubmitted because classmates are approved | Confirm the corrected student comment was saved | Submit the correction again; approved and under-review classmates remain unchanged |
 | Teacher cannot edit one student | Student is Under review or Approved | Leadership must Reject with a reason if an edit is required |
 | Generated report has old information | Freshness status | Regenerate the affected student report |
 | Published report needs correction | Controlled correction process | Reopen with reason, correct, regenerate, and republish |
@@ -431,3 +512,50 @@ Expected: closure is blocked and identifies the unresolved section.
 - Generate only after readiness is green.
 - Preview every corrected report before republishing.
 - Run the term-closing check early enough to resolve issues before the closing date.
+
+---
+
+## 15. Role completion checklists
+
+### Subject teacher — “My work is complete when…”
+
+- [ ] I opened **Evaluations & Comments** and checked every class responsibility assigned to me.
+- [ ] I entered every required assessment score for every active student.
+- [ ] Every assessment says **Fully graded**.
+- [ ] I rated every student against every evaluation criterion.
+- [ ] I used **Not observed** only where observation was genuinely unavailable.
+- [ ] I submitted my ratings.
+- [ ] I checked that my responsibility shows **Ratings complete**.
+- [ ] I responded to any rejected or correction item that was assigned back to me.
+
+### Class teacher — “My class is ready for leadership when…”
+
+- [ ] My class-teacher ratings are complete.
+- [ ] Required subject-teacher contributions are complete.
+- [ ] I reviewed each student’s consolidated ratings.
+- [ ] I saved one final class-teacher comment for every student.
+- [ ] The Comments column shows every student complete.
+- [ ] I selected **Submit for approval**.
+- [ ] My teacher view changed from **Ready to submit** to **Awaiting approval**.
+- [ ] If leadership rejected a student, I read the reason, corrected that student and submitted the correction again.
+
+### Leadership — “A class is ready for report generation when…”
+
+- [ ] The administrator overview has no **Pending teacher submission**, **Comments in progress**, **Under review**, or **Rejected** item for the class.
+- [ ] Every required student evaluation and class-teacher comment is **Approved**.
+- [ ] Academic grades are complete for every required subject and assessment component.
+- [ ] Each student has a saved progression decision.
+- [ ] Readiness shows no unresolved blocker.
+- [ ] I generated the eligible reports and previewed them.
+- [ ] I published the correct reports individually, by selected classes, or with **Publish all generated**.
+- [ ] No published report shows **Update required** or **Correction pending**.
+
+### Administrator — “The term is safe to close when…”
+
+- [ ] Teacher allocations and evaluation responsibilities are correct.
+- [ ] Every active student has a current published report.
+- [ ] No evaluation approval, score correction, report correction or regeneration is pending.
+- [ ] Progression decisions are complete.
+- [ ] Finance and staff closing requirements are complete.
+- [ ] All blocking messages in the term-closing check have been resolved.
+- [ ] Required warnings have been reviewed and acknowledged according to school policy.
