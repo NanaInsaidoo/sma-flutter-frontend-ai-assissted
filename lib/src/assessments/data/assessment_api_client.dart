@@ -314,6 +314,9 @@ class AssessmentApiClient {
               percentage: _double(item['percentage']),
               status: _string(item['status']),
               remarks: _string(item['remarks']),
+              reportGenerated: item['reportGenerated'] == true,
+              reportPublished: item['reportPublished'] == true,
+              correctionStatus: _string(item['correctionStatus']),
             ),
           )
           .where((item) => item.studentId.isNotEmpty)
@@ -391,6 +394,47 @@ class AssessmentApiClient {
     );
   }
 
+  Future<Map<String, dynamic>> requestReportSourceCorrection({
+    required String customSchoolId,
+    required String studentId,
+    required int termId,
+    required String correctionType,
+    String proposedValue = '',
+    Map<String, String> proposedRatings = const {},
+    required String reason,
+    required String assignedApprover,
+  }) async {
+    final schoolPath = Uri.encodeComponent(customSchoolId);
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/report-corrections/schools/$schoolPath/source-requests',
+          method: 'POST',
+          body: {
+            'customStudentId': studentId,
+            'termId': termId,
+            'correctionType': correctionType,
+            'proposedValue': proposedValue,
+            'proposedRatings': proposedRatings,
+            'reason': reason,
+            'assignedApprover': assignedApprover,
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getReportCorrectionApprovers({
+    required String customSchoolId,
+  }) async {
+    final schoolPath = Uri.encodeComponent(customSchoolId);
+    return _list(
+      _decodeBody(
+        await _send('/api/report-corrections/schools/$schoolPath/approvers'),
+      ),
+    ).map(_map).toList();
+  }
+
   Future<List<Map<String, dynamic>>> getReportCorrections({
     required String customSchoolId,
     String? status,
@@ -419,6 +463,36 @@ class AssessmentApiClient {
           '/api/report-corrections/schools/$schoolPath/$requestId/${approve ? 'approve' : 'reject'}',
           method: 'POST',
           body: {'note': note},
+        ),
+      ),
+    );
+  }
+
+  Future<Map<String, dynamic>> regenerateReportCorrection({
+    required String customSchoolId,
+    required int requestId,
+  }) async {
+    final schoolPath = Uri.encodeComponent(customSchoolId);
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/report-corrections/schools/$schoolPath/$requestId/regenerate',
+          method: 'POST',
+        ),
+      ),
+    );
+  }
+
+  Future<Map<String, dynamic>> publishReportCorrection({
+    required String customSchoolId,
+    required int requestId,
+  }) async {
+    final schoolPath = Uri.encodeComponent(customSchoolId);
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/report-corrections/schools/$schoolPath/$requestId/publish',
+          method: 'POST',
         ),
       ),
     );
@@ -1075,6 +1149,21 @@ class AssessmentApiClient {
     );
   }
 
+  Future<void> undoTermEvaluationLeadershipApproval({
+    required String studentId,
+    required String schoolId,
+    required int termId,
+  }) async {
+    final q = Uri(
+      queryParameters: {'customSchoolId': schoolId, 'termId': '$termId'},
+    ).query;
+    await _send(
+      '/api/term-evaluations/students/${Uri.encodeComponent(studentId)}/leadership-review/undo-approval?$q',
+      method: 'POST',
+      body: const {},
+    );
+  }
+
   Future<Map<String, dynamic>> approveTermEvaluationLeadershipReviews({
     required String schoolId,
     required int termId,
@@ -1280,6 +1369,9 @@ class AssessmentStudentScore {
     required this.percentage,
     required this.status,
     required this.remarks,
+    this.reportGenerated = false,
+    this.reportPublished = false,
+    this.correctionStatus = '',
   });
 
   final String studentId;
@@ -1290,6 +1382,9 @@ class AssessmentStudentScore {
   final double? percentage;
   final String status;
   final String remarks;
+  final bool reportGenerated;
+  final bool reportPublished;
+  final String correctionStatus;
 
   String get name =>
       [firstName, lastName].where((part) => part.trim().isNotEmpty).join(' ');

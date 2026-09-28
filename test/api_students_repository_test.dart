@@ -7,6 +7,57 @@ import 'package:school_management_app/src/students/data/api_students_repository.
 import 'package:school_management_app/src/students/domain/student_models.dart';
 
 void main() {
+  test('loads the register when a legacy birth date uses MM/DD/YYYY', () async {
+    final client = MockClient((request) async {
+      final path = request.url.path;
+      if (path.endsWith('/api/v1/current-term/SCH-001')) {
+        return _json({
+          'id': 44,
+          'academicYear': {'name': '2026-2027'},
+          'termType': {'name': 'First Term'},
+          'startDate': '2026-08-25',
+          'endDate': '2026-12-11',
+        });
+      }
+      if (path.endsWith('/api/students/schools/SCH-001/students/filter')) {
+        return _json([
+          {
+            'customStudentId': 'STU-001',
+            'firstName': 'Kojo',
+            'lastName': 'Boateng',
+            'status': 'ACTIVE',
+            'dateOfBirth': '04/10/2013',
+          },
+        ]);
+      }
+      if (path.endsWith('/api/students/schools/SCH-001/students/STU-001')) {
+        return _json({
+          'customStudentId': 'STU-001',
+          'firstName': 'Kojo',
+          'lastName': 'Boateng',
+          'status': 'ACTIVE',
+          'gradeName': 'Basic 1',
+          'genderName': 'Male',
+          'dateOfBirth': '04/10/2013',
+        });
+      }
+      if (path.contains('/attendance/student/')) {
+        return _json({'attendanceRate': 95, 'recentAttendanceRecords': []});
+      }
+      return http.Response('{}', 404);
+    });
+    final repository = ApiStudentsRepository(
+      customSchoolId: 'SCH-001',
+      accessToken: 'token',
+      client: client,
+    );
+
+    final students = await repository.getEnrolledStudents();
+
+    expect(students, hasLength(1));
+    expect(students.single.dateOfBirth, DateTime(2013, 4, 10));
+  });
+
   test(
     'reloads pending adjustments separately from the balance account',
     () async {

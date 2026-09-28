@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import '../data/assessment_api_client.dart';
 import '../domain/teacher_assessment_scope.dart';
 import '../../dashboard/data/teacher_workspace_api_client.dart';
+import '../../approvals/data/approval_api_client.dart';
+import '../../approvals/presentation/approvals_screen.dart';
 import '../../platform/presentation/document_opener.dart';
 import '../../theme/app_theme.dart';
 import 'assessment_csv_export.dart';
@@ -173,6 +175,7 @@ class _CompleteAssessmentWorkflowState
   final Map<String, int> _reportAssessmentsRequired = {};
   final Map<String, List<String>> _reportMissingComponents = {};
   final Map<String, Map<String, dynamic>> _studentReportCards = {};
+  final Map<String, Map<String, dynamic>> _activeReportCorrections = {};
   List<String> _configuredGradeLevels = const [];
   bool _refreshingReportCards = false;
   final Map<String, _ReportRemarksDraft> _reportRemarks = {};
@@ -506,11 +509,13 @@ class _CompleteAssessmentWorkflowState
   }
 
   void _back() {
-    if (_history.isEmpty) {
-      setState(() => _route = _Route.dashboard);
-      return;
+    final destination = _history.isEmpty
+        ? _Route.dashboard
+        : _history.removeLast();
+    setState(() => _route = destination);
+    if (destination == _Route.finalReports) {
+      _loadFinalReportOverview();
     }
-    setState(() => _route = _history.removeLast());
   }
 
   Future<void> _openAssessment(_AssessmentRecord assessment) async {
@@ -1518,6 +1523,24 @@ class _CompleteAssessmentWorkflowState
   List<_StudentRecord> get _reportCardStudents =>
       _liveReportStudents ?? _students;
 
+  Map<String, dynamic>? _activeCorrectionFor(_StudentRecord student) =>
+      _activeReportCorrections[student.id];
+
+  String _activeCorrectionStatus(_StudentRecord student) =>
+      '${_activeCorrectionFor(student)?['status'] ?? ''}'.toUpperCase();
+
+  String _reportCardDisplayStatus(_StudentRecord student) =>
+      switch (_activeCorrectionStatus(student)) {
+        'PENDING' => 'Correction pending',
+        'APPROVED_REGENERATION_REQUIRED' => 'Update required',
+        'REGENERATION_IN_PROGRESS' => 'Regenerating',
+        'REGENERATION_FAILED' => 'Regeneration failed',
+        'REGENERATED_AWAITING_PUBLICATION' => 'Awaiting publication',
+        'PUBLICATION_IN_PROGRESS' => 'Publishing',
+        'PUBLICATION_FAILED' => 'Publication failed',
+        _ => _reportStatusFor(student),
+      };
+
   Future<bool> _loadLiveReportReadiness(
     AssessmentFormSetup setup,
     String classLabel,
@@ -1547,6 +1570,35 @@ class _CompleteAssessmentWorkflowState
         term: setup.termSequence,
         academicYearId: setup.academicYearId,
       );
+      List<Map<String, dynamic>> correctionRows;
+      try {
+        correctionRows = await _assessmentApi.getReportCorrections(
+          customSchoolId: widget.customSchoolId,
+        );
+      } on AssessmentApiException {
+        // Correction status is an enhancement to the report-card list. Keep
+        // core readiness available if this auxiliary endpoint is unavailable.
+        correctionRows = const [];
+      }
+      final activeCorrections = <String, Map<String, dynamic>>{};
+      for (final item in correctionRows) {
+        final status = '${item['status'] ?? ''}'.toUpperCase();
+        final studentId = '${item['customStudentId'] ?? ''}'.trim();
+        if (_jsonInt(item['termId']) != setup.termId ||
+            studentId.isEmpty ||
+            !const {
+              'PENDING',
+              'APPROVED_REGENERATION_REQUIRED',
+              'REGENERATION_IN_PROGRESS',
+              'REGENERATION_FAILED',
+              'REGENERATED_AWAITING_PUBLICATION',
+              'PUBLICATION_IN_PROGRESS',
+              'PUBLICATION_FAILED',
+            }.contains(status)) {
+          continue;
+        }
+        activeCorrections.putIfAbsent(studentId, () => item);
+      }
       final gradesByStudent = <String, List<Map<String, dynamic>>>{};
       for (final grade in gradeRows) {
         final studentId = grade['customStudentId']?.toString() ?? '';
@@ -1661,6 +1713,9 @@ class _CompleteAssessmentWorkflowState
         }
       }
       setState(() {
+        _activeReportCorrections
+          ..clear()
+          ..addAll(activeCorrections);
         _liveReportStudents = students;
         if (_selectedReportStudent != null) {
           final selectedId = _selectedReportStudent!.id;
@@ -3782,15 +3837,6 @@ class _CompleteAssessmentWorkflowState
             ),
           ),
           const SizedBox(height: 8),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: () => _notice('Assessment report generated.'),
-              icon: const Icon(Icons.description_outlined, size: 16),
-              label: const Text('Generate Report'),
-            ),
-          ),
-          const SizedBox(height: 8),
           Row(
             children: [
               Expanded(
@@ -5573,25 +5619,53 @@ class _CompleteAssessmentWorkflowState
         .where(_canGenerateOrRegenerate)
         .length;
     final needsAttention = _reportCardStudents
-        .where((student) => !_generationReady(student))
+        .where(
+          (student) =>
+              !_generationReady(student) ||
+              _activeCorrectionStatus(student) == 'PENDING',
+        )
         .length;
     final generated = _reportCardStudents
-        .where((student) => _reportStatusFor(student) == 'Generated')
+        .where(
+          (student) =>
+              _reportStatusFor(student) == 'Generated' ||
+              _activeCorrectionStatus(student) ==
+                  'REGENERATED_AWAITING_PUBLICATION',
+        )
         .length;
     final updateRequired = _reportCardStudents
-        .where((student) => reportNeedsUpdate(_reportStatusFor(student)))
+        .where(
+          (student) =>
+              reportNeedsUpdate(_reportStatusFor(student)) ||
+              const {
+                'APPROVED_REGENERATION_REQUIRED',
+                'REGENERATED_AWAITING_PUBLICATION',
+              }.contains(_activeCorrectionStatus(student)),
+        )
         .length;
     final published = _reportCardStudents
-        .where((student) => _reportStatusFor(student) == 'Published')
+        .where(
+          (student) =>
+              _reportStatusFor(student) == 'Published' &&
+              !const {
+                'APPROVED_REGENERATION_REQUIRED',
+                'REGENERATED_AWAITING_PUBLICATION',
+              }.contains(_activeCorrectionStatus(student)),
+        )
         .length;
     final filteredStudents = _reportCardStudents.where((student) {
       final status = _reportStatusFor(student);
+      final correctionStatus = _activeCorrectionStatus(student);
       final matchesFilter = switch (_reportCardFilter) {
         'Ready' => _canGenerateOrRegenerate(student),
-        'Needs Attention' => !_generationReady(student),
+        'Needs Attention' =>
+          !_generationReady(student) || correctionStatus == 'PENDING',
         'Not Generated' => status == 'Not Generated',
         'Generated' => status == 'Generated',
-        'Update Required' => reportNeedsUpdate(status),
+        'Update Required' =>
+          reportNeedsUpdate(status) ||
+              correctionStatus == 'APPROVED_REGENERATION_REQUIRED' ||
+              correctionStatus == 'REGENERATED_AWAITING_PUBLICATION',
         'Published' => status == 'Published',
         _ => true,
       };
@@ -5840,6 +5914,7 @@ class _CompleteAssessmentWorkflowState
                           'Needs Attention',
                           'Not Generated',
                           'Generated',
+                          'Update Required',
                           'Published',
                         ].map((value) {
                           return DropdownMenuItem(
@@ -5987,7 +6062,7 @@ class _CompleteAssessmentWorkflowState
 
   Widget _reportCardStudentRow(_StudentRecord student, int index) {
     final selected = _selectedReportStudents.contains(student.id);
-    final status = _reportStatusFor(student);
+    final status = _reportCardDisplayStatus(student);
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 6),
       decoration: const BoxDecoration(
@@ -6091,7 +6166,9 @@ class _CompleteAssessmentWorkflowState
             child: Center(
               child: _reportStateBadge(
                 status,
-                onTap: reportNeedsUpdate(status)
+                onTap: _activeCorrectionFor(student) != null
+                    ? () => _openStudentCorrectionWorkflow(student)
+                    : reportNeedsUpdate(status)
                     ? () => _showReportUpdateDetails(student)
                     : null,
               ),
@@ -6164,6 +6241,14 @@ class _CompleteAssessmentWorkflowState
       'ready' => (const Color(0xFF4F8F84), const Color(0xFFF0F8F6)),
       'generated' => (const Color(0xFF527AA8), const Color(0xFFF1F6FB)),
       'published' => (const Color(0xFF4F8F84), const Color(0xFFF0F8F6)),
+      'correction pending' => (
+        const Color(0xFFB45309),
+        const Color(0xFFFFF7ED),
+      ),
+      'awaiting publication' => (
+        const Color(0xFF1D4ED8),
+        const Color(0xFFEFF6FF),
+      ),
       'update required' => (const Color(0xFFB45309), const Color(0xFFFFF7ED)),
       'published · update required' => (
         const Color(0xFFB45309),
@@ -6198,6 +6283,87 @@ class _CompleteAssessmentWorkflowState
         onTap: onTap,
         borderRadius: BorderRadius.circular(999),
         child: badge,
+      ),
+    );
+  }
+
+  Future<void> _openStudentCorrectionWorkflow(_StudentRecord student) async {
+    final correction = _activeCorrectionFor(student);
+    final requestId = (correction?['id'] as num?)?.toInt();
+    if (correction == null || requestId == null) return;
+    final repository = ApprovalApiClient(
+      accessToken: widget.accessToken,
+      onRefreshAccessToken: widget.onRefreshAccessToken,
+    );
+    try {
+      final inbox = await repository.getInbox(widget.customSchoolId);
+      final approvalMatches = inbox.myApprovals.where(
+        (item) =>
+            (item.type == 'REPORT_SCORE_CORRECTION' ||
+                item.type == 'REPORT_CORRECTION') &&
+            item.entityId == requestId,
+      );
+      final requestMatches = inbox.myRequests.where(
+        (item) =>
+            (item.type == 'REPORT_SCORE_CORRECTION' ||
+                item.type == 'REPORT_CORRECTION') &&
+            item.entityId == requestId,
+      );
+      final item = approvalMatches.isNotEmpty
+          ? approvalMatches.first
+          : requestMatches.isNotEmpty
+          ? requestMatches.first
+          : null;
+      if (!mounted) return;
+      if (item == null) {
+        await _showCorrectionAssignment(correction);
+        return;
+      }
+      await showApprovalItemPanel(
+        context: context,
+        item: item,
+        onAction: (action, reason) async {
+          await repository.performAction(
+            schoolId: widget.customSchoolId,
+            item: item,
+            action: action,
+            reason: reason,
+          );
+        },
+        correctionRepository: repository,
+        schoolId: widget.customSchoolId,
+        canManageCorrection: approvalMatches.isNotEmpty,
+      );
+      if (mounted) await _refreshReportCards();
+    } on ApprovalApiException catch (error) {
+      if (mounted) _notice(error.message);
+    }
+  }
+
+  Future<void> _showCorrectionAssignment(
+    Map<String, dynamic> correction,
+  ) async {
+    final status = '${correction['status'] ?? ''}'.toUpperCase();
+    final label = switch (status) {
+      'PENDING' => 'Pending approval',
+      'APPROVED_REGENERATION_REQUIRED' => 'Regeneration required',
+      'REGENERATED_AWAITING_PUBLICATION' => 'Publication required',
+      _ => status.replaceAll('_', ' ').toLowerCase(),
+    };
+    final approver = '${correction['assignedApproverName'] ?? ''}'.trim();
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Report correction'),
+        content: Text(
+          '$label. ${approver.isEmpty ? 'The assigned approver' : approver} must complete this workflow.',
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Close'),
+          ),
+        ],
       ),
     );
   }
@@ -6278,6 +6444,29 @@ class _CompleteAssessmentWorkflowState
   }
 
   Widget _reportCardRowActions(_StudentRecord student) {
+    final correction = _activeCorrectionFor(student);
+    if (correction != null) {
+      final correctionStatus = _activeCorrectionStatus(student);
+      final label = switch (correctionStatus) {
+        'PENDING' => 'View correction',
+        'APPROVED_REGENERATION_REQUIRED' => 'Regenerate report',
+        'REGENERATED_AWAITING_PUBLICATION' => 'View & publish',
+        _ => 'View correction',
+      };
+      final icon = switch (correctionStatus) {
+        'APPROVED_REGENERATION_REQUIRED' => Icons.refresh_rounded,
+        'REGENERATED_AWAITING_PUBLICATION' => Icons.publish_outlined,
+        _ => Icons.rule_rounded,
+      };
+      return Center(
+        child: FilledButton.tonalIcon(
+          key: ValueKey('report-correction-${student.id}'),
+          onPressed: () => _openStudentCorrectionWorkflow(student),
+          icon: Icon(icon, size: 14),
+          label: Text(label),
+        ),
+      );
+    }
     final status = _reportStatusFor(student);
     if (status == 'Processing' || status == 'Publishing') {
       return Center(
@@ -6893,15 +7082,426 @@ class _CompleteAssessmentWorkflowState
     return reason;
   }
 
-  void _reopenPublishedReport(_StudentRecord student) {
-    setState(() => _reopenedReportStudents.add(student.id));
-    _notice(
-      '${student.name} report is open for correction. The reason will be requested when you save.',
+  Future<void> _requestRatingCorrection(
+    _StudentRecord student,
+    dynamic rawConduct,
+  ) async {
+    if (await _resumeExistingCorrection(student)) return;
+    final original = <String, String>{};
+    if (rawConduct is List) {
+      for (final raw in rawConduct.whereType<Map>()) {
+        final item = Map<String, dynamic>.from(raw);
+        final key = _evaluationCriterionKey('${item['criterion'] ?? ''}');
+        final rating = '${item['rating'] ?? ''}'.trim();
+        if (key != null && rating.isNotEmpty) original[key] = rating;
+      }
+    }
+    const labels = <String, String>{
+      'HOMEWORK_HABITS': 'Homework habits',
+      'ATTENTIVENESS': 'Attentiveness',
+      'TEAMWORK': 'Teamwork',
+      'CLASS_PARTICIPATION': 'Class participation',
+      'RESPECT_AND_DISCIPLINE': 'Respect and discipline',
+      'NEATNESS': 'Neatness',
+    };
+    if (!labels.keys.every(original.containsKey)) {
+      _notice(
+        'The complete generated evaluation could not be loaded. Refresh and try again.',
+      );
+      return;
+    }
+    List<Map<String, dynamic>> approvers;
+    try {
+      approvers = await _assessmentApi.getReportCorrectionApprovers(
+        customSchoolId: widget.customSchoolId,
+      );
+    } on AssessmentApiException catch (error) {
+      if (mounted) _notice(error.message);
+      return;
+    }
+    if (!mounted) return;
+    final proposed = Map<String, String>.from(original);
+    final reasonController = TextEditingController();
+    String? approver;
+    const ratings = [
+      'Excellent',
+      'Good',
+      'Satisfactory',
+      'Needs improvement',
+      'Not observed',
+    ];
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Request evaluation-rating correction'),
+          content: SizedBox(
+            width: 600,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${student.name} · The official ratings remain unchanged until the selected approver accepts this request.',
+                  ),
+                  const SizedBox(height: 16),
+                  ...labels.entries.map(
+                    (criterion) => Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${criterion.value}\nCurrent: ${original[criterion.key]}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          SizedBox(
+                            width: 210,
+                            child: DropdownButtonFormField<String>(
+                              value: proposed[criterion.key],
+                              decoration: const InputDecoration(
+                                labelText: 'Proposed rating',
+                              ),
+                              items: ratings
+                                  .map(
+                                    (rating) => DropdownMenuItem(
+                                      value: rating,
+                                      child: Text(rating),
+                                    ),
+                                  )
+                                  .toList(),
+                              onChanged: (value) => setDialogState(
+                                () => proposed[criterion.key] = value!,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  DropdownButtonFormField<String>(
+                    key: const ValueKey('source-correction-approver'),
+                    value: approver,
+                    decoration: const InputDecoration(
+                      labelText: 'Approver',
+                      hintText: 'Choose who will approve this correction',
+                    ),
+                    items: _correctionApproverItems(approvers),
+                    onChanged: (value) =>
+                        setDialogState(() => approver = value),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: reasonController,
+                    minLines: 3,
+                    maxLines: 5,
+                    decoration: const InputDecoration(
+                      labelText: 'Reason for correction',
+                      alignLabelWithHint: true,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (approver == null) {
+                  _dialogNotice(dialogContext, 'Choose an approver.');
+                  return;
+                }
+                if (reasonController.text.trim().length < 5) {
+                  _dialogNotice(
+                    dialogContext,
+                    'Enter a clear reason of at least 5 characters.',
+                  );
+                  return;
+                }
+                if (labels.keys.every(
+                  (key) => original[key] == proposed[key],
+                )) {
+                  _dialogNotice(dialogContext, 'Change at least one rating.');
+                  return;
+                }
+                Navigator.pop(dialogContext, true);
+              },
+              child: const Text('Submit for approval'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final reason = reasonController.text.trim();
+    reasonController.dispose();
+    if (submitted != true || approver == null || !mounted) return;
+    await _submitSourceCorrection(
+      student: student,
+      type: 'EVALUATION_RATINGS',
+      proposedRatings: proposed,
+      reason: reason,
+      approver: approver!,
     );
   }
 
+  Future<void> _requestTextSourceCorrection({
+    required _StudentRecord student,
+    required String type,
+    required String label,
+    required String currentValue,
+    required bool allowEmpty,
+    required bool multiline,
+    List<String>? choices,
+  }) async {
+    if (await _resumeExistingCorrection(student)) return;
+    List<Map<String, dynamic>> approvers;
+    try {
+      approvers = await _assessmentApi.getReportCorrectionApprovers(
+        customSchoolId: widget.customSchoolId,
+      );
+    } on AssessmentApiException catch (error) {
+      if (mounted) _notice(error.message);
+      return;
+    }
+    if (!mounted) return;
+    final valueController = TextEditingController(text: currentValue);
+    final reasonController = TextEditingController();
+    String proposed = currentValue;
+    String? approver;
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text('Request $label correction'),
+          content: SizedBox(
+            width: 560,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${student.name} · The official value remains unchanged until approval.',
+                  ),
+                  const SizedBox(height: 14),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF8FAFC),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      'Current $label\n${currentValue.trim().isEmpty ? 'Not set' : currentValue}',
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  if (choices != null)
+                    DropdownButtonFormField<String>(
+                      value: choices.contains(proposed) ? proposed : null,
+                      decoration: InputDecoration(labelText: 'Proposed $label'),
+                      items: choices
+                          .map(
+                            (value) => DropdownMenuItem(
+                              value: value,
+                              child: Text(value),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) =>
+                          setDialogState(() => proposed = value ?? ''),
+                    )
+                  else
+                    TextField(
+                      controller: valueController,
+                      minLines: multiline ? 4 : 1,
+                      maxLines: multiline ? 7 : 1,
+                      decoration: InputDecoration(
+                        labelText: 'Proposed $label',
+                        alignLabelWithHint: multiline,
+                      ),
+                      onChanged: (value) => proposed = value,
+                    ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    value: approver,
+                    decoration: const InputDecoration(
+                      labelText: 'Approver',
+                      hintText: 'Choose who will approve this correction',
+                    ),
+                    items: _correctionApproverItems(approvers),
+                    onChanged: (value) =>
+                        setDialogState(() => approver = value),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: reasonController,
+                    minLines: 3,
+                    maxLines: 5,
+                    decoration: const InputDecoration(
+                      labelText: 'Reason for correction',
+                      alignLabelWithHint: true,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                proposed = choices == null
+                    ? valueController.text.trim()
+                    : proposed.trim();
+                if (!allowEmpty && proposed.isEmpty) {
+                  _dialogNotice(dialogContext, 'Enter the proposed value.');
+                  return;
+                }
+                if (proposed == currentValue.trim()) {
+                  _dialogNotice(
+                    dialogContext,
+                    'Change the current value first.',
+                  );
+                  return;
+                }
+                if (approver == null) {
+                  _dialogNotice(dialogContext, 'Choose an approver.');
+                  return;
+                }
+                if (reasonController.text.trim().length < 5) {
+                  _dialogNotice(
+                    dialogContext,
+                    'Enter a clear reason of at least 5 characters.',
+                  );
+                  return;
+                }
+                Navigator.pop(dialogContext, true);
+              },
+              child: const Text('Submit for approval'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final reason = reasonController.text.trim();
+    proposed = choices == null ? valueController.text.trim() : proposed.trim();
+    valueController.dispose();
+    reasonController.dispose();
+    if (submitted != true || approver == null || !mounted) return;
+    await _submitSourceCorrection(
+      student: student,
+      type: type,
+      proposedValue: proposed,
+      reason: reason,
+      approver: approver!,
+    );
+  }
+
+  Future<void> _requestProgressionCorrection(
+    _StudentRecord student,
+    _ReportRemarksDraft remarks,
+  ) => _requestTextSourceCorrection(
+    student: student,
+    type: 'PROGRESSION',
+    label: 'progression decision',
+    currentValue: remarks.promotedTo,
+    allowEmpty: false,
+    multiline: false,
+    choices: _promotionGradeOptions(remarks.promotedTo),
+  );
+
+  Future<void> _submitSourceCorrection({
+    required _StudentRecord student,
+    required String type,
+    String proposedValue = '',
+    Map<String, String> proposedRatings = const {},
+    required String reason,
+    required String approver,
+  }) async {
+    try {
+      final setup = await _assessmentFormSetup;
+      await _assessmentApi.requestReportSourceCorrection(
+        customSchoolId: widget.customSchoolId,
+        studentId: student.id,
+        termId: setup.termId,
+        correctionType: type,
+        proposedValue: proposedValue,
+        proposedRatings: proposedRatings,
+        reason: reason,
+        assignedApprover: approver,
+      );
+      await _loadLiveReportReadiness(setup, _selectedClass);
+      if (mounted) {
+        _notice('$type correction submitted to the selected approver.');
+      }
+    } on AssessmentApiException catch (error) {
+      if (mounted) _notice(error.message);
+    }
+  }
+
+  Future<bool> _resumeExistingCorrection(_StudentRecord student) async {
+    if (_activeCorrectionFor(student) == null) return false;
+    await _openStudentCorrectionWorkflow(student);
+    return true;
+  }
+
+  List<DropdownMenuItem<String>> _correctionApproverItems(
+    List<Map<String, dynamic>> approvers,
+  ) => approvers
+      .map((entry) {
+        final username = '${entry['username'] ?? ''}'.trim();
+        final name = '${entry['name'] ?? username}'.trim();
+        final role = '${entry['role'] ?? ''}'
+            .replaceAll('_', ' ')
+            .toLowerCase();
+        return DropdownMenuItem(
+          value: username,
+          child: Text(role.isEmpty ? name : '$name · $role'),
+        );
+      })
+      .where((item) => item.value?.isNotEmpty == true)
+      .toList();
+
+  String? _evaluationCriterionKey(String value) {
+    final normalized = value
+        .trim()
+        .toUpperCase()
+        .replaceAll(RegExp(r'[^A-Z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_|_$'), '');
+    return switch (normalized) {
+      'HOMEWORK' || 'HOMEWORK_HABITS' => 'HOMEWORK_HABITS',
+      'ATTENTIVENESS' => 'ATTENTIVENESS',
+      'TEAMWORK' => 'TEAMWORK',
+      'PARTICIPATION' || 'CLASS_PARTICIPATION' => 'CLASS_PARTICIPATION',
+      'DISCIPLINE' ||
+      'RESPECT_DISCIPLINE' ||
+      'RESPECT_AND_DISCIPLINE' => 'RESPECT_AND_DISCIPLINE',
+      'NEATNESS' => 'NEATNESS',
+      _ => null,
+    };
+  }
+
+  void _dialogNotice(BuildContext context, String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
   Widget _reportCardStudentTile(_StudentRecord student) {
-    final status = _reportStatusFor(student);
+    final status = _reportCardDisplayStatus(student);
     return Container(
       padding: const EdgeInsets.fromLTRB(4, 4, 10, 12),
       decoration: const BoxDecoration(
@@ -6996,14 +7596,12 @@ class _CompleteAssessmentWorkflowState
     final classTeacherComment = _classTeacherCommentFor(student, remarks);
     final evaluation = _evaluationFor(student);
     final status = _reportStatusFor(student);
+    final displayStatus = _reportCardDisplayStatus(student);
     final generated = reportHasGeneratedVersion(status);
     final published = canDistributeReport(status);
     final academicManager = _evaluationManager;
-    final correctionPending =
-        remarks.reportStatus.toUpperCase() == 'CORRECTION_PENDING' ||
-        _reopenedReportStudents.contains(student.id);
-    final canEditClass = academicManager && (!published || correctionPending);
-    final canEditHead = academicManager && (!published || correctionPending);
+    final canEditClass = academicManager && !generated;
+    final canEditHead = academicManager && !generated;
     final reportSubjects = _studentReportCards[student.id]?['subjects'];
     final generatedAcademicRows = reportSubjects is List
         ? reportSubjects.whereType<Map>().map((rawSubject) {
@@ -7051,15 +7649,9 @@ class _CompleteAssessmentWorkflowState
       compactHeader: true,
       maxContentWidth: 1320,
       actions: [
-        if (academicManager && published && !correctionPending)
+        if (academicManager && !generated)
           _outlineButton(
-            'Reopen Report',
-            Icons.lock_open_outlined,
-            () => _reopenPublishedReport(student),
-          )
-        else if (academicManager)
-          _outlineButton(
-            correctionPending ? 'Save Correction' : 'Save Draft',
+            'Save Draft',
             Icons.save_outlined,
             () => _saveReportRemarks(
               student,
@@ -7067,8 +7659,7 @@ class _CompleteAssessmentWorkflowState
               remarks.headTeacherRemarks,
               remarks.promotedTo,
               ignoreHeadTeacherRemark: false,
-              draft: !correctionPending,
-              correction: correctionPending,
+              draft: true,
             ),
           ),
         _outlineButton(
@@ -7126,7 +7717,11 @@ class _CompleteAssessmentWorkflowState
           ),
       ],
       children: [
-        _studentReportIdentity(student, status),
+        _studentReportIdentity(student, displayStatus),
+        if (_activeCorrectionFor(student) != null) ...[
+          const SizedBox(height: 16),
+          _studentCorrectionProgressPanel(student),
+        ],
         const SizedBox(height: 16),
         _reportReadinessSection(student),
         const SizedBox(height: 16),
@@ -7146,7 +7741,11 @@ class _CompleteAssessmentWorkflowState
           ),
         ),
         const SizedBox(height: 16),
-        _studentReportEvaluation(student, evaluation),
+        _studentReportEvaluation(
+          student,
+          evaluation,
+          canRequestCorrection: academicManager && generated,
+        ),
         const SizedBox(height: 16),
         LayoutBuilder(
           builder: (context, constraints) {
@@ -7156,11 +7755,13 @@ class _CompleteAssessmentWorkflowState
               remarks,
               classTeacherComment: classTeacherComment,
               canEditHead: canEditHead,
+              canRequestCorrection: academicManager && generated,
             );
             final promotionSection = _studentReportPromotionSection(
               student,
               remarks,
               canEdit: canEditClass,
+              canRequestCorrection: academicManager && generated,
             );
             if (compact) {
               return Column(
@@ -7232,6 +7833,119 @@ class _CompleteAssessmentWorkflowState
             ),
           ),
           _reportStateBadge(status),
+        ],
+      ),
+    );
+  }
+
+  Widget _studentCorrectionProgressPanel(_StudentRecord student) {
+    final correction = _activeCorrectionFor(student)!;
+    final status = _activeCorrectionStatus(student);
+    final source = switch ('${correction['correctionType'] ?? ''}'
+        .toUpperCase()) {
+      'SCORE' => 'Score',
+      'EVALUATION_RATINGS' => 'Evaluation ratings',
+      'CLASS_TEACHER_COMMENT' => 'Class-teacher comment',
+      'HEAD_TEACHER_COMMENT' => 'Head-teacher comment',
+      'PROGRESSION' => 'Progression decision',
+      _ => '${correction['sourceLabel'] ?? 'Report'}',
+    };
+    final message = switch (status) {
+      'PENDING' => 'Awaiting approval',
+      'APPROVED_REGENERATION_REQUIRED' =>
+        'Approved · report regeneration required',
+      'REGENERATION_IN_PROGRESS' => 'Regenerating the report',
+      'REGENERATION_FAILED' => 'Regeneration failed · retry required',
+      'REGENERATED_AWAITING_PUBLICATION' =>
+        'Regenerated · publication required',
+      'PUBLICATION_IN_PROGRESS' => 'Publishing the updated report',
+      'PUBLICATION_FAILED' => 'Publication failed · retry required',
+      _ => 'Correction in progress',
+    };
+    final currentStep = switch (status) {
+      'PENDING' => 1,
+      'APPROVED_REGENERATION_REQUIRED' ||
+      'REGENERATION_IN_PROGRESS' ||
+      'REGENERATION_FAILED' => 2,
+      'REGENERATED_AWAITING_PUBLICATION' ||
+      'PUBLICATION_IN_PROGRESS' ||
+      'PUBLICATION_FAILED' => 3,
+      _ => 0,
+    };
+    const steps = ['Requested', 'Approval', 'Regenerate', 'Publish'];
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBEB),
+        border: Border.all(color: const Color(0xFFF6D68A)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.pending_actions_outlined,
+                color: Color(0xFFB56100),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '$source correction',
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    Text(
+                      message,
+                      style: const TextStyle(
+                        color: Color(0xFF8A5200),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => _openStudentCorrectionWorkflow(student),
+                icon: const Icon(Icons.open_in_new_rounded, size: 15),
+                label: const Text('View correction'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: List.generate(steps.length, (index) {
+              final completed = index < currentStep;
+              final current = index == currentStep;
+              return Chip(
+                avatar: Icon(
+                  completed
+                      ? Icons.check_circle
+                      : current
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                  size: 16,
+                  color: completed
+                      ? const Color(0xFF0B806C)
+                      : current
+                      ? const Color(0xFFB56100)
+                      : const Color(0xFF94A3B8),
+                ),
+                label: Text(steps[index]),
+                backgroundColor: completed
+                    ? const Color(0xFFE8F7F3)
+                    : current
+                    ? const Color(0xFFFFF3D6)
+                    : const Color(0xFFF8FAFC),
+              );
+            }),
+          ),
         ],
       ),
     );
@@ -7342,8 +8056,10 @@ class _CompleteAssessmentWorkflowState
 
   Widget _studentReportEvaluation(
     _StudentRecord student,
-    _EvaluationDraft evaluation,
-  ) {
+    _EvaluationDraft evaluation, {
+    required bool canRequestCorrection,
+  }) {
+    final hasActiveCorrection = _activeCorrectionFor(student) != null;
     final rawConduct = _studentReportCards[student.id]?['conductItems'];
     final consolidatedItems = rawConduct is List
         ? rawConduct.whereType<Map>().map((raw) {
@@ -7367,7 +8083,20 @@ class _CompleteAssessmentWorkflowState
           ];
     return _section(
       title: 'Student Evaluation',
-      action: hasConsolidated
+      action: canRequestCorrection && hasConsolidated
+          ? OutlinedButton.icon(
+              onPressed: () => _requestRatingCorrection(student, rawConduct),
+              icon: Icon(
+                hasActiveCorrection
+                    ? Icons.pending_actions_outlined
+                    : Icons.rate_review_outlined,
+                size: 14,
+              ),
+              label: Text(
+                hasActiveCorrection ? 'View correction' : 'Request correction',
+              ),
+            )
+          : hasConsolidated
           ? null
           : OutlinedButton.icon(
               onPressed: () => _editEvaluationOnReport(student),
@@ -7440,9 +8169,57 @@ class _CompleteAssessmentWorkflowState
     _ReportRemarksDraft remarks, {
     required String classTeacherComment,
     required bool canEditHead,
+    required bool canRequestCorrection,
   }) {
+    final hasActiveCorrection = _activeCorrectionFor(student) != null;
     return _section(
       title: 'Teacher Remarks',
+      action: canRequestCorrection
+          ? hasActiveCorrection
+                ? OutlinedButton.icon(
+                    onPressed: () => _openStudentCorrectionWorkflow(student),
+                    icon: const Icon(Icons.pending_actions_outlined, size: 14),
+                    label: const Text('View correction'),
+                  )
+                : PopupMenuButton<String>(
+                    tooltip: 'Request a remark correction',
+                    onSelected: (value) {
+                      if (value == 'CLASS_TEACHER_COMMENT') {
+                        _requestTextSourceCorrection(
+                          student: student,
+                          type: value,
+                          label: 'Class-teacher comment',
+                          currentValue: classTeacherComment,
+                          allowEmpty: false,
+                          multiline: true,
+                        );
+                      } else {
+                        _requestTextSourceCorrection(
+                          student: student,
+                          type: value,
+                          label: 'Head-teacher comment',
+                          currentValue: remarks.headTeacherRemarks,
+                          allowEmpty: true,
+                          multiline: true,
+                        );
+                      }
+                    },
+                    itemBuilder: (context) => const [
+                      PopupMenuItem(
+                        value: 'CLASS_TEACHER_COMMENT',
+                        child: Text('Class-teacher comment'),
+                      ),
+                      PopupMenuItem(
+                        value: 'HEAD_TEACHER_COMMENT',
+                        child: Text('Head-teacher comment'),
+                      ),
+                    ],
+                    child: const Chip(
+                      avatar: Icon(Icons.edit_note_outlined, size: 16),
+                      label: Text('Request correction'),
+                    ),
+                  )
+          : null,
       child: Column(
         children: [
           TextFormField(
@@ -7484,9 +8261,25 @@ class _CompleteAssessmentWorkflowState
     _StudentRecord student,
     _ReportRemarksDraft remarks, {
     required bool canEdit,
+    required bool canRequestCorrection,
   }) {
+    final hasActiveCorrection = _activeCorrectionFor(student) != null;
     return _section(
       title: 'Progression & Attendance',
+      action: canRequestCorrection
+          ? OutlinedButton.icon(
+              onPressed: () => _requestProgressionCorrection(student, remarks),
+              icon: Icon(
+                hasActiveCorrection
+                    ? Icons.pending_actions_outlined
+                    : Icons.trending_up_rounded,
+                size: 14,
+              ),
+              label: Text(
+                hasActiveCorrection ? 'View correction' : 'Request correction',
+              ),
+            )
+          : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -11647,7 +12440,6 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
   String _query = '';
   List<AssessmentStudentScore> _students = const [];
   final Map<String, TextEditingController> _controllers = {};
-  final Map<String, TextEditingController> _remarkControllers = {};
   bool _loading = true;
   bool _saving = false;
   String? _error;
@@ -11701,11 +12493,7 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
     for (final controller in _controllers.values) {
       controller.dispose();
     }
-    for (final controller in _remarkControllers.values) {
-      controller.dispose();
-    }
     _controllers.clear();
-    _remarkControllers.clear();
     for (final student in students) {
       _controllers[student.studentId] = TextEditingController(
         text: student.score == null
@@ -11713,9 +12501,6 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
             : student.score!
                   .toStringAsFixed(2)
                   .replaceFirst(RegExp(r'\.?0+$'), ''),
-      );
-      _remarkControllers[student.studentId] = TextEditingController(
-        text: student.remarks,
       );
     }
     setState(() {
@@ -11728,9 +12513,6 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
   void dispose() {
     _searchController.dispose();
     for (final controller in _controllers.values) {
-      controller.dispose();
-    }
-    for (final controller in _remarkControllers.values) {
       controller.dispose();
     }
     super.dispose();
@@ -11833,6 +12615,9 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
                   .length *
               100 /
               values.length;
+    final allReportsLocked =
+        _students.isNotEmpty &&
+        _students.every((student) => student.reportGenerated);
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Center(
@@ -11901,7 +12686,7 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
                         label: const Text('Export CSV'),
                       ),
                       FilledButton.icon(
-                        onPressed: _saving ? null : _save,
+                        onPressed: _saving || allReportsLocked ? null : _save,
                         icon: _saving
                             ? const SizedBox.square(
                                 dimension: 16,
@@ -11910,7 +12695,13 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
                                 ),
                               )
                             : const Icon(Icons.save_outlined, size: 16),
-                        label: Text(_saving ? 'Saving…' : 'Save Scores'),
+                        label: Text(
+                          _saving
+                              ? 'Saving…'
+                              : allReportsLocked
+                              ? 'Scores locked'
+                              : 'Save Scores',
+                        ),
                       ),
                     ],
                   );
@@ -11933,6 +12724,10 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
                 },
               ),
               const SizedBox(height: 16),
+              if (_students.any((student) => student.reportGenerated)) ...[
+                _scoreSheetLockNotice(),
+                const SizedBox(height: 12),
+              ],
               LayoutBuilder(
                 builder: (context, constraints) {
                   final stats = [
@@ -12052,7 +12847,6 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
                                 const DataColumn(label: Text('VISUAL')),
                                 const DataColumn(label: Text('GRADE')),
                                 const DataColumn(label: Text('PASS/FAIL')),
-                                const DataColumn(label: Text('REMARKS')),
                                 const DataColumn(label: Text('ACTION')),
                               ],
                               rows: visibleStudents
@@ -12144,6 +12938,7 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
       width: 92,
       child: TextField(
         controller: _controllers[student.studentId],
+        readOnly: student.reportGenerated,
         onChanged: (_) => setState(() {}),
         textAlign: TextAlign.center,
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -12238,18 +13033,6 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
           ),
         ),
         DataCell(_oldPassBadge(score)),
-        DataCell(
-          SizedBox(
-            width: 180,
-            child: TextField(
-              controller: _remarkControllers[student.studentId],
-              decoration: const InputDecoration(
-                hintText: 'Add remark...',
-                isDense: true,
-              ),
-            ),
-          ),
-        ),
         DataCell(_resetScoreAction(student)),
       ],
     );
@@ -12312,14 +13095,6 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _remarkControllers[student.studentId],
-            decoration: const InputDecoration(
-              hintText: 'Add remark...',
-              isDense: true,
-            ),
-          ),
           if (student.score != null) ...[
             const SizedBox(height: 8),
             Align(
@@ -12332,8 +13107,134 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
     );
   }
 
+  Widget _scoreSheetLockNotice() {
+    final active = _students
+        .where((student) => student.reportGenerated)
+        .where(
+          (student) => const {
+            'PENDING',
+            'APPROVED_REGENERATION_REQUIRED',
+            'REGENERATED_AWAITING_PUBLICATION',
+          }.contains(student.correctionStatus.toUpperCase()),
+        )
+        .toList();
+    final statuses = active
+        .map((student) => student.correctionStatus.toUpperCase())
+        .toSet();
+    final count = active.length;
+    final noun = count == 1 ? 'student' : 'students';
+    final message = switch (statuses.singleOrNull) {
+      'PENDING' => 'Correction awaiting leadership approval for $count $noun.',
+      'APPROVED_REGENERATION_REQUIRED' =>
+        'Correction approved — report regeneration pending for $count $noun.',
+      'REGENERATED_AWAITING_PUBLICATION' =>
+        'Updated report awaiting publication for $count $noun.',
+      _ when active.isNotEmpty =>
+        'Score corrections are in progress for $count $noun. See each row for its current status.',
+      _ =>
+        'Scores locked — used in generated reports. Use Request correction to change a score.',
+    };
+    final hasActiveCorrection = active.isNotEmpty;
+    final foreground = hasActiveCorrection
+        ? const Color(0xFF1D4ED8)
+        : const Color(0xFF92400E);
+    final background = hasActiveCorrection
+        ? const Color(0xFFEFF6FF)
+        : const Color(0xFFFFFBEB);
+    final border = hasActiveCorrection
+        ? const Color(0xFFBFDBFE)
+        : const Color(0xFFFDE68A);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: background,
+        border: Border.all(color: border),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            hasActiveCorrection
+                ? Icons.pending_actions_outlined
+                : Icons.lock_outline,
+            size: 18,
+            color: foreground,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                color: foreground,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _resetScoreAction(AssessmentStudentScore student) {
     if (student.score == null) return const SizedBox.shrink();
+    if (student.reportGenerated) {
+      final status = student.correctionStatus.toUpperCase();
+      final active = const {
+        'PENDING',
+        'APPROVED_REGENERATION_REQUIRED',
+        'REGENERATED_AWAITING_PUBLICATION',
+      }.contains(status);
+      final label = switch (status) {
+        'PENDING' => 'Awaiting approval',
+        'APPROVED_REGENERATION_REQUIRED' => 'Awaiting regeneration',
+        'REGENERATED_AWAITING_PUBLICATION' => 'Awaiting publication',
+        'REJECTED' => 'Rejected · Request again',
+        _ => 'Request correction',
+      };
+      if (active) {
+        final awaitingDecision = status == 'PENDING';
+        final foreground = awaitingDecision
+            ? const Color(0xFF92400E)
+            : const Color(0xFF1D4ED8);
+        final background = awaitingDecision
+            ? const Color(0xFFFFF7ED)
+            : const Color(0xFFEFF6FF);
+        final border = awaitingDecision
+            ? const Color(0xFFF59E0B)
+            : const Color(0xFF60A5FA);
+        return Container(
+          key: ValueKey('score-correction-status-${student.studentId}'),
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
+          decoration: BoxDecoration(
+            color: background,
+            border: Border.all(color: border),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.hourglass_top_rounded, size: 16, color: foreground),
+              const SizedBox(width: 7),
+              Text(
+                label,
+                style: TextStyle(
+                  color: foreground,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+      return OutlinedButton.icon(
+        key: ValueKey('request-score-correction-${student.studentId}'),
+        onPressed: () => _requestScoreCorrection(student),
+        icon: const Icon(Icons.edit_note_outlined, size: 16),
+        label: Text(label),
+      );
+    }
     final resetting = _resettingStudents.contains(student.studentId);
     return TextButton.icon(
       onPressed: resetting ? null : () => _confirmResetScore(student),
@@ -12354,7 +13255,7 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Reset score?'),
         content: Text(
-          'Reset ${student.name}’s score? The recorded score and remark will be removed, and the student will return to “Not entered”.',
+          'Reset ${student.name}’s score? The recorded score will be removed, and the student will return to “Not entered”.',
         ),
         actions: [
           TextButton(
@@ -12399,111 +13300,196 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
     }
   }
 
-  List<AssessmentStudentScore> _changedStudents() {
-    return _students.where((student) {
-      final proposed = double.tryParse(
-        _controllers[student.studentId]?.text.trim() ?? '',
-      );
-      final proposedRemark =
-          _remarkControllers[student.studentId]?.text.trim() ?? '';
-      final scoreChanged =
-          proposed != null &&
-          (student.score == null || (proposed - student.score!).abs() > 0.0001);
-      return scoreChanged || proposedRemark != student.remarks.trim();
-    }).toList();
-  }
-
   Future<void> _requestScoreCorrection(AssessmentStudentScore student) async {
-    final proposed = double.tryParse(
-      _controllers[student.studentId]?.text.trim() ?? '',
+    List<Map<String, dynamic>> approvers;
+    try {
+      approvers = await widget.api.getReportCorrectionApprovers(
+        customSchoolId: widget.customSchoolId,
+      );
+    } on AssessmentApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+      return;
+    }
+    if (!mounted) return;
+    final proposedScore = TextEditingController(
+      text: student.score
+          ?.toStringAsFixed(2)
+          .replaceFirst(RegExp(r'\.?0+$'), ''),
     );
-    if (proposed == null) return;
     final reason = TextEditingController();
-    final approver = TextEditingController();
-    final submit = await showDialog<bool>(
+    String? selectedApprover;
+    final proposal = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Request report correction'),
-        content: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 540),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '${student.name}: ${student.score?.toStringAsFixed(2) ?? 'Not entered'} → ${proposed.toStringAsFixed(2)}',
-                style: const TextStyle(fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'The official score will not change now. Leadership must approve this proposal; approval applies it and regenerates the student report.',
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                key: const ValueKey('score-correction-reason'),
-                controller: reason,
-                autofocus: true,
-                minLines: 3,
-                maxLines: 5,
-                decoration: const InputDecoration(
-                  labelText: 'Reason for correction',
-                  hintText:
-                      'Explain what was wrong and why this value is correct',
-                  alignLabelWithHint: true,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Request score correction'),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 540),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${student.name} · ${widget.assessment.title}',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                key: const ValueKey('score-correction-approver'),
-                controller: approver,
-                decoration: const InputDecoration(
-                  labelText: 'Assigned approver (optional)',
-                  hintText: 'Head teacher or administrator username',
+                const SizedBox(height: 8),
+                const Text(
+                  'The official score remains unchanged until leadership approves this request. Leadership will then regenerate and publish the updated report.',
                 ),
-              ),
-            ],
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Current score',
+                        ),
+                        child: Text(
+                          '${student.score?.toStringAsFixed(2) ?? 'Not entered'} / ${widget.assessment.maxScore}',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextField(
+                        key: const ValueKey('score-correction-proposed-score'),
+                        controller: proposedScore,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration: InputDecoration(
+                          labelText: 'New score',
+                          suffixText: '/ ${widget.assessment.maxScore}',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  key: const ValueKey('score-correction-approver'),
+                  value: selectedApprover,
+                  decoration: const InputDecoration(
+                    labelText: 'Approver',
+                    hintText: 'Choose approver',
+                  ),
+                  items: approvers.map((approver) {
+                    final username = '${approver['username'] ?? ''}'.trim();
+                    final name = '${approver['name'] ?? username}'.trim();
+                    final role = '${approver['role'] ?? ''}'
+                        .replaceAll('_', ' ')
+                        .toLowerCase();
+                    final roleLabel = role.isEmpty
+                        ? ''
+                        : '${role[0].toUpperCase()}${role.substring(1)}';
+                    return DropdownMenuItem(
+                      value: username,
+                      child: Text(
+                        roleLabel.isEmpty ? name : '$name · $roleLabel',
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: approvers.isEmpty
+                      ? null
+                      : (value) =>
+                            setDialogState(() => selectedApprover = value),
+                ),
+                if (approvers.isEmpty) ...[
+                  const SizedBox(height: 6),
+                  const Text(
+                    'No eligible approver is available. Ask an administrator to assign a school leader.',
+                    style: TextStyle(color: Color(0xFFB45309), fontSize: 12),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                TextField(
+                  key: const ValueKey('score-correction-reason'),
+                  controller: reason,
+                  autofocus: true,
+                  minLines: 3,
+                  maxLines: 5,
+                  decoration: const InputDecoration(
+                    labelText: 'Reason for correction',
+                    hintText:
+                        'Explain what was wrong and why this value is correct',
+                    alignLabelWithHint: true,
+                  ),
+                ),
+              ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              key: const ValueKey('submit-score-correction'),
+              onPressed: selectedApprover == null
+                  ? null
+                  : () {
+                      final score = double.tryParse(proposedScore.text.trim());
+                      final explanation = reason.text.trim();
+                      if (score == null ||
+                          score < 0 ||
+                          score > widget.assessment.maxScore) {
+                        ScaffoldMessenger.of(dialogContext).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Enter a score between 0 and ${widget.assessment.maxScore}.',
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+                      if (student.score != null &&
+                          (score - student.score!).abs() < .0001) {
+                        ScaffoldMessenger.of(dialogContext).showSnackBar(
+                          const SnackBar(
+                            content: Text('Enter a different score first.'),
+                          ),
+                        );
+                        return;
+                      }
+                      if (explanation.length < 5) {
+                        ScaffoldMessenger.of(dialogContext).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Enter a clear reason of at least 5 characters.',
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+                      Navigator.pop(dialogContext, {
+                        'score': score,
+                        'reason': explanation,
+                        'approver': selectedApprover,
+                      });
+                    },
+              child: const Text('Submit for approval'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            key: const ValueKey('submit-score-correction'),
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Send for approval'),
-          ),
-        ],
       ),
     );
-    if (submit != true || !mounted) {
-      reason.dispose();
-      approver.dispose();
-      return;
-    }
-    final correctionReason = reason.text.trim();
-    final assignedApprover = approver.text.trim();
+    proposedScore.dispose();
     reason.dispose();
-    approver.dispose();
-    if (correctionReason.length < 5) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Enter a clear reason of at least 5 characters.'),
-        ),
-      );
-      return;
-    }
+    if (proposal == null || !mounted) return;
     try {
       await widget.api.requestReportScoreCorrection(
         customSchoolId: widget.customSchoolId,
         studentId: student.studentId,
         assessmentId: widget.assessment.id,
-        proposedScore: proposed,
-        proposedRemarks:
-            _remarkControllers[student.studentId]?.text.trim() ?? '',
-        reason: correctionReason,
-        assignedApprover: assignedApprover,
+        proposedScore: proposal['score'] as double,
+        proposedRemarks: student.remarks,
+        reason: proposal['reason'] as String,
+        assignedApprover: proposal['approver'] as String,
       );
       if (!mounted) return;
       await _load();
@@ -12511,7 +13497,7 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Correction sent for approval. The official score is unchanged until it is approved.',
+            'Correction submitted for approval. The official score is unchanged.',
           ),
         ),
       );
@@ -12526,6 +13512,10 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
   Future<void> _save() async {
     final scores = <Map<String, dynamic>>[];
     for (final entry in _controllers.entries) {
+      final student = _students.firstWhere(
+        (candidate) => candidate.studentId == entry.key,
+      );
+      if (student.reportGenerated) continue;
       final value = entry.value.text.trim();
       final score = value.isEmpty ? null : double.tryParse(value);
       if (score != null && (score < 0 || score > widget.assessment.maxScore)) {
@@ -12538,18 +13528,21 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
         );
         return;
       }
-      if (score != null) {
+      final scoreChanged =
+          score != null &&
+          (student.score == null || (score - student.score!).abs() > .0001);
+      if (score != null && scoreChanged) {
         scores.add({
           'studentId': entry.key,
           'score': score,
           'maxScore': widget.assessment.maxScore,
-          'remarks': _remarkControllers[entry.key]!.text.trim(),
+          'remarks': student.remarks,
         });
       }
     }
     if (scores.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter at least one score to save.')),
+        const SnackBar(content: Text('There are no editable changes to save.')),
       );
       return;
     }
@@ -12567,15 +13560,10 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
     } on AssessmentApiException catch (error) {
       if (!mounted) return;
       if (error.message.toLowerCase().contains('report has been generated')) {
-        final changed = _changedStudents();
-        if (changed.length == 1) {
-          await _requestScoreCorrection(changed.single);
-          return;
-        }
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'Generated reports are locked. Change one student at a time to submit a correction request.',
+              'A report was generated while this page was open. Refresh and use Request correction for that student.',
             ),
           ),
         );
@@ -12591,7 +13579,7 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
 
   String _buildCsv() {
     final rows = <String>[
-      'Student ID,Student Name,Score,Maximum Score,Grade,Result,Remarks',
+      'Student ID,Student Name,Score,Maximum Score,Grade,Result',
       for (final student in _students)
         [
           student.studentId,
@@ -12604,7 +13592,6 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
               : _scoreFor(student)! >= widget.assessment.maxScore * .5
               ? 'Pass'
               : 'Fail',
-          '"${_remarkControllers[student.studentId]!.text.replaceAll('"', '""')}"',
         ].join(','),
     ];
     return rows.join('\n');

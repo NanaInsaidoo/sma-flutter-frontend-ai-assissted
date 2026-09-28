@@ -43,10 +43,66 @@ class ApprovalApiClient {
     return ApprovalInbox.fromJson(_map(response));
   }
 
+  Future<ApprovalInbox> regenerateReportCorrection({
+    required String schoolId,
+    required int requestId,
+  }) async {
+    final schoolPath = Uri.encodeComponent(schoolId);
+    await _send(
+      'POST',
+      '/api/report-corrections/schools/$schoolPath/$requestId/regenerate',
+    );
+    return getInbox(schoolId);
+  }
+
+  Future<ApprovalInbox> publishReportCorrection({
+    required String schoolId,
+    required int requestId,
+  }) async {
+    final schoolPath = Uri.encodeComponent(schoolId);
+    await _send(
+      'POST',
+      '/api/report-corrections/schools/$schoolPath/$requestId/publish',
+    );
+    return getInbox(schoolId);
+  }
+
+  Future<List<int>> getReportCorrectionPdf({
+    required String schoolId,
+    required ApprovalItem item,
+  }) async {
+    if (item.customStudentId.isEmpty ||
+        item.termId == null ||
+        item.academicYearId == null) {
+      throw const ApprovalApiException(
+        'The report context is unavailable. Refresh the request and try again.',
+      );
+    }
+    final studentPath = Uri.encodeComponent(item.customStudentId);
+    final query = Uri(
+      queryParameters: {
+        'customSchoolId': schoolId,
+        'termId': '${item.termId}',
+        'academicYearId': '${item.academicYearId}',
+        'download': 'false',
+      },
+    ).query;
+    final response = await _send(
+      'GET',
+      '/api/report-cards/student/$studentPath/pdf?$query',
+      extraHeaders: const {'Accept': 'application/pdf'},
+    );
+    if (response.bodyBytes.isEmpty) {
+      throw const ApprovalApiException('The report PDF could not be opened.');
+    }
+    return response.bodyBytes;
+  }
+
   Future<http.Response> _send(
     String method,
     String path, {
     Map<String, dynamic>? body,
+    Map<String, String>? extraHeaders,
   }) async {
     if (accessToken?.isNotEmpty != true) {
       throw const ApprovalApiException('Please sign in again to continue.');
@@ -55,6 +111,7 @@ class ApprovalApiClient {
       final headers = {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $accessToken',
+        ...?extraHeaders,
       };
       final uri = Uri.parse('${ApiConfig.baseUrl}$path');
       return method == 'POST'

@@ -6,10 +6,107 @@ import 'package:school_management_app/src/dashboard/data/teacher_dashboard_summa
 import 'package:school_management_app/src/dashboard/data/teacher_workspace_api_client.dart';
 import 'package:school_management_app/src/dashboard/domain/dashboard_models.dart';
 import 'package:school_management_app/src/dashboard/presentation/administrator_dashboard.dart';
+import 'package:school_management_app/src/approvals/domain/approval_models.dart';
 import 'package:school_management_app/src/leave/presentation/leave_management_screen.dart';
 import 'package:school_management_app/src/theme/app_theme.dart';
 
+ApprovalItem _pendingCorrection({required bool approver}) => ApprovalItem(
+  key: 'REPORT_CORRECTION:91',
+  type: 'REPORT_CORRECTION',
+  entityId: 91,
+  category: 'Score corrections',
+  title: 'Score correction · English Language CAT1',
+  subtitle: 'STU-E41A3E-4032 · 9.5/10 → 10/10',
+  status: 'PENDING_APPROVAL',
+  requesterName: 'Sena Owusu',
+  approverName: 'Adjoa Mensah',
+  reason: 'Transcription error',
+  canApprove: approver,
+  canReject: approver,
+  canWithdraw: false,
+  sourcePage: 'assessments',
+);
+
 void main() {
+  testWidgets('assigned score correction appears in administrator attention', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: AdministratorDashboard(
+          repository: _EmptyDashboardRepository(),
+          schoolId: 'SCH-001',
+          schoolName: 'Test School',
+          userDisplayName: 'Adjoa Mensah',
+          role: 'ADMINISTRATOR',
+          approvalInboxLoader: () async => ApprovalInbox(
+            pendingMyApproval: 1,
+            pendingMyRequests: 0,
+            myApprovals: [_pendingCorrection(approver: true)],
+            myRequests: const [],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Report correction awaiting your approval'),
+      findsOneWidget,
+    );
+    expect(find.text('Requests & Approvals · My approvals'), findsOneWidget);
+    expect(find.textContaining('1 approvals'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('teacher requester sees correction in tasks and request count', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: AdministratorDashboard(
+          repository: _ForbiddenDashboardRepository(),
+          schoolId: 'SCH-001',
+          schoolName: 'Test School',
+          userDisplayName: 'Sena Owusu',
+          role: 'CLASS_TEACHER',
+          teacherDashboardLoader: () async => _teacherSummary,
+          approvalInboxLoader: () async => ApprovalInbox(
+            pendingMyApproval: 0,
+            pendingMyRequests: 1,
+            myApprovals: const [],
+            myRequests: [_pendingCorrection(approver: false)],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Requests & Approvals'), findsOneWidget);
+    expect(
+      find.text('Your report correction is awaiting approval'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('1 active report correction request needs'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('0 approvals'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('renders honest empty states when dashboard lists are empty', (
     tester,
   ) async {

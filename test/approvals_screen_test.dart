@@ -6,6 +6,118 @@ import 'package:school_management_app/src/approvals/presentation/approvals_scree
 import 'package:school_management_app/src/theme/app_theme.dart';
 
 void main() {
+  testWidgets(
+    'score correction appears in the approver inbox with correction actions',
+    (tester) async {
+      await _useDesktopSurface(tester);
+      final item = _scoreCorrection();
+      final api = _SingleApprovalApiClient(item);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: ApprovalsScreen(schoolId: 'SCH-1', repository: api),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text(item.title), findsOneWidget);
+      await tester.tap(find.text(item.title));
+      await tester.pumpAndSettle();
+      expect(find.text('Current score'), findsOneWidget);
+      expect(find.text('9.5/10'), findsOneWidget);
+      expect(find.text('Proposed score'), findsOneWidget);
+      expect(find.text('10/10'), findsOneWidget);
+      expect(find.text('Sena Owusu'), findsOneWidget);
+      expect(find.text('Adjoa Mensah'), findsOneWidget);
+      expect(find.text('Reject correction'), findsOneWidget);
+      expect(find.text('Approve correction'), findsOneWidget);
+
+      await tester.tap(find.text('Approve correction'));
+      await tester.pumpAndSettle();
+      expect(api.lastAction, 'APPROVE');
+      expect(api.actions, 1);
+      expect(find.text('Report correction'), findsOneWidget);
+      expect(find.text('Regenerate report'), findsOneWidget);
+
+      await tester.tap(find.text('Regenerate report'));
+      await tester.pumpAndSettle();
+      expect(api.regenerations, 1);
+      expect(find.text('View report'), findsOneWidget);
+      expect(find.text('Republish now'), findsOneWidget);
+
+      await tester.tap(find.text('Republish now'));
+      await tester.pumpAndSettle();
+      expect(api.publications, 1);
+      expect(find.text('Republished'), findsWidgets);
+      expect(find.text('Report correction'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'score correction appears in the requester inbox without actions',
+    (tester) async {
+      await _useDesktopSurface(tester);
+      final item = _scoreCorrection(requester: true);
+      final api = _SingleApprovalApiClient(item, asRequester: true);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: ApprovalsScreen(schoolId: 'SCH-1', repository: api),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('My requests'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(item.title));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Adjoa Mensah'), findsOneWidget);
+      expect(find.text('Approve correction'), findsNothing);
+      expect(find.text('Reject correction'), findsNothing);
+      expect(api.actions, 0);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'opening a correction source waits for the approval panel to close',
+    (tester) async {
+      await _useDesktopSurface(tester);
+      final item = _scoreCorrection();
+      final api = _SingleApprovalApiClient(item);
+      var opened = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: ApprovalsScreen(
+              schoolId: 'SCH-1',
+              repository: api,
+              onOpenSource: (_) => opened++,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(item.title));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Open source page'), findsOneWidget);
+      await tester.ensureVisible(find.text('Open source page'));
+      await tester.tap(find.text('Open source page'));
+      await tester.pumpAndSettle();
+
+      expect(opened, 1);
+      expect(find.text('Report correction'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('student record approval submits immediately without a comment', (
     tester,
   ) async {
@@ -431,6 +543,34 @@ void main() {
     expect(item.submittedAt, DateTime(2026, 8, 25, 0, 11, 33, 191, 929));
     expect(item.stateToken, 'PENDING_APPROVAL|2026-08-25T00:11:33.191929');
     expect(item.requesterNote, 'Updated after the budget review.');
+  });
+
+  test('parses report context needed to resume a score correction', () {
+    final item = ApprovalItem.fromJson({
+      'key': 'REPORT_SCORE_CORRECTION:91',
+      'type': 'REPORT_SCORE_CORRECTION',
+      'entityId': 91,
+      'category': 'Score corrections',
+      'title': 'Score correction · English Language CAT1',
+      'subtitle': 'STU-44 · 8/10 → 9/10',
+      'status': 'REGENERATED_AWAITING_PUBLICATION',
+      'requesterName': 'Sena Owusu',
+      'approverName': 'Adjoa Mensah',
+      'reason': 'Transcription error',
+      'canApprove': false,
+      'canReject': false,
+      'canWithdraw': false,
+      'sourcePage': 'evaluations',
+      'customStudentId': 'STU-44',
+      'termId': 17,
+      'academicYearId': 26,
+      'reportWasPublished': true,
+    });
+
+    expect(item.customStudentId, 'STU-44');
+    expect(item.termId, 17);
+    expect(item.academicYearId, 26);
+    expect(item.reportWasPublished, isTrue);
   });
 
   testWidgets('shows assigned approvals and completes an approval', (
@@ -1379,12 +1519,76 @@ ApprovalItem _paymentReversalApproval() => ApprovalItem(
   sourcePage: 'fees',
 );
 
+ApprovalItem _scoreCorrection({
+  bool requester = false,
+  String status = 'PENDING_APPROVAL',
+}) => ApprovalItem(
+  key: 'REPORT_SCORE_CORRECTION:91',
+  type: 'REPORT_SCORE_CORRECTION',
+  entityId: 91,
+  category: 'Score corrections',
+  title: 'Score correction · English Language CAT1',
+  subtitle: 'STU-E41A3E-4032 · 9.5/10 → 10/10',
+  status: status,
+  requesterName: 'Sena Owusu',
+  approverName: 'Adjoa Mensah',
+  reason: 'Correcting a transcription error.',
+  requesterNote: 'Correcting a transcription error.',
+  submittedAt: DateTime(2026, 9, 27, 9),
+  createdAt: DateTime(2026, 9, 27, 9),
+  academicPeriod: 'First Term · 2026-2027',
+  detailSections: const [
+    ApprovalDetailSection(
+      title: 'Requested score change',
+      description:
+          'The official score remains unchanged until the assigned approver accepts this correction.',
+      entries: [
+        ApprovalDetailEntry(
+          title: 'STU-E41A3E-4032',
+          subtitle: 'English Language CAT1',
+          fields: [
+            ApprovalDetailField(
+              label: 'Current score',
+              value: '9.5/10',
+              emphasized: false,
+            ),
+            ApprovalDetailField(
+              label: 'Proposed score',
+              value: '10/10',
+              emphasized: true,
+            ),
+            ApprovalDetailField(
+              label: 'Requested by',
+              value: 'Sena Owusu',
+              emphasized: false,
+            ),
+            ApprovalDetailField(
+              label: 'Assigned approver',
+              value: 'Adjoa Mensah',
+              emphasized: false,
+            ),
+          ],
+        ),
+      ],
+    ),
+  ],
+  canApprove: !requester && status == 'PENDING_APPROVAL',
+  canReject: !requester && status == 'PENDING_APPROVAL',
+  canWithdraw: false,
+  sourcePage: 'assessments',
+  reportWasPublished: true,
+);
+
 class _SingleApprovalApiClient extends ApprovalApiClient {
-  _SingleApprovalApiClient(this.item, {this.asRequester = false})
-    : super(accessToken: 'test');
-  final ApprovalItem item;
+  _SingleApprovalApiClient(ApprovalItem item, {this.asRequester = false})
+    : _item = item,
+      super(accessToken: 'test');
+  ApprovalItem _item;
+  ApprovalItem get item => _item;
   final bool asRequester;
   int actions = 0;
+  int regenerations = 0;
+  int publications = 0;
   String? lastAction;
   String? lastReason;
   bool? lastItemsStillInIssuerCustody;
@@ -1404,11 +1608,40 @@ class _SingleApprovalApiClient extends ApprovalApiClient {
     required String action,
     String reason = '',
     bool itemsStillInIssuerCustody = false,
-  }) {
+  }) async {
     actions++;
     lastAction = action;
     lastReason = reason;
     lastItemsStillInIssuerCustody = itemsStillInIssuerCustody;
+    if (item.type == 'REPORT_SCORE_CORRECTION' && action == 'APPROVE') {
+      _item = _scoreCorrection(
+        requester: asRequester,
+        status: 'APPROVED_REGENERATION_REQUIRED',
+      );
+    }
+    return getInbox(schoolId);
+  }
+
+  @override
+  Future<ApprovalInbox> regenerateReportCorrection({
+    required String schoolId,
+    required int requestId,
+  }) async {
+    regenerations++;
+    _item = _scoreCorrection(
+      requester: asRequester,
+      status: 'REGENERATED_AWAITING_PUBLICATION',
+    );
+    return getInbox(schoolId);
+  }
+
+  @override
+  Future<ApprovalInbox> publishReportCorrection({
+    required String schoolId,
+    required int requestId,
+  }) async {
+    publications++;
+    _item = _scoreCorrection(requester: asRequester, status: 'REPUBLISHED');
     return getInbox(schoolId);
   }
 }

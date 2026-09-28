@@ -56,6 +56,10 @@ class ApprovalItem {
     required this.canReject,
     required this.canWithdraw,
     required this.sourcePage,
+    this.customStudentId = '',
+    this.termId,
+    this.academicYearId,
+    this.reportWasPublished = false,
   });
 
   final String key;
@@ -82,8 +86,13 @@ class ApprovalItem {
   final bool canReject;
   final bool canWithdraw;
   final String sourcePage;
+  final String customStudentId;
+  final int? termId;
+  final int? academicYearId;
+  final bool reportWasPublished;
 
   bool get pending =>
+      status == 'PENDING' ||
       status == 'PENDING_APPROVAL' ||
       status == 'PENDING_ACCEPTANCE' ||
       status == 'AWAITING_SELLER_ACK' ||
@@ -91,7 +100,13 @@ class ApprovalItem {
       status == 'DISPUTED' ||
       status == 'PENDING_DISBURSEMENT' ||
       status == 'AWAITING_RECIPIENT_CONFIRMATION' ||
-      status == 'PENDING_CORRECTION';
+      status == 'PENDING_CORRECTION' ||
+      status == 'APPROVED_REGENERATION_REQUIRED' ||
+      status == 'REGENERATION_IN_PROGRESS' ||
+      status == 'REGENERATION_FAILED' ||
+      status == 'REGENERATED_AWAITING_PUBLICATION' ||
+      status == 'PUBLICATION_IN_PROGRESS' ||
+      status == 'PUBLICATION_FAILED';
 
   factory ApprovalItem.fromJson(Map<String, dynamic> json) {
     String text(String key) => json[key]?.toString().trim() ?? '';
@@ -149,6 +164,10 @@ class ApprovalItem {
       canReject: json['canReject'] == true,
       canWithdraw: json['canWithdraw'] == true,
       sourcePage: text('sourcePage'),
+      customStudentId: text('customStudentId'),
+      termId: (json['termId'] as num?)?.toInt(),
+      academicYearId: (json['academicYearId'] as num?)?.toInt(),
+      reportWasPublished: json['reportWasPublished'] == true,
     );
   }
 }

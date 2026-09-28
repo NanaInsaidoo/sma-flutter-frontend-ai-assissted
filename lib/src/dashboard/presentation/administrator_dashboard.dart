@@ -90,6 +90,7 @@ class AdministratorDashboard extends StatefulWidget {
     this.onLogout,
     this.readinessRepository,
     this.teacherDashboardLoader,
+    this.approvalInboxLoader,
   });
 
   final DashboardRepository repository;
@@ -104,6 +105,7 @@ class AdministratorDashboard extends StatefulWidget {
   final VoidCallback? onLogout;
   final SchoolReadinessRepository? readinessRepository;
   final Future<TeacherDashboardSummary> Function()? teacherDashboardLoader;
+  final Future<ApprovalInbox?> Function()? approvalInboxLoader;
 
   @override
   State<AdministratorDashboard> createState() => _AdministratorDashboardState();
@@ -267,7 +269,10 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   }
 
   Future<ApprovalInbox?> _loadApprovalInbox() async {
-    if (_schoolId.isEmpty || _isTeachingRole(_activeRole)) return null;
+    if (_schoolId.isEmpty) return null;
+    if (widget.approvalInboxLoader != null) {
+      return widget.approvalInboxLoader!.call();
+    }
     try {
       return await ApprovalApiClient(
         accessToken: widget.accessToken,
@@ -279,7 +284,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   }
 
   Future<SchoolNotificationInbox?> _loadNotifications() async {
-    if (_schoolId.isEmpty || !_canSeeFinancialNotices(_activeRole)) return null;
+    if (_schoolId.isEmpty) return null;
     try {
       return await SchoolNotificationApiClient(
         accessToken: widget.accessToken,
@@ -889,6 +894,12 @@ class _DashboardBody extends StatelessWidget {
             onSelectPage(_SchoolAdminPage.shop);
           } else if (item.sourcePage == 'expenses') {
             onSelectPage(_SchoolAdminPage.expenses);
+          } else if (item.sourcePage == 'assessments') {
+            onSelectPage(_SchoolAdminPage.assessments);
+          } else if (item.sourcePage == 'evaluations') {
+            onSelectPage(_SchoolAdminPage.evaluations);
+          } else if (item.sourcePage == 'finalReports') {
+            onSelectPage(_SchoolAdminPage.finalReports);
           } else if (item.sourcePage == 'leave') {
             showLeaveRequestDetails(
               context: context,
@@ -1245,6 +1256,8 @@ class _DashboardBody extends StatelessWidget {
         onOpenMyLeave: () => onSelectPage(_SchoolAdminPage.myLeave),
         onOpenCalendar: () => onSelectPage(_SchoolAdminPage.calendar),
         onOpenTermReview: () => onSelectPage(_SchoolAdminPage.termReview),
+        approvalInbox: approvalInbox,
+        onOpenApprovals: () => onSelectPage(_SchoolAdminPage.approvals),
       );
     }
 
@@ -1265,31 +1278,41 @@ class _DashboardBody extends StatelessWidget {
                 const SizedBox(height: 18),
                 FutureBuilder<ApprovalInbox?>(
                   future: approvalInbox,
-                  builder: (context, snapshot) => _QuickActionsCard(
-                    role: role,
-                    inbox: snapshot.data,
-                    onFindStudent: onFindStudent,
-                    onRecordPayment: onRecordPayment,
-                    onRecordExpense: onRecordExpense,
-                    onOpenApprovals: () =>
-                        onSelectPage(_SchoolAdminPage.approvals),
-                    onOpenFees: () => onSelectPage(_SchoolAdminPage.fees),
-                    onStartAdmission: onStartAdmission,
-                    onAddStaff: onAddStaff,
-                    onCreateEvent: onAddCalendarEvent,
+                  builder: (context, snapshot) => Column(
+                    children: [
+                      _QuickActionsCard(
+                        role: role,
+                        inbox: snapshot.data,
+                        onFindStudent: onFindStudent,
+                        onRecordPayment: onRecordPayment,
+                        onRecordExpense: onRecordExpense,
+                        onOpenApprovals: () =>
+                            onSelectPage(_SchoolAdminPage.approvals),
+                        onOpenFees: () => onSelectPage(_SchoolAdminPage.fees),
+                        onStartAdmission: onStartAdmission,
+                        onAddStaff: onAddStaff,
+                        onCreateEvent: onAddCalendarEvent,
+                      ),
+                      const SizedBox(height: 20),
+                      _MetricGrid(metrics: data.metrics),
+                      const SizedBox(height: 20),
+                      _DashboardGrid(
+                        data: data,
+                        additionalAlerts: _approvalAttentionAlerts(
+                          snapshot.data,
+                          onOpen: () =>
+                              onSelectPage(_SchoolAdminPage.approvals),
+                        ),
+                        onOpenAdmissions: () =>
+                            onSelectPage(_SchoolAdminPage.admissions),
+                        onOpenAttendance: () =>
+                            onSelectPage(_SchoolAdminPage.attendance),
+                        onOpenFees: () => onSelectPage(_SchoolAdminPage.fees),
+                        onOpenCalendar: () =>
+                            onSelectPage(_SchoolAdminPage.calendar),
+                      ),
+                    ],
                   ),
-                ),
-                const SizedBox(height: 20),
-                _MetricGrid(metrics: data.metrics),
-                const SizedBox(height: 20),
-                _DashboardGrid(
-                  data: data,
-                  onOpenAdmissions: () =>
-                      onSelectPage(_SchoolAdminPage.admissions),
-                  onOpenAttendance: () =>
-                      onSelectPage(_SchoolAdminPage.attendance),
-                  onOpenFees: () => onSelectPage(_SchoolAdminPage.fees),
-                  onOpenCalendar: () => onSelectPage(_SchoolAdminPage.calendar),
                 ),
               ],
             ),
@@ -1970,15 +1993,73 @@ class _MetricCard extends StatelessWidget {
   }
 }
 
+List<SchoolAlert> _approvalAttentionAlerts(
+  ApprovalInbox? inbox, {
+  VoidCallback? onOpen,
+}) {
+  if (inbox == null) return const [];
+  final alerts = <SchoolAlert>[];
+  final seen = <String>{};
+  void add(ApprovalItem item, {required bool assignedToMe}) {
+    if (!_isReportCorrectionItem(item) ||
+        !item.pending ||
+        !seen.add(item.key)) {
+      return;
+    }
+    alerts.add(
+      SchoolAlert(
+        title: _scoreCorrectionAttentionTitle(item, assignedToMe: assignedToMe),
+        message: '${item.title}. ${item.subtitle}',
+        context: assignedToMe
+            ? 'Requests & Approvals · My approvals'
+            : 'Requests & Approvals · My requests',
+        level: AlertLevel.warning,
+        onTap: onOpen,
+      ),
+    );
+  }
+
+  for (final item in inbox.myApprovals) {
+    add(item, assignedToMe: true);
+  }
+  for (final item in inbox.myRequests) {
+    add(item, assignedToMe: false);
+  }
+  return alerts;
+}
+
+String _scoreCorrectionAttentionTitle(
+  ApprovalItem item, {
+  required bool assignedToMe,
+}) => switch (item.status) {
+  'APPROVED_REGENERATION_REQUIRED' =>
+    assignedToMe
+        ? 'Approved report correction needs regeneration'
+        : 'Your report correction was approved; regeneration is pending',
+  'REGENERATED_AWAITING_PUBLICATION' =>
+    assignedToMe
+        ? 'Corrected report is awaiting publication'
+        : 'Your corrected report is awaiting publication',
+  _ =>
+    assignedToMe
+        ? 'Report correction awaiting your approval'
+        : 'Your report correction is awaiting approval',
+};
+
+bool _isReportCorrectionItem(ApprovalItem item) =>
+    item.type == 'REPORT_CORRECTION' || item.type == 'REPORT_SCORE_CORRECTION';
+
 class _DashboardGrid extends StatelessWidget {
   const _DashboardGrid({
     required this.data,
+    this.additionalAlerts = const [],
     required this.onOpenAdmissions,
     required this.onOpenAttendance,
     required this.onOpenFees,
     required this.onOpenCalendar,
   });
   final DashboardSnapshot data;
+  final List<SchoolAlert> additionalAlerts;
   final VoidCallback onOpenAdmissions;
   final VoidCallback onOpenAttendance;
   final VoidCallback onOpenFees;
@@ -1986,6 +2067,7 @@ class _DashboardGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final alerts = [...additionalAlerts, ...data.alerts];
     return LayoutBuilder(
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 950;
@@ -1997,7 +2079,7 @@ class _DashboardGrid extends StatelessWidget {
                 onOpenAdmissions: onOpenAdmissions,
               ),
               const SizedBox(height: 16),
-              _AttentionCard(alerts: data.alerts),
+              _AttentionCard(alerts: alerts),
               const SizedBox(height: 16),
               _FinanceCard(fees: data.fees, onOpenFees: onOpenFees),
               const SizedBox(height: 16),
@@ -2051,7 +2133,7 @@ class _DashboardGrid extends StatelessWidget {
               flex: 4,
               child: Column(
                 children: [
-                  _AttentionCard(alerts: data.alerts),
+                  _AttentionCard(alerts: alerts),
                   const SizedBox(height: 16),
                   _AttendanceCard(
                     attendance: data.attendance,
@@ -2332,7 +2414,7 @@ class _AttentionItem extends StatelessWidget {
       AlertLevel.warning => AppColors.amber,
       AlertLevel.info => AppColors.blue,
     };
-    return Container(
+    final content = Container(
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -2376,7 +2458,20 @@ class _AttentionItem extends StatelessWidget {
               ],
             ),
           ),
+          if (alert.onTap != null) ...[
+            const SizedBox(width: 6),
+            Icon(Icons.chevron_right_rounded, size: 18, color: color),
+          ],
         ],
+      ),
+    );
+    if (alert.onTap == null) return content;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: alert.onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: content,
       ),
     );
   }
@@ -5395,6 +5490,8 @@ class _TeacherWorkspaceLanding extends StatefulWidget {
     required this.onOpenMyLeave,
     required this.onOpenCalendar,
     required this.onOpenTermReview,
+    required this.approvalInbox,
+    required this.onOpenApprovals,
   });
 
   final String displayName;
@@ -5410,6 +5507,8 @@ class _TeacherWorkspaceLanding extends StatefulWidget {
   final VoidCallback onOpenMyLeave;
   final VoidCallback onOpenCalendar;
   final VoidCallback onOpenTermReview;
+  final Future<ApprovalInbox?> approvalInbox;
+  final VoidCallback onOpenApprovals;
 
   @override
   State<_TeacherWorkspaceLanding> createState() =>
@@ -5463,7 +5562,11 @@ class _TeacherWorkspaceLandingState extends State<_TeacherWorkspaceLanding> {
                     if (snapshot.hasError || !snapshot.hasData) {
                       return _TeacherDashboardLoadError(onRetry: _reload);
                     }
-                    return _dashboard(snapshot.data!);
+                    return FutureBuilder<ApprovalInbox?>(
+                      future: widget.approvalInbox,
+                      builder: (context, approvalSnapshot) =>
+                          _dashboard(snapshot.data!, approvalSnapshot.data),
+                    );
                   },
                 ),
               ],
@@ -5474,7 +5577,10 @@ class _TeacherWorkspaceLandingState extends State<_TeacherWorkspaceLanding> {
     );
   }
 
-  Widget _dashboard(TeacherDashboardSummary summary) {
+  Widget _dashboard(
+    TeacherDashboardSummary summary,
+    ApprovalInbox? approvalInbox,
+  ) {
     final workspace = summary.workspace;
     final classes = workspace.assignedClasses;
     final classNames = classes.map((item) => item.label).toList();
@@ -5528,7 +5634,25 @@ class _TeacherWorkspaceLandingState extends State<_TeacherWorkspaceLanding> {
         ? 'No repeated-lateness concerns'
         : 'Late for 2 consecutive school days or more';
 
+    final correctionRequests =
+        approvalInbox?.myRequests
+            .where((item) => _isReportCorrectionItem(item) && item.pending)
+            .toList() ??
+        const <ApprovalItem>[];
     final tasks = <Widget>[];
+    if (correctionRequests.isNotEmpty) {
+      final first = correctionRequests.first;
+      tasks.add(
+        _TeacherDashboardListItem(
+          icon: Icons.rule_folder_outlined,
+          color: AppColors.amber,
+          title:
+              '${correctionRequests.length} active report correction ${correctionRequests.length == 1 ? 'request needs' : 'requests need'} attention',
+          subtitle: '${first.title} · ${first.subtitle}',
+          onTap: widget.onOpenApprovals,
+        ),
+      );
+    }
     if (attendance != null &&
         attendance.schoolDay &&
         attendance.pendingClasses > 0) {
@@ -5591,7 +5715,16 @@ class _TeacherWorkspaceLandingState extends State<_TeacherWorkspaceLanding> {
     late final String focusSubtitle;
     late final String focusActionLabel;
     late final VoidCallback focusAction;
-    if (attendance != null &&
+    if (correctionRequests.isNotEmpty) {
+      final first = correctionRequests.first;
+      focusIcon = Icons.notification_important_outlined;
+      focusTitle = correctionRequests.length == 1
+          ? _scoreCorrectionAttentionTitle(first, assignedToMe: false)
+          : '${correctionRequests.length} report corrections need attention';
+      focusSubtitle = '${first.title} · ${first.subtitle}';
+      focusActionLabel = 'View request';
+      focusAction = widget.onOpenApprovals;
+    } else if (attendance != null &&
         attendance.schoolDay &&
         attendance.pendingClasses > 0) {
       focusIcon = Icons.fact_check_outlined;
@@ -5721,6 +5854,14 @@ class _TeacherWorkspaceLandingState extends State<_TeacherWorkspaceLanding> {
                 value: concernValue,
                 caption: concernCaption,
                 onTap: widget.onOpenAttendance,
+              ),
+              _TeacherSummaryCard(
+                icon: Icons.approval_outlined,
+                title: 'Requests & approvals',
+                value: '${approvalInbox?.pendingTotal ?? 0}',
+                caption:
+                    '${approvalInbox?.pendingMyRequests ?? 0} requests · ${approvalInbox?.pendingMyApproval ?? 0} approvals',
+                onTap: widget.onOpenApprovals,
               ),
             ],
           ),
@@ -6514,21 +6655,20 @@ class _Sidebar extends StatelessWidget {
                     active: selectedPage == _SchoolAdminPage.dashboard,
                     onTap: () => onSelectPage(_SchoolAdminPage.dashboard),
                   ),
-                  if (!isTeacher)
-                    FutureBuilder<ApprovalInbox?>(
-                      future: approvalInbox,
-                      builder: (context, snapshot) {
-                        final inbox = snapshot.data;
-                        return _SidebarButton(
-                          icon: Icons.approval_outlined,
-                          label: 'Requests & Approvals',
-                          collapsed: collapsed,
-                          collapsedBadgeCount: inbox?.pendingTotal ?? 0,
-                          active: selectedPage == _SchoolAdminPage.approvals,
-                          onTap: () => onSelectPage(_SchoolAdminPage.approvals),
-                        );
-                      },
-                    ),
+                  FutureBuilder<ApprovalInbox?>(
+                    future: approvalInbox,
+                    builder: (context, snapshot) {
+                      final inbox = snapshot.data;
+                      return _SidebarButton(
+                        icon: Icons.approval_outlined,
+                        label: 'Requests & Approvals',
+                        collapsed: collapsed,
+                        collapsedBadgeCount: inbox?.pendingTotal ?? 0,
+                        active: selectedPage == _SchoolAdminPage.approvals,
+                        onTap: () => onSelectPage(_SchoolAdminPage.approvals),
+                      );
+                    },
+                  ),
                   if (!isBursar && !isTeacher)
                     _SidebarButton(
                       icon: Icons.manage_history_rounded,

@@ -32,12 +32,14 @@ class SchoolAlert {
     required this.message,
     required this.context,
     required this.level,
+    this.onTap,
   });
 
   final String title;
   final String message;
   final String context;
   final AlertLevel level;
+  final VoidCallback? onTap;
 }
 
 class SchoolEvent {

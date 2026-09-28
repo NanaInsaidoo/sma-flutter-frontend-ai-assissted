@@ -2,7 +2,7 @@
 
 ## Training manual for teachers, head teachers, and administrators
 
-**Updated:** 26 September 2026<br>
+**Updated:** 27 September 2026<br>
 **Applies to:** Evaluations & Comments, assessment grading, report readiness, progression, report generation, publication, corrections, and term closure
 
 This guide explains the complete end-of-term workflow, who is responsible for each step, what becomes locked, and how to resolve the most common blockers.
@@ -48,7 +48,7 @@ Use this manual by goal:
 - Generates report cards after all readiness requirements are complete.
 - Selects and confirms the progression decision.
 - Publishes report cards.
-- Reopens a published report for an authorized correction, with a recorded reason.
+- Reviews report-source correction requests and controls report regeneration and publication.
 
 ### Headmaster-only controls
 
@@ -81,7 +81,7 @@ If a teacher cannot see a subject, check the class-subject allocation first. If 
 7. Leadership selects each student’s progression decision.
 8. When academic grades, evaluations and comments, leadership approval, and progression are complete, leadership generates the report.
 9. Leadership previews the generated report and publishes it individually, by selected classes, or as part of all eligible generated reports.
-10. Any later correction uses the controlled reopen, save-reason, regenerate and republish process.
+10. Any later correction to a score, evaluation rating, class-teacher comment, head-teacher comment, or progression decision uses the controlled request, leadership approval, regeneration and publication process.
 11. Leadership closes the term only when every required report is current and published and no correction is pending.
 
 ---
@@ -330,33 +330,68 @@ Publishing makes the report visible through the school’s report distribution c
 
 ## 9. Corrections after generation or publication
 
-### Before publication
+Source information used by a generated report is controlled. Staff do not reopen a complete report and silently overwrite its contents. They open the source page, propose the exact change, state why it is required, and choose the leader who must approve it.
 
-If a generated report is found to be wrong:
+### Where each correction starts
 
-1. Reopen or return the affected source item through an authorized leadership action.
-2. Record a reason.
-3. Make or request the correction.
-4. Regenerate the affected student’s report.
-5. Preview again before publication.
+| Information to correct | Open this source | Action |
+|---|---|---|
+| Assessment score | **Assessments → assessment → View score sheet** | **Request correction** beside the student |
+| Evaluation ratings | The generated student report | **Edit ratings** / **Request correction** |
+| Class-teacher comment | The generated student report | **Edit class-teacher comment** / **Request correction** |
+| Head-teacher comment | The generated student report | **Edit head-teacher comment** / **Request correction** |
+| Progression decision | The generated student report | **Edit progression** / **Request correction** |
 
-### After publication
+The score sheet explains why it is locked only when one or more scores on that sheet are used by a generated report. Unaffected, pre-generation score sheets continue to use normal score entry and saving.
 
-1. Leadership opens the student report.
-2. Select **Reopen report**.
-3. The published progression decision and head teacher comment become editable. The published version remains in history.
-4. Make the correction and select **Save Correction**.
-5. Enter the correction reason. The reason and saved changes are recorded in the audit log.
-6. The report becomes **Correction pending** and is no longer counted as safely published for term closure.
-7. Regenerate only the affected student.
-8. Preview the corrected version.
-9. Republish it.
+### Submit a correction request
 
-Published reports are read-only before **Reopen report** is selected. Reopening by itself does not change the stored report and does not require a reason; the reason is required when the correction is saved.
+1. Open the affected source and select its correction action.
+2. Confirm the student and current value.
+3. Enter the proposed value. For ratings, change only the affected criteria. For comments, enter the complete revised comment.
+4. Enter a clear reason. A blank or meaningless reason is rejected.
+5. Choose the responsible leadership approver.
+6. Select **Submit for approval**.
 
-The audit history records who reopened, why, when, and when the corrected version was republished. The original published history is retained; corrections create a newer controlled version.
+The official source value and existing report do not change at this point. The affected action displays **Awaiting approval** with strong, readable status styling. Only one active request is allowed for the same student and source. The request appears under the requester’s **Requests & Approvals → My requests**, increases the request count, creates notifications, and appears in the dashboard’s **Attention required** area.
 
-Teachers do not directly overwrite a generated or published report. When a teacher tries to save a changed score after generation, the system opens **Request report correction**. The teacher submits one student at a time, including the proposed score, reason, and optional named approver. Leadership sees a correction banner on **Evaluations & Comments**, then approves and regenerates or rejects the request. Approval applies the proposed score and regenerates the affected student; rejection leaves the official data unchanged.
+Validation prevents submitting an unchanged value. Scores below zero or above the assessment maximum are also rejected. A rejected request may be corrected and submitted again as a new request.
+
+### Leadership reviews and completes the correction
+
+1. Open **Requests & Approvals → My approvals**.
+2. Open the correction request. Only the specifically assigned approver can decide it; other administrators receive an awareness notification but no approval controls.
+3. Review the student, source, current value, proposed value, request reason, requester name and ID, and assigned approver. Rating requests list only the criteria that changed. Comment requests show the current and complete revised versions.
+4. Select **Reject** to leave the official value unchanged, or **Approve correction** to apply the approved source change.
+5. The request increases the approver’s approval count and appears in **Attention required** on the main dashboard. After approval, the same correction window advances to **Regenerate report**. Approval and regeneration are deliberately separate actions.
+6. When regeneration completes, select **View report**. The correction window remains open so leadership can continue without losing context.
+7. Select **Publish now** for a previously unpublished report or **Republish now** for a report that was already published. Leadership may close the window and publish later if more checking is needed.
+
+If the window is closed, the assigned approver can resume the exact same stage from **Requests & Approvals → My approvals**, **Attention required** on the main dashboard, or the affected student row under **Final Report Management → Report Cards**. These are entry points to one saved workflow; they do not create separate requests.
+
+### Visible progress
+
+The request dialog and the student’s report-card row display the same four-step tracker. Completed steps remain checked, the current step is highlighted, and a processing state is shown while regeneration or publication is running:
+
+**Requested → Approval → Regenerate → Publish**
+
+This progress remains visible after the dialog is closed. **View correction** reopens the saved workflow from the student report, while the dashboard and Requests & Approvals provide alternative resume points.
+
+The visible correction states are:
+
+| State | Meaning | Next action |
+|---|---|---|
+| Awaiting approval | Teacher submitted a proposed change; the official score is unchanged | Leadership approves or rejects |
+| Approved · regeneration required | The approved score is now official; the report version is stale | Leadership regenerates |
+| Regenerated · publication required | A fresh report version exists | Leadership views and publishes |
+| Regeneration in progress / failed | The server is creating a fresh report, or the last attempt failed | Wait, or retry regeneration |
+| Publication in progress / failed | The server is releasing the fresh version, or the last attempt failed | Wait, or retry publication |
+| Published / Republished | The fresh version is official | No action remains |
+| Rejected | The official score and report were not changed | Teacher may submit a new request if needed |
+
+The audit trail records the source type, original and proposed values, request reason, requester, named approver or rejecter, decision note, regeneration actor and time, and publication actor and time. If the official source changed after a request was submitted, approval is blocked so a stale request cannot overwrite newer data.
+
+Approval applies the corrected source value but never regenerates or publishes automatically. Regeneration creates a new version but never publishes automatically. This separation lets leadership inspect the corrected PDF before it becomes official.
 
 ---
 
@@ -453,29 +488,56 @@ Expected: readiness reports the missing score count and report generation remain
 
 Expected: the report displays Update required until regenerated.
 
-### Scenario H — correction after publication
+### Scenario H — teacher requests a score correction after publication
 
 1. Publish a report.
-2. Reopen it with a reason.
-3. Correct, regenerate, and republish.
+2. Open the source score sheet and confirm the student score is read-only.
+3. Select **Request correction**, enter a different proposed score and a reason, then submit.
+4. Confirm it appears in the requester’s **My requests**, the assigned leader’s **My approvals**, and both dashboards’ attention areas.
+5. As the assigned approver, approve the request. Confirm that another administrator can see the notification but cannot approve it.
+6. Confirm the request changes to **Approved · regeneration required** rather than regenerating automatically.
+7. Regenerate, view the updated report, and republish it.
 
-Expected: the term cannot close while correction is pending; the audit trail contains reopen and republish events.
+Expected: the official score remains unchanged before approval; the report becomes stale after approval; publication is unavailable until regeneration; the audit trail contains every actor and stage.
 
-### Scenario I — unauthorized access
+### Scenario I — reject or duplicate a correction
+
+1. Reject a teacher correction with a reason.
+2. Confirm the official score is unchanged.
+3. Submit another correction for the same student and assessment.
+4. While it remains active, attempt to submit a duplicate request.
+
+Expected: a new request is allowed after rejection, but a second active request is blocked.
+
+### Scenario J — correct every supported report source
+
+Repeat the controlled correction flow for each source: evaluation ratings, class-teacher comment, head-teacher comment, and progression.
+
+Expected: each request shows the correct original and proposed values; only the named approver can decide; approval updates only that source; the report becomes stale; regeneration enables **View report**; republishing completes the workflow; and **Open source page** returns to Evaluations or Final Reports as appropriate.
+
+### Scenario K — resume a correction after closing the dialog
+
+1. Approve a correction, then close the dialog before regeneration.
+2. Resume it from **Requests & Approvals**.
+3. Repeat by closing after regeneration and reopening from **Attention required** or the student’s **View correction** action.
+
+Expected: the same saved request opens at its current stage. No step is repeated and no duplicate request is created.
+
+### Scenario L — unauthorized access
 
 1. Sign in as a subject teacher.
 2. Try to start leadership review, change progression, generate, reopen, or publish.
 
 Expected: all leadership-only actions are hidden and rejected by the server if called directly.
 
-### Scenario J — allocation added after release
+### Scenario M — allocation added after release
 
 1. Add a subject teacher after evaluations were released.
 2. Refresh the exercise.
 
 Expected: the class appears in Teacher progress, or appears as pending synchronization with a clear action. If the teacher already teaches another subject in that class, the new subject is added to the existing responsibility rather than creating a second evaluation.
 
-### Scenario K — term closure
+### Scenario N — term closure
 
 1. Leave one evaluation under review or one report correction pending.
 2. Attempt to close the term.
@@ -498,7 +560,10 @@ Expected: closure is blocked and identifies the unresolved section.
 | A rejected student cannot be resubmitted because classmates are approved | Confirm the corrected student comment was saved | Submit the correction again; approved and under-review classmates remain unchanged |
 | Teacher cannot edit one student | Student is Under review or Approved | Leadership must Reject with a reason if an edit is required |
 | Generated report has old information | Freshness status | Regenerate the affected student report |
-| Published report needs correction | Controlled correction process | Reopen with reason, correct, regenerate, and republish |
+| Generated or published report has a wrong score | Controlled score-correction process | Teacher submits the current-to-proposed change and reason; leadership approves or rejects, then regenerates and publishes |
+| A correction dialog was closed before completion | Saved correction state | Resume from Requests & Approvals, dashboard Attention required, or the student’s View correction action |
+| Another administrator can see a request but cannot approve it | Named approver rule | This is expected; only the selected approver receives decision controls |
+| Regenerated report still says publication required | Generation and publication are separate | Preview the report, then select Publish now or Republish now |
 | Term cannot close | Closure blockers | Resolve every blocker; warnings require an acknowledgement where permitted |
 
 ---

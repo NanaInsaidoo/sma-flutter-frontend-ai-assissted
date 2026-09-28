@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
 import '../data/assessment_api_client.dart';
+import '../../platform/presentation/document_opener.dart';
 
 const _criteria = <String, String>{
   'HOMEWORK_HABITS': 'Homework habits',
@@ -236,10 +238,20 @@ class _TermEvaluationWorkflowScreenState
         termId: widget.setup.termId,
       );
       if (_manager) {
-        _pendingCorrections = await widget.api.getReportCorrections(
+        final corrections = await widget.api.getReportCorrections(
           customSchoolId: widget.schoolId,
-          status: 'PENDING',
         );
+        _pendingCorrections = corrections.where((request) {
+          final status = request['status']?.toString().toUpperCase();
+          return const {
+            'APPROVED_REGENERATION_REQUIRED',
+            'REGENERATION_IN_PROGRESS',
+            'REGENERATION_FAILED',
+            'REGENERATED_AWAITING_PUBLICATION',
+            'PUBLICATION_IN_PROGRESS',
+            'PUBLICATION_FAILED',
+          }.contains(status);
+        }).toList();
       }
     } on AssessmentApiException catch (error) {
       _error = error.message;
@@ -470,7 +482,7 @@ class _TermEvaluationWorkflowScreenState
                         ],
                       ),
                     if (managerWorkspace &&
-                        !dedicatedManagerWorkspace &&
+                        _managerView == 'Approval' &&
                         _pendingCorrections.isNotEmpty) ...[
                       const SizedBox(height: 14),
                       _correctionBanner(),
@@ -671,16 +683,16 @@ class _TermEvaluationWorkflowScreenState
     child: ListTile(
       leading: const Icon(Icons.rule_folder_outlined, color: Color(0xFFB45309)),
       title: Text(
-        '${_pendingCorrections.length} report ${_pendingCorrections.length == 1 ? 'correction needs' : 'corrections need'} a decision',
+        '${_pendingCorrections.length} approved report ${_pendingCorrections.length == 1 ? 'correction needs' : 'corrections need'} completion',
         style: const TextStyle(fontWeight: FontWeight.w800),
       ),
       subtitle: const Text(
-        'Review the teacher’s proposed value and reason. Approval applies the change and regenerates the affected student report.',
+        'Complete approved score, rating, comment, and progression corrections.',
       ),
       trailing: FilledButton.tonal(
         key: const ValueKey('review-report-corrections'),
         onPressed: _showCorrections,
-        child: const Text('Review requests'),
+        child: const Text('Complete updates'),
       ),
     ),
   );
@@ -709,15 +721,13 @@ class _TermEvaluationWorkflowScreenState
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Report correction requests'),
+          title: const Text('Report corrections requiring attention'),
           content: SizedBox(
-            width: 760,
+            width: 860,
             child: _pendingCorrections.isEmpty
                 ? const Padding(
                     padding: EdgeInsets.all(24),
-                    child: Text(
-                      'No correction requests are awaiting a decision.',
-                    ),
+                    child: Text('No report corrections require attention.'),
                   )
                 : ListView.separated(
                     shrinkWrap: true,
@@ -725,40 +735,60 @@ class _TermEvaluationWorkflowScreenState
                     separatorBuilder: (_, _) => const Divider(),
                     itemBuilder: (context, index) {
                       final request = _pendingCorrections[index];
-                      final original =
-                          request['originalScore']?.toString() ?? '—';
-                      final proposed =
-                          request['proposedScore']?.toString() ?? '—';
-                      return ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(
-                          '${request['customStudentId']} · ${request['assessmentTitle'] ?? request['assessmentId']}',
-                          style: const TextStyle(fontWeight: FontWeight.w800),
-                        ),
-                        subtitle: Text(
-                          '$original → $proposed\n${request['reason'] ?? ''}\nRequested by ${request['requestedBy'] ?? 'Unknown'}${request['assignedApprover'] == null ? '' : ' · Assigned to ${request['assignedApprover']}'}',
-                        ),
-                        isThreeLine: true,
-                        trailing: Wrap(
-                          spacing: 6,
+                      final requesterName =
+                          '${request['requestedByName'] ?? request['requestedBy'] ?? 'Unknown'}'
+                              .trim();
+                      final requesterId =
+                          '${request['requestedByStaffId'] ?? ''}'.trim();
+                      final status =
+                          request['status']?.toString().toUpperCase() ??
+                          'PENDING';
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            TextButton(
-                              onPressed: () => _decideCorrection(
-                                dialogContext,
-                                setDialogState,
-                                request,
-                                approve: false,
-                              ),
-                              child: const Text('Reject'),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    '${request['customStudentId']} · ${_correctionSourceLabel(request)}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                ),
+                                _correctionStatusBadge(status),
+                              ],
                             ),
-                            FilledButton(
-                              onPressed: () => _decideCorrection(
+                            const SizedBox(height: 8),
+                            Text(
+                              _correctionChangeSummary(request),
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w900,
+                                color: Color(0xFF172033),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text('${request['reason'] ?? ''}'),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Requested by $requesterName${requesterId.isEmpty ? '' : ' · $requesterId'}',
+                              style: const TextStyle(
+                                color: Colors.blueGrey,
+                                fontSize: 12,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: _correctionActions(
                                 dialogContext,
                                 setDialogState,
                                 request,
-                                approve: true,
+                                status,
                               ),
-                              child: const Text('Approve & regenerate'),
                             ),
                           ],
                         ),
@@ -775,6 +805,243 @@ class _TermEvaluationWorkflowScreenState
         ),
       ),
     );
+    if (mounted) await _load();
+  }
+
+  String _correctionNumber(String value) {
+    final parsed = double.tryParse(value);
+    if (parsed == null) return value;
+    return parsed == parsed.roundToDouble()
+        ? parsed.toInt().toString()
+        : parsed.toStringAsFixed(2).replaceFirst(RegExp(r'0+$'), '');
+  }
+
+  String _correctionSourceLabel(Map<String, dynamic> request) {
+    final source = '${request['sourceLabel'] ?? ''}'.trim();
+    if (source.isNotEmpty) return source;
+    return '${request['assessmentTitle'] ?? request['assessmentId'] ?? 'Report source'}';
+  }
+
+  String _correctionChangeSummary(Map<String, dynamic> request) {
+    final type = '${request['correctionType'] ?? 'SCORE'}'.toUpperCase();
+    if (type == 'SCORE') {
+      final original = '${request['originalScore'] ?? '—'}';
+      final proposed = '${request['proposedScore'] ?? '—'}';
+      final maximum = '${request['maximumScore'] ?? '—'}';
+      return '${_correctionNumber(original)}/${_correctionNumber(maximum)}  →  ${_correctionNumber(proposed)}/${_correctionNumber(maximum)}';
+    }
+    if (type == 'EVALUATION_RATINGS') {
+      try {
+        final before = Map<String, dynamic>.from(
+          jsonDecode('${request['originalValue'] ?? '{}'}') as Map,
+        );
+        final after = Map<String, dynamic>.from(
+          jsonDecode('${request['proposedValue'] ?? '{}'}') as Map,
+        );
+        final changed = after.keys
+            .where((key) => '${before[key]}' != '${after[key]}')
+            .length;
+        return '$changed evaluation ${changed == 1 ? 'rating' : 'ratings'} changed';
+      } catch (_) {
+        return 'Evaluation ratings changed';
+      }
+    }
+    final before = '${request['originalValue'] ?? ''}'.trim();
+    final after = '${request['proposedValue'] ?? ''}'.trim();
+    String short(String value) => value.isEmpty
+        ? 'Not set'
+        : value.length > 70
+        ? '${value.substring(0, 67)}…'
+        : value;
+    return '${short(before)}  →  ${short(after)}';
+  }
+
+  Widget _correctionStatusBadge(String status) {
+    final (label, color, background) = switch (status) {
+      'APPROVED_REGENERATION_REQUIRED' => (
+        'Approved · regeneration required',
+        const Color(0xFFB45309),
+        const Color(0xFFFFF7ED),
+      ),
+      'REGENERATION_IN_PROGRESS' => (
+        'Regenerating report',
+        const Color(0xFF1D4ED8),
+        const Color(0xFFEFF6FF),
+      ),
+      'REGENERATION_FAILED' => (
+        'Regeneration failed',
+        const Color(0xFFB91C1C),
+        const Color(0xFFFEF2F2),
+      ),
+      'REGENERATED_AWAITING_PUBLICATION' => (
+        'Regenerated · publication required',
+        const Color(0xFF1D4ED8),
+        const Color(0xFFEFF6FF),
+      ),
+      'PUBLICATION_IN_PROGRESS' => (
+        'Publishing report',
+        const Color(0xFF1D4ED8),
+        const Color(0xFFEFF6FF),
+      ),
+      'PUBLICATION_FAILED' => (
+        'Publication failed',
+        const Color(0xFFB91C1C),
+        const Color(0xFFFEF2F2),
+      ),
+      'REPUBLISHED' => (
+        'Republished',
+        const Color(0xFF047857),
+        const Color(0xFFECFDF5),
+      ),
+      'PUBLISHED' => (
+        'Published',
+        const Color(0xFF047857),
+        const Color(0xFFECFDF5),
+      ),
+      'REJECTED' => (
+        'Rejected',
+        const Color(0xFFB91C1C),
+        const Color(0xFFFEF2F2),
+      ),
+      _ => (
+        'Awaiting approval',
+        const Color(0xFFB45309),
+        const Color(0xFFFFF7ED),
+      ),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  Widget _correctionActions(
+    BuildContext dialogContext,
+    StateSetter setDialogState,
+    Map<String, dynamic> request,
+    String status,
+  ) {
+    if (status == 'PENDING') {
+      final assignedApproverName = '${request['assignedApproverName'] ?? ''}'
+          .trim();
+      final serverDecisionAllowed = request['decisionAllowed'];
+      final canDecide = serverDecisionAllowed is bool
+          ? serverDecisionAllowed
+          : assignedApproverName.isEmpty ||
+                assignedApproverName.toLowerCase() ==
+                    widget.viewerName.trim().toLowerCase();
+      if (!canDecide) {
+        return Text(
+          assignedApproverName.isEmpty
+              ? 'Assigned approver will review this request'
+              : 'Assigned to $assignedApproverName',
+          style: const TextStyle(
+            color: Colors.blueGrey,
+            fontWeight: FontWeight.w700,
+          ),
+        );
+      }
+      return Wrap(
+        spacing: 12,
+        runSpacing: 8,
+        children: [
+          OutlinedButton(
+            onPressed: () => _decideCorrection(
+              dialogContext,
+              setDialogState,
+              request,
+              approve: false,
+            ),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFFB91C1C),
+            ),
+            child: const Text('Reject'),
+          ),
+          FilledButton(
+            onPressed: () => _decideCorrection(
+              dialogContext,
+              setDialogState,
+              request,
+              approve: true,
+            ),
+            child: const Text('Approve correction'),
+          ),
+        ],
+      );
+    }
+    if (status == 'REGENERATION_IN_PROGRESS' ||
+        status == 'PUBLICATION_IN_PROGRESS') {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            status == 'REGENERATION_IN_PROGRESS'
+                ? 'Regenerating…'
+                : 'Publishing…',
+          ),
+        ],
+      );
+    }
+    if (status == 'APPROVED_REGENERATION_REQUIRED' ||
+        status == 'REGENERATION_FAILED') {
+      return FilledButton.icon(
+        key: ValueKey('regenerate-correction-${request['id']}'),
+        onPressed: () =>
+            _advanceCorrection(setDialogState, request, regenerate: true),
+        icon: const Icon(Icons.refresh),
+        label: Text(
+          status == 'REGENERATION_FAILED'
+              ? 'Retry regeneration'
+              : 'Regenerate report',
+        ),
+      );
+    }
+    if (status == 'REGENERATED_AWAITING_PUBLICATION' ||
+        status == 'PUBLICATION_FAILED') {
+      final republish = request['reportWasPublished'] == true;
+      return Wrap(
+        spacing: 10,
+        runSpacing: 8,
+        children: [
+          OutlinedButton.icon(
+            onPressed: () => _viewCorrectionReport(request),
+            icon: const Icon(Icons.visibility_outlined),
+            label: const Text('View report'),
+          ),
+          FilledButton.icon(
+            key: ValueKey('publish-correction-${request['id']}'),
+            onPressed: () =>
+                _advanceCorrection(setDialogState, request, regenerate: false),
+            icon: const Icon(Icons.publish_outlined),
+            label: Text(
+              status == 'PUBLICATION_FAILED'
+                  ? 'Retry publication'
+                  : republish
+                  ? 'Republish now'
+                  : 'Publish now',
+            ),
+          ),
+        ],
+      );
+    }
+    return const SizedBox.shrink();
   }
 
   Future<void> _decideCorrection(
@@ -805,7 +1072,7 @@ class _TermEvaluationWorkflowScreenState
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: Text(approve ? 'Approve & regenerate' : 'Reject'),
+            child: Text(approve ? 'Approve correction' : 'Reject'),
           ),
         ],
       ),
@@ -818,26 +1085,86 @@ class _TermEvaluationWorkflowScreenState
       return;
     }
     try {
-      await widget.api.decideReportCorrection(
+      final updated = await widget.api.decideReportCorrection(
         customSchoolId: widget.schoolId,
         requestId: (request['id'] as num).toInt(),
         approve: approve,
         note: decisionNote,
       );
-      _pendingCorrections = await widget.api.getReportCorrections(
-        customSchoolId: widget.schoolId,
-        status: 'PENDING',
-      );
       if (!mounted) return;
-      setDialogState(() {});
+      setDialogState(() {
+        final index = _pendingCorrections.indexWhere(
+          (item) => item['id'] == request['id'],
+        );
+        if (approve && index >= 0) {
+          _pendingCorrections[index] = updated;
+        } else if (index >= 0) {
+          _pendingCorrections.removeAt(index);
+        }
+      });
       setState(() {});
       _message(
         approve
-            ? 'Correction approved and the student report was regenerated.'
+            ? 'Correction approved. Regenerate the report when ready.'
             : 'Correction request rejected. Official data was not changed.',
       );
     } on AssessmentApiException catch (error) {
       _message(error.message);
+    }
+  }
+
+  Future<void> _advanceCorrection(
+    StateSetter setDialogState,
+    Map<String, dynamic> request, {
+    required bool regenerate,
+  }) async {
+    try {
+      final requestId = (request['id'] as num).toInt();
+      final updated = regenerate
+          ? await widget.api.regenerateReportCorrection(
+              customSchoolId: widget.schoolId,
+              requestId: requestId,
+            )
+          : await widget.api.publishReportCorrection(
+              customSchoolId: widget.schoolId,
+              requestId: requestId,
+            );
+      if (!mounted) return;
+      setDialogState(() {
+        final index = _pendingCorrections.indexWhere(
+          (item) => item['id'] == request['id'],
+        );
+        if (index >= 0) _pendingCorrections[index] = updated;
+      });
+      setState(() {});
+      _message(
+        regenerate
+            ? 'Updated report generated. Review it, then publish when ready.'
+            : 'Updated report published successfully.',
+      );
+    } on AssessmentApiException catch (error) {
+      _message(error.message);
+    }
+  }
+
+  Future<void> _viewCorrectionReport(Map<String, dynamic> request) async {
+    try {
+      prepareDocumentWindow();
+      final bytes = await widget.api.getStudentReportCardPdf(
+        customSchoolId: widget.schoolId,
+        customStudentId: request['customStudentId'].toString(),
+        termId: widget.setup.termId,
+        academicYearId: widget.setup.academicYearId,
+      );
+      await openDocumentBytes(
+        bytes,
+        'application/pdf',
+        '${request['customStudentId']}_updated_report.pdf',
+      );
+    } on AssessmentApiException catch (error) {
+      _message(error.message);
+    } on UnsupportedError catch (error) {
+      _message(error.message ?? 'Report preview is unavailable.');
     }
   }
 
@@ -862,28 +1189,37 @@ class _TermEvaluationWorkflowScreenState
 
   Widget _evaluationWindowStatusBadge() {
     final open = _teacherEntryOpen;
-    final color = open ? const Color(0xFF00897B) : const Color(0xFF64748B);
+    final released = _data?['released'] == true;
+    final color = released && open
+        ? const Color(0xFF00897B)
+        : const Color(0xFF64748B);
     return Container(
       key: const ValueKey('evaluation-window-status'),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
-        color: open ? const Color(0xFFE0F2F1) : const Color(0xFFF1F5F9),
+        color: released && open
+            ? const Color(0xFFE0F2F1)
+            : const Color(0xFFF1F5F9),
         borderRadius: BorderRadius.circular(999),
         border: Border.all(
-          color: open ? const Color(0xFF99D5CE) : const Color(0xFFCBD5E1),
+          color: released && open
+              ? const Color(0xFF99D5CE)
+              : const Color(0xFFCBD5E1),
         ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
-            open ? Icons.lock_open_outlined : Icons.lock_outline,
+            released && open
+                ? Icons.lock_open_outlined
+                : Icons.lock_outline,
             size: 17,
             color: color,
           ),
           const SizedBox(width: 7),
           Text(
-            open ? 'Released' : 'Locked',
+            released && open ? 'Released' : 'Not released',
             style: TextStyle(color: color, fontWeight: FontWeight.w800),
           ),
         ],
@@ -4304,6 +4640,57 @@ class _ClassEvaluationResultsViewState
     }
   }
 
+  Future<void> _undoApproval(String studentId, String studentName) async {
+    if (_busy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Undo approval for $studentName?'),
+        content: const Text(
+          'This student will return to Awaiting approval. The ratings and class-teacher comment will remain unchanged.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const ValueKey('confirm-undo-evaluation-approval'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Undo approval'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      await widget.api.undoTermEvaluationLeadershipApproval(
+        studentId: studentId,
+        schoolId: widget.schoolId,
+        termId: widget.termId,
+      );
+      await _refresh();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              "$studentName's evaluation is awaiting approval again.",
+            ),
+          ),
+        );
+      }
+    } on AssessmentApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('Class ratings & comments approval')),
@@ -4518,7 +4905,7 @@ class _ClassEvaluationResultsViewState
                                       child: Text('STATUS'),
                                     ),
                                     const SizedBox(
-                                      width: 190,
+                                      width: 256,
                                       child: Text('DECISION'),
                                     ),
                                     const SizedBox(width: 36),
@@ -4558,8 +4945,10 @@ class _ClassEvaluationResultsViewState
     final reviewStatus =
         review['status']?.toString().toUpperCase() ?? 'PENDING';
     final studentId = row['id']?.toString() ?? '';
+    final studentName = row['name']?.toString() ?? 'this student';
     final eligible = _awaitingApproval(reviewStatus);
     final canDecide = eligible || reviewStatus == 'UNDER_REVIEW';
+    final canUndoApproval = reviewStatus == 'APPROVED';
     final longComment = comment.length > 150;
     return ExpansionTile(
       key: ValueKey('class-result-$studentId'),
@@ -4657,29 +5046,47 @@ class _ClassEvaluationResultsViewState
             ),
           ),
           SizedBox(
-            width: 190,
+            width: 256,
             child: canDecide
-                ? Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    alignment: WrapAlignment.end,
+                ? Row(
                     children: [
-                      OutlinedButton(
-                        onPressed: _busy
-                            ? null
-                            : () => _rejectStudent(studentId, reviewStatus),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: const Color(0xFFB42318),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: _busy
+                              ? null
+                              : () => _rejectStudent(studentId, reviewStatus),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFFB42318),
+                            minimumSize: const Size.fromHeight(44),
+                          ),
+                          child: const Text('Reject'),
                         ),
-                        child: const Text('Reject'),
                       ),
-                      FilledButton(
-                        onPressed: _busy
-                            ? null
-                            : () => _approveStudents([studentId]),
-                        child: const Text('Approve'),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: _busy
+                              ? null
+                              : () => _approveStudents([studentId]),
+                          style: FilledButton.styleFrom(
+                            minimumSize: const Size.fromHeight(44),
+                          ),
+                          child: const Text('Approve'),
+                        ),
                       ),
                     ],
+                  )
+                : canUndoApproval
+                ? OutlinedButton.icon(
+                    key: ValueKey('undo-class-result-$studentId'),
+                    onPressed: _busy
+                        ? null
+                        : () => _undoApproval(studentId, studentName),
+                    icon: const Icon(Icons.undo),
+                    label: const Text('Undo approval'),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(44),
+                    ),
                   )
                 : const SizedBox.shrink(),
           ),
@@ -6960,6 +7367,7 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
   int _suggestionVariant = 0;
   int _suggestionRequest = 0;
   String _status = 'PENDING';
+  bool _reportSourceLocked = false;
   String? _leadershipReviewer;
   String? _leadershipDecisionNote;
 
@@ -6999,6 +7407,7 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
           ..addAll(finalRatings);
         _comment.text = data['comment']?.toString() ?? '';
         _status = data['status']?.toString() ?? 'PENDING';
+        _reportSourceLocked = data['reportSourceLocked'] == true;
         _leadershipReviewer = data['leadershipReviewer']?.toString();
         _leadershipDecisionNote = data['leadershipDecisionNote']?.toString();
         _audit = (data['audit'] as List? ?? const [])
@@ -7015,7 +7424,7 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
             .toList();
         _loading = false;
       });
-      if (!widget.canReviewLeadership) {
+      if (!widget.canReviewLeadership && !_reportSourceLocked) {
         await _loadSuggestion(resetVariant: true);
       }
     } on AssessmentApiException catch (error) {
@@ -7295,6 +7704,233 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
     }
   }
 
+  List<DropdownMenuItem<String>> _correctionApproverItems(
+    List<Map<String, dynamic>> approvers,
+  ) => approvers
+      .map((entry) {
+        final username = '${entry['username'] ?? ''}'.trim();
+        final name = '${entry['name'] ?? username}'.trim();
+        final role = '${entry['role'] ?? ''}'
+            .replaceAll('_', ' ')
+            .toLowerCase();
+        return DropdownMenuItem(
+          value: username,
+          child: Text(role.isEmpty ? name : '$name · $role'),
+        );
+      })
+      .where((item) => item.value?.isNotEmpty == true)
+      .toList();
+
+  Future<Map<String, String>?> _correctionApprovalDetails({
+    required String title,
+    required Widget changeEditor,
+  }) async {
+    List<Map<String, dynamic>> approvers;
+    try {
+      approvers = await widget.api.getReportCorrectionApprovers(
+        customSchoolId: widget.schoolId,
+      );
+    } on AssessmentApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+      return null;
+    }
+    if (!mounted) return null;
+    String? approver;
+    final reason = TextEditingController();
+    final result = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(title),
+          content: SizedBox(
+            width: 620,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'The official report remains unchanged until the selected approver approves this request, regenerates the report, reviews it, and publishes it.',
+                  ),
+                  const SizedBox(height: 16),
+                  changeEditor,
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<String>(
+                    key: const ValueKey('evaluation-correction-approver'),
+                    value: approver,
+                    decoration: const InputDecoration(
+                      labelText: 'Approver',
+                      hintText: 'Choose who will approve this correction',
+                    ),
+                    items: _correctionApproverItems(approvers),
+                    onChanged: approvers.isEmpty
+                        ? null
+                        : (value) => setDialogState(() => approver = value),
+                  ),
+                  if (approvers.isEmpty) ...[
+                    const SizedBox(height: 8),
+                    const Text(
+                      'No eligible approver is available. Ask an administrator to assign a school leader.',
+                      style: TextStyle(color: Colors.red),
+                    ),
+                  ],
+                  const SizedBox(height: 14),
+                  TextField(
+                    key: const ValueKey('evaluation-correction-reason'),
+                    controller: reason,
+                    minLines: 3,
+                    maxLines: 5,
+                    decoration: const InputDecoration(
+                      labelText: 'Reason for correction',
+                      alignLabelWithHint: true,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              key: const ValueKey('submit-evaluation-correction'),
+              onPressed: approver == null
+                  ? null
+                  : () {
+                      if (reason.text.trim().length < 5) {
+                        ScaffoldMessenger.of(dialogContext).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Enter a clear reason of at least 5 characters.',
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+                      Navigator.pop(dialogContext, {
+                        'approver': approver!,
+                        'reason': reason.text.trim(),
+                      });
+                    },
+              child: const Text('Submit for approval'),
+            ),
+          ],
+        ),
+      ),
+    );
+    return result;
+  }
+
+  Future<void> _submitEvaluationCorrection({
+    required String type,
+    String proposedValue = '',
+    Map<String, String> proposedRatings = const {},
+    required Map<String, String> approval,
+  }) async {
+    setState(() => _busy = true);
+    try {
+      await widget.api.requestReportSourceCorrection(
+        customSchoolId: widget.schoolId,
+        studentId: widget.student['id'].toString(),
+        termId: widget.termId,
+        correctionType: type,
+        proposedValue: proposedValue,
+        proposedRatings: proposedRatings,
+        reason: approval['reason']!,
+        assignedApprover: approval['approver']!,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Correction submitted. The official report is unchanged until approval, regeneration, and publication are complete.',
+          ),
+        ),
+      );
+      await _load();
+    } on AssessmentApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _requestCommentCorrection() async {
+    final current = _comment.text.trim();
+    final proposed = TextEditingController(text: current);
+    final approval = await _correctionApprovalDetails(
+      title: 'Request class-teacher comment correction',
+      changeEditor: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Current comment\n${current.isEmpty ? 'Not set' : current}'),
+          const SizedBox(height: 12),
+          TextField(
+            key: const ValueKey('proposed-evaluation-comment'),
+            controller: proposed,
+            minLines: 4,
+            maxLines: 7,
+            decoration: const InputDecoration(labelText: 'Proposed comment'),
+          ),
+        ],
+      ),
+    );
+    final value = proposed.text.trim();
+    if (approval == null || !mounted) return;
+    if (value.isEmpty || value == current) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Change the current comment first.')),
+      );
+      return;
+    }
+    await _submitEvaluationCorrection(
+      type: 'CLASS_TEACHER_COMMENT',
+      proposedValue: value,
+      approval: approval,
+    );
+  }
+
+  Future<void> _requestRatingCorrection() async {
+    final changed = _criteria.keys
+        .where((key) => _final[key] != _originalFinal[key])
+        .toList();
+    if (changed.isEmpty) return;
+    final approval = await _correctionApprovalDetails(
+      title: 'Request evaluation-rating correction',
+      changeEditor: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Proposed rating changes',
+            style: TextStyle(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 8),
+          ...changed.map(
+            (key) => Text(
+              '${_criteria[key] ?? key}: ${_originalFinal[key]} → ${_final[key]}',
+            ),
+          ),
+        ],
+      ),
+    );
+    if (approval == null || !mounted) return;
+    await _submitEvaluationCorrection(
+      type: 'EVALUATION_RATINGS',
+      proposedRatings: Map<String, String>.from(_final),
+      approval: approval,
+    );
+  }
+
   String _historyTitle(Map<String, dynamic> entry) {
     final details = entry['reason']?.toString() ?? '';
     final change = details.split('; reason:').first.trim();
@@ -7356,7 +7992,9 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
     final edited = _criteria.keys
         .where((criterion) => _final[criterion] != _originalFinal[criterion])
         .length;
-    final summaryMessage = !complete
+    final summaryMessage = _reportSourceLocked
+        ? 'This source is read-only because a report has already been generated. Submit any change for approval; the approver must then regenerate, review, and publish the revised report.'
+        : !complete
         ? 'Teacher submissions are incomplete. This student cannot be finalized yet.'
         : widget.canReviewLeadership
         ? switch (_status) {
@@ -7541,7 +8179,8 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                                 key: const ValueKey(
                                   'use-evaluation-suggestion',
                                 ),
-                                onPressed: lockedForReview
+                                onPressed:
+                                    lockedForReview || _reportSourceLocked
                                     ? null
                                     : _useSuggestion,
                                 icon: const Icon(Icons.check),
@@ -7551,7 +8190,10 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                                 key: const ValueKey(
                                   'try-another-evaluation-suggestion',
                                 ),
-                                onPressed: lockedForReview || _suggestionLoading
+                                onPressed:
+                                    lockedForReview ||
+                                        _reportSourceLocked ||
+                                        _suggestionLoading
                                     ? null
                                     : _tryAnotherSuggestion,
                                 icon: const Icon(Icons.refresh),
@@ -7575,7 +8217,10 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
               TextField(
                 key: const ValueKey('evaluation-final-comment'),
                 controller: _comment,
-                readOnly: lockedForReview || widget.canReviewLeadership,
+                readOnly:
+                    lockedForReview ||
+                    widget.canReviewLeadership ||
+                    _reportSourceLocked,
                 maxLines: 4,
                 onChanged: (_) => setState(() {}),
                 decoration: const InputDecoration(
@@ -7621,7 +8266,7 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                         label: const Text('Approve'),
                       ),
                     ],
-                    if (_status == 'APPROVED')
+                    if (_status == 'APPROVED' && !_reportSourceLocked)
                       OutlinedButton.icon(
                         onPressed: _busy ? null : _rejectLeadershipReview,
                         icon: const Icon(Icons.cancel_outlined),
@@ -7632,25 +8277,44 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                         edited > 0)
                       FilledButton.icon(
                         key: const ValueKey('save-headmaster-wordings'),
-                        onPressed: !_busy ? _saveManagerChanges : null,
+                        onPressed: !_busy
+                            ? (_reportSourceLocked
+                                  ? _requestRatingCorrection
+                                  : _saveManagerChanges)
+                            : null,
                         icon: const Icon(Icons.admin_panel_settings_outlined),
-                        label: const Text('Save wording changes'),
+                        label: Text(
+                          _reportSourceLocked
+                              ? 'Submit rating correction'
+                              : 'Save wording changes',
+                        ),
                       ),
                   ],
                 )
               else if (lockedForReview)
-                const Card(
+                Card(
                   child: Padding(
-                    padding: EdgeInsets.all(16),
+                    padding: const EdgeInsets.all(16),
                     child: Row(
                       children: [
-                        Icon(Icons.lock_outline),
-                        SizedBox(width: 10),
+                        const Icon(Icons.lock_outline),
+                        const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            'Leadership review has started. The evaluation is locked until it is approved or returned for changes.',
+                            _reportSourceLocked
+                                ? 'A report already uses this comment. Request approval before changing the official source.'
+                                : 'Leadership review has started. The evaluation is locked until it is approved or returned for changes.',
                           ),
                         ),
+                        if (_reportSourceLocked)
+                          OutlinedButton.icon(
+                            key: const ValueKey(
+                              'request-evaluation-comment-correction',
+                            ),
+                            onPressed: _busy ? null : _requestCommentCorrection,
+                            icon: const Icon(Icons.edit_note_outlined),
+                            label: const Text('Request comment correction'),
+                          ),
                       ],
                     ),
                   ),

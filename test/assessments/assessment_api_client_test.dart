@@ -357,6 +357,40 @@ void main() {
       expect(requests.last.body, contains('"ignoreHeadTeacherRemarks":true'));
     });
 
+    test('submits a named-approver report-source correction', () async {
+      late http.Request request;
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((value) async {
+          request = value;
+          return http.Response(
+            '{"id":41,"status":"PENDING","correctionType":"PROGRESSION"}',
+            200,
+          );
+        }),
+      );
+
+      final result = await api.requestReportSourceCorrection(
+        customSchoolId: 'SCHOOL-1',
+        studentId: 'STU/1',
+        termId: 7,
+        correctionType: 'PROGRESSION',
+        proposedValue: 'Basic 2',
+        reason: 'Approved progression record was corrected.',
+        assignedApprover: 'adjoa@example.com',
+      );
+
+      expect(request.method, 'POST');
+      expect(
+        request.url.path,
+        endsWith('/report-corrections/schools/SCHOOL-1/source-requests'),
+      );
+      expect(request.body, contains('"customStudentId":"STU/1"'));
+      expect(request.body, contains('"correctionType":"PROGRESSION"'));
+      expect(request.body, contains('"assignedApprover":"adjoa@example.com"'));
+      expect(result['status'], 'PENDING');
+    });
+
     test(
       'publishes a report card through the guarded lifecycle endpoint',
       () async {
@@ -432,7 +466,7 @@ void main() {
             {
               "assessment":{"assessmentId":"ASM-100","maxScore":10},
               "scores":[
-                {"studentId":"STU-1","firstName":"Ama","lastName":"Boateng","score":8.5,"maxScore":10,"percentage":85,"status":"SUBMITTED","remarks":"Good work"},
+                {"studentId":"STU-1","firstName":"Ama","lastName":"Boateng","score":8.5,"maxScore":10,"percentage":85,"status":"SUBMITTED","remarks":"Good work","reportGenerated":true,"reportPublished":true,"correctionStatus":"PENDING"},
                 {"studentId":"STU-2","firstName":"Kojo","lastName":"Owusu","score":null,"maxScore":10}
               ]
             }
@@ -461,6 +495,9 @@ void main() {
       expect(sheet.students, hasLength(2));
       expect(sheet.students.first.name, 'Ama Boateng');
       expect(sheet.students.first.score, 8.5);
+      expect(sheet.students.first.reportGenerated, isTrue);
+      expect(sheet.students.first.reportPublished, isTrue);
+      expect(sheet.students.first.correctionStatus, 'PENDING');
       expect(requests.last.method, 'PUT');
       expect(requests.last.body, contains('"submittedBy":"teacher-1"'));
       expect(requests.last.body, contains('"studentId":"STU-2"'));
@@ -767,6 +804,30 @@ void main() {
       expect(result['approved'], 2);
     });
 
+    test('returns an approved evaluation to the approval queue', () async {
+      late http.Request request;
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((value) async {
+          request = value;
+          return http.Response('{"status":"SUBMITTED"}', 200);
+        }),
+      );
+
+      await api.undoTermEvaluationLeadershipApproval(
+        studentId: 'STU/1',
+        schoolId: 'SCHOOL-1',
+        termId: 7,
+      );
+
+      expect(request.method, 'POST');
+      expect(
+        request.url.path,
+        endsWith('/students/STU%2F1/leadership-review/undo-approval'),
+      );
+      expect(request.url.queryParameters['termId'], '7');
+    });
+
     test('sends an audited headmaster final-wording correction', () async {
       late http.Request request;
       final api = AssessmentApiClient(
@@ -832,6 +893,32 @@ void main() {
   });
 
   group('AssessmentApiClient report corrections', () {
+    test('loads the eligible correction approvers', () async {
+      late http.Request request;
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((value) async {
+          request = value;
+          return http.Response(
+            '[{"id":2,"username":"head@example.com","name":"Kofi Nketia","staffId":"STF-2","role":"HEAD_TEACHER"}]',
+            200,
+          );
+        }),
+      );
+
+      final result = await api.getReportCorrectionApprovers(
+        customSchoolId: 'SCHOOL-1',
+      );
+
+      expect(request.method, 'GET');
+      expect(
+        request.url.path,
+        endsWith('/report-corrections/schools/SCHOOL-1/approvers'),
+      );
+      expect(result.single['name'], 'Kofi Nketia');
+      expect(result.single['staffId'], 'STF-2');
+    });
+
     test('submits the proposed score without directly changing it', () async {
       late http.Request request;
       final api = AssessmentApiClient(
@@ -863,13 +950,16 @@ void main() {
       expect(result['status'], 'PENDING');
     });
 
-    test('approves a correction and requests regeneration', () async {
+    test('approves a correction without regenerating it', () async {
       late http.Request request;
       final api = AssessmentApiClient(
         accessToken: 'test-token',
         client: MockClient((value) async {
           request = value;
-          return http.Response('{"id":4,"status":"APPROVED_REGENERATED"}', 200);
+          return http.Response(
+            '{"id":4,"status":"APPROVED_REGENERATION_REQUIRED"}',
+            200,
+          );
         }),
       );
 
@@ -886,7 +976,49 @@ void main() {
         endsWith('/report-corrections/schools/SCHOOL-1/4/approve'),
       );
       expect(request.body, contains('"note":"Verified"'));
-      expect(result['status'], 'APPROVED_REGENERATED');
+      expect(result['status'], 'APPROVED_REGENERATION_REQUIRED');
     });
+
+    test(
+      'regenerates and publishes an approved correction in stages',
+      () async {
+        final requests = <http.Request>[];
+        final api = AssessmentApiClient(
+          accessToken: 'test-token',
+          client: MockClient((request) async {
+            requests.add(request);
+            if (request.url.path.endsWith('/regenerate')) {
+              return http.Response(
+                '{"id":4,"status":"REGENERATED_AWAITING_PUBLICATION"}',
+                200,
+              );
+            }
+            return http.Response('{"id":4,"status":"REPUBLISHED"}', 200);
+          }),
+        );
+
+        final regenerated = await api.regenerateReportCorrection(
+          customSchoolId: 'SCHOOL-1',
+          requestId: 4,
+        );
+        final published = await api.publishReportCorrection(
+          customSchoolId: 'SCHOOL-1',
+          requestId: 4,
+        );
+
+        expect(requests, hasLength(2));
+        expect(requests[0].method, 'POST');
+        expect(
+          requests[0].url.path,
+          endsWith('/report-corrections/schools/SCHOOL-1/4/regenerate'),
+        );
+        expect(
+          requests[1].url.path,
+          endsWith('/report-corrections/schools/SCHOOL-1/4/publish'),
+        );
+        expect(regenerated['status'], 'REGENERATED_AWAITING_PUBLICATION');
+        expect(published['status'], 'REPUBLISHED');
+      },
+    );
   });
 }

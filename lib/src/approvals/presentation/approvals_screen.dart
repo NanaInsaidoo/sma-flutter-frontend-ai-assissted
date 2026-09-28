@@ -6,6 +6,7 @@ import '../domain/approval_models.dart';
 import '../../leave/data/leave_api_client.dart';
 import '../../leave/presentation/leave_management_screen.dart';
 import '../../leave/presentation/leave_date_format.dart';
+import '../../platform/presentation/document_opener.dart';
 
 Future<bool> showApprovalItemPanel({
   required BuildContext context,
@@ -13,6 +14,9 @@ Future<bool> showApprovalItemPanel({
   required Future<void> Function(String action, String reason) onAction,
   VoidCallback? onOpenSource,
   VoidCallback? onReload,
+  ApprovalApiClient? correctionRepository,
+  String? schoolId,
+  bool canManageCorrection = false,
 }) async {
   final result = await showModalBottomSheet<_ApprovalPanelResult>(
     context: context,
@@ -25,14 +29,24 @@ Future<bool> showApprovalItemPanel({
         onOpenSource: onOpenSource == null
             ? null
             : () {
-                Navigator.pop(panelContext, const _ApprovalPanelResult());
-                onOpenSource();
+                Navigator.pop(
+                  panelContext,
+                  const _ApprovalPanelResult(openSource: true),
+                );
               },
         onAction: onAction,
+        onReload: onReload,
+        correctionRepository: correctionRepository,
+        schoolId: schoolId,
+        canManageCorrection: canManageCorrection,
       ),
     ),
   );
   if (!context.mounted) return result?.reload == true;
+  if (result?.openSource == true) {
+    onOpenSource?.call();
+    return result?.reload == true;
+  }
   if (result?.reload == true) onReload?.call();
   if (result?.conflictMessage != null) {
     await showDialog<void>(
@@ -236,6 +250,9 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                         'All',
                         'PENDING_APPROVAL',
                         'PENDING_ACCEPTANCE',
+                        'APPROVED_REGENERATION_REQUIRED',
+                        'REGENERATED_AWAITING_PUBLICATION',
+                        'REPUBLISHED',
                         'CHANGES_REQUESTED',
                         'NEEDS_REVISION',
                         'APPROVED',
@@ -317,6 +334,9 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
           : () => widget.onOpenSource!.call(item),
       onAction: (action, reason) => _act(item, action, reason),
       onReload: _refresh,
+      correctionRepository: widget.repository,
+      schoolId: widget.schoolId,
+      canManageCorrection: _myApprovals,
     );
     if (!mounted || !context.mounted) return;
   }
@@ -968,16 +988,53 @@ class _ApprovalPanel extends StatefulWidget {
     required this.item,
     required this.onAction,
     this.onOpenSource,
+    this.onReload,
+    this.correctionRepository,
+    this.schoolId,
+    this.canManageCorrection = false,
   });
   final ApprovalItem item;
   final Future<void> Function(String action, String reason) onAction;
   final VoidCallback? onOpenSource;
+  final VoidCallback? onReload;
+  final ApprovalApiClient? correctionRepository;
+  final String? schoolId;
+  final bool canManageCorrection;
   @override
   State<_ApprovalPanel> createState() => _ApprovalPanelState();
 }
 
 class _ApprovalPanelState extends State<_ApprovalPanel> {
   bool _busy = false;
+  late ApprovalItem _item;
+
+  @override
+  void initState() {
+    super.initState();
+    _item = widget.item;
+  }
+
+  bool get _canContinueCorrection =>
+      _isReportCorrection(_item) &&
+      widget.canManageCorrection &&
+      widget.correctionRepository != null &&
+      widget.schoolId?.isNotEmpty == true;
+
+  Future<void> _reloadCorrection() async {
+    final repository = widget.correctionRepository;
+    final schoolId = widget.schoolId;
+    if (repository == null || schoolId == null || schoolId.isEmpty) return;
+    final inbox = await repository.getInbox(schoolId);
+    final matches = [
+      ...inbox.myApprovals,
+      ...inbox.myRequests,
+    ].where((candidate) => candidate.key == _item.key);
+    if (matches.isNotEmpty && mounted) {
+      setState(() => _item = matches.first);
+    }
+    widget.onReload?.call();
+  }
+
   Future<void> _run(
     String action, {
     bool reasonRequired = false,
@@ -985,8 +1042,8 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
   }) async {
     if (_busy) return;
     var reason = '';
-    if (action == 'APPROVE' && widget.item.type == 'SHOP_RECONCILIATION') {
-      final sellerAcknowledgement = widget.item.status == 'AWAITING_SELLER_ACK';
+    if (action == 'APPROVE' && _item.type == 'SHOP_RECONCILIATION') {
+      final sellerAcknowledgement = _item.status == 'AWAITING_SELLER_ACK';
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (c) => AlertDialog(
@@ -1018,8 +1075,8 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
       );
       if (confirmed != true || !mounted) return;
     }
-    if (action == 'ACCEPT' && widget.item.type == 'SHOP_STOCK_HANDOVER') {
-      final entries = _primarySection(widget.item)?.entries;
+    if (action == 'ACCEPT' && _item.type == 'SHOP_STOCK_HANDOVER') {
+      final entries = _primarySection(_item)?.entries;
       final entry = entries == null || entries.isEmpty ? null : entries.first;
       final quantity = entry == null ? null : _fieldValue(entry, 'Quantity');
       final stockDescription = entry == null
@@ -1049,12 +1106,11 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
       );
       if (confirmed != true || !mounted) return;
     }
-    if (action == 'CANCEL' && widget.item.type == 'SHOP_STOCK_HANDOVER') {
+    if (action == 'CANCEL' && _item.type == 'SHOP_STOCK_HANDOVER') {
       final confirmed = await showDialog<bool>(
         context: context,
-        builder: (context) => _CancelStockIssueConfirmation(
-          recipientName: widget.item.approverName,
-        ),
+        builder: (context) =>
+            _CancelStockIssueConfirmation(recipientName: _item.approverName),
       );
       if (confirmed != true || !mounted) return;
     }
@@ -1071,7 +1127,11 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
     try {
       await widget.onAction(action, reason);
       if (mounted) {
-        Navigator.pop(context, const _ApprovalPanelResult(reload: true));
+        if (_isReportCorrection(_item) && widget.correctionRepository != null) {
+          await _reloadCorrection();
+        } else {
+          Navigator.pop(context, const _ApprovalPanelResult(reload: true));
+        }
       }
     } on ApprovalApiException catch (error) {
       if (!mounted) return;
@@ -1098,7 +1158,15 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final item = widget.item;
+    final item = _item;
+    final correctionCompletion =
+        _canContinueCorrection &&
+        (item.status == 'APPROVED_REGENERATION_REQUIRED' ||
+            item.status == 'REGENERATION_IN_PROGRESS' ||
+            item.status == 'REGENERATION_FAILED' ||
+            item.status == 'REGENERATED_AWAITING_PUBLICATION' ||
+            item.status == 'PUBLICATION_IN_PROGRESS' ||
+            item.status == 'PUBLICATION_FAILED');
     return Material(
       color: Colors.white,
       child: SafeArea(
@@ -1125,6 +1193,8 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                             ? 'Reconciliation review'
                             : item.type == 'FINANCE_EXPENSE_REVERSAL'
                             ? 'Expense reversal'
+                            : _isReportCorrection(item)
+                            ? 'Report correction'
                             : 'Approval details',
                         style: const TextStyle(
                           fontSize: 20,
@@ -1162,6 +1232,8 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                           item: item,
                           onOpenSource: widget.onOpenSource,
                         )
+                      else if (_isReportCorrection(item))
+                        _ReportCorrectionRequest(item: item)
                       else ...[
                         _RequestSummary(item: item),
                         if (item.requesterNote.isNotEmpty) ...[
@@ -1195,7 +1267,10 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                   ),
                 ),
               ),
-              if (item.canApprove || item.canReject || item.canWithdraw)
+              if (item.canApprove ||
+                  item.canReject ||
+                  item.canWithdraw ||
+                  correctionCompletion)
                 Container(
                   padding: const EdgeInsets.all(18),
                   decoration: const BoxDecoration(
@@ -1203,6 +1278,8 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                   ),
                   child: _busy
                       ? const Center(child: CircularProgressIndicator())
+                      : correctionCompletion
+                      ? _correctionCompletionActions(item)
                       : Row(
                           children: [
                             if (item.canWithdraw)
@@ -1250,6 +1327,8 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                                         : item.type ==
                                               'FINANCE_EXPENSE_REVERSAL'
                                         ? 'Decline'
+                                        : _isReportCorrection(item)
+                                        ? 'Reject correction'
                                         : 'Reject',
                                   ),
                                 ),
@@ -1282,6 +1361,8 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                                         ? item.status == 'AWAITING_SELLER_ACK'
                                               ? 'Acknowledge as correct'
                                               : 'Resolve differences'
+                                        : _isReportCorrection(item)
+                                        ? 'Approve correction'
                                         : 'Approve',
                                   ),
                                 ),
@@ -1294,6 +1375,148 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
         ),
       ),
     );
+  }
+
+  Widget _correctionCompletionActions(ApprovalItem item) {
+    if (item.status == 'REGENERATION_IN_PROGRESS' ||
+        item.status == 'PUBLICATION_IN_PROGRESS') {
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2.5),
+          ),
+          const SizedBox(width: 12),
+          Text(
+            item.status == 'REGENERATION_IN_PROGRESS'
+                ? 'Regenerating updated report…'
+                : 'Publishing updated report…',
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ],
+      );
+    }
+    if (item.status == 'APPROVED_REGENERATION_REQUIRED' ||
+        item.status == 'REGENERATION_FAILED') {
+      return SizedBox(
+        width: double.infinity,
+        child: FilledButton.icon(
+          key: ValueKey('regenerate-correction-${item.entityId}'),
+          onPressed: () => _advanceCorrection(regenerate: true),
+          icon: const Icon(Icons.refresh_rounded),
+          label: Text(
+            item.status == 'REGENERATION_FAILED'
+                ? 'Retry regeneration'
+                : 'Regenerate report',
+          ),
+        ),
+      );
+    }
+    return Row(
+      children: [
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: _viewCorrectionReport,
+            icon: const Icon(Icons.visibility_outlined),
+            label: const Text('View report'),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: FilledButton.icon(
+            key: ValueKey('publish-correction-${item.entityId}'),
+            onPressed: () => _advanceCorrection(regenerate: false),
+            icon: const Icon(Icons.publish_outlined),
+            label: Text(
+              item.status == 'PUBLICATION_FAILED'
+                  ? 'Retry publication'
+                  : item.reportWasPublished
+                  ? 'Republish now'
+                  : 'Publish now',
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _advanceCorrection({required bool regenerate}) async {
+    if (_busy) return;
+    final repository = widget.correctionRepository;
+    final schoolId = widget.schoolId;
+    if (repository == null || schoolId == null) return;
+    setState(() => _busy = true);
+    try {
+      if (regenerate) {
+        await repository.regenerateReportCorrection(
+          schoolId: schoolId,
+          requestId: _item.entityId,
+        );
+      } else {
+        await repository.publishReportCorrection(
+          schoolId: schoolId,
+          requestId: _item.entityId,
+        );
+      }
+      await _reloadCorrection();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              regenerate
+                  ? 'Updated report generated. Review it before publication.'
+                  : 'Updated report published successfully.',
+            ),
+          ),
+        );
+      }
+    } on ApprovalApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _viewCorrectionReport() async {
+    if (_busy) return;
+    final repository = widget.correctionRepository;
+    final schoolId = widget.schoolId;
+    if (repository == null || schoolId == null) return;
+    setState(() => _busy = true);
+    try {
+      prepareDocumentWindow();
+      final bytes = await repository.getReportCorrectionPdf(
+        schoolId: schoolId,
+        item: _item,
+      );
+      await openDocumentBytes(
+        bytes,
+        'application/pdf',
+        '${_item.customStudentId}_updated_report.pdf',
+      );
+    } on ApprovalApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } on UnsupportedError catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(error.message ?? 'Report preview unavailable.'),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 }
 
@@ -1443,8 +1666,13 @@ class _DecisionReasonDialogState extends State<_DecisionReasonDialog> {
 }
 
 class _ApprovalPanelResult {
-  const _ApprovalPanelResult({this.reload = false, this.conflictMessage});
+  const _ApprovalPanelResult({
+    this.reload = false,
+    this.openSource = false,
+    this.conflictMessage,
+  });
   final bool reload;
+  final bool openSource;
   final String? conflictMessage;
 }
 
@@ -2442,6 +2670,307 @@ class _RecordChangeValue extends StatelessWidget {
   );
 }
 
+class _ReportCorrectionRequest extends StatelessWidget {
+  const _ReportCorrectionRequest({required this.item});
+
+  final ApprovalItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final entries = _primarySection(item)?.entries;
+    final entry = entries == null || entries.isEmpty ? null : entries.first;
+    final isScore =
+        entry?.fields.any((field) => field.label == 'Current score') == true;
+    if (!isScore) {
+      return _GenericReportCorrectionRequest(item: item);
+    }
+    String value(String label, [String fallback = 'Not available']) =>
+        entry == null
+        ? fallback
+        : (_fieldValue(entry, label)?.trim().isNotEmpty == true
+              ? _fieldValue(entry, label)!.trim()
+              : fallback);
+    final current = value('Current score');
+    final proposed = value('Proposed score');
+    final reason = item.requesterNote.trim().isNotEmpty
+        ? item.requesterNote.trim()
+        : value('Reason');
+    return Container(
+      key: const Key('score-correction-summary'),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _StatusPill(status: item.status),
+          const SizedBox(height: 14),
+          _CorrectionProgress(status: item.status),
+          const SizedBox(height: 14),
+          Text(
+            value('Assessment', item.title),
+            style: const TextStyle(
+              color: AppColors.navy,
+              fontSize: 21,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Student ${value('Student ID', item.subtitle)}',
+            style: const TextStyle(color: AppColors.muted),
+          ),
+          const SizedBox(height: 18),
+          Row(
+            children: [
+              Expanded(
+                child: _RecordChangeValue(
+                  label: 'Current score',
+                  value: current,
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 14),
+                child: Icon(
+                  Icons.arrow_forward_rounded,
+                  color: AppColors.green,
+                ),
+              ),
+              Expanded(
+                child: _RecordChangeValue(
+                  label: 'Proposed score',
+                  value: proposed,
+                  proposed: true,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          const Text(
+            'Reason for correction',
+            style: TextStyle(fontSize: 12, color: AppColors.muted),
+          ),
+          const SizedBox(height: 4),
+          Text(reason),
+          const SizedBox(height: 18),
+          Wrap(
+            spacing: 24,
+            runSpacing: 14,
+            children: [
+              _PanelField(label: 'Requested by', value: item.requesterName),
+              _PanelField(label: 'Assigned approver', value: item.approverName),
+              _PanelField(
+                label: 'Submitted',
+                value: _dateText(item.submittedAt ?? item.createdAt),
+              ),
+            ],
+          ),
+          if (item.status == 'PENDING_APPROVAL') ...[
+            const SizedBox(height: 14),
+            const Text(
+              'The official score remains unchanged until this request is approved.',
+              style: TextStyle(color: AppColors.muted, fontSize: 12),
+            ),
+          ] else if (item.status == 'APPROVED_REGENERATION_REQUIRED') ...[
+            const SizedBox(height: 14),
+            const Text(
+              'The corrected score is approved. Regenerate the report to create an updated version.',
+              style: TextStyle(color: AppColors.muted, fontSize: 12),
+            ),
+          ] else if (item.status == 'REGENERATED_AWAITING_PUBLICATION') ...[
+            const SizedBox(height: 14),
+            const Text(
+              'The updated report is ready. Review it before publishing the new official version.',
+              style: TextStyle(color: AppColors.muted, fontSize: 12),
+            ),
+          ] else if (item.status == 'REPUBLISHED' ||
+              item.status == 'PUBLISHED') ...[
+            const SizedBox(height: 14),
+            const Text(
+              'The updated report has been published and is now the official version.',
+              style: TextStyle(color: AppColors.muted, fontSize: 12),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _GenericReportCorrectionRequest extends StatelessWidget {
+  const _GenericReportCorrectionRequest({required this.item});
+
+  final ApprovalItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final section = _primarySection(item);
+    return Container(
+      key: const Key('report-source-correction-summary'),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _StatusPill(status: item.status),
+          const SizedBox(height: 14),
+          _CorrectionProgress(status: item.status),
+          const SizedBox(height: 18),
+          Text(
+            item.title,
+            style: const TextStyle(
+              color: AppColors.navy,
+              fontSize: 21,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(item.subtitle, style: const TextStyle(color: AppColors.muted)),
+          if (section != null) ...[
+            const SizedBox(height: 18),
+            ...section.entries.map(
+              (entry) => Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.border),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      entry.title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.navy,
+                      ),
+                    ),
+                    if (entry.subtitle.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        entry.subtitle,
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 10),
+                    ...entry.fields.map(
+                      (field) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SizedBox(
+                              width: 125,
+                              child: Text(
+                                field.label,
+                                style: const TextStyle(
+                                  color: AppColors.muted,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                            Expanded(
+                              child: Text(
+                                field.value,
+                                style: TextStyle(
+                                  fontWeight: field.emphasized
+                                      ? FontWeight.w800
+                                      : FontWeight.w500,
+                                  color: field.emphasized
+                                      ? AppColors.green
+                                      : AppColors.navy,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _CorrectionProgress extends StatelessWidget {
+  const _CorrectionProgress({required this.status});
+
+  final String status;
+
+  @override
+  Widget build(BuildContext context) {
+    final step = switch (status) {
+      'PENDING_APPROVAL' => 0,
+      'APPROVED_REGENERATION_REQUIRED' => 1,
+      'REGENERATION_IN_PROGRESS' || 'REGENERATION_FAILED' => 2,
+      'REGENERATED_AWAITING_PUBLICATION' => 3,
+      'PUBLICATION_IN_PROGRESS' || 'PUBLICATION_FAILED' => 4,
+      'PUBLISHED' || 'REPUBLISHED' => 4,
+      _ => 0,
+    };
+    const labels = ['Approval', 'Approved', 'Regenerate', 'Review', 'Publish'];
+    return LayoutBuilder(
+      builder: (context, constraints) => Wrap(
+        spacing: 6,
+        runSpacing: 8,
+        children: List.generate(labels.length, (index) {
+          final complete = index <= step;
+          final active = index == step;
+          return Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+            decoration: BoxDecoration(
+              color: active
+                  ? const Color(0xFFE1F3EF)
+                  : complete
+                  ? const Color(0xFFF0F8F6)
+                  : const Color(0xFFF4F6F8),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                color: active ? AppColors.green : AppColors.border,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  complete ? Icons.check_circle : Icons.radio_button_unchecked,
+                  size: 14,
+                  color: complete ? AppColors.green : AppColors.muted,
+                ),
+                const SizedBox(width: 5),
+                Text(
+                  labels[index],
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+                    color: complete ? AppColors.navy : AppColors.muted,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }),
+      ),
+    );
+  }
+}
+
 class _ItemExemptionRequest extends StatelessWidget {
   const _ItemExemptionRequest({required this.item});
   final ApprovalItem item;
@@ -3167,6 +3696,13 @@ class _ErrorState extends StatelessWidget {
 
 String _statusText(String value) => switch (value) {
   'PENDING_APPROVAL' => 'Pending approval',
+  'APPROVED_REGENERATION_REQUIRED' => 'Approved · regeneration required',
+  'REGENERATION_IN_PROGRESS' => 'Regenerating report',
+  'REGENERATION_FAILED' => 'Regeneration failed · retry required',
+  'REGENERATED_AWAITING_PUBLICATION' => 'Regenerated · publication required',
+  'PUBLICATION_IN_PROGRESS' => 'Publishing report',
+  'PUBLICATION_FAILED' => 'Publication failed · retry required',
+  'REPUBLISHED' => 'Republished',
   'All' => 'All statuses',
   _ =>
     value
@@ -3180,6 +3716,9 @@ String _statusText(String value) => switch (value) {
         )
         .join(' '),
 };
+
+bool _isReportCorrection(ApprovalItem item) =>
+    item.type == 'REPORT_CORRECTION' || item.type == 'REPORT_SCORE_CORRECTION';
 
 DateTime? _approvalItemDateOrNull(ApprovalItem item) =>
     item.submittedAt ?? item.updatedAt ?? item.createdAt ?? item.decidedAt;

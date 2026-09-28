@@ -1230,7 +1230,26 @@ StudentFeeAdjustmentStatus _adjustmentStatus(String status) =>
 DateTime? _date(Object? value) {
   if (value is DateTime) return value;
   if (value is String && value.trim().isNotEmpty) {
-    return DateTime.tryParse(value.trim());
+    final text = value.trim();
+    final parsed = DateTime.tryParse(text);
+    if (parsed != null) return parsed;
+
+    // A few legacy student records use the browser-style MM/DD/YYYY format.
+    // Treat it as a valid date instead of failing the entire student register.
+    final legacyDate = RegExp(
+      r'^(\d{1,2})/(\d{1,2})/(\d{4})$',
+    ).firstMatch(text);
+    if (legacyDate != null) {
+      final month = int.parse(legacyDate.group(1)!);
+      final day = int.parse(legacyDate.group(2)!);
+      final year = int.parse(legacyDate.group(3)!);
+      final candidate = DateTime(year, month, day);
+      if (candidate.year == year &&
+          candidate.month == month &&
+          candidate.day == day) {
+        return candidate;
+      }
+    }
   }
   if (value is List && value.length >= 3) {
     final year = _integer(value[0]);

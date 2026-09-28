@@ -526,6 +526,141 @@ void main() {
   });
 
   testWidgets(
+    'generated evaluation wording becomes a named-approver correction request',
+    (tester) async {
+      await useWideScreen(tester);
+      http.Request? correctionRequest;
+      final calculated = {
+        'HOMEWORK_HABITS': 'Good',
+        'ATTENTIVENESS': 'Good',
+        'TEAMWORK': 'Good',
+        'CLASS_PARTICIPATION': 'Good',
+        'RESPECT_AND_DISCIPLINE': 'Good',
+        'NEATNESS': 'Good',
+      };
+      final api = AssessmentApiClient(
+        accessToken: 'token',
+        client: MockClient((request) async {
+          if (request.url.path.endsWith('/approvers')) {
+            return http.Response(
+              '[{"username":"adjoa@example.com","name":"Adjoa Mensah","role":"administrator"}]',
+              200,
+            );
+          }
+          if (request.method == 'POST' &&
+              request.url.path.endsWith('/source-requests')) {
+            correctionRequest = request;
+            return http.Response(
+              '{"id":41,"status":"PENDING","correctionType":"EVALUATION_RATINGS"}',
+              200,
+            );
+          }
+          if (request.url.path.endsWith('/review')) {
+            return http.Response(
+              jsonEncode({
+                'calculated': calculated,
+                'finalRatings': calculated,
+                'comment': 'Ama has worked well this term.',
+                'status': 'APPROVED',
+                'reportSourceLocked': true,
+                'audit': const [],
+              }),
+              200,
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'released': true,
+              'totalAssignments': 1,
+              'submitted': 1,
+              'incomplete': 0,
+              'assignments': [
+                {
+                  'id': 15,
+                  'staffId': 'CLASS-1',
+                  'staffName': 'Adwoa Teacher',
+                  'subjectName': 'Class-teacher evaluation',
+                  'assignmentType': 'CLASS_TEACHER',
+                  'status': 'SUBMITTED',
+                  'studentCount': 1,
+                  'completionPercent': 100,
+                  'students': [
+                    {'id': 'STU-1', 'name': 'Ama Mensah'},
+                  ],
+                },
+              ],
+            }),
+            200,
+          );
+        }),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TermEvaluationWorkflowScreen(
+            api: api,
+            schoolId: 'SCHOOL-1',
+            viewerName: 'Nana Headmaster',
+            viewerRole: 'HEADMASTER',
+            setup: setup,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await openManagerWorkspace(tester, 'Teacher progress');
+      await tester.tap(find.text('Review results'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Ama Mensah'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('report has already been generated'),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('headmaster-wording-HOMEWORK_HABITS')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Excellent').last);
+      await tester.pumpAndSettle();
+      await tester.drag(find.byType(ListView).last, const Offset(0, -1200));
+      await tester.pumpAndSettle();
+      expect(find.text('Submit rating correction'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey('save-headmaster-wordings')).hitTestable(),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('evaluation-correction-approver')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.textContaining('Adjoa Mensah').last);
+      await tester.enterText(
+        find.byKey(const ValueKey('evaluation-correction-reason')),
+        'Verified against the final signed review.',
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('submit-evaluation-correction')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(correctionRequest, isNotNull);
+      expect(
+        correctionRequest!.body,
+        contains('"correctionType":"EVALUATION_RATINGS"'),
+      );
+      expect(
+        correctionRequest!.body,
+        contains('"HOMEWORK_HABITS":"Excellent"'),
+      );
+      expect(
+        correctionRequest!.body,
+        contains('"assignedApprover":"adjoa@example.com"'),
+      );
+    },
+  );
+
+  testWidgets(
     'administrator can review but cannot change final rating wording',
     (tester) async {
       await useWideScreen(tester);
@@ -1455,7 +1590,9 @@ void main() {
     (tester) async {
       await useWideScreen(tester);
       http.Request? batchApprovalRequest;
+      http.Request? undoApprovalRequest;
       var batchApproved = false;
+      final undoneApprovals = <String>{};
       final ratings = {
         'HOMEWORK_HABITS': 'Excellent',
         'ATTENTIVENESS': 'Good',
@@ -1482,12 +1619,22 @@ void main() {
               200,
             );
           }
+          if (request.method == 'POST' &&
+              request.url.path.endsWith('/undo-approval')) {
+            undoApprovalRequest = request;
+            final studentId = request
+                .url
+                .pathSegments[request.url.pathSegments.indexOf('students') + 1];
+            undoneApprovals.add(studentId);
+            return http.Response('{"status":"SUBMITTED"}', 200);
+          }
           if (request.url.path.endsWith('/review')) {
             final studentId = request
                 .url
                 .pathSegments[request.url.pathSegments.indexOf('students') + 1];
-            final status =
-                batchApproved && const {'STU-2', 'STU-3'}.contains(studentId)
+            final status = undoneApprovals.contains(studentId)
+                ? 'SUBMITTED'
+                : batchApproved && const {'STU-2', 'STU-3'}.contains(studentId)
                 ? 'APPROVED'
                 : switch (studentId) {
                     'STU-1' => 'APPROVED',
@@ -1594,6 +1741,22 @@ void main() {
       expect(batchApprovalRequest!.body, isNot(contains('STU-1')));
       expect(find.text('Awaiting 0'), findsOneWidget);
       expect(find.text('Approved 3'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('undo-class-result-STU-1')));
+      await tester.pumpAndSettle();
+      expect(find.text('Undo approval for Kojo Boateng?'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey('confirm-undo-evaluation-approval')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(undoApprovalRequest, isNotNull);
+      expect(
+        undoApprovalRequest!.url.path,
+        endsWith('/students/STU-1/leadership-review/undo-approval'),
+      );
+      expect(find.text('Awaiting 1'), findsOneWidget);
+      expect(find.text('Approved 2'), findsOneWidget);
     },
   );
 
@@ -1643,7 +1806,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Locked'), findsOneWidget);
+    expect(find.text('Not released'), findsOneWidget);
     expect(find.byKey(const ValueKey('release-evaluations')), findsOneWidget);
     expect(find.text('Refresh'), findsNothing);
 
@@ -1725,42 +1888,46 @@ void main() {
   );
 
   testWidgets(
-    'leadership approves a proposed score correction and regeneration',
+    'leadership completes regeneration and publication after central approval',
     (tester) async {
       await useWideScreen(tester);
-      var pending = true;
-      http.Request? approvalRequest;
+      var correction = <String, dynamic>{
+        'id': 9,
+        'customStudentId': 'STU-1',
+        'assessmentId': 'ASM-1',
+        'assessmentTitle': 'Mathematics CAT 1',
+        'originalScore': 12,
+        'proposedScore': 15,
+        'maximumScore': 20,
+        'reason': 'Transcription error',
+        'requestedBy': 'teacher@example.com',
+        'requestedByName': 'Sena Owusu',
+        'requestedByStaffId': 'STF-1042',
+        'assignedApproverName': 'Nana Headmaster',
+        'decisionAllowed': true,
+        'status': 'APPROVED_REGENERATION_REQUIRED',
+        'reportWasPublished': true,
+      };
+      http.Request? regenerationRequest;
+      http.Request? publicationRequest;
       final api = AssessmentApiClient(
         accessToken: 'token',
         client: MockClient((request) async {
           if (request.url.path.contains('/report-corrections/')) {
-            if (request.method == 'POST' &&
-                request.url.path.endsWith('/9/approve')) {
-              approvalRequest = request;
-              pending = false;
-              return http.Response(
-                '{"id":9,"status":"APPROVED_REGENERATED"}',
-                200,
-              );
+            if (request.url.path.endsWith('/9/regenerate')) {
+              regenerationRequest = request;
+              correction = {
+                ...correction,
+                'status': 'REGENERATED_AWAITING_PUBLICATION',
+              };
+              return http.Response(jsonEncode(correction), 200);
             }
-            return http.Response(
-              pending
-                  ? jsonEncode([
-                      {
-                        'id': 9,
-                        'customStudentId': 'STU-1',
-                        'assessmentId': 'ASM-1',
-                        'assessmentTitle': 'Mathematics CAT 1',
-                        'originalScore': 12,
-                        'proposedScore': 15,
-                        'reason': 'Transcription error',
-                        'requestedBy': 'teacher@example.com',
-                        'assignedApprover': 'head@example.com',
-                      },
-                    ])
-                  : '[]',
-              200,
-            );
+            if (request.url.path.endsWith('/9/publish')) {
+              publicationRequest = request;
+              correction = {...correction, 'status': 'REPUBLISHED'};
+              return http.Response(jsonEncode(correction), 200);
+            }
+            return http.Response(jsonEncode([correction]), 200);
           }
           return http.Response(
             jsonEncode({
@@ -1797,26 +1964,101 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('1 report correction needs'), findsOneWidget);
+      expect(
+        find.textContaining('1 approved report correction needs completion'),
+        findsOneWidget,
+      );
       await tester.tap(find.byKey(const ValueKey('review-report-corrections')));
       await tester.pumpAndSettle();
-      expect(find.textContaining('12 → 15'), findsOneWidget);
-      expect(
-        find.textContaining('Assigned to head@example.com'),
-        findsOneWidget,
+      expect(find.text('12/20  →  15/20'), findsOneWidget);
+      expect(find.text('Requested by Sena Owusu · STF-1042'), findsOneWidget);
+
+      expect(find.text('Regenerate report'), findsOneWidget);
+
+      await tester.tap(find.text('Regenerate report'));
+      await tester.pumpAndSettle();
+      expect(regenerationRequest, isNotNull);
+      expect(find.text('Republish now'), findsOneWidget);
+      expect(find.text('View report'), findsOneWidget);
+
+      await tester.tap(find.text('Republish now'));
+      await tester.pumpAndSettle();
+      expect(publicationRequest, isNotNull);
+      expect(find.text('Republished'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'pending score corrections do not appear in evaluation approvals',
+    (tester) async {
+      await useWideScreen(tester);
+      final api = AssessmentApiClient(
+        accessToken: 'token',
+        client: MockClient((request) async {
+          if (request.url.path.contains('/report-corrections/')) {
+            return http.Response(
+              jsonEncode([
+                {
+                  'id': 11,
+                  'customStudentId': 'STU-1',
+                  'assessmentId': 'ASM-1',
+                  'assessmentTitle': 'English Language CAT 1',
+                  'originalScore': 8,
+                  'proposedScore': 9,
+                  'maximumScore': 10,
+                  'reason': 'Transcription error',
+                  'requestedBy': 'teacher@example.com',
+                  'requestedByName': 'Sena Owusu',
+                  'assignedApproverName': 'Adjoa Mensah',
+                  'decisionAllowed': false,
+                  'status': 'PENDING',
+                  'reportWasPublished': true,
+                },
+              ]),
+              200,
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'released': true,
+              'cycleStatus': 'RELEASED',
+              'teacherEntryOpen': true,
+              'totalAssignments': 0,
+              'submitted': 0,
+              'incomplete': 0,
+              'assignments': const [],
+              'readiness': {
+                'readyStudents': 0,
+                'blockedStudents': 0,
+                'students': const [],
+              },
+              'insights': {'totalStudents': 0, 'criteria': const []},
+            }),
+            200,
+          );
+        }),
       );
 
-      await tester.tap(find.text('Approve & regenerate').first);
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Approve & regenerate').last);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TermEvaluationWorkflowScreen(
+            api: api,
+            schoolId: 'SCHOOL-1',
+            viewerName: 'Kofi Nketia',
+            viewerRole: 'ADMINISTRATOR',
+            setup: setup,
+            managementProgressOnly: true,
+          ),
+        ),
+      );
       await tester.pumpAndSettle();
 
-      expect(approvalRequest, isNotNull);
-      expect(approvalRequest!.method, 'POST');
       expect(
-        find.text('No correction requests are awaiting a decision.'),
-        findsOneWidget,
+        find.byKey(const ValueKey('review-report-corrections')),
+        findsNothing,
       );
+      expect(find.text('Approve correction'), findsNothing);
+      expect(find.text('Reject'), findsNothing);
     },
   );
 }

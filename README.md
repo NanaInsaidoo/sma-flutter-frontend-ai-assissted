@@ -20,6 +20,37 @@ https://api.airghana.org/Narellallc/sma-v1/1.0.0
 
 ## Run Locally
 
+The complete assessment, evaluation, report, correction, and term-closing workflow is documented in [Term Evaluations and Report Cards](docs/TERM_EVALUATIONS_AND_REPORT_CARDS_TRAINING_MANUAL.md).
+
+### Recommended: one port
+
+Build the Flutter web app and let Spring Boot serve both the interface and the
+API from one address:
+
+```bash
+./tool/run_single_port.sh
+```
+
+Open:
+
+```text
+http://localhost:3000
+```
+
+Only port `3000` is exposed. To use another port:
+
+```bash
+PORT=4173 ./tool/run_single_port.sh
+```
+
+If the backend repository is not beside `SMA-Fontend`, set its location:
+
+```bash
+SMA_BACKEND_DIR=/path/to/spring-server-generated ./tool/run_single_port.sh
+```
+
+### Separate frontend and backend ports
+
 Use the default localhost backend:
 
 ```bash
