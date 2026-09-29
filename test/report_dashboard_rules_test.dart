@@ -46,6 +46,42 @@ void main() {
       expect(reportNeedsUpdate('PUBLISHED_UPDATE_REQUIRED'), isTrue);
       expect(reportNeedsUpdate('PUBLISHED'), isFalse);
     });
+
+    test('allows generated and verified regenerated reports to publish', () {
+      expect(reportStatusCanBePublished('GENERATED'), isTrue);
+      expect(reportStatusCanBePublished('NOT_GENERATED'), isFalse);
+      expect(reportStatusCanBePublished('PUBLISHED'), isFalse);
+      expect(
+        reportStatusCanBePublished(
+          'PUBLISHED_UPDATE_REQUIRED',
+          republishRequired: true,
+        ),
+        isTrue,
+      );
+      expect(
+        reportStatusCanBePublished(
+          'PUBLISHED_UPDATE_REQUIRED',
+          republishRequired: true,
+          regenerationRequired: true,
+        ),
+        isFalse,
+      );
+    });
+
+    test('describes all, selected and mixed bulk publication actions', () {
+      expect(
+        bulkPublishLabel(selectedCount: 0, eligibleCount: 4),
+        'Publish all eligible (4)',
+      );
+      expect(
+        bulkPublishLabel(selectedCount: 2, eligibleCount: 2),
+        'Publish selected (2)',
+      );
+      expect(
+        bulkPublishLabel(selectedCount: 4, eligibleCount: 2),
+        'Publish eligible (2)',
+      );
+    });
   });
 
   group('report readiness summary', () {

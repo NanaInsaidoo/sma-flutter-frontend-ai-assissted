@@ -117,6 +117,14 @@ void main() {
       expect(find.text('Ama Mensah'), findsOneWidget);
       expect(find.text('Kojo Mensah'), findsOneWidget);
       expect(find.textContaining('Apply to'), findsNothing);
+      final toolbar = find.byKey(const ValueKey('evaluation-entry-toolbar'));
+      final studentList = find.byKey(
+        const ValueKey('evaluation-entry-student-list'),
+      );
+      expect(tester.getSize(toolbar).width, lessThanOrEqualTo(1120));
+      expect(tester.getCenter(toolbar).dx, closeTo(800, 1));
+      expect(tester.getSize(studentList).width, lessThanOrEqualTo(1120));
+      expect(tester.getCenter(studentList).dx, closeTo(800, 1));
 
       await tester.tap(find.widgetWithText(ChoiceChip, 'Good').first);
       await tester.pump(const Duration(milliseconds: 900));
@@ -1319,6 +1327,240 @@ void main() {
     expect(find.byTooltip('More actions'), findsNothing);
     expect(find.text('Edit ratings'), findsNothing);
   });
+
+  testWidgets(
+    'class teacher can request an audited correction for a generated evaluation',
+    (tester) async {
+      await useWideScreen(tester);
+      http.Request? correctionRequest;
+      var correctionPending = false;
+      final requestedUrls = <String>[];
+      final correctionSnapshots = <bool>[];
+      final ratings = {
+        'HOMEWORK_HABITS': 'Good',
+        'ATTENTIVENESS': 'Good',
+        'TEAMWORK': 'Good',
+        'CLASS_PARTICIPATION': 'Good',
+        'RESPECT_AND_DISCIPLINE': 'Good',
+        'NEATNESS': 'Good',
+      };
+      final api = AssessmentApiClient(
+        accessToken: 'token',
+        client: MockClient((request) async {
+          requestedUrls.add('${request.method} ${request.url}');
+          if (request.url.path.endsWith('/approvers')) {
+            return http.Response(
+              '[{"username":"adjoa@example.com","name":"Adjoa Mensah","role":"administrator"}]',
+              200,
+            );
+          }
+          if (request.method == 'POST' &&
+              request.url.path.endsWith('/source-requests')) {
+            correctionRequest = request;
+            correctionPending = true;
+            return http.Response(
+              '{"id":51,"status":"PENDING","correctionType":"EVALUATION_RATINGS"}',
+              200,
+            );
+          }
+          if (request.method == 'POST' &&
+              request.url.path.endsWith('/51/cancel')) {
+            correctionPending = false;
+            return http.Response(
+              '{"id":51,"status":"CANCELLED","correctionType":"EVALUATION_RATINGS"}',
+              200,
+            );
+          }
+          if (request.method == 'GET' &&
+              request.url.path.endsWith(
+                '/api/report-corrections/schools/SCHOOL-1',
+              )) {
+            correctionSnapshots.add(correctionPending);
+            return http.Response(
+              jsonEncode(
+                correctionPending
+                    ? [
+                        {
+                          'id': 51,
+                          'customStudentId': 'STU-1',
+                          'termId': 7,
+                          'status': 'PENDING',
+                          'correctionType': 'EVALUATION_RATINGS',
+                          'sourceLabel': 'Evaluation ratings',
+                          'requestedBy': 'sena@example.com',
+                          'requestedByName': 'Sena Owusu',
+                          'requestedByStaffId': 'STF-SENA',
+                          'assignedApproverName': 'Adjoa Mensah',
+                          'cancellationAllowed': true,
+                        },
+                      ]
+                    : const [],
+              ),
+              200,
+            );
+          }
+          if (request.url.path.endsWith('/review')) {
+            return http.Response(
+              jsonEncode({
+                'calculated': ratings,
+                'finalRatings': ratings,
+                'comment': 'Daniel has worked well this term.',
+                'status': 'APPROVED',
+                'reportSourceLocked': true,
+                'audit': const [],
+              }),
+              200,
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'released': true,
+              'teacherEntryOpen': true,
+              'assignments': [
+                {
+                  'id': 18,
+                  'streamId': 13,
+                  'staffId': 'SENA-1',
+                  'staffName': 'Sena Owusu',
+                  'subjectName': 'Class-teacher evaluation',
+                  'streamName': 'JHS 1 - Section 3',
+                  'assignmentType': 'CLASS_TEACHER',
+                  'status': 'SUBMITTED',
+                  'workflowStatus': 'APPROVED',
+                  'studentCount': 1,
+                  'commentsCompleted': 1,
+                  'completionPercent': 100,
+                  'students': [
+                    {'id': 'STU-1', 'name': 'Daniel Blue'},
+                  ],
+                },
+              ],
+            }),
+            200,
+          );
+        }),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TermEvaluationWorkflowScreen(
+            api: api,
+            schoolId: 'SCHOOL-1',
+            viewerName: 'Sena Owusu',
+            viewerRole: 'CLASS_TEACHER',
+            setup: setup,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Approved'), findsOneWidget);
+      expect(find.text('Review & correct'), findsOneWidget);
+      await tester.tap(find.text('Review & correct'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Approved evaluations'), findsWidgets);
+      expect(find.text('View / correct'), findsOneWidget);
+      await tester.tap(find.text('Daniel Blue'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('approved evaluation is locked'),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('correction-rating-HOMEWORK_HABITS')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('correction-rating-HOMEWORK_HABITS')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Excellent').last);
+      await tester.pumpAndSettle();
+      await tester.drag(find.byType(ListView).last, const Offset(0, -1200));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Submit rating correction'), findsOneWidget);
+      expect(find.text('Request comment correction'), findsOneWidget);
+      await tester.tap(
+        find
+            .byKey(const ValueKey('request-evaluation-rating-correction'))
+            .hitTestable(),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('evaluation-correction-approver')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.textContaining('Adjoa Mensah').last);
+      await tester.enterText(
+        find.byKey(const ValueKey('evaluation-correction-reason')),
+        'Corrected from the signed observation record.',
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('submit-evaluation-correction')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(correctionRequest, isNotNull);
+      expect(
+        correctionRequest!.body,
+        contains('"correctionType":"EVALUATION_RATINGS"'),
+      );
+      expect(
+        correctionRequest!.body,
+        contains('"HOMEWORK_HABITS":"Excellent"'),
+      );
+      expect(
+        correctionRequest!.body,
+        contains('"assignedApprover":"adjoa@example.com"'),
+      );
+      final correctionLoads = requestedUrls
+          .where(
+            (value) => value.contains(
+              '/api/report-corrections/schools/SCHOOL-1?studentId=STU-1',
+            ),
+          )
+          .length;
+      expect(correctionLoads, greaterThanOrEqualTo(2));
+      expect(correctionSnapshots.last, isTrue);
+      final detailScroll = tester.state<ScrollableState>(
+        find.byType(Scrollable).last,
+      );
+      detailScroll.position.jumpTo(0);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('active-evaluation-correction-notice')),
+        findsOneWidget,
+      );
+      expect(find.text('Change request awaiting approval'), findsOneWidget);
+      expect(find.text('Raised by Sena Owusu · STF-SENA'), findsOneWidget);
+      expect(
+        find.textContaining(
+          'must be cancelled or approved before another change',
+        ),
+        findsOneWidget,
+      );
+      final blockedRatingRequest = tester.widget<FilledButton>(
+        find.byKey(const ValueKey('request-evaluation-rating-correction')),
+      );
+      expect(blockedRatingRequest.onPressed, isNull);
+
+      final cancel = find.byKey(const ValueKey('cancel-evaluation-correction'));
+      await tester.ensureVisible(cancel);
+      await tester.tap(cancel);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('confirm-cancel-evaluation-correction')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('active-evaluation-correction-notice')),
+        findsNothing,
+      );
+    },
+  );
 
   testWidgets(
     'completed class comments can be submitted from the responsibility row',

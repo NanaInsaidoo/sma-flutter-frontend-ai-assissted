@@ -39,6 +39,31 @@ bool reportNeedsUpdate(String? status) {
       normalized == 'Published · update required';
 }
 
+bool reportStatusCanBePublished(
+  String? status, {
+  bool republishRequired = false,
+  bool regenerationRequired = false,
+}) {
+  final normalized = normalizeReportStatus(status);
+  return normalized == 'Generated' ||
+      (normalized == 'Published · update required' &&
+          republishRequired &&
+          !regenerationRequired);
+}
+
+String bulkPublishLabel({
+  required int selectedCount,
+  required int eligibleCount,
+}) {
+  if (selectedCount == 0) {
+    return 'Publish all eligible ($eligibleCount)';
+  }
+  if (selectedCount == eligibleCount) {
+    return 'Publish selected ($eligibleCount)';
+  }
+  return 'Publish eligible ($eligibleCount)';
+}
+
 String summarizeReportReadiness(List<String> blockers) {
   if (blockers.isEmpty) return 'Ready';
   final additional = blockers.length - 1;

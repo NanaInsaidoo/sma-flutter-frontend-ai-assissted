@@ -161,7 +161,9 @@ class _CompleteAssessmentWorkflowState
   bool _isPublishingAllReports = false;
   final Set<int> _selectedFinalReportStreams = {};
   bool _isGeneratingReports = false;
-  double _reportGenerationProgress = 0;
+  int _generatedReportsInCurrentRun = 0;
+  int _failedReportsInCurrentRun = 0;
+  String? _reportGenerationError;
   final Map<String, _EvaluationDraft> _evaluationDrafts = {};
   final Map<String, Map<String, double?>> _assessmentScores = {};
   final Map<String, String> _reportStatuses = {};
@@ -5250,10 +5252,11 @@ class _CompleteAssessmentWorkflowState
   }
 
   bool _readyToPublish(_StudentRecord student) =>
-      (_reportStatusFor(student) == 'Generated' ||
-          (_reportStatusFor(student) == 'Published · update required' &&
-              student.reportRepublishRequired &&
-              !student.reportRegenerationRequired)) &&
+      reportStatusCanBePublished(
+        _reportStatusFor(student),
+        republishRequired: student.reportRepublishRequired,
+        regenerationRequired: student.reportRegenerationRequired,
+      ) &&
       _generationReady(student);
 
   _ReportAudit _auditFor(_StudentRecord student) {
@@ -5296,6 +5299,80 @@ class _CompleteAssessmentWorkflowState
     'Dec',
   ][month - 1];
 
+  Future<void> _showReportGenerationFeedback({
+    required int generated,
+    required int failed,
+    String? error,
+  }) async {
+    if (!mounted) return;
+    final hasError = error != null && error.trim().isNotEmpty;
+    final successful = !hasError && failed == 0 && generated > 0;
+    final color = successful
+        ? const Color(0xFF0F766E)
+        : hasError
+        ? const Color(0xFFB91C1C)
+        : const Color(0xFFB45309);
+    final background = successful
+        ? const Color(0xFFE6F4F1)
+        : hasError
+        ? const Color(0xFFFEE2E2)
+        : const Color(0xFFFFF7ED);
+    final title = successful
+        ? 'Reports generated'
+        : hasError
+        ? 'Unable to generate reports'
+        : 'Generation completed with issues';
+    final summary = successful
+        ? '$generated report${generated == 1 ? '' : 's'} generated successfully.'
+        : generated > 0
+        ? '$generated generated; $failed could not be generated.'
+        : error ?? 'No reports could be generated.';
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const ValueKey('report-generation-feedback'),
+        icon: Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(color: background, shape: BoxShape.circle),
+          child: Icon(
+            successful
+                ? Icons.check_circle_outline_rounded
+                : Icons.error_outline_rounded,
+            color: color,
+            size: 28,
+          ),
+        ),
+        title: Text(title, textAlign: TextAlign.center),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(summary, textAlign: TextAlign.center),
+              if (hasError && generated > 0) ...[
+                const SizedBox(height: 10),
+                Text(
+                  error,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Color(0xFF64748B)),
+                ),
+              ],
+            ],
+          ),
+        ),
+        actionsAlignment: MainAxisAlignment.center,
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _generateReports(
     Iterable<_StudentRecord> students, {
     String? vacationOverrideReason,
@@ -5314,9 +5391,14 @@ class _CompleteAssessmentWorkflowState
       );
       return;
     }
+    final startsNewRun = _processingReportStudents.isEmpty;
     setState(() {
+      if (startsNewRun) {
+        _generatedReportsInCurrentRun = 0;
+        _failedReportsInCurrentRun = 0;
+        _reportGenerationError = null;
+      }
       _isGeneratingReports = true;
-      _reportGenerationProgress = .25;
       _processingReportStudents.addAll(ready.map((student) => student.id));
     });
     if (widget.customSchoolId.trim().isNotEmpty) {
@@ -5347,55 +5429,143 @@ class _CompleteAssessmentWorkflowState
         final failures = failedRows is List ? failedRows.length : 0;
         await _loadLiveReportReadiness(setup, _selectedClass);
         if (!mounted) return;
+        var showFeedback = false;
+        var generatedTotal = 0;
+        var failedTotal = 0;
+        String? feedbackError;
         setState(() {
+          _generatedReportsInCurrentRun += generated;
+          _failedReportsInCurrentRun += failures;
           _processingReportStudents.removeAll(
             ready.map((student) => student.id),
           );
-          _isGeneratingReports = false;
-          _reportGenerationProgress = 1;
+          _isGeneratingReports = _processingReportStudents.isNotEmpty;
+          showFeedback = !_isGeneratingReports;
+          if (showFeedback) {
+            generatedTotal = _generatedReportsInCurrentRun;
+            failedTotal = _failedReportsInCurrentRun;
+            feedbackError = _reportGenerationError;
+          }
         });
-        _notice(
-          failures == 0
-              ? '$generated report card(s) generated.'
-              : '$generated generated; $failures could not be generated.',
-        );
+        if (showFeedback) {
+          await _showReportGenerationFeedback(
+            generated: generatedTotal,
+            failed: failedTotal,
+            error: feedbackError,
+          );
+        }
         return;
       } on AssessmentApiException catch (error) {
         if (!mounted) return;
+        final requiresVacationReason =
+            vacationOverrideReason == null &&
+            error.message.toLowerCase().contains('teaching begins');
+        var showFeedback = false;
+        var generatedTotal = 0;
+        var failedTotal = 0;
+        String? feedbackError;
         setState(() {
+          if (!requiresVacationReason) {
+            _failedReportsInCurrentRun += ready.length;
+            _reportGenerationError = error.message;
+          }
           _processingReportStudents.removeAll(
             ready.map((student) => student.id),
           );
-          _isGeneratingReports = false;
-          _reportGenerationProgress = 0;
+          _isGeneratingReports = _processingReportStudents.isNotEmpty;
+          showFeedback = !_isGeneratingReports && !requiresVacationReason;
+          if (showFeedback) {
+            generatedTotal = _generatedReportsInCurrentRun;
+            failedTotal = _failedReportsInCurrentRun;
+            feedbackError = _reportGenerationError;
+          }
         });
-        if (vacationOverrideReason == null &&
-            error.message.toLowerCase().contains('teaching begins')) {
+        if (requiresVacationReason) {
           final reason = await _requestReportVacationReason(error.message);
           if (reason != null && mounted) {
             await _generateReports(ready, vacationOverrideReason: reason);
           }
           return;
         }
-        _notice(error.message);
+        if (showFeedback) {
+          await _showReportGenerationFeedback(
+            generated: generatedTotal,
+            failed: failedTotal,
+            error: feedbackError,
+          );
+        }
         return;
       }
     }
     await Future<void>.delayed(const Duration(milliseconds: 350));
     if (!mounted) return;
-    setState(() => _reportGenerationProgress = .75);
     await Future<void>.delayed(const Duration(milliseconds: 350));
     if (!mounted) return;
+    var showFeedback = false;
+    var generatedTotal = 0;
+    var failedTotal = 0;
+    String? feedbackError;
     setState(() {
       for (final student in ready) {
         _reportStatuses[student.id] = 'Generated';
         _processingReportStudents.remove(student.id);
         _touchReportAudit(student);
       }
+      _generatedReportsInCurrentRun += ready.length;
       _isGeneratingReports = _processingReportStudents.isNotEmpty;
-      _reportGenerationProgress = _isGeneratingReports ? .75 : 1;
+      showFeedback = !_isGeneratingReports;
+      if (showFeedback) {
+        generatedTotal = _generatedReportsInCurrentRun;
+        failedTotal = _failedReportsInCurrentRun;
+        feedbackError = _reportGenerationError;
+      }
     });
-    _notice('${ready.length} report card(s) generated.');
+    if (showFeedback) {
+      await _showReportGenerationFeedback(
+        generated: generatedTotal,
+        failed: failedTotal,
+        error: feedbackError,
+      );
+    }
+  }
+
+  Future<void> _confirmAndPublishStudentReports(
+    Iterable<_StudentRecord> students,
+  ) async {
+    final publishable = students.where(_readyToPublish).toList();
+    if (publishable.isEmpty) {
+      _notice(
+        'No selected report meets all publication-readiness requirements.',
+      );
+      return;
+    }
+    final count = publishable.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        key: const ValueKey('bulk-publish-confirmation'),
+        title: Text('Publish $count report${count == 1 ? '' : 's'}?'),
+        content: Text(
+          'The $count eligible report${count == 1 ? '' : 's'} will become '
+          'the official published version for $_selectedClass.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            key: const ValueKey('confirm-bulk-publish'),
+            onPressed: () => Navigator.of(context).pop(true),
+            icon: const Icon(Icons.publish_outlined, size: 16),
+            label: const Text('Publish now'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      await _publishStudentReports(publishable);
+    }
   }
 
   Future<void> _publishStudentReports(Iterable<_StudentRecord> students) async {
@@ -5431,6 +5601,9 @@ class _CompleteAssessmentWorkflowState
             _publishingReportStudents.remove(student.id);
             _touchReportAudit(student);
           }
+          _selectedReportStudents.removeAll(
+            generated.map((student) => student.id),
+          );
         });
         _notice('${generated.length} report card(s) published.');
         return;
@@ -5453,6 +5626,7 @@ class _CompleteAssessmentWorkflowState
         _publishingReportStudents.remove(student.id);
         _touchReportAudit(student);
       }
+      _selectedReportStudents.removeAll(generated.map((student) => student.id));
     });
     _notice('${generated.length} report card(s) published.');
   }
@@ -5698,9 +5872,12 @@ class _CompleteAssessmentWorkflowState
         ),
         if (_isGeneratingReports) ...[
           const SizedBox(height: 16),
-          LinearProgressIndicator(value: _reportGenerationProgress),
+          const LinearProgressIndicator(),
           const SizedBox(height: 6),
-          const Text('Generating report cards...'),
+          Text(
+            'Generating ${_processingReportStudents.length} report'
+            '${_processingReportStudents.length == 1 ? '' : 's'}…',
+          ),
         ],
         const SizedBox(height: 18),
         _reportCardStudentRegister(filteredStudents),
@@ -5877,6 +6054,20 @@ class _CompleteAssessmentWorkflowState
     final selectionContainsBlocked =
         selectedStudents.isNotEmpty &&
         generationTargets.length != selectedStudents.length;
+    final publicationCandidates = selectedStudents.isEmpty
+        ? students
+        : selectedStudents;
+    final publicationTargets = publicationCandidates
+        .where(_readyToPublish)
+        .toList();
+    final allVisibleSelected =
+        students.isNotEmpty &&
+        students.every(
+          (student) => _selectedReportStudents.contains(student.id),
+        );
+    final someVisibleSelected = students.any(
+      (student) => _selectedReportStudents.contains(student.id),
+    );
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
@@ -5932,17 +6123,50 @@ class _CompleteAssessmentWorkflowState
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     FilledButton.icon(
+                      style: _isGeneratingReports
+                          ? FilledButton.styleFrom(
+                              disabledForegroundColor: const Color(0xFF0F766E),
+                              disabledBackgroundColor: const Color(0xFFE6F4F1),
+                            )
+                          : null,
                       onPressed:
                           _isGeneratingReports ||
                               generationTargets.isEmpty ||
                               selectionContainsBlocked
                           ? null
                           : () => _generateReports(generationTargets),
-                      icon: const Icon(Icons.description_outlined, size: 14),
+                      icon: _isGeneratingReports
+                          ? const SizedBox.square(
+                              dimension: 14,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Color(0xFF0F766E),
+                              ),
+                            )
+                          : const Icon(Icons.description_outlined, size: 14),
                       label: Text(
-                        selectedStudents.isEmpty
+                        _isGeneratingReports
+                            ? 'Generating ${_processingReportStudents.length}…'
+                            : selectedStudents.isEmpty
                             ? 'Generate all ready (${generationTargets.length})'
                             : 'Generate selected (${selectedStudents.length})',
+                      ),
+                    ),
+                    FilledButton.icon(
+                      key: const ValueKey('bulk-publish-reports'),
+                      onPressed:
+                          publicationTargets.isEmpty ||
+                              _publishingReportStudents.isNotEmpty
+                          ? null
+                          : () => _confirmAndPublishStudentReports(
+                              publicationTargets,
+                            ),
+                      icon: const Icon(Icons.publish_outlined, size: 14),
+                      label: Text(
+                        bulkPublishLabel(
+                          selectedCount: selectedStudents.length,
+                          eligibleCount: publicationTargets.length,
+                        ),
                       ),
                     ),
                     if (_evaluationManager)
@@ -5998,48 +6222,72 @@ class _CompleteAssessmentWorkflowState
                 }
                 return Column(
                   children: [
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 10),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
                       child: Row(
                         children: [
-                          SizedBox(width: 46),
                           SizedBox(
+                            width: 46,
+                            child: Checkbox(
+                              key: const ValueKey(
+                                'select-all-visible-report-students',
+                              ),
+                              tristate: true,
+                              value: allVisibleSelected
+                                  ? true
+                                  : someVisibleSelected
+                                  ? null
+                                  : false,
+                              onChanged: (_) => setState(() {
+                                if (allVisibleSelected) {
+                                  _selectedReportStudents.removeAll(
+                                    students.map((student) => student.id),
+                                  );
+                                } else {
+                                  _selectedReportStudents.addAll(
+                                    students.map((student) => student.id),
+                                  );
+                                }
+                              }),
+                            ),
+                          ),
+                          const SizedBox(
                             width: 30,
                             child: _FinalReportHeader('#', centered: true),
                           ),
-                          Expanded(
+                          const Expanded(
                             flex: 3,
                             child: _FinalReportHeader('STUDENT'),
                           ),
-                          Expanded(
+                          const Expanded(
                             flex: 2,
                             child: _FinalReportHeader(
                               'ACADEMIC GRADES',
                               centered: true,
                             ),
                           ),
-                          Expanded(
+                          const Expanded(
                             flex: 3,
                             child: _FinalReportHeader(
                               'EVALUATIONS & COMMENTS',
                               centered: true,
                             ),
                           ),
-                          Expanded(
+                          const Expanded(
                             flex: 2,
                             child: _FinalReportHeader(
                               'PROGRESSION',
                               centered: true,
                             ),
                           ),
-                          Expanded(
+                          const Expanded(
                             flex: 2,
                             child: _FinalReportHeader(
                               'REPORT STATUS',
                               centered: true,
                             ),
                           ),
-                          Expanded(
+                          const Expanded(
                             flex: 4,
                             child: _FinalReportHeader('ACTION', centered: true),
                           ),
@@ -6063,10 +6311,20 @@ class _CompleteAssessmentWorkflowState
   Widget _reportCardStudentRow(_StudentRecord student, int index) {
     final selected = _selectedReportStudents.contains(student.id);
     final status = _reportCardDisplayStatus(student);
-    return Container(
+    return AnimatedContainer(
+      key: ValueKey('report-card-row-${student.id}'),
+      duration: const Duration(milliseconds: 160),
+      curve: Curves.easeOut,
       padding: const EdgeInsets.symmetric(vertical: 6),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: Color(0xFFF3F4F6))),
+      decoration: BoxDecoration(
+        color: selected ? const Color(0xFFF0FAF8) : Colors.white,
+        border: Border(
+          left: BorderSide(
+            color: selected ? const Color(0xFF0F8F83) : Colors.transparent,
+            width: 3,
+          ),
+          bottom: const BorderSide(color: Color(0xFFF3F4F6)),
+        ),
       ),
       child: Row(
         children: [
@@ -6469,10 +6727,27 @@ class _CompleteAssessmentWorkflowState
     }
     final status = _reportStatusFor(student);
     if (status == 'Processing' || status == 'Publishing') {
+      final generating = status == 'Processing';
       return Center(
-        child: FilledButton(
+        child: FilledButton.icon(
+          key: ValueKey(
+            generating
+                ? 'report-generation-progress-${student.id}'
+                : 'report-publication-progress-${student.id}',
+          ),
+          style: FilledButton.styleFrom(
+            disabledForegroundColor: const Color(0xFF0F766E),
+            disabledBackgroundColor: const Color(0xFFE6F4F1),
+          ),
           onPressed: null,
-          child: Text(status == 'Processing' ? 'Generating…' : 'Publishing…'),
+          icon: const SizedBox.square(
+            dimension: 14,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Color(0xFF0F766E),
+            ),
+          ),
+          label: Text(generating ? 'Generating…' : 'Publishing…'),
         ),
       );
     }
@@ -7501,18 +7776,29 @@ class _CompleteAssessmentWorkflowState
   }
 
   Widget _reportCardStudentTile(_StudentRecord student) {
+    final selected = _selectedReportStudents.contains(student.id);
     final status = _reportCardDisplayStatus(student);
-    return Container(
+    return AnimatedContainer(
+      key: ValueKey('report-card-tile-${student.id}'),
+      duration: const Duration(milliseconds: 160),
+      curve: Curves.easeOut,
       padding: const EdgeInsets.fromLTRB(4, 4, 10, 12),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: Color(0xFFF3F4F6))),
+      decoration: BoxDecoration(
+        color: selected ? const Color(0xFFF0FAF8) : Colors.white,
+        border: Border(
+          left: BorderSide(
+            color: selected ? const Color(0xFF0F8F83) : Colors.transparent,
+            width: 3,
+          ),
+          bottom: const BorderSide(color: Color(0xFFF3F4F6)),
+        ),
       ),
       child: Column(
         children: [
           ListTile(
             contentPadding: EdgeInsets.zero,
             leading: Checkbox(
-              value: _selectedReportStudents.contains(student.id),
+              value: selected,
               onChanged: (checked) => setState(() {
                 if (checked ?? false) {
                   _selectedReportStudents.add(student.id);

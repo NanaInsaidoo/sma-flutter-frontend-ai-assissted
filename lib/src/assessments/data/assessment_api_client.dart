@@ -438,16 +438,37 @@ class AssessmentApiClient {
   Future<List<Map<String, dynamic>>> getReportCorrections({
     required String customSchoolId,
     String? status,
+    String? studentId,
   }) async {
     final schoolPath = Uri.encodeComponent(customSchoolId);
-    final query = status == null || status.trim().isEmpty
+    final queryParameters = <String, String>{
+      if (status != null && status.trim().isNotEmpty) 'status': status.trim(),
+      if (studentId != null && studentId.trim().isNotEmpty)
+        'studentId': studentId.trim(),
+    };
+    final query = queryParameters.isEmpty
         ? ''
-        : '?status=${Uri.encodeQueryComponent(status)}';
+        : '?${Uri(queryParameters: queryParameters).query}';
     return _list(
       _decodeBody(
         await _send('/api/report-corrections/schools/$schoolPath$query'),
       ),
     ).map(_map).toList();
+  }
+
+  Future<Map<String, dynamic>> cancelReportCorrection({
+    required String customSchoolId,
+    required int requestId,
+  }) async {
+    final schoolPath = Uri.encodeComponent(customSchoolId);
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/report-corrections/schools/$schoolPath/$requestId/cancel',
+          method: 'POST',
+        ),
+      ),
+    );
   }
 
   Future<Map<String, dynamic>> decideReportCorrection({
