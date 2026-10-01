@@ -165,15 +165,16 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   }
 
   List<String> get _availableRoles {
-    final values = <String>{};
+    final values = <String>[];
     final primary = widget.role?.trim().toUpperCase() ?? '';
     if (primary.isNotEmpty) values.add(primary);
-    values.addAll(
-      widget.roles
-          .map((role) => role.trim().toUpperCase())
-          .where((role) => role.isNotEmpty),
-    );
-    return values.toList(growable: false);
+    for (final rawRole in widget.roles) {
+      final role = rawRole.trim().toUpperCase();
+      if (role.isEmpty || values.contains(role)) continue;
+      if (_isTeachingRole(role) && values.any(_isTeachingRole)) continue;
+      values.add(role);
+    }
+    return List.unmodifiable(values);
   }
 
   String _initialRole() {
@@ -6902,6 +6903,7 @@ class _Sidebar extends StatelessWidget {
   String _displayRole(String? role) {
     final value = role?.trim() ?? '';
     if (value.isEmpty) return 'School Staff';
+    if (_isTeachingRole(value)) return 'Teacher';
     return value
         .split('_')
         .where((part) => part.isNotEmpty)

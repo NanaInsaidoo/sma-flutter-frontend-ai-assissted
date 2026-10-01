@@ -378,6 +378,47 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('class and subject access share one Teacher workspace', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: AdministratorDashboard(
+          repository: _EmptyDashboardRepository(),
+          schoolId: 'SCH-001',
+          schoolName: 'Test School',
+          userDisplayName: 'Adwoa Teacher',
+          role: 'CLASS_TEACHER',
+          roles: const ['CLASS_TEACHER', 'SUBJECT_TEACHER', 'BURSAR'],
+          teacherDashboardLoader: () async => _teacherSummary,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Teacher'), findsNWidgets(2));
+    expect(find.text('Class Teacher'), findsNothing);
+    expect(find.text('Subject Teacher'), findsNothing);
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+    final workspaceValues = tester
+        .widgetList<DropdownMenuItem<String>>(
+          find.byType(DropdownMenuItem<String>),
+        )
+        .map((item) => item.value)
+        .toSet();
+    expect(workspaceValues, {'CLASS_TEACHER', 'BURSAR'});
+    expect(find.text('Teacher'), findsNWidgets(3));
+    expect(find.text('Bursar'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('school calendar menu opens the complete event list', (
     tester,
   ) async {

@@ -82,6 +82,147 @@ class StaffApiClient {
     return StaffUserRecord.fromJson(_decodeMap(response));
   }
 
+  Future<StaffUserRecord> updateSchoolUser({
+    required String customSchoolId,
+    required String userId,
+    required Map<String, dynamic> body,
+  }) async {
+    final response = await _send(
+      'PUT',
+      '/api/user-management/schools/${Uri.encodeComponent(customSchoolId)}/users/${Uri.encodeComponent(userId)}',
+      body: body,
+    );
+    return StaffUserRecord.fromJson(_decodeMap(response));
+  }
+
+  Future<void> suspendSchoolUser({
+    required String customSchoolId,
+    required String userId,
+    required String reason,
+  }) async {
+    final query = Uri(queryParameters: {'reason': reason}).query;
+    await _send(
+      'POST',
+      '/api/user-management/schools/${Uri.encodeComponent(customSchoolId)}/users/${Uri.encodeComponent(userId)}/suspend?$query',
+    );
+  }
+
+  Future<void> reactivateSchoolUser({
+    required String customSchoolId,
+    required String userId,
+  }) async {
+    await _send(
+      'POST',
+      '/api/user-management/schools/${Uri.encodeComponent(customSchoolId)}/users/${Uri.encodeComponent(userId)}/reactivate',
+    );
+  }
+
+  Future<void> deactivateSchoolUser({
+    required String customSchoolId,
+    required String userId,
+    required String reason,
+  }) async {
+    final query = Uri(queryParameters: {'reason': reason}).query;
+    await _send(
+      'POST',
+      '/api/user-management/schools/${Uri.encodeComponent(customSchoolId)}/users/${Uri.encodeComponent(userId)}/deactivate?$query',
+    );
+  }
+
+  Future<Map<String, List<String>>> getStaffAssignments(
+    String customSchoolId,
+  ) async {
+    final encodedSchoolId = Uri.encodeComponent(customSchoolId);
+    final response = await _send(
+      'GET',
+      '/api/grade-levels/school/$encodedSchoolId/all-streams',
+    );
+    final streams = _decodeList(response)
+        .whereType<Map<String, dynamic>>()
+        .map(
+          (row) => (
+            id: int.tryParse('${row['streamId'] ?? row['id'] ?? ''}') ?? 0,
+            grade: '${row['gradeLevelName'] ?? row['gradeName'] ?? ''}'.trim(),
+            name: '${row['streamName'] ?? row['name'] ?? row['section'] ?? ''}'
+                .trim(),
+          ),
+        )
+        .where((stream) => stream.id > 0)
+        .toList();
+    final assignments = <String, Set<String>>{};
+    await Future.wait(
+      streams.map((stream) async {
+        final streamLabel = [
+          stream.grade,
+          stream.name,
+        ].where((part) => part.isNotEmpty).join(' · ');
+        final responses = await Future.wait([
+          _send(
+            'GET',
+            '/api/grade-levels/school/$encodedSchoolId/streams/${stream.id}/class-teachers',
+          ),
+          _send(
+            'GET',
+            '/api/schools/$encodedSchoolId/streams/${stream.id}/subject-teachers',
+          ),
+        ]);
+        for (final row in _decodeList(
+          responses[0],
+        ).whereType<Map<String, dynamic>>()) {
+          if (row['isActive'] == false || row['active'] == false) continue;
+          final staffId = _assignmentStaffId(row);
+          if (staffId.isEmpty) continue;
+          final primary = row['isPrimary'] == true
+              ? 'Primary class teacher'
+              : 'Class teacher';
+          assignments
+              .putIfAbsent(staffId, () => <String>{})
+              .add('$primary · $streamLabel');
+        }
+        for (final row in _decodeList(
+          responses[1],
+        ).whereType<Map<String, dynamic>>()) {
+          if (row['active'] == false || row['isActive'] == false) continue;
+          final staffId = _assignmentStaffId(row);
+          if (staffId.isEmpty) continue;
+          final subject =
+              '${row['subjectName'] ?? row['subjectCode'] ?? 'Subject'}'.trim();
+          assignments
+              .putIfAbsent(staffId, () => <String>{})
+              .add('$subject teacher · $streamLabel');
+        }
+      }),
+    );
+    return {
+      for (final entry in assignments.entries)
+        entry.key: (entry.value.toList()..sort()),
+    };
+  }
+
+  Future<List<StaffActivityRecord>> getStaffActivity(String userId) async {
+    final response = await _send(
+      'GET',
+      '/api/audit-logs/user/${Uri.encodeComponent(userId)}/recent',
+    );
+    final json = _decodeMap(response);
+    final values = json['recentActivity'];
+    if (values is! List) return const [];
+    return values
+        .whereType<Map<String, dynamic>>()
+        .map(StaffActivityRecord.fromJson)
+        .toList();
+  }
+
+  String _assignmentStaffId(Map<String, dynamic> row) {
+    final nested = row['staff'] is Map<String, dynamic>
+        ? row['staff'] as Map<String, dynamic>
+        : row['teacher'] is Map<String, dynamic>
+        ? row['teacher'] as Map<String, dynamic>
+        : const <String, dynamic>{};
+    return '${row['staffId'] ?? row['staffUuid'] ?? nested['staffId'] ?? nested['id'] ?? ''}'
+        .trim();
+  }
+
   Future<StaffOnboardingResult> initiateOnboarding({
     required Map<String, dynamic> body,
   }) async {
@@ -131,6 +272,18 @@ class StaffApiClient {
       '/api/v1/staff-management/$staffId/finance',
       body: body,
     );
+  }
+
+  Future<StaffFinanceRecord?> getStaffFinance(String staffId) async {
+    try {
+      final response = await _send(
+        'GET',
+        '/api/v1/staff-management/${Uri.encodeComponent(staffId)}/finance',
+      );
+      return StaffFinanceRecord.fromJson(_decodeMap(response));
+    } on StaffApiException {
+      return null;
+    }
   }
 
   Future<void> uploadResume({
@@ -469,6 +622,10 @@ class StaffProfileRecord {
     this.firstName = '',
     this.lastName = '',
     this.email = '',
+    this.dateOfBirth = '',
+    this.invitationMaskedPhone = '',
+    this.invitationPrimaryRole = '',
+    this.invitationRoles = const [],
     this.invitationToken = '',
     this.invitationStatus = '',
     this.invitationDeliveryStatus = 'NOT_SENT',
@@ -488,6 +645,10 @@ class StaffProfileRecord {
   final String firstName;
   final String lastName;
   final String email;
+  final String dateOfBirth;
+  final String invitationMaskedPhone;
+  final String invitationPrimaryRole;
+  final List<String> invitationRoles;
   final String invitationToken;
   final String invitationStatus;
   final String invitationDeliveryStatus;
@@ -512,6 +673,13 @@ class StaffProfileRecord {
       firstName: (json['firstName'] ?? '').toString(),
       lastName: (json['lastName'] ?? '').toString(),
       email: (json['email'] ?? '').toString(),
+      dateOfBirth: (json['dateOfBirth'] ?? json['dob'] ?? '').toString(),
+      invitationMaskedPhone: (json['invitationMaskedPhone'] ?? '').toString(),
+      invitationPrimaryRole: (json['invitationPrimaryRole'] ?? '').toString(),
+      invitationRoles: _roleList(
+        json['invitationRoles'],
+        fallback: json['invitationPrimaryRole'],
+      ),
       invitationToken: (json['invitationToken'] ?? '').toString(),
       invitationStatus: (json['invitationStatus'] ?? '').toString(),
       invitationDeliveryStatus: (json['invitationDeliveryStatus'] ?? 'NOT_SENT')
@@ -549,6 +717,71 @@ class StaffResumeRecord {
       fileType: (json['fileType'] ?? '').toString(),
       fileSize: int.tryParse('${json['fileSize'] ?? 0}') ?? 0,
       status: (json['status'] ?? '').toString(),
+    );
+  }
+}
+
+class StaffFinanceRecord {
+  const StaffFinanceRecord({
+    required this.basicPay,
+    required this.houseAllowance,
+    required this.transportAllowance,
+    required this.otherAllowances,
+    required this.grossSalary,
+    required this.ssnitNumber,
+    required this.tinNumber,
+  });
+
+  final double basicPay;
+  final double houseAllowance;
+  final double transportAllowance;
+  final double otherAllowances;
+  final double grossSalary;
+  final String ssnitNumber;
+  final String tinNumber;
+
+  double get totalAllowances =>
+      houseAllowance + transportAllowance + otherAllowances;
+
+  factory StaffFinanceRecord.fromJson(dynamic value) {
+    final json = value is Map<String, dynamic> ? value : <String, dynamic>{};
+    double amount(String key) =>
+        double.tryParse('${json[key] ?? 0}'.replaceAll(',', '')) ?? 0;
+    return StaffFinanceRecord(
+      basicPay: amount('basicPay'),
+      houseAllowance: amount('houseAllowance'),
+      transportAllowance: amount('transportAllowance'),
+      otherAllowances: amount('otherAllowances'),
+      grossSalary: amount('grossSalary'),
+      ssnitNumber: '${json['ssnitNumber'] ?? ''}'.trim(),
+      tinNumber: '${json['tinNumber'] ?? ''}'.trim(),
+    );
+  }
+}
+
+class StaffActivityRecord {
+  const StaffActivityRecord({
+    required this.actionType,
+    required this.description,
+    required this.timestamp,
+    required this.actorName,
+  });
+
+  final String actionType;
+  final String description;
+  final String timestamp;
+  final String actorName;
+
+  factory StaffActivityRecord.fromJson(Map<String, dynamic> json) {
+    final actor = '${json['performedByDisplayName'] ?? ''}'.trim();
+    final actorUsername = '${json['performedByUsername'] ?? ''}'.trim();
+    return StaffActivityRecord(
+      actionType: '${json['actionType'] ?? 'UNKNOWN'}'.trim(),
+      description: '${json['description'] ?? ''}'.trim(),
+      timestamp: '${json['timestamp'] ?? ''}'.trim(),
+      actorName: actor.isNotEmpty
+          ? actor
+          : (actorUsername.isNotEmpty ? actorUsername : 'System'),
     );
   }
 }
