@@ -297,6 +297,37 @@ void main() {
   );
 
   testWidgets(
+    'teacher without an active assignment does not see assessments or evaluations',
+    (tester) async {
+      tester.view.physicalSize = const Size(1600, 1200);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: AdministratorDashboard(
+            repository: _ForbiddenDashboardRepository(),
+            schoolId: 'SCH-001',
+            schoolName: 'Test School',
+            userDisplayName: 'Unassigned Teacher',
+            role: 'CLASS_TEACHER',
+            teacherDashboardLoader: () async => _unassignedTeacherSummary,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Classes'), findsOneWidget);
+      expect(find.text('Assessments'), findsNothing);
+      expect(find.text('Evaluations & Comments'), findsNothing);
+      expect(find.text('No active classes assigned'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'subject-only teacher sees attendance access without a pending obligation',
     (tester) async {
       tester.view.physicalSize = const Size(1600, 1200);
@@ -1068,6 +1099,29 @@ const _subjectTeacherSummary = TeacherDashboardSummary(
     totalAssessments: 2,
     incompleteAssessments: 1,
     outstandingScores: 4,
+  ),
+  lateConcerns: [],
+  upcomingLeave: [],
+  myIncidents: [],
+);
+
+const _unassignedTeacherSummary = TeacherDashboardSummary(
+  workspace: TeacherWorkspaceSnapshot(
+    role: 'CLASS_TEACHER',
+    assignedStudents: 0,
+    classes: [],
+    subjects: [],
+  ),
+  attendance: TeacherAttendanceSummary(
+    schoolDay: true,
+    assignedClasses: 0,
+    submittedClasses: 0,
+    calendarMessage: '',
+  ),
+  assessments: TeacherAssessmentSummary(
+    totalAssessments: 0,
+    incompleteAssessments: 0,
+    outstandingScores: 0,
   ),
   lateConcerns: [],
   upcomingLeave: [],

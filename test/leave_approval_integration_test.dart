@@ -307,14 +307,18 @@ void main() {
       (tester) async {
         final f = _Fixture();
         await _show(tester, LeaveManagementScreen(api: f.leave), width: width);
-        for (final s in leaveStatuses) {
+        expect(
+          find.byKey(const ValueKey('leave-summary-total')),
+          findsOneWidget,
+        );
+        for (final s in ['PENDING_APPROVAL', 'APPROVED', 'ON_LEAVE']) {
           expect(find.byKey(ValueKey('leave-status-$s')), findsOneWidget);
         }
-        final revised = find.byKey(
-          const ValueKey('leave-status-NEEDS_REVISION'),
-        );
-        await tester.ensureVisible(revised);
-        await tester.tap(revised);
+        final statusFilter = find.byType(DropdownButtonFormField<String>);
+        await tester.ensureVisible(statusFilter);
+        await tester.tap(statusFilter);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Needs revision').last);
         await tester.pumpAndSettle();
         expect(f.filters.last, 'NEEDS_REVISION');
         final pending = find.byKey(
@@ -479,14 +483,24 @@ void main() {
     expect(tester.takeException(), isNull);
   });
   testWidgets(
-    'leave management summary includes draft revision and cancelled filters',
+    'leave summary stays concise while the status filter remains complete',
     (tester) async {
       final f = _Fixture();
       await _show(tester, LeaveManagementScreen(api: f.leave));
-      for (final s in leaveStatuses) {
+      expect(find.byKey(const ValueKey('leave-summary-total')), findsOneWidget);
+      for (final s in ['PENDING_APPROVAL', 'APPROVED', 'ON_LEAVE']) {
         expect(find.byKey(ValueKey('leave-status-$s')), findsOneWidget);
       }
-      await tester.tap(find.byKey(const ValueKey('leave-status-CANCELLED')));
+      expect(find.text('Away today'), findsOneWidget);
+      expect(find.text('On leave today'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('leave-status-CANCELLED')),
+        findsNothing,
+      );
+      final statusFilter = find.byType(DropdownButtonFormField<String>);
+      await tester.tap(statusFilter);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cancelled').last);
       await tester.pumpAndSettle();
       expect(f.filters.last, 'CANCELLED');
     },

@@ -15,7 +15,7 @@ String leaveLabel(Object? value) => switch (value) {
   'CANCELLED' => 'Cancelled',
   'PENDING_APPROVAL' => 'Pending approval',
   'NEEDS_REVISION' => 'Needs revision',
-  'ON_LEAVE' => 'On leave today',
+  'ON_LEAVE' => 'Away today',
   'CHANGE_PENDING_APPROVAL' => 'Change pending approval',
   'EARLY_RETURN' => 'Early return',
   'VOID' => 'Approval revoked',
@@ -239,12 +239,9 @@ class _LeaveManagementScreenState extends State<LeaveManagementScreen> {
     final content = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Wrap(
-          alignment: WrapAlignment.spaceBetween,
-          spacing: 24,
-          runSpacing: 12,
-          children: [
-            Column(
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final title = Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
@@ -263,80 +260,63 @@ class _LeaveManagementScreenState extends State<LeaveManagementScreen> {
                   style: const TextStyle(color: AppColors.muted),
                 ),
               ],
-            ),
-            if (_context != null)
-              FilledButton.icon(
-                onPressed: _loading ? null : () => _form(),
-                icon: const Icon(Icons.add),
-                label: const Text('Request leave'),
-              ),
-            IconButton(
-              tooltip: 'Refresh leave',
-              onPressed: _loading ? null : _load,
-              icon: const Icon(Icons.refresh),
-            ),
-          ],
+            );
+            final actions = Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_context != null)
+                  FilledButton.icon(
+                    onPressed: _loading ? null : () => _form(),
+                    icon: const Icon(Icons.add),
+                    label: const Text('Request leave'),
+                  ),
+                const SizedBox(width: 8),
+                IconButton(
+                  tooltip: 'Refresh leave',
+                  onPressed: _loading ? null : _load,
+                  icon: const Icon(Icons.refresh),
+                ),
+              ],
+            );
+            if (constraints.maxWidth < 700) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [title, const SizedBox(height: 12), actions],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: title),
+                const SizedBox(width: 24),
+                actions,
+              ],
+            );
+          },
         ),
         const SizedBox(height: 18),
         if (_loading) const LinearProgressIndicator(),
         if (_error != null) _errorPanel(_error!, _load),
         if (_result != null && _context != null) ...[
-          Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children: [
-              for (final status in leaveStatuses)
-                SizedBox(
-                  key: ValueKey('leave-status-$status'),
-                  width: 210,
-                  child: Card(
-                    child: InkWell(
-                      onTap: _loading
-                          ? null
-                          : () {
-                              setState(() {
-                                _status = status;
-                                _page = 0;
-                              });
-                              _load();
-                            },
-                      borderRadius: BorderRadius.circular(16),
-                      child: Padding(
-                        padding: const EdgeInsets.all(18),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              status == 'PENDING_APPROVAL'
-                                  ? 'Pending requests'
-                                  : status == 'ON_LEAVE'
-                                  ? 'On leave today'
-                                  : status == 'APPROVED'
-                                  ? 'Approved leave'
-                                  : status == 'REJECTED'
-                                  ? 'Rejected requests'
-                                  : leaveLabel(status),
-                              style: const TextStyle(color: AppColors.muted),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              '${(_result!['counts'] as Map)[status] ?? 0}',
-                              style: Theme.of(context).textTheme.headlineSmall,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
+          _LeaveStatusSummary(
+            counts: Map<String, dynamic>.from(_result!['counts'] as Map),
+            selectedStatus: _status,
+            enabled: !_loading,
+            showOnLeaveToday: !widget.myLeave,
+            onSelected: (status) {
+              setState(() {
+                _status = status;
+                _page = 0;
+              });
+              _load();
+            },
           ),
           Padding(
-            padding: EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.only(top: 8, bottom: 12),
             child: Text(
               widget.myLeave
-                  ? 'Your requests across all dates. On leave is as of today (UTC).'
-                  : 'Counts cover all dates for the selected staff. On leave is as of today (UTC).',
+                  ? 'Your requests across all dates.'
+                  : 'Counts cover all dates. Away today means an approved leave period includes today (UTC).',
               style: const TextStyle(color: AppColors.muted, fontSize: 12),
             ),
           ),
@@ -431,7 +411,7 @@ class _LeaveManagementScreenState extends State<LeaveManagementScreen> {
                               'REJECTED',
                               'CANCELLED',
                               'NEEDS_REVISION',
-                              'ON_LEAVE',
+                              if (!widget.myLeave) 'ON_LEAVE',
                               'CHANGE_PENDING_APPROVAL',
                             ])
                               DropdownMenuItem(
@@ -665,6 +645,149 @@ class _LeaveManagementScreenState extends State<LeaveManagementScreen> {
       ),
     );
     if (changed == true && mounted) _changed();
+  }
+}
+
+class _LeaveStatusSummary extends StatelessWidget {
+  const _LeaveStatusSummary({
+    required this.counts,
+    required this.selectedStatus,
+    required this.enabled,
+    required this.showOnLeaveToday,
+    required this.onSelected,
+  });
+
+  final Map<String, dynamic> counts;
+  final String? selectedStatus;
+  final bool enabled;
+  final bool showOnLeaveToday;
+  final ValueChanged<String?> onSelected;
+
+  String _label(String status) => switch (status) {
+    'PENDING_APPROVAL' => 'Pending requests',
+    'ON_LEAVE' => 'Away today',
+    'APPROVED' => 'Approved leave',
+    'REJECTED' => 'Rejected requests',
+    _ => leaveLabel(status),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final totalRequests = leaveStatuses
+        .where((status) => status != 'ON_LEAVE')
+        .fold<int>(
+          0,
+          (total, status) => total + ((counts[status] as num?)?.toInt() ?? 0),
+        );
+    final metrics = <(String?, String, int)>[
+      (null, 'Total requests', totalRequests),
+      (
+        'PENDING_APPROVAL',
+        _label('PENDING_APPROVAL'),
+        (counts['PENDING_APPROVAL'] as num?)?.toInt() ?? 0,
+      ),
+      (
+        'APPROVED',
+        _label('APPROVED'),
+        (counts['APPROVED'] as num?)?.toInt() ?? 0,
+      ),
+      if (showOnLeaveToday)
+        (
+          'ON_LEAVE',
+          _label('ON_LEAVE'),
+          (counts['ON_LEAVE'] as num?)?.toInt() ?? 0,
+        ),
+    ];
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      decoration: const BoxDecoration(
+        border: Border(
+          top: BorderSide(color: AppColors.border),
+          bottom: BorderSide(color: AppColors.border),
+        ),
+      ),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 6,
+        children: [
+          for (final metric in metrics)
+            _LeaveStatusMetric(
+              key: ValueKey(
+                metric.$1 == null
+                    ? 'leave-summary-total'
+                    : 'leave-status-${metric.$1}',
+              ),
+              label: metric.$2,
+              count: metric.$3,
+              selected: selectedStatus == metric.$1,
+              enabled: enabled,
+              onTap: () => onSelected(metric.$1),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LeaveStatusMetric extends StatelessWidget {
+  const _LeaveStatusMetric({
+    super.key,
+    required this.label,
+    required this.count,
+    required this.selected,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final String label;
+  final int count;
+  final bool selected;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: selected ? AppColors.greenSoft : Colors.transparent,
+      borderRadius: BorderRadius.circular(9),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 190),
+        child: InkWell(
+          onTap: enabled ? onTap : null,
+          borderRadius: BorderRadius.circular(9),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '$count',
+                  style: TextStyle(
+                    color: selected ? AppColors.green : AppColors.text,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    height: 1,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: selected ? AppColors.green : AppColors.muted,
+                      fontSize: 13,
+                      fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

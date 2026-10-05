@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 
 import '../data/staff_api_client.dart';
+import '../../common/display_formatters.dart';
+import '../../platform/presentation/document_opener.dart';
 import '../../theme/app_theme.dart';
 import '../../leave/data/leave_api_client.dart';
 import '../../leave/presentation/leave_management_screen.dart';
@@ -36,6 +38,8 @@ class _StaffScreenState extends State<StaffScreen> {
   _StaffTab _tab = _StaffTab.staffList;
   _StaffMember? _selectedStaff;
   String _query = '';
+  _StaffSortField _sortField = _StaffSortField.name;
+  bool _sortAscending = true;
   bool _isLoadingStaff = false;
   String? _staffError;
 
@@ -65,6 +69,8 @@ class _StaffScreenState extends State<StaffScreen> {
     if (_selectedStaff != null) {
       return _StaffProfilePage(
         staff: _selectedStaff!,
+        customSchoolId: widget.customSchoolId?.trim() ?? '',
+        apiClient: _apiClient(),
         leaveContent:
             widget.customSchoolId != null &&
                 int.tryParse(_selectedStaff!.id) != null
@@ -102,6 +108,18 @@ class _StaffScreenState extends State<StaffScreen> {
                 _selectedStaff!.id != '${widget.currentUserId}'
             ? () => _suspendStaff(_selectedStaff!)
             : null,
+        onRequirePasswordChange:
+            _selectedStaff!.status == _StaffStatus.active &&
+                !_selectedStaff!.mustChangePassword &&
+                _selectedStaff!.id != '${widget.currentUserId}'
+            ? () => _requirePasswordChange(_selectedStaff!)
+            : null,
+        onApprove: _selectedStaff!.status == _StaffStatus.pendingReview
+            ? () => _approveStaff(_selectedStaff!)
+            : null,
+        onReject: _selectedStaff!.status == _StaffStatus.pendingReview
+            ? () => _rejectStaff(_selectedStaff!)
+            : null,
         onReactivate: _selectedStaff!.status == _StaffStatus.suspended
             ? () => _reactivateStaff(_selectedStaff!)
             : null,
@@ -124,6 +142,10 @@ class _StaffScreenState extends State<StaffScreen> {
     }
 
     final visibleStaff = _filteredStaff;
+    final onboardingStaff = _staff.where(_isStaffOnboarding).toList();
+    final establishedStaff = _staff
+        .where((staff) => !_isStaffOnboarding(staff))
+        .toList();
     return SingleChildScrollView(
       padding: const EdgeInsets.all(28),
       child: Column(
@@ -135,6 +157,8 @@ class _StaffScreenState extends State<StaffScreen> {
           const SizedBox(height: 18),
           _StaffTabs(
             selected: _tab,
+            staffCount: establishedStaff.length,
+            onboardingCount: onboardingStaff.length,
             onChanged: (tab) => setState(() => _tab = tab),
           ),
           const SizedBox(height: 14),
@@ -149,23 +173,32 @@ class _StaffScreenState extends State<StaffScreen> {
             ],
             switch (_tab) {
               _StaffTab.staffList => _DirectoryPanel(
-                staff: visibleStaff
-                    .where((member) => member.status != _StaffStatus.draft)
-                    .toList(),
+                staff: _sortStaff(
+                  visibleStaff
+                      .where((member) => !_isStaffOnboarding(member))
+                      .toList(),
+                ),
                 query: _query,
                 onQueryChanged: (value) => setState(() => _query = value),
                 onOpenStaff: (member) =>
                     setState(() => _selectedStaff = member),
                 currentUserId: widget.currentUserId,
+                sortField: _sortField,
+                sortAscending: _sortAscending,
+                onSort: _changeSort,
               ),
               _StaffTab.onboarding => _OnboardingPanel(
-                staff: visibleStaff
-                    .where((member) => member.status == _StaffStatus.draft)
-                    .toList(),
+                staff: _sortStaff(
+                  visibleStaff.where(_isStaffOnboarding).toList(),
+                ),
+                hasOnboardingRecords: onboardingStaff.isNotEmpty,
                 query: _query,
                 onQueryChanged: (value) => setState(() => _query = value),
                 onOpenStaff: (member) =>
                     setState(() => _selectedStaff = member),
+                sortField: _sortField,
+                sortAscending: _sortAscending,
+                onSort: _changeSort,
               ),
             },
           ],
@@ -324,6 +357,101 @@ class _StaffScreenState extends State<StaffScreen> {
     }
   }
 
+  Future<void> _requirePasswordChange(_StaffMember staff) async {
+    final schoolId = widget.customSchoolId?.trim() ?? '';
+    if (schoolId.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Require password change?'),
+        content: Text(
+          '${staff.fullName} will be signed out of all current sessions. Their existing password will work only to sign in and create a replacement password before they can use SMA.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Require change'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await _apiClient().requirePasswordChange(
+        customSchoolId: schoolId,
+        userId: staff.id,
+      );
+      await _loadStaff();
+      if (mounted) {
+        _showMessage('Password change required. Current sessions signed out.');
+      }
+    } on StaffApiException catch (error) {
+      if (mounted) _showMessage(error.message);
+    }
+  }
+
+  Future<void> _approveStaff(_StaffMember staff) async {
+    final schoolId = widget.customSchoolId?.trim() ?? '';
+    if (schoolId.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Approve staff account?'),
+        content: Text(
+          '${staff.fullName} will receive active access based on their assigned roles and individual permissions.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Approve account'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await _apiClient().approveSchoolUser(
+        customSchoolId: schoolId,
+        userId: staff.id,
+      );
+      await _loadStaff();
+      if (mounted) _showMessage('Staff account approved.');
+    } on StaffApiException catch (error) {
+      if (mounted) _showMessage(error.message);
+    }
+  }
+
+  Future<void> _rejectStaff(_StaffMember staff) async {
+    final schoolId = widget.customSchoolId?.trim() ?? '';
+    if (schoolId.isEmpty) return;
+    final reason = await _lifecycleReason(
+      title: 'Reject ${staff.fullName}’s account?',
+      actionLabel: 'Reject account',
+      message:
+          'This denies account access and keeps an audited record of the decision.',
+    );
+    if (reason == null || !mounted) return;
+    try {
+      await _apiClient().rejectSchoolUser(
+        customSchoolId: schoolId,
+        userId: staff.id,
+        reason: reason,
+      );
+      await _loadStaff();
+      if (mounted) _showMessage('Staff account rejected.');
+    } on StaffApiException catch (error) {
+      if (mounted) _showMessage(error.message);
+    }
+  }
+
   Future<void> _deactivateStaff(_StaffMember staff) async {
     final schoolId = widget.customSchoolId?.trim() ?? '';
     if (schoolId.isEmpty) return;
@@ -361,6 +489,46 @@ class _StaffScreenState extends State<StaffScreen> {
       ].join(' ').toLowerCase();
       return haystack.contains(query);
     }).toList();
+  }
+
+  void _changeSort(_StaffSortField field) {
+    setState(() {
+      if (_sortField == field) {
+        _sortAscending = !_sortAscending;
+      } else {
+        _sortField = field;
+        _sortAscending = true;
+      }
+    });
+  }
+
+  List<_StaffMember> _sortStaff(List<_StaffMember> staff) {
+    final sorted = List<_StaffMember>.from(staff);
+    sorted.sort((left, right) {
+      final comparison = switch (_sortField) {
+        _StaffSortField.name => _compareText(left.fullName, right.fullName),
+        _StaffSortField.role => _compareText(left.role, right.role),
+        _StaffSortField.department => _compareText(
+          left.department,
+          right.department,
+        ),
+        _StaffSortField.source => _compareText(
+          left.sourceLabel,
+          right.sourceLabel,
+        ),
+        _StaffSortField.status => left.status.index.compareTo(
+          right.status.index,
+        ),
+        _StaffSortField.startDate => _staffDateSortValue(
+          left.startDate,
+        ).compareTo(_staffDateSortValue(right.startDate)),
+      };
+      if (comparison != 0) {
+        return _sortAscending ? comparison : -comparison;
+      }
+      return _compareText(left.fullName, right.fullName);
+    });
+    return sorted;
   }
 
   Future<void> _loadStaff() async {
@@ -401,34 +569,14 @@ class _StaffScreenState extends State<StaffScreen> {
       final users = results[0] as List<StaffUserRecord>;
       final profiles = results[1] as List<StaffProfileRecord>;
       final assignmentsByStaffId = results[2] as Map<String, List<String>>;
-      final loadedDetails = await Future.wait([
-        Future.wait(
-          profiles.map((profile) async {
-            final finance = profile.staffId.isEmpty
-                ? null
-                : await apiClient.getStaffFinance(profile.staffId);
-            return (staffId: profile.staffId, finance: finance);
-          }),
-        ),
-        Future.wait(
-          users.map((user) async {
-            final activity = await apiClient
-                .getStaffActivity(user.id)
-                .onError((_, __) => const <StaffActivityRecord>[]);
-            return (userId: user.id, activity: activity);
-          }),
-        ),
-      ]);
-      final financeRows =
-          loadedDetails[0]
-              as List<({String staffId, StaffFinanceRecord? finance})>;
-      final activityRows =
-          loadedDetails[1]
-              as List<({String userId, List<StaffActivityRecord> activity})>;
-      final financeByStaffId = <String, StaffFinanceRecord>{
-        for (final row in financeRows)
-          if (row.finance != null) row.staffId: row.finance!,
-      };
+      final activityRows = await Future.wait(
+        users.map((user) async {
+          final activity = await apiClient
+              .getStaffActivity(user.id)
+              .onError((_, __) => const <StaffActivityRecord>[]);
+          return (userId: user.id, activity: activity);
+        }),
+      );
       final activityByUserId = {
         for (final row in activityRows) row.userId: row.activity,
       };
@@ -442,7 +590,7 @@ class _StaffScreenState extends State<StaffScreen> {
             user,
             profile,
             assignmentsByStaffId[profile?.staffId] ?? const [],
-            financeByStaffId[profile?.staffId],
+            null,
             activityByUserId[user.id] ?? const [],
           );
         }),
@@ -452,12 +600,7 @@ class _StaffScreenState extends State<StaffScreen> {
                   profile.invitationToken.isNotEmpty &&
                   !users.any((user) => user.id == profile.userId),
             )
-            .map(
-              (profile) => _staffFromInvitationProfile(
-                profile,
-                financeByStaffId[profile.staffId],
-              ),
-            ),
+            .map((profile) => _staffFromInvitationProfile(profile)),
         ..._localEduHireDrafts,
       ];
       if (!mounted) return;
@@ -751,14 +894,6 @@ class _StaffScreenState extends State<StaffScreen> {
       sourceLabel: 'School user',
       sourceReference: _display(user.userName),
       color: _colorForRole(user.role),
-      checks: [
-        if (user.mustChangePassword) 'Awaiting first password change',
-        if (!user.mustChangePassword) 'Login setup complete',
-        if (profile == null)
-          'Employment profile can be completed from onboarding',
-        if (profile != null) 'Employment onboarding saved',
-        if (profile?.resumes.isNotEmpty == true) 'Resume uploaded',
-      ],
       assignments: assignments,
       staffProfileId: profile?.staffId ?? '',
       resumes: profile?.resumes ?? const [],
@@ -768,6 +903,7 @@ class _StaffScreenState extends State<StaffScreen> {
       invitationDeliveryStatus: profile?.invitationDeliveryStatus ?? 'NOT_SENT',
       invitationLastSentAt: profile?.invitationLastSentAt ?? '',
       invitationSendCount: profile?.invitationSendCount ?? 0,
+      mustChangePassword: user.mustChangePassword,
     );
   }
 
@@ -808,7 +944,6 @@ class _StaffScreenState extends State<StaffScreen> {
       sourceLabel: 'School invitation',
       sourceReference: profile.staffId,
       color: AppColors.green,
-      checks: const ['Awaiting account activation'],
       assignments: const [],
       staffProfileId: profile.staffId,
       resumes: profile.resumes,
@@ -864,20 +999,7 @@ String _formatFileSize(int bytes) {
 }
 
 String _formatRole(String role) {
-  final clean = _clean(role);
-  if (clean.isEmpty) return 'Staff';
-  if (const {
-    'TEACHER',
-    'CLASS_TEACHER',
-    'SUBJECT_TEACHER',
-  }.contains(clean.toUpperCase())) {
-    return 'Teacher';
-  }
-  return clean
-      .split('_')
-      .where((part) => part.isNotEmpty)
-      .map((part) => '${part[0]}${part.substring(1).toLowerCase()}')
-      .join(' ');
+  return displayRoleName(role);
 }
 
 String _formatStaffRoles(Iterable<String> roles) {
@@ -915,17 +1037,49 @@ _StaffStatus _statusFromAccountStatus(String status) {
   return switch (_clean(status).toUpperCase()) {
     'ACTIVE' => _StaffStatus.active,
     'INVITED' => _StaffStatus.invited,
-    'PENDING' ||
-    'PENDING_REVIEW' ||
-    'PENDING_APPROVAL' => _StaffStatus.pendingReview,
+    'PENDING' => _StaffStatus.passwordSetup,
+    'PENDING_REVIEW' || 'PENDING_APPROVAL' => _StaffStatus.pendingReview,
     'SUSPENDED' => _StaffStatus.suspended,
     'INACTIVE' || 'DELETED' => _StaffStatus.inactive,
     _ => _StaffStatus.draft,
   };
 }
 
+int _compareText(String left, String right) =>
+    left.toLowerCase().compareTo(right.toLowerCase());
+
+DateTime _staffDateSortValue(String value) {
+  final iso = DateTime.tryParse(value);
+  if (iso != null) return iso;
+  final parts = value.trim().split(RegExp(r'\s+'));
+  if (parts.length == 3) {
+    const months = {
+      'jan': 1,
+      'feb': 2,
+      'mar': 3,
+      'apr': 4,
+      'may': 5,
+      'jun': 6,
+      'jul': 7,
+      'aug': 8,
+      'sep': 9,
+      'oct': 10,
+      'nov': 11,
+      'dec': 12,
+    };
+    final day = int.tryParse(parts[0]);
+    final month = months[parts[1].toLowerCase()];
+    final year = int.tryParse(parts[2]);
+    if (day != null && month != null && year != null) {
+      return DateTime(year, month, day);
+    }
+  }
+  return DateTime(9999);
+}
+
 String _categoryForRole(String role) {
   return switch (_clean(role).toUpperCase()) {
+    'TEACHER' ||
     'CLASS_TEACHER' ||
     'SUBJECT_TEACHER' ||
     'HEAD_TEACHER' ||
@@ -986,17 +1140,6 @@ String _formatDateTime(String raw) {
   final minutes = local.minute.toString().padLeft(2, '0');
   final period = local.hour >= 12 ? 'PM' : 'AM';
   return '${_formatDate(local.toIso8601String())} at $hour:$minutes $period';
-}
-
-String _formatMoney(double value) {
-  final parts = value.toStringAsFixed(2).split('.');
-  final digits = parts.first;
-  final buffer = StringBuffer();
-  for (var index = 0; index < digits.length; index++) {
-    if (index > 0 && (digits.length - index) % 3 == 0) buffer.write(',');
-    buffer.write(digits[index]);
-  }
-  return 'GH₵${buffer.toString()}.${parts.last}';
 }
 
 String _staffInvitationDeliveryLabel(String value) {
@@ -1094,9 +1237,10 @@ class _StaffMetricRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final active = staff.where((item) => item.status == _StaffStatus.active);
-    final teaching = staff.where((item) => item.category == 'Teaching');
-    final nonTeaching = staff.where((item) => item.category == 'Support');
-    final drafts = staff.where((item) => item.status == _StaffStatus.draft);
+    final established = staff.where((item) => !_isStaffOnboarding(item));
+    final teaching = established.where((item) => item.category == 'Teaching');
+    final nonTeaching = established.where((item) => item.category == 'Support');
+    final onboarding = staff.where(_isStaffOnboarding);
     final metrics = [
       _StaffMetric(
         'Active staff',
@@ -1120,9 +1264,9 @@ class _StaffMetricRow extends StatelessWidget {
         AppColors.purple,
       ),
       _StaffMetric(
-        'Onboarding drafts',
-        drafts.length.toString(),
-        'Imported or manually created',
+        'In onboarding',
+        onboarding.length.toString(),
+        'Draft, invited, or awaiting activation',
         Icons.assignment_turned_in_rounded,
         AppColors.amber,
       ),
@@ -1206,9 +1350,16 @@ class _MetricTile extends StatelessWidget {
 }
 
 class _StaffTabs extends StatelessWidget {
-  const _StaffTabs({required this.selected, required this.onChanged});
+  const _StaffTabs({
+    required this.selected,
+    required this.staffCount,
+    required this.onboardingCount,
+    required this.onChanged,
+  });
 
   final _StaffTab selected;
+  final int staffCount;
+  final int onboardingCount;
   final ValueChanged<_StaffTab> onChanged;
 
   @override
@@ -1218,12 +1369,16 @@ class _StaffTabs extends StatelessWidget {
       children: [
         _TabButton(
           label: 'Staff List',
+          count: staffCount,
+          countKey: const ValueKey('staff-list-count'),
           icon: Icons.groups_rounded,
           selected: selected == _StaffTab.staffList,
           onTap: () => onChanged(_StaffTab.staffList),
         ),
         _TabButton(
           label: 'Onboarding',
+          count: onboardingCount,
+          countKey: const ValueKey('staff-onboarding-count'),
           icon: Icons.assignment_ind_rounded,
           selected: selected == _StaffTab.onboarding,
           onTap: () => onChanged(_StaffTab.onboarding),
@@ -1236,12 +1391,16 @@ class _StaffTabs extends StatelessWidget {
 class _TabButton extends StatelessWidget {
   const _TabButton({
     required this.label,
+    required this.count,
+    required this.countKey,
     required this.icon,
     required this.selected,
     required this.onTap,
   });
 
   final String label;
+  final int count;
+  final Key countKey;
   final IconData icon;
   final bool selected;
   final VoidCallback onTap;
@@ -1251,7 +1410,32 @@ class _TabButton extends StatelessWidget {
     return OutlinedButton.icon(
       onPressed: onTap,
       icon: Icon(selected ? Icons.check_rounded : icon, size: 18),
-      label: Text(label),
+      label: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(label),
+          const SizedBox(width: 9),
+          Container(
+            key: countKey,
+            constraints: const BoxConstraints(minWidth: 24),
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+            decoration: BoxDecoration(
+              color: selected ? Colors.white : AppColors.background,
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              '$count',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: selected ? AppColors.green : AppColors.muted,
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+                height: 1.25,
+              ),
+            ),
+          ),
+        ],
+      ),
       style: OutlinedButton.styleFrom(
         foregroundColor: selected ? AppColors.green : AppColors.muted,
         backgroundColor: selected ? AppColors.greenSoft : Colors.white,
@@ -1274,6 +1458,9 @@ class _DirectoryPanel extends StatelessWidget {
     required this.onQueryChanged,
     required this.onOpenStaff,
     required this.currentUserId,
+    required this.sortField,
+    required this.sortAscending,
+    required this.onSort,
   });
 
   final List<_StaffMember> staff;
@@ -1281,34 +1468,65 @@ class _DirectoryPanel extends StatelessWidget {
   final ValueChanged<String> onQueryChanged;
   final ValueChanged<_StaffMember> onOpenStaff;
   final int? currentUserId;
+  final _StaffSortField sortField;
+  final bool sortAscending;
+  final ValueChanged<_StaffSortField> onSort;
 
   @override
   Widget build(BuildContext context) {
     return Card(
+      clipBehavior: Clip.antiAlias,
       child: Column(
         children: [
           _PanelSearch(
             value: query,
             hint: 'Search staff by name, role, department, email, or phone',
             onChanged: onQueryChanged,
+            resultCount: staff.length,
+            resultLabel: staff.length == 1 ? 'staff member' : 'staff members',
           ),
           const Divider(height: 1, color: AppColors.border),
-          const _StaffTableHeader(showSource: false),
-          if (staff.isEmpty)
-            const _EmptyPanel(
-              icon: Icons.group_off_rounded,
-              title: 'No staff found',
-              body: 'Try a different search term or add a staff member.',
-            )
-          else
-            ...staff.map(
-              (member) => _StaffRow(
-                staff: member,
-                showSource: false,
-                isCurrentUser: member.id == currentUserId?.toString(),
-                onTap: () => onOpenStaff(member),
-              ),
-            ),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              const minimumWidth = 1120.0;
+              final tableWidth = constraints.maxWidth < minimumWidth
+                  ? minimumWidth
+                  : constraints.maxWidth;
+              return SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: tableWidth,
+                  child: Column(
+                    children: [
+                      _StaffTableHeader(
+                        showSource: false,
+                        sortField: sortField,
+                        sortAscending: sortAscending,
+                        onSort: onSort,
+                      ),
+                      if (staff.isEmpty)
+                        const _EmptyPanel(
+                          icon: Icons.group_off_rounded,
+                          title: 'No staff found',
+                          body:
+                              'Try a different search term or add a staff member.',
+                        )
+                      else
+                        ...staff.map(
+                          (member) => _StaffRow(
+                            staff: member,
+                            showSource: false,
+                            isCurrentUser:
+                                member.id == currentUserId?.toString(),
+                            onTap: () => onOpenStaff(member),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
         ],
       ),
     );
@@ -1318,42 +1536,80 @@ class _DirectoryPanel extends StatelessWidget {
 class _OnboardingPanel extends StatelessWidget {
   const _OnboardingPanel({
     required this.staff,
+    required this.hasOnboardingRecords,
     required this.query,
     required this.onQueryChanged,
     required this.onOpenStaff,
+    required this.sortField,
+    required this.sortAscending,
+    required this.onSort,
   });
 
   final List<_StaffMember> staff;
+  final bool hasOnboardingRecords;
   final String query;
   final ValueChanged<String> onQueryChanged;
   final ValueChanged<_StaffMember> onOpenStaff;
+  final _StaffSortField sortField;
+  final bool sortAscending;
+  final ValueChanged<_StaffSortField> onSort;
 
   @override
   Widget build(BuildContext context) {
     return Card(
+      clipBehavior: Clip.antiAlias,
       child: Column(
         children: [
           _PanelSearch(
             value: query,
-            hint: 'Search onboarding drafts',
+            hint: 'Search staff onboarding',
             onChanged: onQueryChanged,
+            resultCount: staff.length,
+            resultLabel: staff.length == 1 ? 'person' : 'people',
           ),
           const Divider(height: 1, color: AppColors.border),
-          const _StaffTableHeader(showSource: true),
-          if (staff.isEmpty)
-            const _EmptyPanel(
-              icon: Icons.assignment_late_outlined,
-              title: 'No onboarding drafts',
-              body: 'Manual drafts and EduHire imports will appear here.',
-            )
-          else
-            ...staff.map(
-              (member) => _StaffRow(
-                staff: member,
-                showSource: true,
-                onTap: () => onOpenStaff(member),
-              ),
-            ),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              const minimumWidth = 1240.0;
+              final tableWidth = constraints.maxWidth < minimumWidth
+                  ? minimumWidth
+                  : constraints.maxWidth;
+              return SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: tableWidth,
+                  child: Column(
+                    children: [
+                      _StaffTableHeader(
+                        showSource: true,
+                        sortField: sortField,
+                        sortAscending: sortAscending,
+                        onSort: onSort,
+                      ),
+                      if (staff.isEmpty)
+                        _EmptyPanel(
+                          icon: Icons.assignment_late_outlined,
+                          title: hasOnboardingRecords && query.trim().isNotEmpty
+                              ? 'No onboarding matches'
+                              : 'No staff currently onboarding',
+                          body: hasOnboardingRecords && query.trim().isNotEmpty
+                              ? 'No onboarding records match "${query.trim()}". Clear the search or try another name.'
+                              : 'Drafts, invitations, verification progress, and EduHire imports will appear here.',
+                        )
+                      else
+                        ...staff.map(
+                          (member) => _StaffRow(
+                            staff: member,
+                            showSource: true,
+                            onTap: () => onOpenStaff(member),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
         ],
       ),
     );
@@ -1478,51 +1734,158 @@ class _PanelSearch extends StatelessWidget {
     required this.value,
     required this.hint,
     required this.onChanged,
+    required this.resultCount,
+    required this.resultLabel,
   });
 
   final String value;
   final String hint;
   final ValueChanged<String> onChanged;
+  final int resultCount;
+  final String resultLabel;
 
   @override
   Widget build(BuildContext context) {
+    final searchField = TextField(
+      controller: TextEditingController(text: value)
+        ..selection = TextSelection.collapsed(offset: value.length),
+      onChanged: onChanged,
+      decoration: InputDecoration(
+        hintText: hint,
+        prefixIcon: const Icon(Icons.search_rounded),
+        suffixIcon: value.isEmpty
+            ? null
+            : IconButton(
+                tooltip: 'Clear search',
+                onPressed: () => onChanged(''),
+                icon: const Icon(Icons.close_rounded),
+              ),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 16,
+        ),
+      ),
+    );
+    final count = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.greenSoft,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppColors.green.withValues(alpha: .2)),
+      ),
+      child: Text(
+        '$resultCount $resultLabel',
+        style: const TextStyle(
+          color: AppColors.green,
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
     return Padding(
       padding: const EdgeInsets.all(16),
-      child: TextField(
-        controller: TextEditingController(text: value)
-          ..selection = TextSelection.collapsed(offset: value.length),
-        onChanged: onChanged,
-        decoration: InputDecoration(
-          hintText: hint,
-          prefixIcon: const Icon(Icons.search_rounded),
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 14,
-            vertical: 16,
-          ),
-        ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 640) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [searchField, const SizedBox(height: 10), count],
+            );
+          }
+          return Row(
+            children: [
+              Expanded(child: searchField),
+              const SizedBox(width: 12),
+              count,
+            ],
+          );
+        },
       ),
     );
   }
 }
 
 class _StaffTableHeader extends StatelessWidget {
-  const _StaffTableHeader({required this.showSource});
+  const _StaffTableHeader({
+    required this.showSource,
+    required this.sortField,
+    required this.sortAscending,
+    required this.onSort,
+  });
 
   final bool showSource;
+  final _StaffSortField sortField;
+  final bool sortAscending;
+  final ValueChanged<_StaffSortField> onSort;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: const Color(0xFFF7F9F9),
-      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 13),
+      decoration: const BoxDecoration(
+        color: Color(0xFFF7F9F9),
+        border: Border(bottom: BorderSide(color: AppColors.border)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
       child: Row(
         children: [
-          const Expanded(flex: 3, child: _HeaderLabel('Staff member')),
-          const Expanded(flex: 2, child: _HeaderLabel('Role')),
-          const Expanded(flex: 2, child: _HeaderLabel('Department')),
-          if (showSource) const Expanded(child: _HeaderLabel('Source')),
-          const Expanded(child: _HeaderLabel('Status')),
-          const Expanded(child: _HeaderLabel('Start date')),
+          Expanded(
+            flex: 4,
+            child: _SortableHeader(
+              label: 'Staff member',
+              field: _StaffSortField.name,
+              activeField: sortField,
+              ascending: sortAscending,
+              onSort: onSort,
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: _SortableHeader(
+              label: 'Role',
+              field: _StaffSortField.role,
+              activeField: sortField,
+              ascending: sortAscending,
+              onSort: onSort,
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: _SortableHeader(
+              label: 'Department',
+              field: _StaffSortField.department,
+              activeField: sortField,
+              ascending: sortAscending,
+              onSort: onSort,
+            ),
+          ),
+          if (showSource)
+            Expanded(
+              child: _SortableHeader(
+                label: 'Source',
+                field: _StaffSortField.source,
+                activeField: sortField,
+                ascending: sortAscending,
+                onSort: onSort,
+              ),
+            ),
+          Expanded(
+            child: _SortableHeader(
+              label: 'Status',
+              field: _StaffSortField.status,
+              activeField: sortField,
+              ascending: sortAscending,
+              onSort: onSort,
+            ),
+          ),
+          Expanded(
+            child: _SortableHeader(
+              label: 'Start date',
+              field: _StaffSortField.startDate,
+              activeField: sortField,
+              ascending: sortAscending,
+              onSort: onSort,
+            ),
+          ),
           const SizedBox(width: 88, child: _HeaderLabel('Actions')),
         ],
       ),
@@ -1530,17 +1893,69 @@ class _StaffTableHeader extends StatelessWidget {
   }
 }
 
+class _SortableHeader extends StatelessWidget {
+  const _SortableHeader({
+    required this.label,
+    required this.field,
+    required this.activeField,
+    required this.ascending,
+    required this.onSort,
+  });
+
+  final String label;
+  final _StaffSortField field;
+  final _StaffSortField activeField;
+  final bool ascending;
+  final ValueChanged<_StaffSortField> onSort;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = field == activeField;
+    return Tooltip(
+      message: active
+          ? 'Sort ${ascending ? 'descending' : 'ascending'} by $label'
+          : 'Sort by $label',
+      child: InkWell(
+        key: ValueKey('staff-sort-${field.name}'),
+        onTap: () => onSort(field),
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(child: _HeaderLabel(label, active: active)),
+              const SizedBox(width: 4),
+              Icon(
+                active
+                    ? (ascending
+                          ? Icons.arrow_upward_rounded
+                          : Icons.arrow_downward_rounded)
+                    : Icons.unfold_more_rounded,
+                size: 15,
+                color: active ? AppColors.green : AppColors.muted,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _HeaderLabel extends StatelessWidget {
-  const _HeaderLabel(this.text);
+  const _HeaderLabel(this.text, {this.active = false});
 
   final String text;
+  final bool active;
 
   @override
   Widget build(BuildContext context) {
     return Text(
       text.toUpperCase(),
-      style: const TextStyle(
-        color: AppColors.muted,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        color: active ? AppColors.green : AppColors.muted,
         fontSize: 11,
         letterSpacing: .7,
         fontWeight: FontWeight.w800,
@@ -1567,20 +1982,23 @@ class _StaffRow extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
+        constraints: const BoxConstraints(minHeight: 88),
+        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
         decoration: const BoxDecoration(
-          border: Border(top: BorderSide(color: AppColors.border)),
+          border: Border(bottom: BorderSide(color: AppColors.border)),
         ),
         child: Row(
           children: [
             Expanded(
-              flex: 3,
+              flex: 4,
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   _InitialsBadge(name: staff.fullName, color: staff.color),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 14),
                   Expanded(
                     child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
@@ -1601,14 +2019,15 @@ class _StaffRow extends StatelessWidget {
                             ],
                           ],
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${staff.email} · ${staff.phone}',
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: AppColors.muted,
-                            fontSize: 12,
-                          ),
+                        const SizedBox(height: 5),
+                        _StaffContactLine(
+                          icon: Icons.mail_outline_rounded,
+                          value: staff.email,
+                        ),
+                        const SizedBox(height: 2),
+                        _StaffContactLine(
+                          icon: Icons.phone_outlined,
+                          value: staff.phone,
                         ),
                       ],
                     ),
@@ -1616,11 +2035,24 @@ class _StaffRow extends StatelessWidget {
                 ],
               ),
             ),
-            Expanded(flex: 2, child: Text(staff.role)),
+            Expanded(
+              flex: 2,
+              child: Text(
+                staff.role,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: AppColors.text,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
             Expanded(
               flex: 2,
               child: Text(
                 staff.department,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(color: AppColors.muted),
               ),
             ),
@@ -1630,6 +2062,8 @@ class _StaffRow extends StatelessWidget {
             Expanded(
               child: Text(
                 staff.startDate,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(color: AppColors.muted),
               ),
             ),
@@ -1637,12 +2071,41 @@ class _StaffRow extends StatelessWidget {
               width: 88,
               child: OutlinedButton(
                 onPressed: onTap,
-                child: const Text('View'),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  side: const BorderSide(color: AppColors.border),
+                ),
+                child: const Text('Open'),
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _StaffContactLine extends StatelessWidget {
+  const _StaffContactLine({required this.icon, required this.value});
+
+  final IconData icon;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 13, color: AppColors.muted),
+        const SizedBox(width: 5),
+        Expanded(
+          child: Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: AppColors.muted, fontSize: 12),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1675,10 +2138,15 @@ class _CurrentUserBadge extends StatelessWidget {
 class _StaffProfilePage extends StatefulWidget {
   const _StaffProfilePage({
     required this.staff,
+    required this.customSchoolId,
+    required this.apiClient,
     required this.onBack,
     this.onEdit,
     this.onManageRoles,
     this.onSuspend,
+    this.onRequirePasswordChange,
+    this.onApprove,
+    this.onReject,
     this.onReactivate,
     this.onDeactivate,
     this.onResendInvitation,
@@ -1688,11 +2156,16 @@ class _StaffProfilePage extends StatefulWidget {
   });
 
   final _StaffMember staff;
+  final String customSchoolId;
+  final StaffApiClient apiClient;
   final Widget leaveContent;
   final VoidCallback onBack;
   final VoidCallback? onEdit;
   final VoidCallback? onManageRoles;
   final VoidCallback? onSuspend;
+  final VoidCallback? onRequirePasswordChange;
+  final VoidCallback? onApprove;
+  final VoidCallback? onReject;
   final VoidCallback? onReactivate;
   final VoidCallback? onDeactivate;
   final VoidCallback? onResendInvitation;
@@ -1709,6 +2182,11 @@ class _StaffProfilePageState extends State<_StaffProfilePage> {
   @override
   Widget build(BuildContext context) {
     final staff = widget.staff;
+    final profileSummary = [
+      staff.role,
+      if (staff.department != 'Not configured') staff.department,
+      if (staff.employmentType != 'Not configured') staff.employmentType,
+    ].join(' · ');
     return SingleChildScrollView(
       padding: const EdgeInsets.all(28),
       child: Column(
@@ -1722,134 +2200,104 @@ class _StaffProfilePageState extends State<_StaffProfilePage> {
           const SizedBox(height: 12),
           Card(
             child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Row(
-                children: [
-                  _InitialsBadge(
-                    name: staff.fullName,
-                    color: staff.color,
-                    size: 78,
-                  ),
-                  const SizedBox(width: 20),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
+              padding: const EdgeInsets.all(20),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final identity = Row(
+                    children: [
+                      _InitialsBadge(
+                        name: staff.fullName,
+                        color: staff.color,
+                        size: 64,
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Flexible(
-                              child: Text(
-                                staff.fullName,
-                                style: const TextStyle(
-                                  fontSize: 30,
-                                  fontWeight: FontWeight.w800,
-                                  color: AppColors.text,
+                            Wrap(
+                              spacing: 12,
+                              runSpacing: 8,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                Text(
+                                  staff.fullName,
+                                  style: const TextStyle(
+                                    fontSize: 26,
+                                    fontWeight: FontWeight.w800,
+                                    color: AppColors.text,
+                                  ),
                                 ),
+                                _StatusBadge(status: staff.status),
+                                if (staff.mustChangePassword)
+                                  const _SoftBadge(
+                                    label: 'Password change required',
+                                    color: AppColors.amber,
+                                  ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              profileSummary,
+                              style: const TextStyle(
+                                color: AppColors.muted,
+                                fontSize: 15,
                               ),
                             ),
-                            const SizedBox(width: 12),
-                            _StatusBadge(status: staff.status),
                           ],
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '${staff.role} · ${staff.department} · ${staff.employmentType}',
-                          style: const TextStyle(
-                            color: AppColors.muted,
-                            fontSize: 15,
+                      ),
+                    ],
+                  );
+                  final actions = Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      if (widget.onEdit != null)
+                        OutlinedButton.icon(
+                          onPressed: widget.onEdit,
+                          icon: const Icon(
+                            Icons.person_outline_rounded,
+                            size: 18,
                           ),
+                          label: const Text('Edit profile'),
                         ),
-                      ],
-                    ),
-                  ),
-                  if (widget.onEdit != null) ...[
-                    OutlinedButton.icon(
-                      onPressed: widget.onEdit,
-                      icon: const Icon(Icons.person_outline_rounded, size: 18),
-                      label: const Text('Edit profile'),
-                    ),
-                    const SizedBox(width: 10),
-                  ],
-                  OutlinedButton.icon(
-                    onPressed: widget.onManageRoles,
-                    icon: const Icon(
-                      Icons.admin_panel_settings_outlined,
-                      size: 18,
-                    ),
-                    label: const Text('Manage roles'),
-                  ),
-                  if (widget.onSuspend != null ||
-                      widget.onReactivate != null ||
-                      widget.onDeactivate != null) ...[
-                    const SizedBox(width: 6),
-                    PopupMenuButton<String>(
-                      tooltip: 'Account actions',
-                      icon: const Icon(Icons.more_vert_rounded),
-                      onSelected: (value) {
-                        if (value == 'suspend') widget.onSuspend?.call();
-                        if (value == 'reactivate') widget.onReactivate?.call();
-                        if (value == 'deactivate') widget.onDeactivate?.call();
-                      },
-                      itemBuilder: (context) => [
-                        if (widget.onSuspend != null)
-                          const PopupMenuItem(
-                            value: 'suspend',
-                            child: Text('Suspend account'),
-                          ),
-                        if (widget.onReactivate != null)
-                          const PopupMenuItem(
-                            value: 'reactivate',
-                            child: Text('Reactivate account'),
-                          ),
-                        if (widget.onDeactivate != null)
-                          const PopupMenuItem(
-                            value: 'deactivate',
-                            child: Text(
-                              'Deactivate permanently',
-                              style: TextStyle(color: AppColors.red),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ],
-                  if (staff.status == _StaffStatus.invited) ...[
-                    const SizedBox(width: 10),
-                    OutlinedButton.icon(
-                      onPressed: widget.onResendInvitation,
-                      icon: const Icon(
-                        Icons.forward_to_inbox_rounded,
-                        size: 18,
+                      OutlinedButton.icon(
+                        onPressed: widget.onManageRoles,
+                        icon: const Icon(
+                          Icons.admin_panel_settings_outlined,
+                          size: 18,
+                        ),
+                        label: const Text('Manage roles'),
                       ),
-                      label: const Text('Resend invitation'),
-                    ),
-                    const SizedBox(width: 10),
-                    TextButton.icon(
-                      onPressed: widget.onCancelInvitation,
-                      icon: const Icon(Icons.cancel_outlined, size: 18),
-                      label: const Text('Cancel invitation'),
-                    ),
-                    const SizedBox(width: 10),
-                    TextButton.icon(
-                      onPressed: widget.onDeleteInvitation,
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppColors.red,
+                      _StaffAccountActionsMenu(
+                        staff: staff,
+                        onRequirePasswordChange: widget.onRequirePasswordChange,
+                        onApprove: widget.onApprove,
+                        onReject: widget.onReject,
+                        onSuspend: widget.onSuspend,
+                        onReactivate: widget.onReactivate,
+                        onDeactivate: widget.onDeactivate,
+                        onResendInvitation: widget.onResendInvitation,
+                        onCancelInvitation: widget.onCancelInvitation,
+                        onDeleteInvitation: widget.onDeleteInvitation,
                       ),
-                      icon: const Icon(Icons.delete_outline_rounded, size: 18),
-                      label: const Text('Delete'),
-                    ),
-                  ],
-                  const SizedBox(width: 10),
-                  FilledButton.icon(
-                    onPressed: staff.status == _StaffStatus.draft
-                        ? () {}
-                        : null,
-                    icon: const Icon(Icons.check_rounded, size: 18),
-                    label: const Text('Approve draft'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.green,
-                    ),
-                  ),
-                ],
+                    ],
+                  );
+                  if (constraints.maxWidth < 880) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [identity, const SizedBox(height: 18), actions],
+                    );
+                  }
+                  return Row(
+                    children: [
+                      Expanded(child: identity),
+                      const SizedBox(width: 18),
+                      actions,
+                    ],
+                  );
+                },
               ),
             ),
           ),
@@ -1899,16 +2347,228 @@ class _StaffProfilePageState extends State<_StaffProfilePage> {
     switch (_tab) {
       case _StaffProfileTab.profile:
         return _ProfileTab(staff: staff);
-      case _StaffProfileTab.payrollTax:
-        return _PayrollTaxProfileTab(staff: staff);
       case _StaffProfileTab.documents:
-        return _DocumentsTab(staff: staff);
+        return _DocumentsTab(
+          staff: staff,
+          onView: _viewDocument,
+          onDownload: _downloadDocument,
+        );
       case _StaffProfileTab.leave:
         return widget.leaveContent;
       case _StaffProfileTab.activity:
         return _ActivityTab(staff: staff);
     }
   }
+
+  Future<void> _viewDocument(StaffResumeRecord document) async {
+    if (!_canAccessDocument(document)) return;
+    prepareDocumentWindow();
+    try {
+      final url = await widget.apiClient.getStaffDocumentAccessUrl(
+        customSchoolId: widget.customSchoolId,
+        documentId: document.documentId,
+        download: false,
+      );
+      await openDocumentUrl(url);
+    } on StaffApiException catch (error) {
+      if (mounted) _showDocumentMessage(error.message);
+    } catch (_) {
+      if (mounted) {
+        _showDocumentMessage('Could not open this document securely.');
+      }
+    }
+  }
+
+  Future<void> _downloadDocument(StaffResumeRecord document) async {
+    if (!_canAccessDocument(document)) return;
+    try {
+      final url = await widget.apiClient.getStaffDocumentAccessUrl(
+        customSchoolId: widget.customSchoolId,
+        documentId: document.documentId,
+        download: true,
+      );
+      await downloadDocumentUrl(url, document.fileName);
+      if (mounted) _showDocumentMessage('Download started.');
+    } on StaffApiException catch (error) {
+      if (mounted) _showDocumentMessage(error.message);
+    } catch (_) {
+      if (mounted) {
+        _showDocumentMessage('Could not download this document securely.');
+      }
+    }
+  }
+
+  bool _canAccessDocument(StaffResumeRecord document) {
+    if (widget.customSchoolId.isEmpty || document.documentId.trim().isEmpty) {
+      _showDocumentMessage('The secure document link is unavailable.');
+      return false;
+    }
+    return true;
+  }
+
+  void _showDocumentMessage(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+}
+
+class _StaffAccountActionsMenu extends StatelessWidget {
+  const _StaffAccountActionsMenu({
+    required this.staff,
+    required this.onRequirePasswordChange,
+    required this.onApprove,
+    required this.onReject,
+    required this.onSuspend,
+    required this.onReactivate,
+    required this.onDeactivate,
+    required this.onResendInvitation,
+    required this.onCancelInvitation,
+    required this.onDeleteInvitation,
+  });
+
+  final _StaffMember staff;
+  final VoidCallback? onRequirePasswordChange;
+  final VoidCallback? onApprove;
+  final VoidCallback? onReject;
+  final VoidCallback? onSuspend;
+  final VoidCallback? onReactivate;
+  final VoidCallback? onDeactivate;
+  final VoidCallback? onResendInvitation;
+  final VoidCallback? onCancelInvitation;
+  final VoidCallback? onDeleteInvitation;
+
+  @override
+  Widget build(BuildContext context) {
+    final cancelledInvitation =
+        staff.status == _StaffStatus.inactive &&
+        staff.invitationToken.isNotEmpty;
+    final actions = <_StaffAccountAction>[
+      if (staff.status == _StaffStatus.invited) ...[
+        if (onResendInvitation != null)
+          _StaffAccountAction(
+            label: 'Resend invitation',
+            icon: Icons.forward_to_inbox_rounded,
+            onSelected: onResendInvitation!,
+          ),
+        if (onCancelInvitation != null)
+          _StaffAccountAction(
+            label: 'Cancel invitation',
+            icon: Icons.cancel_outlined,
+            onSelected: onCancelInvitation!,
+          ),
+        if (onDeleteInvitation != null)
+          _StaffAccountAction(
+            label: 'Delete permanently',
+            icon: Icons.delete_outline_rounded,
+            onSelected: onDeleteInvitation!,
+            destructive: true,
+          ),
+      ],
+      if (staff.status == _StaffStatus.pendingReview) ...[
+        if (onApprove != null)
+          _StaffAccountAction(
+            label: 'Approve account',
+            icon: Icons.check_circle_outline_rounded,
+            onSelected: onApprove!,
+          ),
+        if (onReject != null)
+          _StaffAccountAction(
+            label: 'Reject account',
+            icon: Icons.cancel_outlined,
+            onSelected: onReject!,
+            destructive: true,
+          ),
+      ],
+      if (staff.status == _StaffStatus.active) ...[
+        if (onRequirePasswordChange != null)
+          _StaffAccountAction(
+            key: ValueKey('staff-require-password-change-${staff.id}'),
+            label: 'Require password change',
+            icon: Icons.lock_reset_rounded,
+            onSelected: onRequirePasswordChange!,
+          ),
+        if (onSuspend != null)
+          _StaffAccountAction(
+            label: 'Suspend account',
+            icon: Icons.pause_circle_outline_rounded,
+            onSelected: onSuspend!,
+          ),
+        if (onDeactivate != null)
+          _StaffAccountAction(
+            label: 'Deactivate and archive',
+            icon: Icons.archive_outlined,
+            onSelected: onDeactivate!,
+            destructive: true,
+          ),
+      ],
+      if (staff.status == _StaffStatus.suspended) ...[
+        if (onReactivate != null)
+          _StaffAccountAction(
+            label: 'Reactivate account',
+            icon: Icons.restart_alt_rounded,
+            onSelected: onReactivate!,
+          ),
+        if (onDeactivate != null)
+          _StaffAccountAction(
+            label: 'Deactivate and archive',
+            icon: Icons.archive_outlined,
+            onSelected: onDeactivate!,
+            destructive: true,
+          ),
+      ],
+      if (cancelledInvitation && onDeleteInvitation != null)
+        _StaffAccountAction(
+          label: 'Delete permanently',
+          icon: Icons.delete_outline_rounded,
+          onSelected: onDeleteInvitation!,
+          destructive: true,
+        ),
+    ];
+    if (actions.isEmpty) return const SizedBox.shrink();
+
+    return MenuAnchor(
+      menuChildren: [
+        for (final action in actions)
+          MenuItemButton(
+            key: action.key,
+            onPressed: action.onSelected,
+            leadingIcon: Icon(
+              action.icon,
+              size: 19,
+              color: action.destructive ? AppColors.red : AppColors.text,
+            ),
+            child: Text(
+              action.label,
+              style: TextStyle(
+                color: action.destructive ? AppColors.red : AppColors.text,
+              ),
+            ),
+          ),
+      ],
+      builder: (context, controller, child) => OutlinedButton.icon(
+        onPressed: controller.isOpen ? controller.close : controller.open,
+        icon: const Icon(Icons.manage_accounts_outlined, size: 18),
+        label: const Text('Account actions'),
+      ),
+    );
+  }
+}
+
+class _StaffAccountAction {
+  const _StaffAccountAction({
+    this.key,
+    required this.label,
+    required this.icon,
+    required this.onSelected,
+    this.destructive = false,
+  });
+
+  final Key? key;
+  final String label;
+  final IconData icon;
+  final VoidCallback onSelected;
+  final bool destructive;
 }
 
 class _RoleSelectionResult {
@@ -2238,25 +2898,80 @@ class _StaffProfileTabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tabs = [
-      (_StaffProfileTab.profile, 'Profile'),
-      (_StaffProfileTab.payrollTax, 'Payroll & Tax'),
-      (_StaffProfileTab.documents, 'Documents'),
-      (_StaffProfileTab.leave, 'Leave'),
-      (_StaffProfileTab.activity, 'Activity'),
+      (_StaffProfileTab.profile, 'Profile', Icons.person_outline_rounded),
+      (_StaffProfileTab.documents, 'Documents', Icons.folder_outlined),
+      (_StaffProfileTab.leave, 'Leave', Icons.event_available_outlined),
+      (_StaffProfileTab.activity, 'Account history', Icons.history_rounded),
     ];
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      children: tabs
-          .map(
-            (tab) => _TabButton(
-              label: tab.$2,
-              icon: Icons.circle,
-              selected: selected == tab.$1,
-              onTap: () => onChanged(tab.$1),
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppColors.border)),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: tabs
+              .map(
+                (tab) => _ProfileTabButton(
+                  label: tab.$2,
+                  icon: tab.$3,
+                  selected: selected == tab.$1,
+                  onTap: () => onChanged(tab.$1),
+                ),
+              )
+              .toList(),
+        ),
+      ),
+    );
+  }
+}
+
+class _ProfileTabButton extends StatelessWidget {
+  const _ProfileTabButton({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 13, 16, 12),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(
+              color: selected ? AppColors.green : Colors.transparent,
+              width: 3,
             ),
-          )
-          .toList(),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 18,
+              color: selected ? AppColors.green : AppColors.muted,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                color: selected ? AppColors.green : AppColors.muted,
+                fontWeight: selected ? FontWeight.w800 : FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -2287,25 +3002,35 @@ class _OverviewTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _ProfileGrid(
-      cards: [
-        _InfoCard('Email', staff.email, Icons.mail_outline_rounded),
-        _InfoCard('Phone', staff.phone, Icons.phone_rounded),
-        _InfoCard('Date of birth', staff.dateOfBirth, Icons.cake_rounded),
-        _InfoCard('Address', staff.address, Icons.location_on_outlined),
-        _InfoCard(
-          'Emergency contact',
-          '${staff.emergencyName}\n${staff.emergencyRelationship} · ${staff.emergencyPhone}',
-          Icons.emergency_rounded,
-        ),
-        _InfoCard(
-          'Source',
-          staff.sourceLabel == 'EduHire'
-              ? 'Imported from EduHire\n${staff.sourceReference}'
-              : 'Created manually in SMA',
-          Icons.cloud_sync_rounded,
-        ),
-      ],
+    final emergencyContact =
+        staff.emergencyName == 'Not configured' &&
+            staff.emergencyRelationship == 'Not configured' &&
+            staff.emergencyPhone == 'Not configured'
+        ? 'Not configured'
+        : '${staff.emergencyName}\n${staff.emergencyRelationship} · ${staff.emergencyPhone}';
+    return _ProfileSectionCard(
+      title: 'Contact and personal details',
+      description: 'Contact information and essential personal records.',
+      child: _ProfileGrid(
+        cards: [
+          _InfoCard('Email', staff.email, Icons.mail_outline_rounded),
+          _InfoCard('Phone', staff.phone, Icons.phone_rounded),
+          _InfoCard('Date of birth', staff.dateOfBirth, Icons.cake_rounded),
+          _InfoCard('Address', staff.address, Icons.location_on_outlined),
+          _InfoCard(
+            'Emergency contact',
+            emergencyContact,
+            Icons.emergency_rounded,
+          ),
+          _InfoCard(
+            'Source',
+            staff.sourceLabel == 'EduHire'
+                ? 'Imported from EduHire\n${staff.sourceReference}'
+                : 'Created manually in SMA',
+            Icons.cloud_sync_rounded,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -2317,15 +3042,62 @@ class _EmploymentTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _ProfileGrid(
-      cards: [
-        _InfoCard('Role', staff.role, Icons.work_outline_rounded),
-        _InfoCard('Department', staff.department, Icons.apartment_rounded),
-        _InfoCard('Employment type', staff.employmentType, Icons.badge_rounded),
-        _InfoCard('Contract type', staff.contractType, Icons.description),
-        _InfoCard('Expected start date', staff.startDate, Icons.event),
-        _InfoCard('Category', staff.category, Icons.category_rounded),
-      ],
+    return _ProfileSectionCard(
+      title: 'Employment details',
+      description: 'Role, department, contract, and start information.',
+      child: _ProfileGrid(
+        cards: [
+          _InfoCard('Role', staff.role, Icons.work_outline_rounded),
+          _InfoCard('Department', staff.department, Icons.apartment_rounded),
+          _InfoCard(
+            'Employment type',
+            staff.employmentType,
+            Icons.badge_rounded,
+          ),
+          _InfoCard('Contract type', staff.contractType, Icons.description),
+          _InfoCard('Expected start date', staff.startDate, Icons.event),
+          _InfoCard('Category', staff.category, Icons.category_rounded),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProfileSectionCard extends StatelessWidget {
+  const _ProfileSectionCard({
+    required this.title,
+    required this.description,
+    required this.child,
+  });
+
+  final String title;
+  final String description;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(
+                color: AppColors.text,
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(description, style: const TextStyle(color: AppColors.muted)),
+            const SizedBox(height: 18),
+            child,
+          ],
+        ),
+      ),
     );
   }
 }
@@ -2382,64 +3154,37 @@ class _AssignmentsTab extends StatelessWidget {
   }
 }
 
-class _PayrollTaxProfileTab extends StatelessWidget {
-  const _PayrollTaxProfileTab({required this.staff});
+class _DocumentsTab extends StatefulWidget {
+  const _DocumentsTab({
+    required this.staff,
+    required this.onView,
+    required this.onDownload,
+  });
 
   final _StaffMember staff;
+  final Future<void> Function(StaffResumeRecord document) onView;
+  final Future<void> Function(StaffResumeRecord document) onDownload;
 
   @override
-  Widget build(BuildContext context) {
-    final finance = staff.finance;
-    return _ProfileGrid(
-      cards: [
-        _InfoCard('Staff member', staff.fullName, Icons.person_outline_rounded),
-        _InfoCard(
-          'Basic salary',
-          finance == null ? 'Not configured' : _formatMoney(finance.basicPay),
-          Icons.payments_rounded,
-        ),
-        _InfoCard(
-          'Allowances',
-          finance == null
-              ? 'Not configured'
-              : _formatMoney(finance.totalAllowances),
-          Icons.add_card_rounded,
-        ),
-        _InfoCard(
-          'Gross salary',
-          finance == null
-              ? 'Not configured'
-              : _formatMoney(finance.grossSalary),
-          Icons.account_balance_wallet_outlined,
-        ),
-        _InfoCard(
-          'SSNIT number',
-          finance == null || finance.ssnitNumber.isEmpty
-              ? 'Not provided'
-              : finance.ssnitNumber,
-          Icons.verified_user_rounded,
-        ),
-        _InfoCard(
-          'TIN / GRA',
-          finance == null || finance.tinNumber.isEmpty
-              ? 'Not provided'
-              : finance.tinNumber,
-          Icons.receipt_long_rounded,
-        ),
-        _InfoCard(
-          'Bank details',
-          'Not configured',
-          Icons.account_balance_rounded,
-        ),
-      ],
-    );
-  }
+  State<_DocumentsTab> createState() => _DocumentsTabState();
 }
 
-class _DocumentsTab extends StatelessWidget {
-  const _DocumentsTab({required this.staff});
+class _DocumentsTabState extends State<_DocumentsTab> {
+  String? _busyAction;
 
-  final _StaffMember staff;
+  Future<void> _run(
+    String action,
+    StaffResumeRecord document,
+    Future<void> Function(StaffResumeRecord document) callback,
+  ) async {
+    if (_busyAction != null) return;
+    setState(() => _busyAction = '$action:${document.documentId}');
+    try {
+      await callback(document);
+    } finally {
+      if (mounted) setState(() => _busyAction = null);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2450,12 +3195,19 @@ class _DocumentsTab extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Documents and checks',
+              'Documents',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 12),
-            if (staff.resumes.isNotEmpty) ...[
-              ...staff.resumes.map(
+            if (widget.staff.resumes.isEmpty)
+              const _EmptyPanel(
+                icon: Icons.folder_open_rounded,
+                title: 'No documents uploaded',
+                body:
+                    'Resumes and other employment documents uploaded for this staff member will appear here.',
+              )
+            else ...[
+              ...widget.staff.resumes.map(
                 (resume) => Container(
                   margin: const EdgeInsets.only(bottom: 10),
                   padding: const EdgeInsets.all(14),
@@ -2464,60 +3216,112 @@ class _DocumentsTab extends StatelessWidget {
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: AppColors.border),
                   ),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.picture_as_pdf_outlined,
-                        color: AppColors.green,
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final identity = Row(
+                        children: [
+                          const Icon(
+                            Icons.description_outlined,
+                            color: AppColors.green,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  resume.fileName,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                Text(
+                                  '${_formatFileSize(resume.fileSize)} · ${resume.status.toLowerCase()}',
+                                  style: const TextStyle(
+                                    color: AppColors.muted,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      );
+                      final actions = Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          const _SoftBadge(
+                            label: 'Resume',
+                            color: AppColors.green,
+                          ),
+                          OutlinedButton.icon(
+                            key: ValueKey(
+                              'staff-document-view-${resume.documentId}',
+                            ),
+                            onPressed: _busyAction == null
+                                ? () => _run('view', resume, widget.onView)
+                                : null,
+                            icon: _busyAction == 'view:${resume.documentId}'
+                                ? const SizedBox.square(
+                                    dimension: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.visibility_outlined),
+                            label: const Text('View'),
+                          ),
+                          FilledButton.icon(
+                            key: ValueKey(
+                              'staff-document-download-${resume.documentId}',
+                            ),
+                            onPressed: _busyAction == null
+                                ? () => _run(
+                                    'download',
+                                    resume,
+                                    widget.onDownload,
+                                  )
+                                : null,
+                            icon: _busyAction == 'download:${resume.documentId}'
+                                ? const SizedBox.square(
+                                    dimension: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Icon(Icons.download_rounded),
+                            label: const Text('Download'),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: AppColors.green,
+                            ),
+                          ),
+                        ],
+                      );
+                      if (constraints.maxWidth < 720) {
+                        return Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              resume.fileName,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                            Text(
-                              '${_formatFileSize(resume.fileSize)} · ${resume.status.toLowerCase()}',
-                            ),
+                            identity,
+                            const SizedBox(height: 12),
+                            actions,
                           ],
-                        ),
-                      ),
-                      const _SoftBadge(label: 'Resume', color: AppColors.green),
-                    ],
+                        );
+                      }
+                      return Row(
+                        children: [
+                          Expanded(child: identity),
+                          const SizedBox(width: 16),
+                          actions,
+                        ],
+                      );
+                    },
                   ),
                 ),
               ),
-              const SizedBox(height: 4),
             ],
-            ...staff.checks.map(
-              (check) => Container(
-                margin: const EdgeInsets.only(bottom: 10),
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF8FAFA),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.border),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.verified_outlined, color: AppColors.green),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        check,
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                    const _SoftBadge(label: 'Verified', color: AppColors.green),
-                  ],
-                ),
-              ),
-            ),
           ],
         ),
       ),
@@ -2539,15 +3343,21 @@ class _ActivityTab extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Activity',
+              'Account history',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Administrative changes to this staff account are recorded here.',
+              style: TextStyle(color: AppColors.muted),
             ),
             const SizedBox(height: 12),
             if (staff.activity.isEmpty)
               const _EmptyPanel(
                 icon: Icons.history_rounded,
-                title: 'No recorded activity',
-                body: 'Account and access changes will appear here.',
+                title: 'No account history yet',
+                body:
+                    'Role, access, suspension, reactivation, and other account changes will appear here.',
               )
             else
               ...staff.activity.map(
@@ -2580,7 +3390,11 @@ class _ProfileGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final columns = constraints.maxWidth >= 980 ? 3 : 2;
+        final columns = constraints.maxWidth >= 960
+            ? 3
+            : constraints.maxWidth >= 560
+            ? 2
+            : 1;
         const gap = 12.0;
         final width = (constraints.maxWidth - (columns - 1) * gap) / columns;
         return Wrap(
@@ -2604,13 +3418,27 @@ class _InfoCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
+    return Container(
+      constraints: const BoxConstraints(minHeight: 92),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFA),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.all(16),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon, color: AppColors.green),
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: AppColors.green.withValues(alpha: .09),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Icon(icon, color: AppColors.green, size: 18),
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -2625,12 +3453,12 @@ class _InfoCard extends StatelessWidget {
                       fontWeight: FontWeight.w800,
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   Text(
                     value,
                     style: const TextStyle(
                       color: AppColors.text,
-                      fontWeight: FontWeight.w800,
+                      fontWeight: FontWeight.w700,
                       height: 1.35,
                     ),
                   ),
@@ -2811,37 +3639,28 @@ class _ManualStaffDrawer extends StatefulWidget {
 }
 
 class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
-  static const _roles = [
-    ('ADMINISTRATOR', 'Administrator'),
-    ('HEADMASTER', 'Headmaster'),
-    ('HEAD_TEACHER', 'Head teacher'),
-    ('ASSISTANT_HEAD_TEACHER', 'Assistant head teacher'),
-    ('CLASS_TEACHER', 'Teacher'),
-    ('BURSAR', 'Bursar'),
-    ('SECRETARY', 'Secretary'),
-  ];
-
   final _firstName = TextEditingController();
   final _middleName = TextEditingController();
   final _lastName = TextEditingController();
   final _dateOfBirth = TextEditingController();
   final _email = TextEditingController();
   final _phone = TextEditingController();
-  final _position = TextEditingController();
   final _startDate = TextEditingController();
-  final _basicPay = TextEditingController();
-  final _houseAllowance = TextEditingController();
-  final _transportAllowance = TextEditingController();
-  final _otherAllowances = TextEditingController();
-  final _grossSalary = TextEditingController();
-  final _ssnitNumber = TextEditingController();
-  final _tinNumber = TextEditingController();
+  final _bankName = TextEditingController();
+  final _bankBranch = TextEditingController();
+  final _accountName = TextEditingController();
+  final _accountNumber = TextEditingController();
+  final _confirmAccountNumber = TextEditingController();
+  final _mobileMoneyNetwork = TextEditingController();
+  final _mobileMoneyNumber = TextEditingController();
+  final _confirmMobileMoneyNumber = TextEditingController();
+  final _mobileMoneyRegisteredName = TextEditingController();
   final List<_ReferenceForm> _references = [];
 
   int _step = 0;
-  String _role = 'CLASS_TEACHER';
-  final Set<String> _selectedRoles = {'CLASS_TEACHER'};
-  String _employmentType = 'FULL_TIME';
+  StaffJobTitleOption? _jobTitle;
+  String? _employmentType;
+  String _paymentMethod = 'ADD_LATER';
   StaffLookupOption? _department;
   String? _staffId;
   String? _invitationToken;
@@ -2850,6 +3669,7 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
   bool _saving = false;
   String? _error;
   List<StaffLookupOption> _departments = const [];
+  List<StaffJobTitleOption> _jobTitles = const [];
   PlatformFile? _resume;
 
   @override
@@ -2866,15 +3686,16 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
     _dateOfBirth.dispose();
     _email.dispose();
     _phone.dispose();
-    _position.dispose();
     _startDate.dispose();
-    _basicPay.dispose();
-    _houseAllowance.dispose();
-    _transportAllowance.dispose();
-    _otherAllowances.dispose();
-    _grossSalary.dispose();
-    _ssnitNumber.dispose();
-    _tinNumber.dispose();
+    _bankName.dispose();
+    _bankBranch.dispose();
+    _accountName.dispose();
+    _accountNumber.dispose();
+    _confirmAccountNumber.dispose();
+    _mobileMoneyNetwork.dispose();
+    _mobileMoneyNumber.dispose();
+    _confirmMobileMoneyNumber.dispose();
+    _mobileMoneyRegisteredName.dispose();
     for (final reference in _references) {
       reference.dispose();
     }
@@ -2946,7 +3767,7 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
     return switch (_step) {
       0 => _identityStep(),
       1 => _employmentStep(),
-      2 => _financeStep(),
+      2 => _paymentAccountStep(),
       3 => _resumeStep(),
       _ => _referencesStep(),
     };
@@ -3010,50 +3831,25 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
             ),
           ],
         ),
-        DropdownButtonFormField<String>(
-          value: _role,
-          decoration: const InputDecoration(labelText: 'Staff role *'),
-          items: _roles
+        DropdownButtonFormField<StaffJobTitleOption>(
+          key: const Key('staff-job-title'),
+          value: _jobTitle,
+          decoration: const InputDecoration(labelText: 'Job title *'),
+          items: _jobTitles
               .map(
-                (role) =>
-                    DropdownMenuItem(value: role.$1, child: Text(role.$2)),
+                (title) =>
+                    DropdownMenuItem(value: title, child: Text(title.name)),
               )
               .toList(),
-          onChanged: (value) => setState(() {
-            final next = value ?? _role;
-            _role = next;
-            _selectedRoles.add(next);
-          }),
+          onChanged: (value) => setState(() => _jobTitle = value),
         ),
-        const SizedBox(height: 12),
-        const Text(
-          'Additional workspaces',
-          style: TextStyle(fontWeight: FontWeight.w800),
-        ),
-        const SizedBox(height: 6),
-        const Text(
-          'Select additional authority profiles. Class and subject responsibilities are assigned later through Classes & Sections.',
-          style: TextStyle(color: AppColors.muted, height: 1.35),
-        ),
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: _roles.where((role) => role.$1 != _role).map((role) {
-            final selected = _selectedRoles.contains(role.$1);
-            return FilterChip(
-              label: Text(role.$2),
-              selected: selected,
-              onSelected: (value) => setState(() {
-                if (value) {
-                  _selectedRoles.add(role.$1);
-                } else {
-                  _selectedRoles.remove(role.$1);
-                }
-              }),
-            );
-          }).toList(),
-        ),
+        if (_jobTitle != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            'Default authority: ${_jobTitle!.authorityName}. Additional or individual access can be assigned safely in Settings.',
+            style: const TextStyle(color: AppColors.muted, height: 1.35),
+          ),
+        ],
         const SizedBox(height: 12),
         const Text(
           'The staff member will receive an SMS code and create their own global username and permanent password.',
@@ -3068,11 +3864,6 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const _DrawerSectionTitle('Employment details'),
-        _DrawerField(
-          controller: _position,
-          label: 'Position *',
-          hint: 'e.g. Mathematics Teacher',
-        ),
         DropdownButtonFormField<StaffLookupOption>(
           value: _department,
           decoration: const InputDecoration(labelText: 'Department *'),
@@ -3089,7 +3880,10 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
         const SizedBox(height: 12),
         DropdownButtonFormField<String>(
           value: _employmentType,
-          decoration: const InputDecoration(labelText: 'Employment type *'),
+          decoration: const InputDecoration(
+            labelText: 'Employment type (optional)',
+            hintText: 'Not specified',
+          ),
           items: const [
             DropdownMenuItem(value: 'FULL_TIME', child: Text('Full-time')),
             DropdownMenuItem(value: 'PART_TIME', child: Text('Part-time')),
@@ -3097,8 +3891,7 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
             DropdownMenuItem(value: 'TEMPORARY', child: Text('Temporary')),
             DropdownMenuItem(value: 'CASUAL', child: Text('Casual')),
           ],
-          onChanged: (value) =>
-              setState(() => _employmentType = value ?? _employmentType),
+          onChanged: (value) => setState(() => _employmentType = value),
         ),
         _DateDrawerField(
           controller: _startDate,
@@ -3109,73 +3902,124 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
     );
   }
 
-  Widget _financeStep() {
+  Widget _paymentAccountStep() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const _DrawerSectionTitle('Payroll and tax'),
-        Row(
+        const _DrawerSectionTitle('Salary payment account'),
+        const Text(
+          'Record where this staff member should be paid. Salary, tax, pension, allowances, and deductions are configured later in the dedicated Payroll workspace.',
+          style: TextStyle(color: AppColors.muted, height: 1.35),
+        ),
+        const SizedBox(height: 14),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
           children: [
-            Expanded(
-              child: _DrawerField(
-                controller: _basicPay,
-                label: 'Basic pay (GH¢) *',
-                hint: '2500',
-              ),
+            ChoiceChip(
+              key: const Key('staff-payment-bank'),
+              label: const Text('Bank account'),
+              selected: _paymentMethod == 'BANK',
+              onSelected: (_) => setState(() => _paymentMethod = 'BANK'),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _DrawerField(
-                controller: _houseAllowance,
-                label: 'House allowance',
-                hint: '0',
-              ),
+            ChoiceChip(
+              key: const Key('staff-payment-momo'),
+              label: const Text('Mobile Money'),
+              selected: _paymentMethod == 'MOBILE_MONEY',
+              onSelected: (_) =>
+                  setState(() => _paymentMethod = 'MOBILE_MONEY'),
+            ),
+            ChoiceChip(
+              key: const Key('staff-payment-later'),
+              label: const Text('Add later'),
+              selected: _paymentMethod == 'ADD_LATER',
+              onSelected: (_) => setState(() => _paymentMethod = 'ADD_LATER'),
             ),
           ],
         ),
-        Row(
-          children: [
-            Expanded(
-              child: _DrawerField(
-                controller: _transportAllowance,
-                label: 'Transport allowance',
-                hint: '0',
+        const SizedBox(height: 14),
+        if (_paymentMethod == 'BANK') ...[
+          _DrawerField(
+            key: const Key('staff-bank-name'),
+            controller: _bankName,
+            label: 'Bank name *',
+            hint: 'e.g. GCB Bank',
+          ),
+          _DrawerField(
+            controller: _bankBranch,
+            label: 'Branch',
+            hint: 'Optional',
+          ),
+          _DrawerField(
+            controller: _accountName,
+            label: 'Account name *',
+            hint: 'Name registered with the bank',
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: _DrawerField(
+                  key: const Key('staff-account-number'),
+                  controller: _accountNumber,
+                  label: 'Account number *',
+                  hint: 'Enter account number',
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _DrawerField(
-                controller: _otherAllowances,
-                label: 'Other allowances',
-                hint: '0',
+              const SizedBox(width: 12),
+              Expanded(
+                child: _DrawerField(
+                  controller: _confirmAccountNumber,
+                  label: 'Confirm account number *',
+                  hint: 'Re-enter account number',
+                ),
               ),
-            ),
-          ],
-        ),
-        _DrawerField(
-          controller: _grossSalary,
-          label: 'Gross salary (GH¢)',
-          hint: 'Leave blank to use pay + allowances',
-        ),
-        Row(
-          children: [
-            Expanded(
-              child: _DrawerField(
-                controller: _ssnitNumber,
-                label: 'SSNIT number',
-                hint: 'C123456789012',
+            ],
+          ),
+        ] else if (_paymentMethod == 'MOBILE_MONEY') ...[
+          _DrawerField(
+            key: const Key('staff-momo-network'),
+            controller: _mobileMoneyNetwork,
+            label: 'Network *',
+            hint: 'MTN MoMo, Telecel Cash, or AT Money',
+          ),
+          _DrawerField(
+            controller: _mobileMoneyRegisteredName,
+            label: 'Registered account name *',
+            hint: 'Name registered to the wallet',
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: _DrawerField(
+                  key: const Key('staff-momo-number'),
+                  controller: _mobileMoneyNumber,
+                  label: 'Mobile Money number *',
+                  hint: '024 000 0000',
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _DrawerField(
-                controller: _tinNumber,
-                label: 'TIN number',
-                hint: 'P1234567890',
+              const SizedBox(width: 12),
+              Expanded(
+                child: _DrawerField(
+                  controller: _confirmMobileMoneyNumber,
+                  label: 'Confirm number *',
+                  hint: 'Re-enter number',
+                ),
               ),
+            ],
+          ),
+        ] else
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppColors.greenSoft,
+              borderRadius: BorderRadius.circular(12),
             ),
-          ],
-        ),
+            child: const Text(
+              'You can finish staff onboarding now and add the payment account from Payroll later.',
+              style: TextStyle(color: AppColors.green, height: 1.35),
+            ),
+          ),
       ],
     );
   }
@@ -3259,12 +4103,16 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
       _error = null;
     });
     try {
-      final departments = await widget.apiClient.getDepartments(
-        widget.customSchoolId,
-      );
+      final results = await Future.wait<dynamic>([
+        widget.apiClient.getDepartments(widget.customSchoolId),
+        widget.apiClient.getJobTitles(widget.customSchoolId),
+      ]);
       if (!mounted) return;
       setState(() {
-        _departments = departments
+        _departments = (results[0] as List<StaffLookupOption>)
+            .where((item) => item.id.isNotEmpty && item.name.isNotEmpty)
+            .toList();
+        _jobTitles = (results[1] as List<StaffJobTitleOption>)
             .where((item) => item.id.isNotEmpty && item.name.isNotEmpty)
             .toList();
         _loadingLookups = false;
@@ -3294,7 +4142,7 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
         case 1:
           await _initiateStaffIfNeeded();
         case 2:
-          await _saveFinance();
+          await _savePaymentAccount();
         case 3:
           await _uploadResume();
         default:
@@ -3319,7 +4167,8 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
     if (_step == 0) {
       if (_firstName.text.trim().isEmpty ||
           _lastName.text.trim().isEmpty ||
-          _phone.text.trim().isEmpty) {
+          _phone.text.trim().isEmpty ||
+          _jobTitle == null) {
         return 'Complete the required staff identity fields.';
       }
       if (_email.text.trim().isNotEmpty && !_email.text.contains('@')) {
@@ -3331,16 +4180,33 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
       }
     }
     if (_step == 1) {
-      if (_position.text.trim().isEmpty ||
-          _department == null ||
-          _startDate.text.trim().isEmpty) {
+      if (_department == null || _startDate.text.trim().isEmpty) {
         return 'Complete the employment details before continuing.';
       }
     }
     if (_step == 2) {
       if (_staffId == null) return 'Start staff onboarding first.';
-      if (_numberValue(_basicPay) <= 0) {
-        return 'Enter the basic pay before continuing.';
+      if (_paymentMethod == 'BANK') {
+        if (_bankName.text.trim().isEmpty ||
+            _accountName.text.trim().isEmpty ||
+            _accountNumber.text.trim().isEmpty) {
+          return 'Complete the required bank account details.';
+        }
+        if (_accountNumber.text.replaceAll(' ', '') !=
+            _confirmAccountNumber.text.replaceAll(' ', '')) {
+          return 'The bank account numbers do not match.';
+        }
+      }
+      if (_paymentMethod == 'MOBILE_MONEY') {
+        if (_mobileMoneyNetwork.text.trim().isEmpty ||
+            _mobileMoneyRegisteredName.text.trim().isEmpty ||
+            _mobileMoneyNumber.text.trim().isEmpty) {
+          return 'Complete the required Mobile Money details.';
+        }
+        if (_normalisePhone(_mobileMoneyNumber.text) !=
+            _normalisePhone(_confirmMobileMoneyNumber.text)) {
+          return 'The Mobile Money numbers do not match.';
+        }
       }
     }
     if (_step == 3 && _resume == null) {
@@ -3374,11 +4240,12 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
           'dateOfBirth': _dateOfBirth.text.trim(),
         if (_email.text.trim().isNotEmpty) 'email': _email.text.trim(),
         'phoneNumber': _normalisePhone(_phone.text),
-        'primaryRole': _role,
-        'roles': [_role, ..._selectedRoles.where((role) => role != _role)],
-        'position': _position.text.trim(),
+        'jobTitleId': int.parse(_jobTitle!.id),
+        'primaryRole': _jobTitle!.baseRole,
+        'roles': [_jobTitle!.baseRole],
+        'position': _jobTitle!.name,
         'departmentId': _department!.id,
-        'employmentType': _employmentType,
+        if (_employmentType != null) 'employmentType': _employmentType,
         'startDate': _startDate.text.trim(),
       },
     );
@@ -3392,21 +4259,24 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
     _invitationMaskedPhone = result.invitationMaskedPhone;
   }
 
-  Future<void> _saveFinance() async {
-    await widget.apiClient.createFinance(
+  Future<void> _savePaymentAccount() async {
+    if (_paymentMethod == 'ADD_LATER') return;
+    await widget.apiClient.savePaymentAccount(
+      customSchoolId: widget.customSchoolId,
       staffId: _staffId!,
       body: {
-        'basicPay': _numberValue(_basicPay),
-        'houseAllowance': _numberValue(_houseAllowance),
-        'transportAllowance': _numberValue(_transportAllowance),
-        'otherAllowances': _numberValue(_otherAllowances),
-        'grossSalary': _grossSalary.text.trim().isEmpty
-            ? _calculatedGross
-            : _numberValue(_grossSalary),
-        if (_ssnitNumber.text.trim().isNotEmpty)
-          'ssnitNumber': _ssnitNumber.text.trim(),
-        if (_tinNumber.text.trim().isNotEmpty)
-          'tinNumber': _tinNumber.text.trim(),
+        'paymentMethod': _paymentMethod,
+        if (_paymentMethod == 'BANK') ...{
+          'bankName': _bankName.text.trim(),
+          'bankBranch': _bankBranch.text.trim(),
+          'accountName': _accountName.text.trim(),
+          'accountNumber': _accountNumber.text.trim(),
+        },
+        if (_paymentMethod == 'MOBILE_MONEY') ...{
+          'mobileMoneyNetwork': _mobileMoneyNetwork.text.trim(),
+          'mobileMoneyNumber': _normalisePhone(_mobileMoneyNumber.text),
+          'mobileMoneyRegisteredName': _mobileMoneyRegisteredName.text.trim(),
+        },
       },
     );
   }
@@ -3436,9 +4306,7 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
       );
     }
     if (!mounted) return;
-    final roleLabel = _roles
-        .firstWhere((role) => role.$1 == _role, orElse: () => (_role, _role))
-        .$2;
+    final roleLabel = _jobTitle?.name ?? 'Staff';
     Navigator.pop(
       context,
       _StaffMember(
@@ -3447,10 +4315,14 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
         lastName: _lastName.text.trim(),
         role: roleLabel,
         department: _department?.name ?? 'Unassigned',
-        category: _role.contains('TEACHER') ? 'Teaching' : 'Support',
+        category: _jobTitle?.baseRole.contains('TEACHER') == true
+            ? 'Teaching'
+            : 'Support',
         employmentType: _employmentTypeLabel,
         contractType: _employmentType == 'CONTRACT'
             ? 'Fixed term'
+            : _employmentType == null
+            ? 'Not specified'
             : 'Permanent',
         email: _email.text.trim(),
         phone: _phone.text.trim(),
@@ -3466,14 +4338,6 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
             ? 'Invitation sent to ${_invitationMaskedPhone ?? 'staff phone'}'
             : 'Manual staff invitation',
         color: AppColors.green,
-        checks: [
-          'Restricted activation invitation sent',
-          'Employment onboarding created',
-          'Finance information captured',
-          'Resume uploaded',
-          if (completedReferences.isNotEmpty) 'References captured',
-          if (completedReferences.isEmpty) 'References not provided (optional)',
-        ],
         assignments: const [],
       ),
     );
@@ -3510,20 +4374,10 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
     return const [
       'Staff login',
       'Employment details',
-      'Payroll and tax',
+      'Payment account',
       'Resume upload',
       'References',
     ][step];
-  }
-
-  double get _calculatedGross =>
-      _numberValue(_basicPay) +
-      _numberValue(_houseAllowance) +
-      _numberValue(_transportAllowance) +
-      _numberValue(_otherAllowances);
-
-  double _numberValue(TextEditingController controller) {
-    return double.tryParse(controller.text.trim().replaceAll(',', '')) ?? 0;
   }
 
   String _normalisePhone(String value) {
@@ -3539,7 +4393,7 @@ class _ManualStaffDrawerState extends State<_ManualStaffDrawer> {
       'CONTRACT' => 'Contract',
       'TEMPORARY' => 'Temporary',
       'CASUAL' => 'Casual',
-      _ => _employmentType,
+      _ => 'Not specified',
     };
   }
 
@@ -3557,7 +4411,7 @@ class _StepProgress extends StatelessWidget {
   static const _labels = [
     'Login',
     'Employment',
-    'Payroll',
+    'Payment account',
     'Resume',
     'References',
   ];
@@ -4119,6 +4973,7 @@ class _DrawerSectionTitle extends StatelessWidget {
 
 class _DrawerField extends StatelessWidget {
   const _DrawerField({
+    super.key,
     required this.controller,
     required this.label,
     required this.hint,
@@ -4189,6 +5044,7 @@ class _StatusBadge extends StatelessWidget {
     final color = switch (status) {
       _StaffStatus.active => AppColors.green,
       _StaffStatus.invited => AppColors.blue,
+      _StaffStatus.passwordSetup => AppColors.blue,
       _StaffStatus.pendingReview => AppColors.amber,
       _StaffStatus.draft => AppColors.muted,
       _StaffStatus.suspended => AppColors.red,
@@ -4197,6 +5053,7 @@ class _StatusBadge extends StatelessWidget {
     final label = switch (status) {
       _StaffStatus.active => 'Active',
       _StaffStatus.invited => 'Invited',
+      _StaffStatus.passwordSetup => 'Password setup',
       _StaffStatus.pendingReview => 'Pending review',
       _StaffStatus.draft => 'Draft',
       _StaffStatus.suspended => 'Suspended',
@@ -4226,9 +5083,8 @@ class _SoftBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return UnconstrainedBox(
+    return Align(
       alignment: Alignment.centerLeft,
-      constrainedAxis: Axis.vertical,
       child: DecoratedBox(
         key: ValueKey('staff-soft-badge-$label'),
         decoration: BoxDecoration(
@@ -4239,6 +5095,8 @@ class _SoftBadge extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           child: Text(
             label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: color,
               fontWeight: FontWeight.w800,
@@ -4289,11 +5147,30 @@ class _EmptyPanel extends StatelessWidget {
 
 enum _StaffTab { staffList, onboarding }
 
-enum _StaffProfileTab { profile, payrollTax, documents, leave, activity }
+enum _StaffSortField { name, role, department, source, status, startDate }
+
+enum _StaffProfileTab { profile, documents, leave, activity }
 
 enum _AddStaffMode { manual, eduhire }
 
-enum _StaffStatus { active, invited, pendingReview, draft, suspended, inactive }
+enum _StaffStatus {
+  active,
+  invited,
+  passwordSetup,
+  pendingReview,
+  draft,
+  suspended,
+  inactive,
+}
+
+bool _isStaffOnboarding(_StaffMember staff) => switch (staff.status) {
+  _StaffStatus.draft ||
+  _StaffStatus.invited ||
+  _StaffStatus.passwordSetup ||
+  _StaffStatus.pendingReview => true,
+  _StaffStatus.inactive => staff.sourceLabel == 'School invitation',
+  _StaffStatus.active || _StaffStatus.suspended => false,
+};
 
 class _StaffMetric {
   const _StaffMetric(
@@ -4335,7 +5212,6 @@ class _StaffMember {
     required this.sourceLabel,
     required this.sourceReference,
     required this.color,
-    required this.checks,
     required this.assignments,
     this.staffProfileId = '',
     this.resumes = const [],
@@ -4345,6 +5221,7 @@ class _StaffMember {
     this.invitationDeliveryStatus = 'NOT_SENT',
     this.invitationLastSentAt = '',
     this.invitationSendCount = 0,
+    this.mustChangePassword = false,
   });
 
   final String id;
@@ -4369,7 +5246,6 @@ class _StaffMember {
   final String sourceLabel;
   final String sourceReference;
   final Color color;
-  final List<String> checks;
   final List<String> assignments;
   final String staffProfileId;
   final List<StaffResumeRecord> resumes;
@@ -4379,6 +5255,7 @@ class _StaffMember {
   final String invitationDeliveryStatus;
   final String invitationLastSentAt;
   final int invitationSendCount;
+  final bool mustChangePassword;
 
   String get fullName => '$firstName $lastName';
 
@@ -4406,7 +5283,6 @@ class _StaffMember {
       sourceLabel: sourceLabel,
       sourceReference: sourceReference,
       color: color,
-      checks: checks,
       assignments: assignments,
       staffProfileId: staffProfileId,
       resumes: resumes,
@@ -4416,6 +5292,7 @@ class _StaffMember {
       invitationDeliveryStatus: invitationDeliveryStatus,
       invitationLastSentAt: invitationLastSentAt,
       invitationSendCount: invitationSendCount,
+      mustChangePassword: mustChangePassword,
     );
   }
 }
@@ -4441,12 +5318,5 @@ const _eduhireStaff = _StaffMember(
   sourceLabel: 'EduHire',
   sourceReference: 'APP-1001 · CAND-1001',
   color: AppColors.green,
-  checks: [
-    'Criminal background clear',
-    'Police clearance verified',
-    'Medical clearance complete',
-    'Certificate verification complete',
-    'Reference checks completed',
-  ],
   assignments: ['Pending class teacher assignment'],
 );

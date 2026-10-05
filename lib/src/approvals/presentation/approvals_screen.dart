@@ -781,14 +781,24 @@ class _ApprovalTableRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Material(
-    color: shaded ? const Color(0xFFFBFCFC) : Colors.white,
+    key: ValueKey('approval-row-${item.key}'),
+    color: item.pending
+        ? const Color(0xFFFFF4D6)
+        : shaded
+        ? const Color(0xFFFBFCFC)
+        : Colors.white,
     child: InkWell(
       onTap: onTap,
       child: Container(
         constraints: const BoxConstraints(minHeight: 54),
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
-        decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: AppColors.border)),
+        decoration: BoxDecoration(
+          border: Border(
+            left: item.pending
+                ? const BorderSide(color: Color(0xFFF59E0B), width: 4)
+                : BorderSide.none,
+            bottom: const BorderSide(color: AppColors.border),
+          ),
         ),
         child: Row(
           children: [
@@ -906,7 +916,8 @@ class _ApprovalStatusText extends StatelessWidget {
       'PENDING_APPROVAL' ||
       'PENDING_ACCEPTANCE' ||
       'CHANGES_REQUESTED' => const Color(0xFFB56F00),
-      'APPROVED' || 'PUBLISHED' || 'ACCEPTED' => AppColors.green,
+      'APPROVED' || 'PUBLISHED' || 'REGENERATED' || 'ACCEPTED' =>
+        AppColors.green,
       'REJECTED' || 'CANCELLED' => AppColors.red,
       _ => AppColors.navy,
     };
@@ -1260,7 +1271,7 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                         OutlinedButton.icon(
                           onPressed: widget.onOpenSource,
                           icon: const Icon(Icons.open_in_new_rounded),
-                          label: const Text('Open source page'),
+                          label: Text(_sourceActionLabel(item)),
                         ),
                       ],
                     ],
@@ -1285,17 +1296,27 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                             if (item.canWithdraw)
                               Expanded(
                                 child: OutlinedButton(
-                                  onPressed: () =>
-                                      item.type == 'SHOP_STOCK_HANDOVER'
+                                  onPressed: () => _isReportCorrection(item)
+                                      ? _run(
+                                          'CANCEL',
+                                          reasonRequired: true,
+                                          reasonPrompt:
+                                              'REPORT_CORRECTION_CANCEL',
+                                        )
+                                      : item.type == 'SHOP_STOCK_HANDOVER'
                                       ? _run('CANCEL')
                                       : _run('WITHDRAW', reasonRequired: true),
                                   child: Text(
-                                    item.type == 'SHOP_STOCK_HANDOVER'
+                                    _isReportCorrection(item)
+                                        ? 'Cancel request'
+                                        : item.type == 'SHOP_STOCK_HANDOVER'
                                         ? 'Cancel issuance'
                                         : 'Withdraw approval request',
                                   ),
                                 ),
                               ),
+                            if (item.canWithdraw && item.canReject)
+                              const SizedBox(width: 10),
                             if (item.canReject)
                               Expanded(
                                 child: OutlinedButton(
@@ -1411,6 +1432,16 @@ class _ApprovalPanelState extends State<_ApprovalPanel> {
                 ? 'Retry regeneration'
                 : 'Regenerate report',
           ),
+        ),
+      );
+    }
+    if (!item.reportWasPublished) {
+      return SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: _viewCorrectionReport,
+          icon: const Icon(Icons.visibility_outlined),
+          label: const Text('View regenerated report'),
         ),
       );
     }
@@ -1603,6 +1634,7 @@ class _DecisionReasonDialogState extends State<_DecisionReasonDialog> {
       'RESOLUTION' => 'Record the resolution',
       'EXPENSE_REVERSAL_APPROVAL' => 'Approve expense reversal',
       'EXPENSE_REVERSAL_DECLINE' => 'Decline expense reversal',
+      'REPORT_CORRECTION_CANCEL' => 'Cancel correction request',
       _ => 'Withdraw approval request',
     }),
     content: Form(
@@ -1627,6 +1659,8 @@ class _DecisionReasonDialogState extends State<_DecisionReasonDialog> {
               'Explain why reversing this expense is correct.',
             'EXPENSE_REVERSAL_DECLINE' =>
               'Explain why this expense should not be reversed.',
+            'REPORT_CORRECTION_CANCEL' =>
+              'Explain why this correction request is being cancelled.',
             _ => 'Explain why you are withdrawing this request.',
           },
           helperText: '5–1000 characters. Saved in the audit trail.',
@@ -1658,6 +1692,7 @@ class _DecisionReasonDialogState extends State<_DecisionReasonDialog> {
           'RESOLUTION' => 'Resolve and close',
           'EXPENSE_REVERSAL_APPROVAL' => 'Approve reversal',
           'EXPENSE_REVERSAL_DECLINE' => 'Decline reversal',
+          'REPORT_CORRECTION_CANCEL' => 'Cancel request',
           _ => 'Continue',
         }),
       ),
@@ -2272,7 +2307,7 @@ class _StockHandoverRequest extends StatelessWidget {
                 minimumSize: const Size(0, 40),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
-              child: const Text('Open source page →'),
+              child: Text('${_sourceActionLabel(item)} →'),
             ),
           ],
         ],
@@ -2707,7 +2742,10 @@ class _ReportCorrectionRequest extends StatelessWidget {
         children: [
           _StatusPill(status: item.status),
           const SizedBox(height: 14),
-          _CorrectionProgress(status: item.status),
+          _CorrectionProgress(
+            status: item.status,
+            reportWasPublished: item.reportWasPublished,
+          ),
           const SizedBox(height: 14),
           Text(
             value('Assessment', item.title),
@@ -2722,6 +2760,17 @@ class _ReportCorrectionRequest extends StatelessWidget {
             'Student ${value('Student ID', item.subtitle)}',
             style: const TextStyle(color: AppColors.muted),
           ),
+          if (item.className.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(
+              'Class: ${item.className}',
+              key: const ValueKey('report-correction-class'),
+              style: const TextStyle(
+                color: AppColors.navy,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
           const SizedBox(height: 18),
           Row(
             children: [
@@ -2785,6 +2834,12 @@ class _ReportCorrectionRequest extends StatelessWidget {
               'The updated report is ready. Review it before publishing the new official version.',
               style: TextStyle(color: AppColors.muted, fontSize: 12),
             ),
+          ] else if (item.status == 'REGENERATED') ...[
+            const SizedBox(height: 14),
+            const Text(
+              'The corrected draft report has been regenerated. It can be published later from Report Cards.',
+              style: TextStyle(color: AppColors.muted, fontSize: 12),
+            ),
           ] else if (item.status == 'REPUBLISHED' ||
               item.status == 'PUBLISHED') ...[
             const SizedBox(height: 14),
@@ -2819,7 +2874,10 @@ class _GenericReportCorrectionRequest extends StatelessWidget {
         children: [
           _StatusPill(status: item.status),
           const SizedBox(height: 14),
-          _CorrectionProgress(status: item.status),
+          _CorrectionProgress(
+            status: item.status,
+            reportWasPublished: item.reportWasPublished,
+          ),
           const SizedBox(height: 18),
           Text(
             item.title,
@@ -2831,6 +2889,17 @@ class _GenericReportCorrectionRequest extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(item.subtitle, style: const TextStyle(color: AppColors.muted)),
+          if (item.className.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(
+              'Class: ${item.className}',
+              key: const ValueKey('report-correction-class'),
+              style: const TextStyle(
+                color: AppColors.navy,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
           if (section != null) ...[
             const SizedBox(height: 18),
             ...section.entries.map(
@@ -2909,9 +2978,13 @@ class _GenericReportCorrectionRequest extends StatelessWidget {
 }
 
 class _CorrectionProgress extends StatelessWidget {
-  const _CorrectionProgress({required this.status});
+  const _CorrectionProgress({
+    required this.status,
+    required this.reportWasPublished,
+  });
 
   final String status;
+  final bool reportWasPublished;
 
   @override
   Widget build(BuildContext context) {
@@ -2919,12 +2992,15 @@ class _CorrectionProgress extends StatelessWidget {
       'PENDING_APPROVAL' => 0,
       'APPROVED_REGENERATION_REQUIRED' => 1,
       'REGENERATION_IN_PROGRESS' || 'REGENERATION_FAILED' => 2,
+      'REGENERATED' => 2,
       'REGENERATED_AWAITING_PUBLICATION' => 3,
       'PUBLICATION_IN_PROGRESS' || 'PUBLICATION_FAILED' => 4,
       'PUBLISHED' || 'REPUBLISHED' => 4,
       _ => 0,
     };
-    const labels = ['Approval', 'Approved', 'Regenerate', 'Review', 'Publish'];
+    final labels = reportWasPublished
+        ? const ['Approval', 'Approved', 'Regenerate', 'Review', 'Publish']
+        : const ['Approval', 'Approved', 'Regenerate'];
     return LayoutBuilder(
       builder: (context, constraints) => Wrap(
         spacing: 6,
@@ -3609,7 +3685,8 @@ class _StatusPill extends StatelessWidget {
     final color = switch (status) {
       'PENDING_APPROVAL' || 'PENDING_ACCEPTANCE' => const Color(0xFFD88A00),
       'CHANGES_REQUESTED' => const Color(0xFFD88A00),
-      'APPROVED' || 'PUBLISHED' || 'ACCEPTED' => AppColors.green,
+      'APPROVED' || 'PUBLISHED' || 'REGENERATED' || 'ACCEPTED' =>
+        AppColors.green,
       'REJECTED' || 'CANCELLED' => Colors.red,
       _ => AppColors.blue,
     };
@@ -3700,6 +3777,7 @@ String _statusText(String value) => switch (value) {
   'REGENERATION_IN_PROGRESS' => 'Regenerating report',
   'REGENERATION_FAILED' => 'Regeneration failed · retry required',
   'REGENERATED_AWAITING_PUBLICATION' => 'Regenerated · publication required',
+  'REGENERATED' => 'Regenerated',
   'PUBLICATION_IN_PROGRESS' => 'Publishing report',
   'PUBLICATION_FAILED' => 'Publication failed · retry required',
   'REPUBLISHED' => 'Republished',
@@ -3719,6 +3797,22 @@ String _statusText(String value) => switch (value) {
 
 bool _isReportCorrection(ApprovalItem item) =>
     item.type == 'REPORT_CORRECTION' || item.type == 'REPORT_SCORE_CORRECTION';
+
+String _sourceActionLabel(ApprovalItem item) {
+  final page = item.sourcePage.trim().toLowerCase();
+  final title = item.title.trim().toLowerCase();
+  return switch (page) {
+    'assessments' => 'View score sheet',
+    'evaluations' => 'View evaluation',
+    'finalreports' when title.contains('progression') => 'View progression',
+    'finalreports' => 'View report details',
+    'students' => 'View student record',
+    'fees' => 'View fee record',
+    'expenses' => 'View expense record',
+    'shop' => 'View inventory record',
+    _ => 'Review original entry',
+  };
+}
 
 DateTime? _approvalItemDateOrNull(ApprovalItem item) =>
     item.submittedAt ?? item.updatedAt ?? item.createdAt ?? item.decidedAt;

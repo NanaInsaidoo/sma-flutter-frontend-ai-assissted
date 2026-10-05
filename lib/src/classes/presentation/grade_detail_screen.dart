@@ -5,6 +5,7 @@ import '../../assessments/data/assessment_api_client.dart';
 import '../../attendance/data/attendance_api_client.dart';
 import '../../attendance/domain/attendance_models.dart';
 import '../../attendance/presentation/attendance_screen.dart';
+import '../../common/display_formatters.dart';
 import '../../theme/app_theme.dart';
 
 class GradeDetailScreen extends StatefulWidget {
@@ -650,7 +651,7 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
                               value: selected.contains(person.id),
                               title: Text(person.name),
                               subtitle: Text(
-                                '${person.role} · ${person.email}',
+                                '${displayRoleName(person.role)} · ${person.email}',
                               ),
                               onChanged: (v) => setDialog(() {
                                 if (v == true) {
@@ -2633,7 +2634,8 @@ class _ClassTeacherRow extends StatelessWidget {
                 const SizedBox(height: 3),
                 Text(
                   [
-                    if (teacher.role.trim().isNotEmpty) teacher.role,
+                    if (teacher.role.trim().isNotEmpty)
+                      displayRoleName(teacher.role),
                     if (teacher.email.trim().isNotEmpty) teacher.email,
                   ].join(' · '),
                   style: const TextStyle(color: AppColors.muted, fontSize: 12),
@@ -2856,7 +2858,8 @@ class _AddClassTeacherDialogState extends State<_AddClassTeacherDialog> {
                                       ),
                                       Text(
                                         [
-                                          if (staff.role.isNotEmpty) staff.role,
+                                          if (staff.role.isNotEmpty)
+                                            displayRoleName(staff.role),
                                           if (staff.email.isNotEmpty)
                                             staff.email,
                                         ].join(' · '),

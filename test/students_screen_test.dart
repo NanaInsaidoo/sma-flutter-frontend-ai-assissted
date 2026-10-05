@@ -20,8 +20,9 @@ void main() {
     ValueChanged<EnrolledStudent>? onCollectPayment,
     AdmissionsApiClient? admissionsApi,
     String? viewerRole,
+    Size viewportSize = const Size(1600, 1000),
   }) async {
-    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.physicalSize = viewportSize;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -60,6 +61,98 @@ void main() {
     expect(find.text('Enrolled students (1)'), findsOneWidget);
     expect(find.text('Akosua Owusu'), findsOneWidget);
     expect(find.text('Kwame Yaw Asante'), findsNothing);
+  });
+
+  testWidgets('keeps the desktop student table compact and fully readable', (
+    tester,
+  ) async {
+    await pumpStudents(tester);
+
+    expect(find.byKey(const Key('students-table-content')), findsOneWidget);
+    expect(
+      tester.getSize(find.byKey(const Key('students-table-content'))).width,
+      1440,
+    );
+    expect(find.text('ITEMS & SUPPLIES'), findsOneWidget);
+    expect(find.text('STATUS'), findsOneWidget);
+    for (final column in [
+      'student',
+      'className',
+      'guardian',
+      'attendance',
+      'feeBalance',
+      'requirements',
+      'status',
+    ]) {
+      expect(find.byKey(Key('student-sort-$column')), findsOneWidget);
+    }
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('sorts the desktop student register in both directions', (
+    tester,
+  ) async {
+    await pumpStudents(tester);
+
+    final abena = find.byKey(const Key('student-row-STU-FA1BC0-3391'));
+    final kwame = find.byKey(const Key('student-row-STU-FA1BC0-9043'));
+    final esi = find.byKey(const Key('student-row-STU-FA1BC0-9348'));
+
+    expect(tester.getTopLeft(abena).dy, lessThan(tester.getTopLeft(kwame).dy));
+
+    await tester.tap(find.byKey(const Key('student-sort-attendance')));
+    await tester.pump();
+    expect(tester.getTopLeft(esi).dy, lessThan(tester.getTopLeft(abena).dy));
+
+    await tester.tap(find.byKey(const Key('student-sort-attendance')));
+    await tester.pump();
+    expect(tester.getTopLeft(abena).dy, lessThan(tester.getTopLeft(esi).dy));
+    expect(find.byKey(const Key('students-active-sort-icon')), findsOneWidget);
+  });
+
+  testWidgets('uses readable student cards at tablet widths', (tester) async {
+    await pumpStudents(tester, viewportSize: const Size(1000, 1000));
+
+    expect(find.byKey(const Key('students-table-content')), findsNothing);
+    expect(
+      find.byKey(const Key('student-row-STU-FA1BC0-9043')),
+      findsOneWidget,
+    );
+    expect(find.text('JHS 1A'), findsWidgets);
+    expect(find.text('Sort: Student'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('sorts the compact student register without a desktop table', (
+    tester,
+  ) async {
+    await pumpStudents(tester, viewportSize: const Size(1000, 1000));
+
+    final abena = find.byKey(const Key('student-row-STU-FA1BC0-3391'));
+    final esi = find.byKey(const Key('student-row-STU-FA1BC0-9348'));
+    await tester.tap(find.byKey(const Key('students-compact-sort-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Attendance').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Sort: Attendance'), findsOneWidget);
+    expect(tester.getTopLeft(esi).dy, lessThan(tester.getTopLeft(abena).dy));
+
+    await tester.tap(find.byKey(const Key('students-sort-direction')));
+    await tester.pump();
+    expect(tester.getTopLeft(abena).dy, lessThan(tester.getTopLeft(esi).dy));
+  });
+
+  testWidgets('uses readable student cards on narrow screens', (tester) async {
+    await pumpStudents(tester, viewportSize: const Size(820, 1000));
+
+    expect(find.byKey(const Key('students-table-content')), findsNothing);
+    expect(
+      find.byKey(const Key('student-row-STU-FA1BC0-9043')),
+      findsOneWidget,
+    );
+    expect(find.text('JHS 1A'), findsWidgets);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('focuses student search when opened from a quick action', (

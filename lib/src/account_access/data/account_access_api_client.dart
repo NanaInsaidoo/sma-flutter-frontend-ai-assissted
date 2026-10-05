@@ -232,6 +232,7 @@ class VerifiedInvitation {
     required this.schoolName,
     required this.possibleAccounts,
     required this.usernameSuggestions,
+    required this.assignedUsername,
   });
   factory VerifiedInvitation.fromJson(Map<String, dynamic> json) =>
       VerifiedInvitation(
@@ -248,12 +249,14 @@ class VerifiedInvitation {
         usernameSuggestions: (json['usernameSuggestions'] as List? ?? const [])
             .map((value) => value.toString())
             .toList(),
+        assignedUsername: json['assignedUsername']?.toString() ?? '',
       );
   final String activationSession;
   final String accountType;
   final String schoolName;
   final List<CandidateAccount> possibleAccounts;
   final List<String> usernameSuggestions;
+  final String assignedUsername;
 }
 
 class ActivationResult {

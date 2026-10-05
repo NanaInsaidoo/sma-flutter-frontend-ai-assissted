@@ -830,6 +830,35 @@ class _TermEvaluationWorkflowScreenState
       final maximum = '${request['maximumScore'] ?? '—'}';
       return '${_correctionNumber(original)}/${_correctionNumber(maximum)}  →  ${_correctionNumber(proposed)}/${_correctionNumber(maximum)}';
     }
+    if (type == 'EVALUATION') {
+      try {
+        final before = Map<String, dynamic>.from(
+          jsonDecode('${request['originalValue'] ?? '{}'}') as Map,
+        );
+        final after = Map<String, dynamic>.from(
+          jsonDecode('${request['proposedValue'] ?? '{}'}') as Map,
+        );
+        final beforeRatings = Map<String, dynamic>.from(
+          before['ratings'] as Map? ?? const {},
+        );
+        final afterRatings = Map<String, dynamic>.from(
+          after['ratings'] as Map? ?? const {},
+        );
+        final ratingChanges = afterRatings.keys
+            .where((key) => '${beforeRatings[key]}' != '${afterRatings[key]}')
+            .length;
+        final commentChanged =
+            '${before['comment'] ?? ''}' != '${after['comment'] ?? ''}';
+        final parts = <String>[
+          if (ratingChanges > 0)
+            '$ratingChanges ${ratingChanges == 1 ? 'rating' : 'ratings'}',
+          if (commentChanged) 'comment',
+        ];
+        return '${parts.join(' and ')} changed';
+      } catch (_) {
+        return 'Evaluation and comment changed';
+      }
+    }
     if (type == 'EVALUATION_RATINGS') {
       try {
         final before = Map<String, dynamic>.from(
@@ -7430,6 +7459,7 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
   };
 
   final _comment = TextEditingController();
+  String _originalComment = '';
   final _final = <String, String>{};
   final _originalFinal = <String, String>{};
   List<Map<String, dynamic>> _audit = const [];
@@ -7495,16 +7525,19 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
       final finalRatings = (data['finalRatings'] as Map? ?? calculated).map(
         (key, value) => MapEntry(key.toString(), value.toString()),
       );
+      final officialComment = data['comment']?.toString() ?? '';
+      final displayedRatings = Map<String, String>.from(finalRatings);
       if (!mounted) return;
       setState(() {
         _calculated = calculated;
         _final
           ..clear()
-          ..addAll(finalRatings);
+          ..addAll(displayedRatings);
         _originalFinal
           ..clear()
           ..addAll(finalRatings);
-        _comment.text = data['comment']?.toString() ?? '';
+        _originalComment = officialComment;
+        _comment.text = officialComment;
         _status = data['status']?.toString() ?? 'PENDING';
         _reportSourceLocked = data['reportSourceLocked'] == true;
         _leadershipReviewer = data['leadershipReviewer']?.toString();
@@ -7972,32 +8005,17 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
         ? (request!['id'] as num).toInt()
         : int.tryParse('${request?['id'] ?? ''}');
     if (requestId == null || _busy) return;
-    final confirmed = await showDialog<bool>(
+    final reason = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Cancel this change request?'),
-        content: const Text(
-          'The pending correction will be closed without changing the official report. You can submit a new correction afterwards.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Keep request'),
-          ),
-          FilledButton(
-            key: const ValueKey('confirm-cancel-evaluation-correction'),
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Cancel request'),
-          ),
-        ],
-      ),
+      builder: (_) => const _CancelEvaluationCorrectionDialog(),
     );
-    if (confirmed != true || !mounted) return;
+    if (reason == null || !mounted) return;
     setState(() => _busy = true);
     try {
       await widget.api.cancelReportCorrection(
         customSchoolId: widget.schoolId,
         requestId: requestId,
+        reason: reason,
       );
       await _load();
       if (!mounted) return;
@@ -8024,12 +8042,163 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
         '${request['sourceLabel'] ?? request['assessmentTitle'] ?? ''}'.trim();
     if (label.isNotEmpty) return label;
     return switch ('${request['correctionType'] ?? ''}'.toUpperCase()) {
+      'EVALUATION' => 'Evaluation & comment',
       'EVALUATION_RATINGS' => 'Evaluation ratings',
       'CLASS_TEACHER_COMMENT' => 'Class-teacher comment',
       'HEAD_TEACHER_COMMENT' => 'Head-teacher comment',
       'PROGRESSION' => 'Progression decision',
       _ => 'Report correction',
     };
+  }
+
+  List<({String key, String label, String current, String proposed})>
+  _activeCorrectionDifferences(Map<String, dynamic> request) {
+    final differences =
+        <({String key, String label, String current, String proposed})>[];
+    final type = '${request['correctionType'] ?? ''}'.toUpperCase();
+    try {
+      if (type == 'EVALUATION') {
+        final before = Map<String, dynamic>.from(
+          jsonDecode('${request['originalValue'] ?? '{}'}') as Map,
+        );
+        final after = Map<String, dynamic>.from(
+          jsonDecode('${request['proposedValue'] ?? '{}'}') as Map,
+        );
+        final beforeRatings = Map<String, dynamic>.from(
+          before['ratings'] as Map? ?? const {},
+        );
+        final afterRatings = Map<String, dynamic>.from(
+          after['ratings'] as Map? ?? const {},
+        );
+        for (final criterion in _criteria.entries) {
+          final current = '${beforeRatings[criterion.key] ?? 'Not set'}';
+          final proposed = '${afterRatings[criterion.key] ?? 'Not set'}';
+          if (current != proposed) {
+            differences.add((
+              key: criterion.key,
+              label: criterion.value,
+              current: current,
+              proposed: proposed,
+            ));
+          }
+        }
+        final currentComment = '${before['comment'] ?? ''}'.trim();
+        final proposedComment = '${after['comment'] ?? ''}'.trim();
+        if (currentComment != proposedComment) {
+          differences.add((
+            key: 'CLASS_TEACHER_COMMENT',
+            label: 'Class-teacher comment',
+            current: currentComment.isEmpty ? 'Not set' : currentComment,
+            proposed: proposedComment.isEmpty ? 'Not set' : proposedComment,
+          ));
+        }
+      } else if (type == 'EVALUATION_RATINGS') {
+        final before = Map<String, dynamic>.from(
+          jsonDecode('${request['originalValue'] ?? '{}'}') as Map,
+        );
+        final after = Map<String, dynamic>.from(
+          jsonDecode('${request['proposedValue'] ?? '{}'}') as Map,
+        );
+        for (final criterion in _criteria.entries) {
+          final current = '${before[criterion.key] ?? 'Not set'}';
+          final proposed = '${after[criterion.key] ?? 'Not set'}';
+          if (current != proposed) {
+            differences.add((
+              key: criterion.key,
+              label: criterion.value,
+              current: current,
+              proposed: proposed,
+            ));
+          }
+        }
+      } else if (type == 'CLASS_TEACHER_COMMENT') {
+        differences.add((
+          key: 'CLASS_TEACHER_COMMENT',
+          label: 'Class-teacher comment',
+          current: '${request['originalValue'] ?? 'Not set'}',
+          proposed: '${request['proposedValue'] ?? 'Not set'}',
+        ));
+      }
+    } catch (_) {
+      // Older requests can still be opened even if their stored detail is incomplete.
+    }
+    return differences;
+  }
+
+  Future<void> _showActiveCorrectionDetails(
+    Map<String, dynamic> request,
+  ) async {
+    final differences = _activeCorrectionDifferences(request);
+    final reason = '${request['reason'] ?? ''}'.trim();
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Requested changes'),
+        content: SizedBox(
+          width: 620,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (differences.isEmpty)
+                  const Text(
+                    'No change details are available for this request.',
+                  )
+                else
+                  ...differences.map(
+                    (difference) => Container(
+                      key: ValueKey('request-change-${difference.key}'),
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF8FAFC),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFE2E8F0)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            difference.label,
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                          const SizedBox(height: 8),
+                          Text('Original: ${difference.current}'),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Proposed: ${difference.proposed}',
+                            style: const TextStyle(
+                              color: Color(0xFF0F766E),
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (reason.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Reason',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(reason),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _activeCorrectionNotice(Map<String, dynamic> request) {
@@ -8071,9 +8240,8 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                   const SizedBox(height: 6),
                   Text(
                     awaitingApproval
-                        ? '${_activeCorrectionSource(request)} correction is waiting for ${approver.isEmpty ? 'leadership approval' : approver}. '
-                              'This request must be cancelled or approved before another change can be submitted for this student.'
-                        : '${_activeCorrectionSource(request)} correction has been approved. Leadership must finish regeneration and publication before another change can be submitted for this student.',
+                        ? '${_activeCorrectionSource(request)} · Awaiting ${approver.isEmpty ? 'leadership approval' : approver}'
+                        : '${_activeCorrectionSource(request)} · Report update in progress',
                   ),
                   const SizedBox(height: 8),
                   Text(
@@ -8083,56 +8251,34 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                       fontWeight: FontWeight.w800,
                     ),
                   ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        key: const ValueKey(
+                          'view-evaluation-correction-request',
+                        ),
+                        onPressed: () => _showActiveCorrectionDetails(request),
+                        icon: const Icon(Icons.visibility_outlined),
+                        label: const Text('View request details'),
+                      ),
+                      if (canCancel)
+                        OutlinedButton.icon(
+                          key: const ValueKey('cancel-evaluation-correction'),
+                          onPressed: _busy ? null : _cancelCorrection,
+                          icon: const Icon(Icons.close),
+                          label: const Text('Cancel request'),
+                        ),
+                    ],
+                  ),
                 ],
               ),
             ),
-            if (canCancel) ...[
-              const SizedBox(width: 12),
-              OutlinedButton.icon(
-                key: const ValueKey('cancel-evaluation-correction'),
-                onPressed: _busy ? null : _cancelCorrection,
-                icon: const Icon(Icons.close),
-                label: const Text('Cancel request'),
-              ),
-            ],
           ],
         ),
       ),
-    );
-  }
-
-  Future<void> _requestCommentCorrection() async {
-    final current = _comment.text.trim();
-    final proposed = TextEditingController(text: current);
-    final approval = await _correctionApprovalDetails(
-      title: 'Request class-teacher comment correction',
-      changeEditor: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Current comment\n${current.isEmpty ? 'Not set' : current}'),
-          const SizedBox(height: 12),
-          TextField(
-            key: const ValueKey('proposed-evaluation-comment'),
-            controller: proposed,
-            minLines: 4,
-            maxLines: 7,
-            decoration: const InputDecoration(labelText: 'Proposed comment'),
-          ),
-        ],
-      ),
-    );
-    final value = proposed.text.trim();
-    if (approval == null || !mounted) return;
-    if (value.isEmpty || value == current) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Change the current comment first.')),
-      );
-      return;
-    }
-    await _submitEvaluationCorrection(
-      type: 'CLASS_TEACHER_COMMENT',
-      proposedValue: value,
-      approval: approval,
     );
   }
 
@@ -8164,6 +8310,94 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
       type: 'EVALUATION_RATINGS',
       proposedRatings: Map<String, String>.from(_final),
       approval: approval,
+    );
+  }
+
+  Future<void> _requestEvaluationCorrection() async {
+    final changedRatings = _criteria.keys
+        .where((key) => _final[key] != _originalFinal[key])
+        .toList();
+    final proposedComment = _comment.text.trim();
+    final commentChanged = proposedComment != _originalComment.trim();
+    if (changedRatings.isEmpty && !commentChanged) return;
+    if (proposedComment.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('The class-teacher comment is required.')),
+      );
+      return;
+    }
+    final approval = await _correctionApprovalDetails(
+      title: 'Submit evaluation changes for approval',
+      changeEditor: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (changedRatings.isNotEmpty) ...[
+            const Text(
+              'Rating changes',
+              style: TextStyle(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            ...changedRatings.map(
+              (key) => Text(
+                '${_criteria[key] ?? key}: ${_originalFinal[key]} → ${_final[key]}',
+              ),
+            ),
+          ],
+          if (changedRatings.isNotEmpty && commentChanged)
+            const SizedBox(height: 16),
+          if (commentChanged) ...[
+            const Text(
+              'Comment change',
+              style: TextStyle(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            Text('Current\n${_originalComment.trim()}'),
+            const SizedBox(height: 8),
+            Text('Proposed\n$proposedComment'),
+          ],
+        ],
+      ),
+    );
+    if (approval == null || !mounted) return;
+    await _submitEvaluationCorrection(
+      type: 'EVALUATION',
+      proposedValue: proposedComment,
+      proposedRatings: Map<String, String>.from(_final),
+      approval: approval,
+    );
+  }
+
+  Future<void> _resetCorrectionDraft() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Reset proposed changes?'),
+        content: const Text(
+          'The proposed ratings and comment will return to the currently approved values. No correction request will be created.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Keep editing'),
+          ),
+          FilledButton(
+            key: const ValueKey('confirm-reset-evaluation-correction'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Reset changes'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      _final
+        ..clear()
+        ..addAll(_originalFinal);
+      _comment.text = _originalComment;
+      _appliedSuggestion = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Proposed changes were reset.')),
     );
   }
 
@@ -8228,6 +8462,9 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
     final edited = _criteria.keys
         .where((criterion) => _final[criterion] != _originalFinal[criterion])
         .length;
+    final commentEdited = _comment.text.trim() != _originalComment.trim();
+    final pendingProposal =
+        '${_activeCorrection?['status'] ?? ''}'.toUpperCase() == 'PENDING';
     final correctionBlocked =
         _activeCorrection != null || _correctionLoadError != null;
     final canDraftRatingCorrection =
@@ -8241,8 +8478,8 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
         !correctionBlocked;
     final summaryMessage = _reportSourceLocked
         ? widget.canRequestCorrections
-              ? 'This approved evaluation is locked because a report already uses it. You can propose a rating or comment correction below; the official report will not change until leadership approves, regenerates, and republishes it.'
-              : 'This source is read-only because a report has already been generated. Submit any change for approval; the approver must then regenerate, review, and publish the revised report.'
+              ? 'This evaluation is used by a generated report. Changes require approval.'
+              : 'This evaluation is read-only because a report already uses it.'
         : !complete
         ? 'Teacher submissions are incomplete. This student cannot be finalized yet.'
         : widget.canReviewLeadership
@@ -8356,7 +8593,9 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                       style: const TextStyle(fontWeight: FontWeight.w800),
                     ),
                     subtitle: Text(
-                      'Calculated: ${_calculated[criterion.key] ?? 'Incomplete'}',
+                      pendingProposal
+                          ? 'Official: ${_originalFinal[criterion.key] ?? 'Incomplete'}'
+                          : 'Calculated: ${_calculated[criterion.key] ?? 'Incomplete'}',
                     ),
                     trailing: SizedBox(
                       width: 280,
@@ -8373,7 +8612,6 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                                     : 'Final report wording',
                               ),
                               items: _ratings
-                                  .where((rating) => rating != 'Not observed')
                                   .map(
                                     (rating) => DropdownMenuItem(
                                       value: rating,
@@ -8390,10 +8628,20 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                           : Align(
                               alignment: Alignment.centerLeft,
                               child: Text(
-                                _final[criterion.key] ?? 'Incomplete',
+                                pendingProposal &&
+                                        _final[criterion.key] !=
+                                            _originalFinal[criterion.key]
+                                    ? 'Proposed: ${_final[criterion.key] ?? 'Incomplete'}'
+                                    : _final[criterion.key] ?? 'Incomplete',
                                 key: ValueKey('final-wording-${criterion.key}'),
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontWeight: FontWeight.w800,
+                                  color:
+                                      pendingProposal &&
+                                          _final[criterion.key] !=
+                                              _originalFinal[criterion.key]
+                                      ? const Color(0xFFB45309)
+                                      : null,
                                 ),
                               ),
                             ),
@@ -8402,7 +8650,7 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                 ),
               ),
               const SizedBox(height: 12),
-              if (!widget.canReviewLeadership)
+              if (!widget.canReviewLeadership && !_reportSourceLocked)
                 Card(
                   color: Theme.of(
                     context,
@@ -8491,13 +8739,15 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                 key: const ValueKey('evaluation-final-comment'),
                 controller: _comment,
                 readOnly:
-                    lockedForReview ||
                     widget.canReviewLeadership ||
-                    _reportSourceLocked,
+                    ((lockedForReview || _reportSourceLocked) &&
+                        !canDraftRatingCorrection),
                 maxLines: 4,
                 onChanged: (_) => setState(() {}),
-                decoration: const InputDecoration(
-                  labelText: 'Final class-teacher comment',
+                decoration: InputDecoration(
+                  labelText: pendingProposal && commentEdited
+                      ? 'Proposed class-teacher comment'
+                      : 'Final class-teacher comment',
                   hintText:
                       'Comment that will accompany the finalized evaluation',
                 ),
@@ -8567,7 +8817,7 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                       ),
                   ],
                 )
-              else if (lockedForReview)
+              else if (lockedForReview && _activeCorrection == null)
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
@@ -8596,41 +8846,33 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                             children: [
                               FilledButton.icon(
                                 key: const ValueKey(
-                                  'request-evaluation-rating-correction',
+                                  'request-evaluation-correction',
                                 ),
                                 onPressed:
-                                    _busy || correctionBlocked || edited == 0
+                                    _busy ||
+                                        correctionBlocked ||
+                                        (edited == 0 && !commentEdited)
                                     ? null
-                                    : _requestRatingCorrection,
-                                icon: const Icon(Icons.rule_outlined),
-                                label: const Text('Submit rating correction'),
-                              ),
-                              OutlinedButton.icon(
-                                key: const ValueKey(
-                                  'request-evaluation-comment-correction',
+                                    : _requestEvaluationCorrection,
+                                icon: const Icon(Icons.fact_check_outlined),
+                                label: const Text(
+                                  'Submit changes for approval',
                                 ),
-                                onPressed: _busy || correctionBlocked
-                                    ? null
-                                    : _requestCommentCorrection,
-                                icon: const Icon(Icons.edit_note_outlined),
-                                label: const Text('Request comment correction'),
                               ),
+                              if (edited > 0 || commentEdited)
+                                TextButton.icon(
+                                  key: const ValueKey(
+                                    'reset-evaluation-correction-draft',
+                                  ),
+                                  onPressed: _busy || correctionBlocked
+                                      ? null
+                                      : _resetCorrectionDraft,
+                                  icon: const Icon(Icons.restart_alt_rounded),
+                                  label: const Text('Reset changes'),
+                                ),
                             ],
                           ),
-                        ] else if (_reportSourceLocked)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 12),
-                            child: OutlinedButton.icon(
-                              key: const ValueKey(
-                                'request-evaluation-comment-correction',
-                              ),
-                              onPressed: _busy || correctionBlocked
-                                  ? null
-                                  : _requestCommentCorrection,
-                              icon: const Icon(Icons.edit_note_outlined),
-                              label: const Text('Request comment correction'),
-                            ),
-                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -8710,6 +8952,77 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _CancelEvaluationCorrectionDialog extends StatefulWidget {
+  const _CancelEvaluationCorrectionDialog();
+
+  @override
+  State<_CancelEvaluationCorrectionDialog> createState() =>
+      _CancelEvaluationCorrectionDialogState();
+}
+
+class _CancelEvaluationCorrectionDialogState
+    extends State<_CancelEvaluationCorrectionDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _reasonController = TextEditingController();
+
+  @override
+  void dispose() {
+    _reasonController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Cancel this change request?'),
+      content: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'The pending correction will be closed without changing the official report. You can submit a new correction afterwards.',
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              key: const ValueKey('evaluation-correction-cancel-reason'),
+              controller: _reasonController,
+              autofocus: true,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Cancellation reason *',
+                helperText: '5–1000 characters. Saved in the audit trail.',
+              ),
+              validator: (value) {
+                final length = (value ?? '').trim().length;
+                return length < 5 || length > 1000
+                    ? 'Enter a reason (5–1000 characters).'
+                    : null;
+              },
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Keep request'),
+        ),
+        FilledButton(
+          key: const ValueKey('confirm-cancel-evaluation-correction'),
+          onPressed: () {
+            if (_formKey.currentState!.validate()) {
+              Navigator.pop(context, _reasonController.text.trim());
+            }
+          },
+          child: const Text('Cancel request'),
+        ),
+      ],
     );
   }
 }

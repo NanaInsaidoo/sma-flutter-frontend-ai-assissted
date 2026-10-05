@@ -123,6 +123,12 @@ void main() {
         await _show(tester, f, width: reviewer ? 1400 : 390);
         expect(find.text('My Leave'), findsOneWidget);
         expect(find.text('My requests'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('leave-status-ON_LEAVE')),
+          findsNothing,
+        );
+        expect(find.text('On leave today'), findsNothing);
+        expect(find.text('Your requests across all dates.'), findsOneWidget);
         expect(find.byType(DropdownButtonFormField<int>), findsNothing);
         expect(find.text('My Employee'), findsOneWidget);
         expect(find.text('Other Employee'), findsNothing);

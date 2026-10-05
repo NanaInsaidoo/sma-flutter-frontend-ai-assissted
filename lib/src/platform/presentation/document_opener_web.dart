@@ -13,6 +13,15 @@ Future<void> openDocumentUrl(String url) async {
   html.window.open(url, _documentWindowName);
 }
 
+Future<void> downloadDocumentUrl(String url, String fileName) async {
+  final anchor = html.AnchorElement(href: url)
+    ..download = fileName
+    ..style.display = 'none';
+  html.document.body?.append(anchor);
+  anchor.click();
+  anchor.remove();
+}
+
 Future<void> openDocumentBytes(
   List<int> bytes,
   String contentType,

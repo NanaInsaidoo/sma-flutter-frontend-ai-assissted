@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../../common/display_formatters.dart';
 import '../../theme/app_theme.dart';
 import '../data/api_class_requirements_repository.dart';
 import '../data/fee_api_client.dart';
@@ -6394,7 +6395,9 @@ class _PaymentReversalDialogState extends State<_PaymentReversalDialog> {
                           .map(
                             (item) => DropdownMenuItem(
                               value: item.id,
-                              child: Text('${item.name} · ${item.role}'),
+                              child: Text(
+                                '${item.name} · ${displayRoleName(item.role)}',
+                              ),
                             ),
                           )
                           .toList(),
@@ -7212,7 +7215,9 @@ class _WaiverApproverDialogState extends State<_WaiverApproverDialog> {
                     .map(
                       (approver) => DropdownMenuItem(
                         value: approver.id,
-                        child: Text('${approver.name} · ${approver.role}'),
+                        child: Text(
+                          '${approver.name} · ${displayRoleName(approver.role)}',
+                        ),
                       ),
                     )
                     .toList(),

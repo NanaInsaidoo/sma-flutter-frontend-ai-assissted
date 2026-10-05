@@ -28,6 +28,14 @@ class StaffApiClient {
     return _decodeList(response).map(StaffLookupOption.fromJson).toList();
   }
 
+  Future<List<StaffJobTitleOption>> getJobTitles(String customSchoolId) async {
+    final response = await _send(
+      'GET',
+      '/api/schools/${Uri.encodeComponent(customSchoolId)}/staff-authorisations/job-titles',
+    );
+    return _decodeList(response).map(StaffJobTitleOption.fromJson).toList();
+  }
+
   Future<List<StaffUserRecord>> getSchoolStaffUsers({
     required String customSchoolId,
     int page = 0,
@@ -126,6 +134,39 @@ class StaffApiClient {
     await _send(
       'POST',
       '/api/user-management/schools/${Uri.encodeComponent(customSchoolId)}/users/${Uri.encodeComponent(userId)}/deactivate?$query',
+    );
+  }
+
+  Future<void> requirePasswordChange({
+    required String customSchoolId,
+    required String userId,
+  }) async {
+    await _send(
+      'POST',
+      '/api/user-management/schools/${Uri.encodeComponent(customSchoolId)}/users/${Uri.encodeComponent(userId)}/reset-password',
+    );
+  }
+
+  Future<void> approveSchoolUser({
+    required String customSchoolId,
+    required String userId,
+  }) async {
+    await _send(
+      'POST',
+      '/api/user-management/schools/${Uri.encodeComponent(customSchoolId)}/users/${Uri.encodeComponent(userId)}/approve',
+      body: const {},
+    );
+  }
+
+  Future<void> rejectSchoolUser({
+    required String customSchoolId,
+    required String userId,
+    required String reason,
+  }) async {
+    await _send(
+      'POST',
+      '/api/user-management/schools/${Uri.encodeComponent(customSchoolId)}/users/${Uri.encodeComponent(userId)}/reject',
+      body: {'reason': reason.trim()},
     );
   }
 
@@ -274,6 +315,18 @@ class StaffApiClient {
     );
   }
 
+  Future<void> savePaymentAccount({
+    required String customSchoolId,
+    required String staffId,
+    required Map<String, dynamic> body,
+  }) async {
+    await _send(
+      'PUT',
+      '/api/schools/${Uri.encodeComponent(customSchoolId)}/payroll/staff/${Uri.encodeComponent(staffId)}/payment-account',
+      body: body,
+    );
+  }
+
   Future<StaffFinanceRecord?> getStaffFinance(String staffId) async {
     try {
       final response = await _send(
@@ -284,6 +337,38 @@ class StaffApiClient {
     } on StaffApiException {
       return null;
     }
+  }
+
+  Future<String> getStaffDocumentAccessUrl({
+    required String customSchoolId,
+    required String documentId,
+    required bool download,
+  }) async {
+    final schoolId = Uri.encodeComponent(customSchoolId);
+    final fileId = Uri.encodeComponent(documentId);
+    final query = Uri(
+      queryParameters: {
+        'expirationMinutes': '15',
+        'download': download.toString(),
+      },
+    ).query;
+    final response = await _send(
+      'GET',
+      '/api/schools/$schoolId/documents/$fileId/download-url?$query',
+    );
+    final payload = _unwrapMap(_decodeMap(response));
+    final url = _firstString(payload, const [
+      'downloadUrl',
+      'presignedUrl',
+      'signedUrl',
+      'url',
+    ]);
+    if (url.isEmpty) {
+      throw const StaffApiException(
+        'The secure document link could not be created.',
+      );
+    }
+    return url;
   }
 
   Future<void> uploadResume({
@@ -606,6 +691,33 @@ class StaffLookupOption {
     return StaffLookupOption(
       id: rawId?.toString() ?? '',
       name: rawName?.toString() ?? '',
+    );
+  }
+}
+
+class StaffJobTitleOption {
+  const StaffJobTitleOption({
+    required this.id,
+    required this.name,
+    required this.authorityName,
+    required this.baseRole,
+  });
+
+  final String id;
+  final String name;
+  final String authorityName;
+  final String baseRole;
+
+  factory StaffJobTitleOption.fromJson(dynamic value) {
+    final json = value is Map<String, dynamic> ? value : <String, dynamic>{};
+    final authority = json['authority'] is Map<String, dynamic>
+        ? json['authority'] as Map<String, dynamic>
+        : <String, dynamic>{};
+    return StaffJobTitleOption(
+      id: '${json['id'] ?? ''}',
+      name: '${json['name'] ?? ''}',
+      authorityName: '${authority['name'] ?? ''}',
+      baseRole: '${authority['baseRole'] ?? 'STAFF'}',
     );
   }
 }

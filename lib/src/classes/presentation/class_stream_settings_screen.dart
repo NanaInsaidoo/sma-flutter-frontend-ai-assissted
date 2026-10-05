@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../common/display_formatters.dart';
 import '../../theme/app_theme.dart';
 import '../data/classes_api_client.dart';
 import '../domain/class_models.dart';
@@ -366,7 +367,9 @@ class _ClassTeacherSettingsScreenState
                       .map(
                         (staff) => DropdownMenuItem(
                           value: staff,
-                          child: Text('${staff.name} · ${staff.role}'),
+                          child: Text(
+                            '${staff.name} · ${displayRoleName(staff.role)}',
+                          ),
                         ),
                       )
                       .toList(),

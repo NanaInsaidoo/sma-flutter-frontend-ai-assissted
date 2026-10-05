@@ -621,10 +621,7 @@ void main() {
       await tester.tap(find.text('Ama Mensah'));
       await tester.pumpAndSettle();
 
-      expect(
-        find.textContaining('report has already been generated'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('report already uses it'), findsOneWidget);
       await tester.tap(
         find.byKey(const ValueKey('headmaster-wording-HOMEWORK_HABITS')),
       );
@@ -1333,6 +1330,7 @@ void main() {
     (tester) async {
       await useWideScreen(tester);
       http.Request? correctionRequest;
+      http.Request? cancellationRequest;
       var correctionPending = false;
       final requestedUrls = <String>[];
       final correctionSnapshots = <bool>[];
@@ -1342,7 +1340,7 @@ void main() {
         'TEAMWORK': 'Good',
         'CLASS_PARTICIPATION': 'Good',
         'RESPECT_AND_DISCIPLINE': 'Good',
-        'NEATNESS': 'Good',
+        'NEATNESS': 'Not observed',
       };
       final api = AssessmentApiClient(
         accessToken: 'token',
@@ -1359,15 +1357,16 @@ void main() {
             correctionRequest = request;
             correctionPending = true;
             return http.Response(
-              '{"id":51,"status":"PENDING","correctionType":"EVALUATION_RATINGS"}',
+              '{"id":51,"status":"PENDING","correctionType":"EVALUATION"}',
               200,
             );
           }
           if (request.method == 'POST' &&
               request.url.path.endsWith('/51/cancel')) {
+            cancellationRequest = request;
             correctionPending = false;
             return http.Response(
-              '{"id":51,"status":"CANCELLED","correctionType":"EVALUATION_RATINGS"}',
+              '{"id":51,"status":"CANCELLED","correctionType":"EVALUATION"}',
               200,
             );
           }
@@ -1385,8 +1384,19 @@ void main() {
                           'customStudentId': 'STU-1',
                           'termId': 7,
                           'status': 'PENDING',
-                          'correctionType': 'EVALUATION_RATINGS',
-                          'sourceLabel': 'Evaluation ratings',
+                          'correctionType': 'EVALUATION',
+                          'sourceLabel': 'Evaluation & comment',
+                          'originalValue': jsonEncode({
+                            'ratings': ratings,
+                            'comment': 'Daniel has worked well this term.',
+                          }),
+                          'proposedValue': jsonEncode({
+                            'ratings': {
+                              ...ratings,
+                              'HOMEWORK_HABITS': 'Excellent',
+                            },
+                            'comment': 'Daniel has worked very well this term.',
+                          }),
                           'requestedBy': 'sena@example.com',
                           'requestedByName': 'Sena Owusu',
                           'requestedByStaffId': 'STF-SENA',
@@ -1464,14 +1474,15 @@ void main() {
       await tester.tap(find.text('Daniel Blue'));
       await tester.pumpAndSettle();
 
-      expect(
-        find.textContaining('approved evaluation is locked'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('used by a generated report'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('correction-rating-HOMEWORK_HABITS')),
         findsOneWidget,
       );
+      final notObserved = tester.widget<DropdownButtonFormField<String>>(
+        find.byKey(const ValueKey('correction-rating-NEATNESS')),
+      );
+      expect(notObserved.initialValue, 'Not observed');
       await tester.tap(
         find.byKey(const ValueKey('correction-rating-HOMEWORK_HABITS')),
       );
@@ -1481,11 +1492,53 @@ void main() {
       await tester.drag(find.byType(ListView).last, const Offset(0, -1200));
       await tester.pumpAndSettle();
 
-      expect(find.text('Submit rating correction'), findsOneWidget);
-      expect(find.text('Request comment correction'), findsOneWidget);
+      expect(find.text('Submit changes for approval'), findsOneWidget);
+      expect(find.text('Reset changes'), findsOneWidget);
       await tester.tap(
         find
-            .byKey(const ValueKey('request-evaluation-rating-correction'))
+            .byKey(const ValueKey('reset-evaluation-correction-draft'))
+            .hitTestable(),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('confirm-reset-evaluation-correction')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Proposed changes were reset.'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('reset-evaluation-correction-draft')),
+        findsNothing,
+      );
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(const ValueKey('evaluation-final-comment')),
+            )
+            .controller!
+            .text,
+        'Daniel has worked well this term.',
+      );
+
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('correction-rating-HOMEWORK_HABITS')),
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('correction-rating-HOMEWORK_HABITS')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Excellent').last);
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('evaluation-final-comment')),
+        'Daniel has worked very well this term.',
+      );
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('request-evaluation-correction')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find
+            .byKey(const ValueKey('request-evaluation-correction'))
             .hitTestable(),
       );
       await tester.pumpAndSettle();
@@ -1506,11 +1559,15 @@ void main() {
       expect(correctionRequest, isNotNull);
       expect(
         correctionRequest!.body,
-        contains('"correctionType":"EVALUATION_RATINGS"'),
+        contains('"correctionType":"EVALUATION"'),
       );
       expect(
         correctionRequest!.body,
         contains('"HOMEWORK_HABITS":"Excellent"'),
+      );
+      expect(
+        correctionRequest!.body,
+        contains('Daniel has worked very well this term.'),
       );
       expect(
         correctionRequest!.body,
@@ -1536,25 +1593,66 @@ void main() {
       );
       expect(find.text('Change request awaiting approval'), findsOneWidget);
       expect(find.text('Raised by Sena Owusu · STF-SENA'), findsOneWidget);
+      expect(find.text('Proposed: Excellent'), findsNothing);
+      expect(find.text('Proposed class-teacher comment'), findsNothing);
       expect(
-        find.textContaining(
-          'must be cancelled or approved before another change',
-        ),
+        tester
+            .widget<TextField>(
+              find.byKey(const ValueKey('evaluation-final-comment')),
+            )
+            .controller!
+            .text,
+        'Daniel has worked well this term.',
+      );
+      expect(
+        find.byKey(const ValueKey('request-evaluation-correction')),
+        findsNothing,
+      );
+
+      final details = find.byKey(
+        const ValueKey('view-evaluation-correction-request'),
+      );
+      await tester.ensureVisible(details);
+      await tester.tap(details);
+      await tester.pumpAndSettle();
+      expect(find.text('Requested changes'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('request-change-HOMEWORK_HABITS')),
         findsOneWidget,
       );
-      final blockedRatingRequest = tester.widget<FilledButton>(
-        find.byKey(const ValueKey('request-evaluation-rating-correction')),
+      expect(find.text('Original: Good'), findsOneWidget);
+      expect(find.text('Proposed: Excellent'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('request-change-CLASS_TEACHER_COMMENT')),
+        findsOneWidget,
       );
-      expect(blockedRatingRequest.onPressed, isNull);
+      expect(
+        find.text('Original: Daniel has worked well this term.'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Proposed: Daniel has worked very well this term.'),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
 
       final cancel = find.byKey(const ValueKey('cancel-evaluation-correction'));
       await tester.ensureVisible(cancel);
       await tester.tap(cancel);
       await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('evaluation-correction-cancel-reason')),
+        'Submitted against the wrong student',
+      );
       await tester.tap(
         find.byKey(const ValueKey('confirm-cancel-evaluation-correction')),
       );
       await tester.pumpAndSettle();
+      expect(
+        cancellationRequest!.body,
+        contains('"note":"Submitted against the wrong student"'),
+      );
       expect(
         find.byKey(const ValueKey('active-evaluation-correction-notice')),
         findsNothing,

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../assessments/presentation/report_pdf_download_stub.dart'
     if (dart.library.html) '../../assessments/presentation/report_pdf_download_web.dart';
+import '../../common/display_formatters.dart';
 import '../../theme/app_theme.dart';
 import '../data/fee_api_client.dart';
 import '../domain/fee_models.dart';
@@ -612,7 +613,9 @@ class _ReversalQueueDialogState extends State<_ReversalQueueDialog> {
                           .map(
                             (item) => DropdownMenuItem(
                               value: item.id,
-                              child: Text('${item.name} · ${item.role}'),
+                              child: Text(
+                                '${item.name} · ${displayRoleName(item.role)}',
+                              ),
                             ),
                           )
                           .toList(),

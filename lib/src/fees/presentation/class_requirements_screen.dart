@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../common/display_formatters.dart';
 import '../../theme/app_theme.dart';
 import '../data/class_requirements_repository.dart';
 import '../domain/class_requirement_models.dart';
@@ -398,7 +399,7 @@ class _ClassRequirementsScreenState extends State<ClassRequirementsScreen> {
                               (approver) => DropdownMenuItem(
                                 value: approver.id,
                                 child: Text(
-                                  '${approver.name} · ${approver.role}',
+                                  '${approver.name} · ${displayRoleName(approver.role)}',
                                 ),
                               ),
                             )
@@ -4398,7 +4399,9 @@ class _StudentRequirementSubmissionDialogState
                   .map(
                     (approver) => DropdownMenuItem(
                       value: approver.id,
-                      child: Text('${approver.name} · ${approver.role}'),
+                      child: Text(
+                        '${approver.name} · ${displayRoleName(approver.role)}',
+                      ),
                     ),
                   )
                   .toList(),

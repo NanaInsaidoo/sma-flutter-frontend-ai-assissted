@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../common/display_formatters.dart';
 import '../../theme/app_theme.dart';
 import '../data/incident_api_client.dart';
 import '../domain/incident_models.dart';
@@ -22,11 +23,13 @@ class IncidentsScreen extends StatefulWidget {
     required this.accessToken,
     this.onRefreshAccessToken,
     required this.reportedBy,
+    this.apiClient,
   });
   final String customSchoolId;
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
   final String reportedBy;
+  final IncidentApiClient? apiClient;
 
   @override
   State<IncidentsScreen> createState() => _IncidentsScreenState();
@@ -50,11 +53,13 @@ class _IncidentsScreenState extends State<IncidentsScreen> {
   @override
   void initState() {
     super.initState();
-    _api = IncidentApiClient(
-      customSchoolId: widget.customSchoolId,
-      accessToken: widget.accessToken,
-      onRefreshAccessToken: widget.onRefreshAccessToken,
-    );
+    _api =
+        widget.apiClient ??
+        IncidentApiClient(
+          customSchoolId: widget.customSchoolId,
+          accessToken: widget.accessToken,
+          onRefreshAccessToken: widget.onRefreshAccessToken,
+        );
     _load();
   }
 
@@ -608,12 +613,9 @@ class _AnalyticsGrid extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
-            child: SizedBox(
-              height: 372,
-              child: _BreakdownCard(
-                title: 'By incident type',
-                items: stats.typeBreakdown,
-              ),
+            child: _BreakdownCard(
+              title: 'By incident type',
+              items: stats.typeBreakdown,
             ),
           ),
           const SizedBox(width: 14),
@@ -679,43 +681,53 @@ class _BreakdownCard extends StatelessWidget {
                 .map(
                   (item) => Padding(
                     padding: const EdgeInsets.only(bottom: 10),
-                    child: Row(
-                      children: [
-                        SizedBox(
-                          width: 90,
-                          child: Text(
-                            _label(item.key),
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 12),
-                          ),
-                        ),
-                        Expanded(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(5),
-                            child: LinearProgressIndicator(
-                              value: item.percentage / 100,
-                              minHeight: 8,
-                              color: _breakdownColor(item.key, _accent),
-                              backgroundColor: _breakdownColor(
-                                item.key,
-                                _accent,
-                              ).withValues(alpha: .1),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final labelWidth = (constraints.maxWidth * .3)
+                            .clamp(120.0, 180.0)
+                            .toDouble();
+                        return Row(
+                          children: [
+                            SizedBox(
+                              width: labelWidth,
+                              child: Text(
+                                _label(item.key),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  height: 1.25,
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        SizedBox(
-                          width: 24,
-                          child: Text(
-                            '${item.count}',
-                            textAlign: TextAlign.end,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 12,
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(5),
+                                child: LinearProgressIndicator(
+                                  value: item.percentage / 100,
+                                  minHeight: 8,
+                                  color: _breakdownColor(item.key, _accent),
+                                  backgroundColor: _breakdownColor(
+                                    item.key,
+                                    _accent,
+                                  ).withValues(alpha: .1),
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                      ],
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: 24,
+                              child: Text(
+                                '${item.count}',
+                                textAlign: TextAlign.end,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -2657,7 +2669,9 @@ class _CloseIncidentDialogState extends State<_CloseIncidentDialog> {
                   .map(
                     (approver) => DropdownMenuItem(
                       value: approver.id,
-                      child: Text('${approver.name} · ${approver.role}'),
+                      child: Text(
+                        '${approver.name} · ${displayRoleName(approver.role)}',
+                      ),
                     ),
                   )
                   .toList(growable: false),

@@ -317,6 +317,7 @@ class AssessmentApiClient {
               reportGenerated: item['reportGenerated'] == true,
               reportPublished: item['reportPublished'] == true,
               correctionStatus: _string(item['correctionStatus']),
+              proposedScore: _double(item['proposedScore']),
             ),
           )
           .where((item) => item.studentId.isNotEmpty)
@@ -459,6 +460,7 @@ class AssessmentApiClient {
   Future<Map<String, dynamic>> cancelReportCorrection({
     required String customSchoolId,
     required int requestId,
+    required String reason,
   }) async {
     final schoolPath = Uri.encodeComponent(customSchoolId);
     return _map(
@@ -466,6 +468,7 @@ class AssessmentApiClient {
         await _send(
           '/api/report-corrections/schools/$schoolPath/$requestId/cancel',
           method: 'POST',
+          body: {'note': reason.trim()},
         ),
       ),
     );
@@ -769,6 +772,66 @@ class AssessmentApiClient {
     return response.bodyBytes;
   }
 
+  Future<ReportPrintPackageOptions> getReportPrintPackageOptions({
+    required String customSchoolId,
+    required int termId,
+    required int academicYearId,
+  }) async {
+    final query = Uri(
+      queryParameters: {
+        'customSchoolId': customSchoolId,
+        'termId': '$termId',
+        'academicYearId': '$academicYearId',
+      },
+    ).query;
+    return ReportPrintPackageOptions.fromJson(
+      _map(
+        _decodeBody(
+          await _send('/api/report-cards/print-package/options?$query'),
+        ),
+      ),
+    );
+  }
+
+  Future<List<int>> prepareReportPrintPackage({
+    required String customSchoolId,
+    required int termId,
+    required int academicYearId,
+    required String scope,
+    required String organization,
+    required bool includeHouseholdCoverSheet,
+    List<int> gradeLevelIds = const [],
+    List<int> streamIds = const [],
+    List<String> customStudentIds = const [],
+  }) async {
+    final query = Uri(
+      queryParameters: {'customSchoolId': customSchoolId},
+    ).query;
+    final response = await _send(
+      '/api/report-cards/print-package/pdf?$query',
+      method: 'POST',
+      body: {
+        'termId': termId,
+        'academicYearId': academicYearId,
+        'scope': scope,
+        'organization': organization,
+        'readyOnly': true,
+        'includeHouseholdCoverSheet': includeHouseholdCoverSheet,
+        'gradeLevelIds': gradeLevelIds,
+        'streamIds': streamIds,
+        'customStudentIds': customStudentIds,
+      },
+      extraHeaders: const {'Accept': 'application/pdf'},
+      timeout: const Duration(minutes: 2),
+    );
+    if (response.bodyBytes.isEmpty) {
+      throw const AssessmentApiException(
+        'The school print package could not be prepared.',
+      );
+    }
+    return response.bodyBytes;
+  }
+
   Future<List<Map<String, dynamic>>> getReportCardRemarks({
     required String customSchoolId,
     required int termId,
@@ -824,6 +887,7 @@ class AssessmentApiClient {
     Object? body,
     Map<String, String> extraHeaders = const {},
     bool retry = true,
+    Duration timeout = const Duration(seconds: 20),
   }) async {
     if (accessToken == null || accessToken!.isEmpty) {
       throw const AssessmentApiException('Please sign in again to continue.');
@@ -844,7 +908,7 @@ class AssessmentApiClient {
                   : method == 'DELETE'
                   ? _client.delete(uri, headers: headers)
                   : _client.get(uri, headers: headers))
-              .timeout(const Duration(seconds: 20));
+              .timeout(timeout);
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
         return response;
@@ -861,6 +925,7 @@ class AssessmentApiClient {
             body: body,
             extraHeaders: extraHeaders,
             retry: false,
+            timeout: timeout,
           );
         }
       }
@@ -1370,6 +1435,82 @@ class AssessmentApiClient {
   }
 }
 
+class ReportPrintPackageOptions {
+  const ReportPrintPackageOptions({
+    required this.totalStudents,
+    required this.readyReports,
+    required this.excludedReports,
+    required this.householdCount,
+    required this.classCount,
+    required this.unassignedHouseholdCount,
+    required this.students,
+  });
+
+  factory ReportPrintPackageOptions.fromJson(Map<String, dynamic> json) =>
+      ReportPrintPackageOptions(
+        totalStudents: AssessmentApiClient._int(json['totalStudents']) ?? 0,
+        readyReports: AssessmentApiClient._int(json['readyReports']) ?? 0,
+        excludedReports: AssessmentApiClient._int(json['excludedReports']) ?? 0,
+        householdCount: AssessmentApiClient._int(json['householdCount']) ?? 0,
+        classCount: AssessmentApiClient._int(json['classCount']) ?? 0,
+        unassignedHouseholdCount:
+            AssessmentApiClient._int(json['unassignedHouseholdCount']) ?? 0,
+        students: AssessmentApiClient._list(json['students'])
+            .map(AssessmentApiClient._map)
+            .map(ReportPrintPackageStudent.fromJson)
+            .where((student) => student.customStudentId.isNotEmpty)
+            .toList(),
+      );
+
+  final int totalStudents;
+  final int readyReports;
+  final int excludedReports;
+  final int householdCount;
+  final int classCount;
+  final int unassignedHouseholdCount;
+  final List<ReportPrintPackageStudent> students;
+}
+
+class ReportPrintPackageStudent {
+  const ReportPrintPackageStudent({
+    required this.customStudentId,
+    required this.studentName,
+    required this.gradeLevelId,
+    required this.gradeLevelName,
+    required this.streamId,
+    required this.className,
+    required this.householdId,
+    required this.householdName,
+    required this.ready,
+    required this.readinessLabel,
+  });
+
+  factory ReportPrintPackageStudent.fromJson(Map<String, dynamic> json) =>
+      ReportPrintPackageStudent(
+        customStudentId: AssessmentApiClient._string(json['customStudentId']),
+        studentName: AssessmentApiClient._string(json['studentName']),
+        gradeLevelId: AssessmentApiClient._int(json['gradeLevelId']),
+        gradeLevelName: AssessmentApiClient._string(json['gradeLevelName']),
+        streamId: AssessmentApiClient._int(json['streamId']),
+        className: AssessmentApiClient._string(json['className']),
+        householdId: AssessmentApiClient._int(json['householdId']),
+        householdName: AssessmentApiClient._string(json['householdName']),
+        ready: json['ready'] == true,
+        readinessLabel: AssessmentApiClient._string(json['readinessLabel']),
+      );
+
+  final String customStudentId;
+  final String studentName;
+  final int? gradeLevelId;
+  final String gradeLevelName;
+  final int? streamId;
+  final String className;
+  final int? householdId;
+  final String householdName;
+  final bool ready;
+  final String readinessLabel;
+}
+
 class AssessmentScoreSheetData {
   const AssessmentScoreSheetData({
     required this.assessment,
@@ -1393,6 +1534,7 @@ class AssessmentStudentScore {
     this.reportGenerated = false,
     this.reportPublished = false,
     this.correctionStatus = '',
+    this.proposedScore,
   });
 
   final String studentId;
@@ -1406,6 +1548,7 @@ class AssessmentStudentScore {
   final bool reportGenerated;
   final bool reportPublished;
   final String correctionStatus;
+  final double? proposedScore;
 
   String get name =>
       [firstName, lastName].where((part) => part.trim().isNotEmpty).join(' ');

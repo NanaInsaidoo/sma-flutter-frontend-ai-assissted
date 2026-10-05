@@ -23,12 +23,19 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text(item.title), findsOneWidget);
+      expect(
+        tester
+            .widget<Material>(find.byKey(ValueKey('approval-row-${item.key}')))
+            .color,
+        const Color(0xFFFFF4D6),
+      );
       await tester.tap(find.text(item.title));
       await tester.pumpAndSettle();
       expect(find.text('Current score'), findsOneWidget);
       expect(find.text('9.5/10'), findsOneWidget);
       expect(find.text('Proposed score'), findsOneWidget);
       expect(find.text('10/10'), findsOneWidget);
+      expect(find.text('Class: Creche - Section 1'), findsOneWidget);
       expect(find.text('Sena Owusu'), findsOneWidget);
       expect(find.text('Adjoa Mensah'), findsOneWidget);
       expect(find.text('Reject correction'), findsOneWidget);
@@ -79,10 +86,153 @@ void main() {
       expect(find.text('Adjoa Mensah'), findsOneWidget);
       expect(find.text('Approve correction'), findsNothing);
       expect(find.text('Reject correction'), findsNothing);
+      expect(find.text('Cancel request'), findsOneWidget);
       expect(api.actions, 0);
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'unpublished report correction ends after regeneration without publication',
+    (tester) async {
+      await _useDesktopSurface(tester);
+      final item = _scoreCorrection(reportWasPublished: false);
+      final api = _SingleApprovalApiClient(item);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: ApprovalsScreen(schoolId: 'SCH-1', repository: api),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(item.title));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Approve correction'));
+      await tester.pumpAndSettle();
+      expect(find.text('Regenerate report'), findsOneWidget);
+      expect(find.text('Publish now'), findsNothing);
+      expect(find.text('Republish now'), findsNothing);
+
+      await tester.tap(find.text('Regenerate report'));
+      await tester.pumpAndSettle();
+
+      expect(api.item.status, 'REGENERATED');
+      expect(find.text('Regenerated'), findsWidgets);
+      expect(find.text('Publish now'), findsNothing);
+      expect(find.text('Republish now'), findsNothing);
+      expect(api.publications, 0);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('administrator cancels a pending correction with a reason', (
+    tester,
+  ) async {
+    await _useDesktopSurface(tester);
+    final item = _scoreCorrection();
+    final api = _SingleApprovalApiClient(item);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: ApprovalsScreen(schoolId: 'SCH-1', repository: api),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(item.title));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Cancel request'));
+    await tester.pumpAndSettle();
+    final dialog = find.byType(AlertDialog);
+    expect(
+      find.descendant(
+        of: dialog,
+        matching: find.text('Cancel correction request'),
+      ),
+      findsOneWidget,
+    );
+    await tester.enterText(
+      find.descendant(of: dialog, matching: find.byType(TextFormField)),
+      'Duplicate correction request',
+    );
+    await tester.tap(
+      find.descendant(of: dialog, matching: find.text('Cancel request')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(api.lastAction, 'CANCEL');
+    expect(api.lastReason, 'Duplicate correction request');
+    expect(find.text('Cancelled'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('pending evaluation correction exposes cancellation', (
+    tester,
+  ) async {
+    await _useDesktopSurface(tester);
+    final item = _scoreCorrection(evaluation: true);
+    final api = _SingleApprovalApiClient(item);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: ApprovalsScreen(schoolId: 'SCH-1', repository: api),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(item.title));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Cancel request'), findsOneWidget);
+    await tester.tap(find.text('Cancel request'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byType(TextFormField),
+      ),
+      'This evaluation correction is no longer required.',
+    );
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('Cancel request'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(api.lastAction, 'CANCEL');
+    expect(find.text('Cancelled'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('completed approval rows remain neutral', (tester) async {
+    await _useDesktopSurface(tester);
+    final item = _scoreCorrection(status: 'REPUBLISHED');
+    final api = _SingleApprovalApiClient(item);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: ApprovalsScreen(schoolId: 'SCH-1', repository: api),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<Material>(find.byKey(ValueKey('approval-row-${item.key}')))
+          .color,
+      Colors.white,
+    );
+  });
 
   testWidgets(
     'opening a correction source waits for the approval panel to close',
@@ -107,9 +257,9 @@ void main() {
       await tester.tap(find.text(item.title));
       await tester.pumpAndSettle();
 
-      expect(find.text('Open source page'), findsOneWidget);
-      await tester.ensureVisible(find.text('Open source page'));
-      await tester.tap(find.text('Open source page'));
+      expect(find.text('View score sheet'), findsOneWidget);
+      await tester.ensureVisible(find.text('View score sheet'));
+      await tester.tap(find.text('View score sheet'));
       await tester.pumpAndSettle();
 
       expect(opened, 1);
@@ -562,12 +712,14 @@ void main() {
       'canWithdraw': false,
       'sourcePage': 'evaluations',
       'customStudentId': 'STU-44',
+      'className': 'JHS 1 - Section 3',
       'termId': 17,
       'academicYearId': 26,
       'reportWasPublished': true,
     });
 
     expect(item.customStudentId, 'STU-44');
+    expect(item.className, 'JHS 1 - Section 3');
     expect(item.termId, 17);
     expect(item.academicYearId, 26);
     expect(item.reportWasPublished, isTrue);
@@ -1522,13 +1674,19 @@ ApprovalItem _paymentReversalApproval() => ApprovalItem(
 ApprovalItem _scoreCorrection({
   bool requester = false,
   String status = 'PENDING_APPROVAL',
+  bool evaluation = false,
+  bool reportWasPublished = true,
 }) => ApprovalItem(
-  key: 'REPORT_SCORE_CORRECTION:91',
-  type: 'REPORT_SCORE_CORRECTION',
+  key: '${evaluation ? 'REPORT_CORRECTION' : 'REPORT_SCORE_CORRECTION'}:91',
+  type: evaluation ? 'REPORT_CORRECTION' : 'REPORT_SCORE_CORRECTION',
   entityId: 91,
-  category: 'Score corrections',
-  title: 'Score correction · English Language CAT1',
-  subtitle: 'STU-E41A3E-4032 · 9.5/10 → 10/10',
+  category: evaluation ? 'Report corrections' : 'Score corrections',
+  title: evaluation
+      ? 'Evaluation ratings correction'
+      : 'Score correction · English Language CAT1',
+  subtitle: evaluation
+      ? 'STU-E41A3E-4032 · Evaluation ratings'
+      : 'STU-E41A3E-4032 · 9.5/10 → 10/10',
   status: status,
   requesterName: 'Sena Owusu',
   approverName: 'Adjoa Mensah',
@@ -1574,9 +1732,10 @@ ApprovalItem _scoreCorrection({
   ],
   canApprove: !requester && status == 'PENDING_APPROVAL',
   canReject: !requester && status == 'PENDING_APPROVAL',
-  canWithdraw: false,
-  sourcePage: 'assessments',
-  reportWasPublished: true,
+  canWithdraw: status == 'PENDING_APPROVAL',
+  sourcePage: evaluation ? 'evaluations' : 'assessments',
+  className: 'Creche - Section 1',
+  reportWasPublished: reportWasPublished,
 );
 
 class _SingleApprovalApiClient extends ApprovalApiClient {
@@ -1613,10 +1772,23 @@ class _SingleApprovalApiClient extends ApprovalApiClient {
     lastAction = action;
     lastReason = reason;
     lastItemsStillInIssuerCustody = itemsStillInIssuerCustody;
-    if (item.type == 'REPORT_SCORE_CORRECTION' && action == 'APPROVE') {
+    if ((item.type == 'REPORT_SCORE_CORRECTION' ||
+            item.type == 'REPORT_CORRECTION') &&
+        action == 'APPROVE') {
       _item = _scoreCorrection(
         requester: asRequester,
         status: 'APPROVED_REGENERATION_REQUIRED',
+        evaluation: item.type == 'REPORT_CORRECTION',
+        reportWasPublished: item.reportWasPublished,
+      );
+    } else if ((item.type == 'REPORT_SCORE_CORRECTION' ||
+            item.type == 'REPORT_CORRECTION') &&
+        action == 'CANCEL') {
+      _item = _scoreCorrection(
+        requester: asRequester,
+        status: 'CANCELLED',
+        evaluation: item.type == 'REPORT_CORRECTION',
+        reportWasPublished: item.reportWasPublished,
       );
     }
     return getInbox(schoolId);
@@ -1630,7 +1802,11 @@ class _SingleApprovalApiClient extends ApprovalApiClient {
     regenerations++;
     _item = _scoreCorrection(
       requester: asRequester,
-      status: 'REGENERATED_AWAITING_PUBLICATION',
+      status: _item.reportWasPublished
+          ? 'REGENERATED_AWAITING_PUBLICATION'
+          : 'REGENERATED',
+      evaluation: _item.type == 'REPORT_CORRECTION',
+      reportWasPublished: _item.reportWasPublished,
     );
     return getInbox(schoolId);
   }
@@ -1641,7 +1817,12 @@ class _SingleApprovalApiClient extends ApprovalApiClient {
     required int requestId,
   }) async {
     publications++;
-    _item = _scoreCorrection(requester: asRequester, status: 'REPUBLISHED');
+    _item = _scoreCorrection(
+      requester: asRequester,
+      status: 'REPUBLISHED',
+      evaluation: _item.type == 'REPORT_CORRECTION',
+      reportWasPublished: _item.reportWasPublished,
+    );
     return getInbox(schoolId);
   }
 }

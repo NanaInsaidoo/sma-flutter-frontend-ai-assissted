@@ -11,6 +11,7 @@ import '../../theme/app_theme.dart';
 import 'assessment_csv_export.dart';
 import 'report_pdf_download.dart';
 import 'report_dashboard_rules.dart';
+import 'report_print_package_dialog.dart';
 import 'term_evaluation_workflow_screen.dart';
 
 enum _Route {
@@ -8130,6 +8131,7 @@ class _CompleteAssessmentWorkflowState
     final source = switch ('${correction['correctionType'] ?? ''}'
         .toUpperCase()) {
       'SCORE' => 'Score',
+      'EVALUATION' => 'Evaluation & comment',
       'EVALUATION_RATINGS' => 'Evaluation ratings',
       'CLASS_TEACHER_COMMENT' => 'Class-teacher comment',
       'HEAD_TEACHER_COMMENT' => 'Head-teacher comment',
@@ -8944,6 +8946,25 @@ class _CompleteAssessmentWorkflowState
     return generated.length;
   }
 
+  Future<void> _openReportPrintPackage() async {
+    if (widget.customSchoolId.trim().isEmpty) {
+      _notice('A school must be selected before preparing report packages.');
+      return;
+    }
+    try {
+      final setup = await _assessmentFormSetup;
+      if (!mounted) return;
+      await showReportPrintPackageDialog(
+        context: context,
+        api: _assessmentApi,
+        customSchoolId: widget.customSchoolId,
+        setup: setup,
+      );
+    } on AssessmentApiException catch (error) {
+      if (mounted) _notice(error.message);
+    }
+  }
+
   Widget _finalReports() {
     final students = _finalReportStreams.fold<int>(
       0,
@@ -9161,10 +9182,12 @@ class _CompleteAssessmentWorkflowState
                         label: const Text('Refresh'),
                       ),
                       OutlinedButton.icon(
-                        onPressed: () =>
-                            _notice('Final report register exported.'),
-                        icon: const Icon(Icons.download_outlined, size: 15),
-                        label: const Text('Export Report'),
+                        key: const ValueKey('prepare-school-print-package'),
+                        onPressed: _loadingFinalReports
+                            ? null
+                            : _openReportPrintPackage,
+                        icon: const Icon(Icons.print_outlined, size: 15),
+                        label: const Text('Prepare print package'),
                       ),
                       FilledButton.icon(
                         onPressed:
@@ -13295,6 +13318,19 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
     );
   }
 
+  Widget _scoreGrade(AssessmentStudentScore student, double? officialScore) {
+    final officialGrade = _gradeFor(officialScore);
+    return Text(
+      officialGrade,
+      style: const TextStyle(fontWeight: FontWeight.w800),
+    );
+  }
+
+  Widget _scorePassOutcome(
+    AssessmentStudentScore student,
+    double? officialScore,
+  ) => _oldPassBadge(officialScore);
+
   DataRow _oldDesktopScoreRow(int index, AssessmentStudentScore student) {
     final score = _validScoreForDisplay(student);
     return DataRow(
@@ -13312,13 +13348,8 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
         DataCell(Text(student.studentId)),
         DataCell(_oldScoreInput(student)),
         DataCell(_oldScoreVisual(score)),
-        DataCell(
-          Text(
-            _gradeFor(score),
-            style: const TextStyle(fontWeight: FontWeight.w800),
-          ),
-        ),
-        DataCell(_oldPassBadge(score)),
+        DataCell(_scoreGrade(student, score)),
+        DataCell(_scorePassOutcome(student, score)),
         DataCell(_resetScoreAction(student)),
       ],
     );
@@ -13365,7 +13396,7 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
                   ],
                 ),
               ),
-              _oldPassBadge(score),
+              _scorePassOutcome(student, score),
             ],
           ),
           const SizedBox(height: 12),
@@ -13375,10 +13406,7 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
               const SizedBox(width: 12),
               Expanded(child: _oldScoreVisual(score)),
               const SizedBox(width: 10),
-              Text(
-                _gradeFor(score),
-                style: const TextStyle(fontWeight: FontWeight.w800),
-              ),
+              _scoreGrade(student, score),
             ],
           ),
           if (student.score != null) ...[
@@ -13476,7 +13504,6 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
         'PENDING' => 'Awaiting approval',
         'APPROVED_REGENERATION_REQUIRED' => 'Awaiting regeneration',
         'REGENERATED_AWAITING_PUBLICATION' => 'Awaiting publication',
-        'REJECTED' => 'Rejected · Request again',
         _ => 'Request correction',
       };
       if (active) {

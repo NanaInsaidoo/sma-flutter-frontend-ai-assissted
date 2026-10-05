@@ -9,6 +9,7 @@ import '../../approvals/data/approval_api_client.dart';
 import '../../approvals/domain/approval_models.dart';
 import '../../approvals/presentation/approvals_screen.dart';
 import '../../assessments/presentation/report_pdf_download.dart';
+import '../../common/display_formatters.dart';
 import '../../platform/presentation/document_opener.dart';
 import '../../theme/app_theme.dart';
 import '../data/finance_api_client.dart';
@@ -5573,7 +5574,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                             .map(
                               (actor) => DropdownMenuItem(
                                 value: actor.id,
-                                child: Text('${actor.name} · ${actor.role}'),
+                                child: Text(
+                                  '${actor.name} · ${displayRoleName(actor.role)}',
+                                ),
                               ),
                             )
                             .toList(),
@@ -6949,7 +6952,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                               .map(
                                 (actor) => DropdownMenuItem<int>(
                                   value: actor.id,
-                                  child: Text('${actor.name} · ${actor.role}'),
+                                  child: Text(
+                                    '${actor.name} · ${displayRoleName(actor.role)}',
+                                  ),
                                 ),
                               )
                               .toList(),
@@ -7775,7 +7780,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                         .map(
                           (a) => DropdownMenuItem(
                             value: a.id,
-                            child: Text('${a.name} · ${a.role}'),
+                            child: Text(
+                              '${a.name} · ${displayRoleName(a.role)}',
+                            ),
                           ),
                         )
                         .toList(),
@@ -7920,7 +7927,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                         .map(
                           (a) => DropdownMenuItem(
                             value: a.id,
-                            child: Text('${a.name} · ${a.role}'),
+                            child: Text(
+                              '${a.name} · ${displayRoleName(a.role)}',
+                            ),
                           ),
                         )
                         .toList(),
@@ -8072,7 +8081,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                       .map(
                         (actor) => DropdownMenuItem(
                           value: actor.id,
-                          child: Text('${actor.name} · ${actor.role}'),
+                          child: Text(
+                            '${actor.name} · ${displayRoleName(actor.role)}',
+                          ),
                         ),
                       )
                       .toList(),
@@ -9096,7 +9107,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                           .map(
                             (actor) => DropdownMenuItem(
                               value: actor.id,
-                              child: Text('${actor.name} · ${actor.role}'),
+                              child: Text(
+                                '${actor.name} · ${displayRoleName(actor.role)}',
+                              ),
                             ),
                           )
                           .toList(),
@@ -9637,7 +9650,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     _FinanceActor? selectedAssignee;
     String actorLabel(_FinanceActor actor) => [
       actor.name,
-      if (actor.role.isNotEmpty) actor.role,
+      if (actor.role.isNotEmpty) displayRoleName(actor.role),
       if (actor.username.isNotEmpty) actor.username,
     ].join(' · ');
     showDialog<void>(

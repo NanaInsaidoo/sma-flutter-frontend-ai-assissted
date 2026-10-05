@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../theme/app_theme.dart';
 import '../data/account_access_api_client.dart';
@@ -28,7 +29,6 @@ class _AccountActivationScreenState extends State<AccountActivationScreen> {
   final _firstName = TextEditingController();
   final _lastName = TextEditingController();
   final _dob = TextEditingController();
-  final _email = TextEditingController();
   final _username = TextEditingController();
   final _password = TextEditingController();
   final _confirmPassword = TextEditingController();
@@ -55,7 +55,6 @@ class _AccountActivationScreenState extends State<AccountActivationScreen> {
       _firstName,
       _lastName,
       _dob,
-      _email,
       _username,
       _password,
       _confirmPassword,
@@ -102,16 +101,15 @@ class _AccountActivationScreenState extends State<AccountActivationScreen> {
         firstName: _firstName.text,
         lastName: _lastName.text,
         dateOfBirth: _dob.text,
-        email: _email.text,
       );
       if (!mounted) return;
       setState(() {
         _verified = verified;
         _loading = false;
-        _decision = verified.possibleAccounts.isEmpty
-            ? 'CREATE_NEW'
-            : 'DECIDE_LATER';
-        if (verified.usernameSuggestions.isNotEmpty) {
+        _decision = 'CREATE_NEW';
+        if (verified.assignedUsername.isNotEmpty) {
+          _username.text = verified.assignedUsername;
+        } else if (verified.usernameSuggestions.isNotEmpty) {
           _username.text = verified.usernameSuggestions.first;
         }
       });
@@ -135,7 +133,9 @@ class _AccountActivationScreenState extends State<AccountActivationScreen> {
       final result = await _api.activate(
         token: widget.token,
         activationSession: _verified!.activationSession,
-        decision: _decision,
+        decision: _verified!.accountType == 'STAFF'
+            ? 'ACTIVATE_RESERVED'
+            : _decision,
         username: _username.text,
         password: _password.text,
         existingUsername: _existingUsername.text,
@@ -201,6 +201,58 @@ class _AccountActivationScreenState extends State<AccountActivationScreen> {
         _error = error.message;
       });
     }
+  }
+
+  DateTime? _parseDateOfBirth(String value) {
+    final match = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(value.trim());
+    if (match == null) return null;
+    final year = int.parse(match.group(1)!);
+    final month = int.parse(match.group(2)!);
+    final day = int.parse(match.group(3)!);
+    final parsed = DateTime.tryParse(
+      '${year.toString().padLeft(4, '0')}-'
+      '${month.toString().padLeft(2, '0')}-'
+      '${day.toString().padLeft(2, '0')}',
+    );
+    if (parsed == null ||
+        parsed.year != year ||
+        parsed.month != month ||
+        parsed.day != day) {
+      return null;
+    }
+    return parsed;
+  }
+
+  String? _validateDateOfBirth(String? value) {
+    if (value == null || value.trim().isEmpty) return 'Required';
+    final parsed = _parseDateOfBirth(value);
+    if (parsed == null) return 'Enter a valid date as YYYY-MM-DD';
+    final today = DateUtils.dateOnly(DateTime.now());
+    if (parsed.isAfter(today)) return 'Date of birth cannot be in the future';
+    return null;
+  }
+
+  String _formatDate(DateTime value) =>
+      '${value.year.toString().padLeft(4, '0')}-'
+      '${value.month.toString().padLeft(2, '0')}-'
+      '${value.day.toString().padLeft(2, '0')}';
+
+  Future<void> _chooseDateOfBirth() async {
+    final today = DateUtils.dateOnly(DateTime.now());
+    final typedDate = _parseDateOfBirth(_dob.text);
+    final suggestedYear = today.year - 18;
+    final selected = await showDatePicker(
+      context: context,
+      initialDate: typedDate ?? DateTime(suggestedYear, today.month, today.day),
+      firstDate: DateTime(1900),
+      lastDate: today,
+      helpText: 'Choose date of birth',
+      fieldLabelText: 'Date of birth',
+      fieldHintText: 'YYYY-MM-DD',
+      initialEntryMode: DatePickerEntryMode.calendar,
+    );
+    if (selected == null || !mounted) return;
+    setState(() => _dob.text = _formatDate(selected));
   }
 
   @override
@@ -292,23 +344,33 @@ class _AccountActivationScreenState extends State<AccountActivationScreen> {
       ),
       if (_summary!.dateOfBirthRequired) ...[
         const SizedBox(height: 14),
-        TextFormField(
-          controller: _dob,
-          decoration: const InputDecoration(
-            labelText: 'Date of birth',
-            hintText: 'YYYY-MM-DD',
-          ),
-          validator: _required,
-        ),
-      ],
-      if (_summary!.emailRequired) ...[
-        const SizedBox(height: 14),
-        TextFormField(
-          controller: _email,
-          decoration: const InputDecoration(
-            labelText: 'Email given to the school',
-          ),
-          validator: _required,
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: TextFormField(
+                controller: _dob,
+                decoration: const InputDecoration(
+                  labelText: 'Date of birth',
+                  hintText: 'YYYY-MM-DD',
+                ),
+                keyboardType: TextInputType.datetime,
+                autofillHints: const [AutofillHints.birthday],
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[0-9-]')),
+                  LengthLimitingTextInputFormatter(10),
+                ],
+                autovalidateMode: AutovalidateMode.onUserInteraction,
+                validator: _validateDateOfBirth,
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton.outlined(
+              tooltip: 'Choose date of birth',
+              onPressed: _loading ? null : _chooseDateOfBirth,
+              icon: const Icon(Icons.calendar_month_outlined),
+            ),
+          ],
         ),
       ],
       const SizedBox(height: 22),
@@ -337,94 +399,39 @@ class _AccountActivationScreenState extends State<AccountActivationScreen> {
   );
 
   Widget _accountDecision() {
-    final hasCandidates = _verified!.possibleAccounts.isNotEmpty;
+    if (_verified!.accountType == 'STAFF') return _staffPasswordSetup();
+    final connectsGuardian =
+        _decision == 'CONNECT_EXISTING' && _verified!.accountType == 'GUARDIAN';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (hasCandidates) ...[
-          Text(
-            'Possible existing access',
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+        Text(
+          'Choose your account access',
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 8),
+        _notice(
+          'SMA does not guess account ownership from a matching phone number or email. Existing access is accepted only after the exact username and password are verified.',
+        ),
+        const SizedBox(height: 10),
+        RadioListTile<String>(
+          value: 'CREATE_NEW',
+          groupValue: _decision,
+          onChanged: (value) => setState(() => _decision = value!),
+          title: const Text('Create new access'),
+          subtitle: const Text('I do not already use an SMA account.'),
+        ),
+        RadioListTile<String>(
+          value: 'CONNECT_EXISTING',
+          groupValue: _decision,
+          onChanged: (value) => setState(() => _decision = value!),
+          title: const Text('I already have SMA access'),
+          subtitle: const Text(
+            'Prove the account with its exact username and password.',
           ),
-          const SizedBox(height: 10),
-          ..._verified!.possibleAccounts.map(
-            (candidate) => Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: AppColors.background,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.account_circle_outlined,
-                    color: AppColors.green,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '${candidate.maskedUsername} · ${candidate.schoolLabel}',
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        Text(
-                          candidate.explanation,
-                          style: const TextStyle(
-                            color: AppColors.muted,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-        if (!hasCandidates)
-          RadioListTile<String>(
-            value: 'CREATE_NEW',
-            groupValue: _decision,
-            onChanged: (value) => setState(() => _decision = value!),
-            title: const Text('Create my access'),
-            subtitle: const Text('Use a new global username and password.'),
-          ),
-        if (hasCandidates)
-          RadioListTile<String>(
-            value: 'CONNECT_EXISTING',
-            groupValue: _decision,
-            onChanged: (value) => setState(() => _decision = value!),
-            title: const Text('Use or connect an existing account'),
-            subtitle: const Text(
-              'You must prove it with its exact username and password.',
-            ),
-          ),
-        if (hasCandidates)
-          RadioListTile<String>(
-            value: 'DECIDE_LATER',
-            groupValue: _decision,
-            onChanged: (value) => setState(() => _decision = value!),
-            title: const Text('Decide later'),
-            subtitle: const Text(
-              'Create separate access now; connect from My account later.',
-            ),
-          ),
-        if (hasCandidates)
-          RadioListTile<String>(
-            value: 'NOT_MINE',
-            groupValue: _decision,
-            onChanged: (value) => setState(() => _decision = value!),
-            title: const Text('None of these accounts is mine'),
-            subtitle: const Text(
-              'Create separate access and record that you rejected the matches.',
-            ),
-          ),
+        ),
         const SizedBox(height: 14),
         if (_decision == 'CONNECT_EXISTING') ...[
           TextFormField(
@@ -444,44 +451,41 @@ class _AccountActivationScreenState extends State<AccountActivationScreen> {
             validator: _required,
           ),
           const SizedBox(height: 8),
-          _notice(
-            'If this is a guardian account, it can be reused across schools. Staff access always remains separate by school, so a new username and password may still be required.',
-          ),
+          _notice('A proven guardian account can be reused across schools.'),
           const SizedBox(height: 14),
         ],
-        TextFormField(
-          controller: _username,
-          decoration: const InputDecoration(labelText: 'New global username'),
-          validator: (value) =>
-              _decision == 'CONNECT_EXISTING' &&
-                  _verified!.accountType == 'GUARDIAN'
-              ? null
-              : _required(value),
-        ),
-        const SizedBox(height: 12),
-        TextFormField(
-          controller: _password,
-          obscureText: true,
-          decoration: const InputDecoration(labelText: 'New password'),
-          validator: (value) =>
-              _decision == 'CONNECT_EXISTING' &&
-                  _verified!.accountType == 'GUARDIAN'
-              ? null
-              : _passwordValidator(value),
-        ),
-        const SizedBox(height: 12),
-        TextFormField(
-          controller: _confirmPassword,
-          obscureText: true,
-          decoration: const InputDecoration(labelText: 'Confirm new password'),
-          validator: (value) {
-            if (_decision == 'CONNECT_EXISTING' &&
-                _verified!.accountType == 'GUARDIAN') {
-              return null;
-            }
-            return value != _password.text ? 'Passwords do not match' : null;
-          },
-        ),
+        if (!connectsGuardian) ...[
+          TextFormField(
+            controller: _username,
+            decoration: InputDecoration(
+              labelText: _decision == 'CONNECT_EXISTING'
+                  ? 'Username for this school'
+                  : 'New global username',
+            ),
+            validator: _required,
+          ),
+          const SizedBox(height: 12),
+          TextFormField(
+            controller: _password,
+            obscureText: true,
+            decoration: InputDecoration(
+              labelText: _decision == 'CONNECT_EXISTING'
+                  ? 'Password for this school'
+                  : 'New password',
+            ),
+            validator: _passwordValidator,
+          ),
+          const SizedBox(height: 12),
+          TextFormField(
+            controller: _confirmPassword,
+            obscureText: true,
+            decoration: const InputDecoration(
+              labelText: 'Confirm new password',
+            ),
+            validator: (value) =>
+                value != _password.text ? 'Passwords do not match' : null,
+          ),
+        ],
         const SizedBox(height: 22),
         SizedBox(
           width: double.infinity,
@@ -495,6 +499,58 @@ class _AccountActivationScreenState extends State<AccountActivationScreen> {
       ],
     );
   }
+
+  Widget _staffPasswordSetup() => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        'Create your password',
+        style: Theme.of(
+          context,
+        ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+      ),
+      const SizedBox(height: 8),
+      _notice(
+        'Your school has already created and reserved this unique username for your staff record. It cannot be changed during activation.',
+      ),
+      const SizedBox(height: 16),
+      TextFormField(
+        controller: _username,
+        readOnly: true,
+        enableInteractiveSelection: true,
+        decoration: const InputDecoration(
+          labelText: 'Assigned username',
+          suffixIcon: Icon(Icons.lock_outline),
+        ),
+        validator: _required,
+      ),
+      const SizedBox(height: 12),
+      TextFormField(
+        controller: _password,
+        obscureText: true,
+        decoration: const InputDecoration(labelText: 'Create password'),
+        validator: _passwordValidator,
+      ),
+      const SizedBox(height: 12),
+      TextFormField(
+        controller: _confirmPassword,
+        obscureText: true,
+        decoration: const InputDecoration(labelText: 'Confirm password'),
+        validator: (value) =>
+            value != _password.text ? 'Passwords do not match' : null,
+      ),
+      const SizedBox(height: 22),
+      SizedBox(
+        width: double.infinity,
+        child: FilledButton(
+          onPressed: _loading ? null : _activate,
+          child: _loading
+              ? const _Spinner()
+              : const Text('Activate staff account'),
+        ),
+      ),
+    ],
+  );
 
   Widget _success() => Column(
     children: [

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../common/display_formatters.dart';
 import '../../theme/app_theme.dart';
 import '../domain/staff_attendance_models.dart';
 import 'staff_attendance_dashboard.dart';
@@ -315,7 +316,7 @@ class _StaffAttendanceScreenState extends State<StaffAttendanceScreen> {
                                 ),
                               ),
                             ),
-                            DataCell(Text(entry.person.role)),
+                            DataCell(Text(displayRoleName(entry.person.role))),
                             DataCell(Text('$presentDays')),
                             DataCell(Text('$lateDays')),
                             DataCell(Text('$excusedDays')),
@@ -525,7 +526,7 @@ class _StaffAttendanceScreenState extends State<StaffAttendanceScreen> {
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                   Text(
-                    entry.person.role,
+                    displayRoleName(entry.person.role),
                     style: const TextStyle(
                       color: AppColors.muted,
                       fontSize: 12,

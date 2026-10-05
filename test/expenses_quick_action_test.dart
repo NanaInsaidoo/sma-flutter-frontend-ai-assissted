@@ -195,8 +195,8 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('top-up-request-approver')));
     await tester.pumpAndSettle();
-    expect(find.text('Kofi Nketia · ADMINISTRATOR'), findsOneWidget);
-    expect(find.text('Adjoa Mensah · ADMINISTRATOR'), findsNothing);
+    expect(find.text('Kofi Nketia · Administrator'), findsOneWidget);
+    expect(find.text('Adjoa Mensah · Administrator'), findsNothing);
     expect(find.byType(SnackBar), findsNothing);
     expect(tester.takeException(), isNull);
   });
@@ -606,7 +606,7 @@ void main() {
 
       await tester.tap(find.byKey(const ValueKey('top-up-approval-disburser')));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Kofi Approver · ADMINISTRATOR').last);
+      await tester.tap(find.text('Kofi Approver · Administrator').last);
       await tester.pumpAndSettle();
       await tester.enterText(
         find.byKey(const ValueKey('top-up-approval-note')),
@@ -1566,9 +1566,9 @@ void main() {
     );
     await tester.enterText(searchInput, 'Yaw');
     await tester.pumpAndSettle();
-    expect(find.text('Yaw Asante · HEAD_TEACHER · yaw.asante'), findsOneWidget);
+    expect(find.text('Yaw Asante · Head teacher · yaw.asante'), findsOneWidget);
     expect(find.textContaining('Kofi Nketia'), findsNothing);
-    await tester.tap(find.text('Yaw Asante · HEAD_TEACHER · yaw.asante'));
+    await tester.tap(find.text('Yaw Asante · Head teacher · yaw.asante'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, 'Send request'));
     await tester.pumpAndSettle();

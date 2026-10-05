@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../common/display_formatters.dart';
 import '../../theme/app_theme.dart';
 import '../domain/student_models.dart';
 import '../../fees/domain/fee_models.dart';
@@ -16,6 +17,16 @@ import '../../admissions/presentation/student_record_changes.dart';
 
 const _allClasses = 'All classes';
 const _allStatuses = 'All statuses';
+
+enum _StudentSortColumn {
+  student,
+  className,
+  guardian,
+  attendance,
+  feeBalance,
+  requirements,
+  status,
+}
 
 class StudentsScreen extends StatefulWidget {
   const StudentsScreen({
@@ -197,6 +208,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
         return LayoutBuilder(
           builder: (context, constraints) {
             final compact = constraints.maxWidth < 850;
+            final compactRegister = constraints.maxWidth < 1240;
             return SingleChildScrollView(
               padding: EdgeInsets.all(compact ? 16 : 28),
               child: Column(
@@ -242,7 +254,7 @@ class _StudentsScreenState extends State<StudentsScreen> {
                     _StudentsRegister(
                       students: visible,
                       totalStudents: students.length,
-                      compact: compact,
+                      compact: compactRegister,
                       onSelected: (student) => _openStudent(student.id),
                     ),
                 ],
@@ -676,7 +688,7 @@ class _TeacherStudentsRegister extends StatelessWidget {
   }
 }
 
-class _StudentsRegister extends StatelessWidget {
+class _StudentsRegister extends StatefulWidget {
   const _StudentsRegister({
     required this.students,
     required this.totalStudents,
@@ -690,7 +702,64 @@ class _StudentsRegister extends StatelessWidget {
   final ValueChanged<EnrolledStudent> onSelected;
 
   @override
+  State<_StudentsRegister> createState() => _StudentsRegisterState();
+}
+
+class _StudentsRegisterState extends State<_StudentsRegister> {
+  _StudentSortColumn _sortColumn = _StudentSortColumn.student;
+  bool _sortAscending = true;
+
+  List<EnrolledStudent> _sortedStudents() {
+    final result = List<EnrolledStudent>.of(widget.students);
+    result.sort((left, right) {
+      final comparison = switch (_sortColumn) {
+        _StudentSortColumn.student => _compareStudentText(
+          left.name,
+          right.name,
+        ),
+        _StudentSortColumn.className => _compareStudentText(
+          left.className,
+          right.className,
+        ),
+        _StudentSortColumn.guardian => _compareStudentText(
+          left.guardianName,
+          right.guardianName,
+          emptyLast: true,
+        ),
+        _StudentSortColumn.attendance => left.attendanceRate.compareTo(
+          right.attendanceRate,
+        ),
+        _StudentSortColumn.feeBalance => left.feeBalance.compareTo(
+          right.feeBalance,
+        ),
+        _StudentSortColumn.requirements => _requirementProgress(
+          left,
+        ).compareTo(_requirementProgress(right)),
+        _StudentSortColumn.status => _compareStudentText(
+          _statusLabel(left.status),
+          _statusLabel(right.status),
+        ),
+      };
+      if (comparison != 0) return _sortAscending ? comparison : -comparison;
+      return _compareStudentText(left.name, right.name);
+    });
+    return result;
+  }
+
+  void _sortBy(_StudentSortColumn column) {
+    setState(() {
+      if (_sortColumn == column) {
+        _sortAscending = !_sortAscending;
+      } else {
+        _sortColumn = column;
+        _sortAscending = true;
+      }
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final sortedStudents = _sortedStudents();
     return Card(
       clipBehavior: Clip.antiAlias,
       child: Column(
@@ -698,170 +767,454 @@ class _StudentsRegister extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-            child: Row(
+            child: Wrap(
+              spacing: 18,
+              runSpacing: 12,
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Expanded(
-                  child: Text(
-                    'Enrolled students (${students.length})',
-                    style: const TextStyle(
-                      color: AppColors.text,
-                      fontSize: 17,
-                      fontWeight: FontWeight.w800,
-                    ),
+                Text(
+                  'Enrolled students (${widget.students.length})',
+                  style: const TextStyle(
+                    color: AppColors.text,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
-                Text(
-                  students.length == totalStudents
-                      ? 'Current register'
-                      : 'Filtered from $totalStudents',
-                  style: const TextStyle(color: AppColors.muted),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (widget.compact)
+                      _StudentSortMenu(
+                        sortColumn: _sortColumn,
+                        onSelected: (column) {
+                          if (column != _sortColumn) _sortBy(column);
+                        },
+                      )
+                    else
+                      const Text(
+                        'Select a column heading to sort',
+                        style: TextStyle(color: AppColors.muted, fontSize: 12),
+                      ),
+                    if (widget.compact) ...[
+                      const SizedBox(width: 6),
+                      IconButton.outlined(
+                        key: const Key('students-sort-direction'),
+                        tooltip: _sortAscending
+                            ? 'Sorted ascending. Change to descending'
+                            : 'Sorted descending. Change to ascending',
+                        onPressed: () => _sortBy(_sortColumn),
+                        icon: Icon(
+                          _sortAscending
+                              ? Icons.arrow_upward_rounded
+                              : Icons.arrow_downward_rounded,
+                          size: 18,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(width: 12),
+                    Text(
+                      widget.students.length == widget.totalStudents
+                          ? 'Current register'
+                          : 'Filtered from ${widget.totalStudents}',
+                      style: const TextStyle(color: AppColors.muted),
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
           const Divider(height: 1),
-          if (students.isEmpty)
+          if (widget.students.isEmpty)
             const _EmptyRegister()
-          else if (compact)
-            ...students.map(
+          else if (widget.compact)
+            ...sortedStudents.map(
               (student) => _StudentCompactRow(
                 student: student,
-                onTap: () => onSelected(student),
+                onTap: () => widget.onSelected(student),
               ),
             )
-          else ...[
-            const _StudentTableHeader(),
-            ...students.map(
-              (student) => _StudentTableRow(
-                student: student,
-                onTap: () => onSelected(student),
-              ),
+          else
+            _StudentTable(
+              students: sortedStudents,
+              sortColumn: _sortColumn,
+              sortAscending: _sortAscending,
+              onSort: _sortBy,
+              onSelected: widget.onSelected,
             ),
-          ],
         ],
       ),
+    );
+  }
+}
+
+class _StudentSortMenu extends StatelessWidget {
+  const _StudentSortMenu({required this.sortColumn, required this.onSelected});
+
+  final _StudentSortColumn sortColumn;
+  final ValueChanged<_StudentSortColumn> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<_StudentSortColumn>(
+      key: const Key('students-compact-sort-menu'),
+      tooltip: 'Sort student register',
+      initialValue: sortColumn,
+      onSelected: onSelected,
+      itemBuilder: (context) => [
+        for (final column in _StudentSortColumn.values)
+          PopupMenuItem(
+            value: column,
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 24,
+                  child: column == sortColumn
+                      ? const Icon(Icons.check_rounded, size: 18)
+                      : null,
+                ),
+                Text(_studentSortLabel(column)),
+              ],
+            ),
+          ),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: BoxDecoration(
+          border: Border.all(color: AppColors.border),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.sort_rounded, size: 18, color: AppColors.green),
+            const SizedBox(width: 7),
+            Text(
+              'Sort: ${_studentSortLabel(sortColumn)}',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StudentTable extends StatefulWidget {
+  const _StudentTable({
+    required this.students,
+    required this.sortColumn,
+    required this.sortAscending,
+    required this.onSort,
+    required this.onSelected,
+  });
+
+  final List<EnrolledStudent> students;
+  final _StudentSortColumn sortColumn;
+  final bool sortAscending;
+  final ValueChanged<_StudentSortColumn> onSort;
+  final ValueChanged<EnrolledStudent> onSelected;
+
+  @override
+  State<_StudentTable> createState() => _StudentTableState();
+}
+
+class _StudentTableState extends State<_StudentTable> {
+  static const _minimumWidth = 1180.0;
+  static const _maximumWidth = 1440.0;
+
+  final ScrollController _horizontalController = ScrollController();
+
+  @override
+  void dispose() {
+    _horizontalController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableWidth = constraints.maxWidth;
+        final tableWidth = availableWidth
+            .clamp(_minimumWidth, _maximumWidth)
+            .toDouble();
+        final centeringPadding = availableWidth > _maximumWidth
+            ? (availableWidth - _maximumWidth) / 2
+            : 0.0;
+        final needsHorizontalScroll = availableWidth < _minimumWidth;
+
+        return Scrollbar(
+          controller: _horizontalController,
+          thumbVisibility: needsHorizontalScroll,
+          scrollbarOrientation: ScrollbarOrientation.bottom,
+          child: SingleChildScrollView(
+            key: const Key('students-table-horizontal-scroll'),
+            controller: _horizontalController,
+            scrollDirection: Axis.horizontal,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                centeringPadding,
+                0,
+                centeringPadding,
+                needsHorizontalScroll ? 10 : 0,
+              ),
+              child: SizedBox(
+                key: const Key('students-table-content'),
+                width: tableWidth,
+                child: Column(
+                  children: [
+                    _StudentTableHeader(
+                      sortColumn: widget.sortColumn,
+                      sortAscending: widget.sortAscending,
+                      onSort: widget.onSort,
+                    ),
+                    for (var index = 0; index < widget.students.length; index++)
+                      _StudentTableRow(
+                        index: index,
+                        student: widget.students[index],
+                        onTap: () => widget.onSelected(widget.students[index]),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
 
 class _StudentTableHeader extends StatelessWidget {
-  const _StudentTableHeader();
+  const _StudentTableHeader({
+    required this.sortColumn,
+    required this.sortAscending,
+    required this.onSort,
+  });
+
+  final _StudentSortColumn sortColumn;
+  final bool sortAscending;
+  final ValueChanged<_StudentSortColumn> onSort;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: const Color(0xFFF8FAFA),
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
-      child: const Row(
+      decoration: const BoxDecoration(
+        color: Color(0xFFF5F8F8),
+        border: Border(bottom: BorderSide(color: AppColors.border)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 7),
+      child: Row(
         children: [
-          Expanded(flex: 23, child: _ColumnLabel('STUDENT')),
-          Expanded(flex: 10, child: _ColumnLabel('CLASS')),
-          Expanded(flex: 19, child: _ColumnLabel('PRIMARY GUARDIAN')),
-          Expanded(flex: 11, child: _ColumnLabel('ATTENDANCE')),
-          Expanded(flex: 12, child: _ColumnLabel('FEE BALANCE')),
-          Expanded(flex: 12, child: _ColumnLabel('ITEMS & SUPPLIES')),
-          Expanded(flex: 9, child: _ColumnLabel('STATUS')),
-          SizedBox(width: 32),
+          Expanded(
+            flex: 25,
+            child: _header('Student', _StudentSortColumn.student),
+          ),
+          Expanded(
+            flex: 14,
+            child: _header('Class', _StudentSortColumn.className),
+          ),
+          Expanded(
+            flex: 20,
+            child: _header('Primary guardian', _StudentSortColumn.guardian),
+          ),
+          Expanded(
+            flex: 11,
+            child: _header('Attendance', _StudentSortColumn.attendance),
+          ),
+          Expanded(
+            flex: 12,
+            child: _header('Fee balance', _StudentSortColumn.feeBalance),
+          ),
+          Expanded(
+            flex: 14,
+            child: _header('Items & supplies', _StudentSortColumn.requirements),
+          ),
+          Expanded(
+            flex: 10,
+            child: _header('Status', _StudentSortColumn.status),
+          ),
+          const SizedBox(width: 36),
         ],
       ),
     );
   }
+
+  Widget _header(String label, _StudentSortColumn column) {
+    return _SortableStudentHeader(
+      label: label,
+      column: column,
+      active: sortColumn == column,
+      ascending: sortAscending,
+      onSort: onSort,
+    );
+  }
 }
 
-class _ColumnLabel extends StatelessWidget {
-  const _ColumnLabel(this.label);
+class _SortableStudentHeader extends StatelessWidget {
+  const _SortableStudentHeader({
+    required this.label,
+    required this.column,
+    required this.active,
+    required this.ascending,
+    required this.onSort,
+  });
 
   final String label;
+  final _StudentSortColumn column;
+  final bool active;
+  final bool ascending;
+  final ValueChanged<_StudentSortColumn> onSort;
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      label,
-      style: const TextStyle(
-        color: AppColors.muted,
-        fontSize: 10,
-        fontWeight: FontWeight.w800,
-        letterSpacing: 0.5,
+    return Tooltip(
+      message: active
+          ? 'Sort ${ascending ? 'descending' : 'ascending'} by $label'
+          : 'Sort by $label',
+      child: InkWell(
+        key: Key('student-sort-${column.name}'),
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => onSort(column),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: Text(
+                  label.toUpperCase(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: active ? AppColors.green : AppColors.muted,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.45,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              Icon(
+                active
+                    ? ascending
+                          ? Icons.arrow_upward_rounded
+                          : Icons.arrow_downward_rounded
+                    : Icons.unfold_more_rounded,
+                key: active ? const Key('students-active-sort-icon') : null,
+                size: 14,
+                color: active ? AppColors.green : AppColors.muted,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
 }
 
 class _StudentTableRow extends StatelessWidget {
-  const _StudentTableRow({required this.student, required this.onTap});
+  const _StudentTableRow({
+    required this.index,
+    required this.student,
+    required this.onTap,
+  });
 
+  final int index;
   final EnrolledStudent student;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      key: Key('student-row-${student.id}'),
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-        decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: AppColors.border)),
-        ),
-        child: Row(
-          children: [
-            Expanded(flex: 23, child: _StudentIdentity(student: student)),
-            Expanded(
-              flex: 10,
-              child: Text(
-                student.className,
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
-            ),
-            Expanded(
-              flex: 19,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    student.guardianName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    '${student.guardianRelationship} · ${student.guardianPhone}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: AppColors.muted,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              flex: 11,
-              child: _AttendanceValue(rate: student.attendanceRate),
-            ),
-            Expanded(
-              flex: 12,
-              child: Text(
-                student.feeBalance == 0
-                    ? 'Paid'
-                    : _projectedMoney(student.feeBalance),
-                style: TextStyle(
-                  color: student.feeBalance > 0
-                      ? AppColors.red
-                      : AppColors.green,
-                  fontWeight: FontWeight.w800,
+    return Material(
+      color: index.isOdd ? const Color(0xFFFBFCFC) : Colors.white,
+      child: InkWell(
+        key: Key('student-row-${student.id}'),
+        onTap: onTap,
+        hoverColor: AppColors.greenSoft.withValues(alpha: 0.55),
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 78),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: AppColors.border)),
+          ),
+          child: Row(
+            children: [
+              Expanded(flex: 25, child: _StudentIdentity(student: student)),
+              Expanded(
+                flex: 14,
+                child: Text(
+                  student.className,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
               ),
-            ),
-            Expanded(flex: 12, child: _RequirementValue(student: student)),
-            Expanded(flex: 9, child: _StatusBadge(status: student.status)),
-            const SizedBox(
-              width: 32,
-              child: Icon(Icons.chevron_right_rounded, color: AppColors.muted),
-            ),
-          ],
+              Expanded(
+                flex: 20,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      student.guardianName.trim().isEmpty
+                          ? 'Not provided'
+                          : student.guardianName.trim(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    if (_joinStudentDetails([
+                      student.guardianRelationship,
+                      student.guardianPhone,
+                    ]).isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        _joinStudentDetails([
+                          student.guardianRelationship,
+                          student.guardianPhone,
+                        ]),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              Expanded(
+                flex: 11,
+                child: _AttendanceValue(rate: student.attendanceRate),
+              ),
+              Expanded(
+                flex: 12,
+                child: Text(
+                  student.feeBalance == 0
+                      ? 'Paid'
+                      : _projectedMoney(student.feeBalance),
+                  style: TextStyle(
+                    color: student.feeBalance > 0
+                        ? AppColors.red
+                        : AppColors.green,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              Expanded(flex: 14, child: _RequirementValue(student: student)),
+              Expanded(flex: 10, child: _StatusBadge(status: student.status)),
+              const SizedBox(
+                width: 36,
+                child: Icon(
+                  Icons.chevron_right_rounded,
+                  color: AppColors.muted,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -879,8 +1232,11 @@ class _StudentCompactRow extends StatelessWidget {
     return InkWell(
       key: Key('student-row-${student.id}'),
       onTap: onTap,
-      child: Padding(
+      child: Container(
         padding: const EdgeInsets.all(16),
+        decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: AppColors.border)),
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -953,7 +1309,7 @@ class _StudentIdentity extends StatelessWidget {
               const SizedBox(height: 3),
               Text(
                 showHousehold
-                    ? '${student.id} · ${student.householdId}'
+                    ? _joinStudentDetails([student.id, student.householdId])
                     : student.id,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -966,6 +1322,36 @@ class _StudentIdentity extends StatelessWidget {
     );
   }
 }
+
+String _joinStudentDetails(Iterable<String> values) => values
+    .map((value) => value.trim())
+    .where((value) => value.isNotEmpty)
+    .join(' · ');
+
+int _compareStudentText(String left, String right, {bool emptyLast = false}) {
+  final normalizedLeft = left.trim().toLowerCase();
+  final normalizedRight = right.trim().toLowerCase();
+  if (emptyLast) {
+    if (normalizedLeft.isEmpty && normalizedRight.isNotEmpty) return 1;
+    if (normalizedRight.isEmpty && normalizedLeft.isNotEmpty) return -1;
+  }
+  return normalizedLeft.compareTo(normalizedRight);
+}
+
+double _requirementProgress(EnrolledStudent student) =>
+    student.requirementsTotal == 0
+    ? -1
+    : student.requirementsCompleted / student.requirementsTotal;
+
+String _studentSortLabel(_StudentSortColumn column) => switch (column) {
+  _StudentSortColumn.student => 'Student',
+  _StudentSortColumn.className => 'Class',
+  _StudentSortColumn.guardian => 'Primary guardian',
+  _StudentSortColumn.attendance => 'Attendance',
+  _StudentSortColumn.feeBalance => 'Fee balance',
+  _StudentSortColumn.requirements => 'Items & supplies',
+  _StudentSortColumn.status => 'Status',
+};
 
 class _InitialsAvatar extends StatelessWidget {
   const _InitialsAvatar({required this.name, this.size = 40});
@@ -5995,7 +6381,9 @@ class _ExemptStudentItemDialogState extends State<_ExemptStudentItemDialog> {
                   .map(
                     (approver) => DropdownMenuItem(
                       value: approver.id,
-                      child: Text('${approver.name} · ${approver.role}'),
+                      child: Text(
+                        '${approver.name} · ${displayRoleName(approver.role)}',
+                      ),
                     ),
                   )
                   .toList(),

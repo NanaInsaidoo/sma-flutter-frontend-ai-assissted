@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../common/display_formatters.dart';
 import '../../theme/app_theme.dart';
 import '../data/fee_api_client.dart';
 import '../domain/fee_models.dart';
@@ -1576,7 +1577,9 @@ class _FeeStructureWorkflowContentState
                       .map(
                         (approver) => DropdownMenuItem(
                           value: approver.id,
-                          child: Text('${approver.name} · ${approver.role}'),
+                          child: Text(
+                            '${approver.name} · ${displayRoleName(approver.role)}',
+                          ),
                         ),
                       )
                       .toList(),
@@ -2757,7 +2760,9 @@ class _StreamFeeEditorState extends State<_StreamFeeEditor> {
                       .map(
                         (approver) => DropdownMenuItem(
                           value: approver.id,
-                          child: Text('${approver.name} · ${approver.role}'),
+                          child: Text(
+                            '${approver.name} · ${displayRoleName(approver.role)}',
+                          ),
                         ),
                       )
                       .toList(),

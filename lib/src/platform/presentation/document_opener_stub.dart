@@ -4,6 +4,10 @@ Future<void> openDocumentUrl(String url) async {
   throw UnsupportedError('Document preview is currently available on web.');
 }
 
+Future<void> downloadDocumentUrl(String url, String fileName) async {
+  throw UnsupportedError('Document download is currently available on web.');
+}
+
 Future<void> openDocumentBytes(
   List<int> bytes,
   String contentType,

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../common/display_formatters.dart';
 import '../../theme/app_theme.dart';
 import '../data/dashboard_repository.dart';
 import '../data/teacher_dashboard_summary.dart';
@@ -36,6 +37,8 @@ import '../../term_review/data/headmaster_term_closure_api_client.dart';
 import '../../term_review/presentation/teacher_term_closing_screen.dart';
 import '../../term_review/presentation/bursar_term_closing_screen.dart';
 import '../../staff/presentation/staff_screen.dart';
+import '../../payroll/data/payroll_api_client.dart';
+import '../../payroll/presentation/payroll_screen.dart';
 import '../../leave/data/leave_api_client.dart';
 import '../../leave/presentation/leave_management_screen.dart';
 import '../../staff_attendance/data/staff_attendance_api_client.dart';
@@ -64,6 +67,7 @@ enum _SchoolAdminPage {
   finalReports,
   households,
   staff,
+  payroll,
   classes,
   fees,
   shop,
@@ -118,6 +122,8 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   late Future<ApprovalInbox?> _approvalInbox;
   late Future<SchoolNotificationInbox?> _notifications;
   late Future<bool> _shopAccess;
+  late Future<bool> _payrollAccess;
+  Future<TeacherWorkspaceSnapshot>? _teacherWorkspace;
   bool _sidebarCollapsed = false;
   _SchoolAdminPage _selectedPage = _SchoolAdminPage.dashboard;
   bool _openStartAdmissionOnNextAdmissions = false;
@@ -148,6 +154,8 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
     _approvalInbox = _loadApprovalInbox();
     _notifications = _loadNotifications();
     _shopAccess = _loadShopAccess();
+    _payrollAccess = _loadPayrollAccess();
+    _teacherWorkspace = _loadTeacherWorkspace(_activeRole);
   }
 
   @override
@@ -161,6 +169,8 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
       _approvalInbox = _loadApprovalInbox();
       _notifications = _loadNotifications();
       _shopAccess = _loadShopAccess();
+      _payrollAccess = _loadPayrollAccess();
+      _teacherWorkspace = _loadTeacherWorkspace(_activeRole);
     }
   }
 
@@ -193,7 +203,21 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
       _approvalInbox = _loadApprovalInbox();
       _notifications = _loadNotifications();
       _shopAccess = _loadShopAccess();
+      _payrollAccess = _loadPayrollAccess();
+      _teacherWorkspace = _loadTeacherWorkspace(_activeRole);
     });
+  }
+
+  Future<TeacherWorkspaceSnapshot>? _loadTeacherWorkspace(String role) {
+    if (!_isTeachingRole(role) || _schoolId.isEmpty) return null;
+    final summaryLoader = widget.teacherDashboardLoader;
+    if (summaryLoader != null) {
+      return summaryLoader().then((summary) => summary.workspace);
+    }
+    return TeacherWorkspaceApiClient(
+      accessToken: widget.accessToken,
+      onRefreshAccessToken: widget.onRefreshAccessToken,
+    ).get(_schoolId);
   }
 
   Future<bool> _loadShopAccess() async {
@@ -220,12 +244,30 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
     }
   }
 
+  Future<bool> _loadPayrollAccess() async {
+    if (_schoolId.isEmpty || widget.accessToken?.isNotEmpty != true) {
+      return false;
+    }
+    try {
+      final access = await PayrollApiClient(
+        schoolId: _schoolId,
+        accessToken: widget.accessToken,
+        onRefreshAccessToken: widget.onRefreshAccessToken,
+      ).getAccess();
+      return access.canView;
+    } catch (_) {
+      return false;
+    }
+  }
+
   void _refresh() {
     setState(() {
       _dashboard = _loadDashboard();
       _feeWorkflowSummary = _loadFeeWorkflowSummary();
       _approvalInbox = _loadApprovalInbox();
       _notifications = _loadNotifications();
+      _payrollAccess = _loadPayrollAccess();
+      _teacherWorkspace = _loadTeacherWorkspace(_activeRole);
     });
   }
 
@@ -317,7 +359,9 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   }
 
   void _selectPage(_SchoolAdminPage page) {
-    if (_isTeachingRole(_activeRole) && page == _SchoolAdminPage.assessments) {
+    if (_isTeachingRole(_activeRole) &&
+        (page == _SchoolAdminPage.assessments ||
+            page == _SchoolAdminPage.evaluations)) {
       unawaited(_openTeacherScopedPage(page));
       return;
     }
@@ -360,13 +404,14 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
     if (_selectingTeacherClass) return;
     _selectingTeacherClass = true;
     try {
-      final workspace = await TeacherWorkspaceApiClient(
-        accessToken: widget.accessToken,
-        onRefreshAccessToken: widget.onRefreshAccessToken,
-      ).get(_schoolId);
+      final workspace = await (_teacherWorkspace ??= _loadTeacherWorkspace(
+        _activeRole,
+      )!);
       if (!mounted) return;
 
-      final classes = workspace.assignedClasses;
+      final classes = workspace.assignedClasses
+          .where((assignment) => assignment.active)
+          .toList();
       if (classes.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -530,6 +575,8 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                       selectedPage: _selectedPage,
                       approvalInbox: _approvalInbox,
                       shopAccess: _shopAccess,
+                      payrollAccess: _payrollAccess,
+                      teacherWorkspace: _teacherWorkspace,
                       onSelectPage: _selectPage,
                       onLogout: widget.onLogout,
                       onCollapse: () => setState(
@@ -621,6 +668,8 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                   selectedPage: _selectedPage,
                   approvalInbox: _approvalInbox,
                   shopAccess: _shopAccess,
+                  payrollAccess: _payrollAccess,
+                  teacherWorkspace: _teacherWorkspace,
                   onSelectPage: (page) {
                     _selectPage(page);
                     Navigator.pop(context);
@@ -1044,6 +1093,14 @@ class _DashboardBody extends StatelessWidget {
         onAddStaffRequestConsumed: onAddStaffRequestConsumed,
         customSchoolId: schoolId,
         currentUserId: userId,
+        accessToken: accessToken,
+        onRefreshAccessToken: onRefreshAccessToken,
+      );
+    }
+
+    if (selectedPage == _SchoolAdminPage.payroll) {
+      return PayrollScreen(
+        schoolId: schoolId,
         accessToken: accessToken,
         onRefreshAccessToken: onRefreshAccessToken,
       );
@@ -6483,6 +6540,8 @@ class _Sidebar extends StatelessWidget {
     required this.selectedPage,
     this.approvalInbox,
     this.shopAccess,
+    this.payrollAccess,
+    this.teacherWorkspace,
     required this.onSelectPage,
     this.onLogout,
     this.onCollapse,
@@ -6497,6 +6556,8 @@ class _Sidebar extends StatelessWidget {
   final _SchoolAdminPage selectedPage;
   final Future<ApprovalInbox?>? approvalInbox;
   final Future<bool>? shopAccess;
+  final Future<bool>? payrollAccess;
+  final Future<TeacherWorkspaceSnapshot>? teacherWorkspace;
   final ValueChanged<_SchoolAdminPage> onSelectPage;
   final VoidCallback? onLogout;
   final VoidCallback? onCollapse;
@@ -6702,22 +6763,42 @@ class _Sidebar extends StatelessWidget {
                       active: selectedPage == _SchoolAdminPage.classes,
                       onTap: () => onSelectPage(_SchoolAdminPage.classes),
                     ),
-                  if (isTeacher) ...[
-                    _SidebarButton(
-                      icon: Icons.assessment_outlined,
-                      label: 'Assessments',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.assessments,
-                      onTap: () => onSelectPage(_SchoolAdminPage.assessments),
+                  if (isTeacher)
+                    FutureBuilder<TeacherWorkspaceSnapshot>(
+                      future: teacherWorkspace,
+                      builder: (context, snapshot) {
+                        final hasActiveAssignments =
+                            snapshot.data?.assignedClasses.any(
+                              (assignment) => assignment.active,
+                            ) ==
+                            true;
+                        if (!hasActiveAssignments) {
+                          return const SizedBox.shrink();
+                        }
+                        return Column(
+                          children: [
+                            _SidebarButton(
+                              icon: Icons.assessment_outlined,
+                              label: 'Assessments',
+                              collapsed: collapsed,
+                              active:
+                                  selectedPage == _SchoolAdminPage.assessments,
+                              onTap: () =>
+                                  onSelectPage(_SchoolAdminPage.assessments),
+                            ),
+                            _SidebarButton(
+                              icon: Icons.fact_check_outlined,
+                              label: 'Evaluations & Comments',
+                              collapsed: collapsed,
+                              active:
+                                  selectedPage == _SchoolAdminPage.evaluations,
+                              onTap: () =>
+                                  onSelectPage(_SchoolAdminPage.evaluations),
+                            ),
+                          ],
+                        );
+                      },
                     ),
-                    _SidebarButton(
-                      icon: Icons.fact_check_outlined,
-                      label: 'Evaluations & Comments',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.evaluations,
-                      onTap: () => onSelectPage(_SchoolAdminPage.evaluations),
-                    ),
-                  ],
                   if (!isTeacher)
                     _SidebarButton(
                       icon: Icons.fact_check_outlined,
@@ -6764,6 +6845,18 @@ class _Sidebar extends StatelessWidget {
                       onTap: () => onSelectPage(_SchoolAdminPage.classes),
                     ),
                   ],
+                  FutureBuilder<bool>(
+                    future: payrollAccess,
+                    builder: (context, snapshot) => snapshot.data == true
+                        ? _SidebarButton(
+                            icon: Icons.payments_outlined,
+                            label: 'Payroll',
+                            collapsed: collapsed,
+                            active: selectedPage == _SchoolAdminPage.payroll,
+                            onTap: () => onSelectPage(_SchoolAdminPage.payroll),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
                   _SidebarButton(
                     icon: Icons.event_note_outlined,
                     label: 'My Leave',
@@ -6901,14 +6994,7 @@ class _Sidebar extends StatelessWidget {
   }
 
   String _displayRole(String? role) {
-    final value = role?.trim() ?? '';
-    if (value.isEmpty) return 'School Staff';
-    if (_isTeachingRole(value)) return 'Teacher';
-    return value
-        .split('_')
-        .where((part) => part.isNotEmpty)
-        .map((part) => '${part[0]}${part.substring(1).toLowerCase()}')
-        .join(' ');
+    return displayRoleName(role, fallback: 'School staff');
   }
 }
 

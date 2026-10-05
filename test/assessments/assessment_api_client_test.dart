@@ -450,6 +450,86 @@ void main() {
       expect(bytes, const [0x25, 0x50, 0x44, 0x46]);
     });
 
+    test('loads physical report print-package options', () async {
+      late http.Request request;
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((value) async {
+          request = value;
+          return http.Response('''
+            {
+              "totalStudents": 3,
+              "readyReports": 2,
+              "excludedReports": 1,
+              "householdCount": 1,
+              "classCount": 1,
+              "unassignedHouseholdCount": 0,
+              "students": [
+                {
+                  "customStudentId": "STU-1",
+                  "studentName": "Ama Mensah",
+                  "gradeLevelId": 31,
+                  "gradeLevelName": "JHS 3",
+                  "streamId": 9,
+                  "className": "JHS 3 - Section 2",
+                  "householdId": 4,
+                  "householdName": "Mensah Household",
+                  "ready": true,
+                  "readinessLabel": "Ready"
+                }
+              ]
+            }
+          ''', 200);
+        }),
+      );
+
+      final result = await api.getReportPrintPackageOptions(
+        customSchoolId: 'SCHOOL-1',
+        termId: 7,
+        academicYearId: 3,
+      );
+
+      expect(request.url.path, endsWith('/report-cards/print-package/options'));
+      expect(result.readyReports, 2);
+      expect(result.excludedReports, 1);
+      expect(result.students.single.householdName, 'Mensah Household');
+      expect(result.students.single.ready, isTrue);
+    });
+
+    test('prepares one combined physical report PDF', () async {
+      late http.Request request;
+      final api = AssessmentApiClient(
+        accessToken: 'test-token',
+        client: MockClient((value) async {
+          request = value;
+          return http.Response.bytes(
+            const [0x25, 0x50, 0x44, 0x46],
+            200,
+            headers: {'content-type': 'application/pdf'},
+          );
+        }),
+      );
+
+      final bytes = await api.prepareReportPrintPackage(
+        customSchoolId: 'SCHOOL-1',
+        termId: 7,
+        academicYearId: 3,
+        scope: 'SELECTED_CLASSES',
+        organization: 'HOUSEHOLD',
+        includeHouseholdCoverSheet: true,
+        streamIds: const [9, 10],
+      );
+
+      expect(request.method, 'POST');
+      expect(request.url.path, endsWith('/report-cards/print-package/pdf'));
+      expect(request.headers['Accept'], 'application/pdf');
+      expect(request.body, contains('"scope":"SELECTED_CLASSES"'));
+      expect(request.body, contains('"organization":"HOUSEHOLD"'));
+      expect(request.body, contains('"readyOnly":true'));
+      expect(request.body, contains('"streamIds":[9,10]'));
+      expect(bytes, const [0x25, 0x50, 0x44, 0x46]);
+    });
+
     test('loads the roster and saves a partial score sheet', () async {
       final requests = <http.Request>[];
       final api = AssessmentApiClient(
@@ -466,7 +546,7 @@ void main() {
             {
               "assessment":{"assessmentId":"ASM-100","maxScore":10},
               "scores":[
-                {"studentId":"STU-1","firstName":"Ama","lastName":"Boateng","score":8.5,"maxScore":10,"percentage":85,"status":"SUBMITTED","remarks":"Good work","reportGenerated":true,"reportPublished":true,"correctionStatus":"PENDING"},
+                {"studentId":"STU-1","firstName":"Ama","lastName":"Boateng","score":8.5,"maxScore":10,"percentage":85,"status":"SUBMITTED","remarks":"Good work","reportGenerated":true,"reportPublished":true,"correctionStatus":"PENDING","proposedScore":9.5},
                 {"studentId":"STU-2","firstName":"Kojo","lastName":"Owusu","score":null,"maxScore":10}
               ]
             }
@@ -498,6 +578,7 @@ void main() {
       expect(sheet.students.first.reportGenerated, isTrue);
       expect(sheet.students.first.reportPublished, isTrue);
       expect(sheet.students.first.correctionStatus, 'PENDING');
+      expect(sheet.students.first.proposedScore, 9.5);
       expect(requests.last.method, 'PUT');
       expect(requests.last.body, contains('"submittedBy":"teacher-1"'));
       expect(requests.last.body, contains('"studentId":"STU-2"'));

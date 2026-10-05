@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../attendance/presentation/attendance_report_export.dart';
+import '../../common/display_formatters.dart';
 import '../../theme/app_theme.dart';
 import '../domain/staff_attendance_models.dart';
 
@@ -218,7 +219,9 @@ class _StaffReportDialogState extends State<_StaffReportDialog> {
                                 dense: true,
                                 value: _selected.contains(person.id),
                                 title: Text(person.name),
-                                subtitle: Text('${person.role} · ${person.id}'),
+                                subtitle: Text(
+                                  '${displayRoleName(person.role)} · ${person.id}',
+                                ),
                                 controlAffinity:
                                     ListTileControlAffinity.leading,
                                 onChanged: (checked) => setState(() {
@@ -647,7 +650,7 @@ class _StaffAttendanceDashboardState extends State<StaffAttendanceDashboard> {
         .map(
           (row) => <String>[
             row.person.name,
-            row.person.role,
+            displayRoleName(row.person.role),
             '${row.recordedDays}',
             '${row.present}',
             '${row.late}',
@@ -804,7 +807,7 @@ class _StaffAttendanceDashboardState extends State<StaffAttendanceDashboard> {
                       (row) => DataRow(
                         cells: [
                           DataCell(Text(row.person.name)),
-                          DataCell(Text(row.person.role)),
+                          DataCell(Text(displayRoleName(row.person.role))),
                           DataCell(Text('${row.recordedDays}')),
                           DataCell(Text('${row.present}')),
                           DataCell(Text('${row.late}')),

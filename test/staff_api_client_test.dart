@@ -144,10 +144,28 @@ void main() {
       userId: '7',
       reason: 'Employment ended',
     );
+    await api.requirePasswordChange(customSchoolId: 'SCH-001', userId: '7');
+    await api.approveSchoolUser(customSchoolId: 'SCH-001', userId: '7');
+    await api.rejectSchoolUser(
+      customSchoolId: 'SCH-001',
+      userId: '7',
+      reason: 'Review failed',
+    );
 
-    expect(requests.map((request) => request.method), ['POST', 'POST', 'POST']);
+    expect(requests.map((request) => request.method), [
+      'POST',
+      'POST',
+      'POST',
+      'POST',
+      'POST',
+      'POST',
+    ]);
     expect(requests[0].url.queryParameters['reason'], 'E2E verification');
     expect(requests[1].url.path, endsWith('/users/7/reactivate'));
     expect(requests[2].url.queryParameters['reason'], 'Employment ended');
+    expect(requests[3].url.path, endsWith('/users/7/reset-password'));
+    expect(requests[4].url.path, endsWith('/users/7/approve'));
+    expect(requests[5].url.path, endsWith('/users/7/reject'));
+    expect(jsonDecode(requests[5].body), {'reason': 'Review failed'});
   });
 }

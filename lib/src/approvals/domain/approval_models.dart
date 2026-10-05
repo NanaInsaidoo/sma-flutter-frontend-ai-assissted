@@ -57,6 +57,7 @@ class ApprovalItem {
     required this.canWithdraw,
     required this.sourcePage,
     this.customStudentId = '',
+    this.className = '',
     this.termId,
     this.academicYearId,
     this.reportWasPublished = false,
@@ -87,6 +88,7 @@ class ApprovalItem {
   final bool canWithdraw;
   final String sourcePage;
   final String customStudentId;
+  final String className;
   final int? termId;
   final int? academicYearId;
   final bool reportWasPublished;
@@ -165,6 +167,7 @@ class ApprovalItem {
       canWithdraw: json['canWithdraw'] == true,
       sourcePage: text('sourcePage'),
       customStudentId: text('customStudentId'),
+      className: text('className'),
       termId: (json['termId'] as num?)?.toInt(),
       academicYearId: (json['academicYearId'] as num?)?.toInt(),
       reportWasPublished: json['reportWasPublished'] == true,

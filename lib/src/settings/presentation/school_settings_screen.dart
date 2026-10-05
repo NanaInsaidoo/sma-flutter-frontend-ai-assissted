@@ -1,10 +1,17 @@
 import 'package:flutter/material.dart';
 
 import '../../classes/presentation/class_stream_settings_screen.dart';
+import '../../staff_authorisations/presentation/staff_authorisations_screen.dart';
 import '../../theme/app_theme.dart';
 import 'academic_term_management_screen.dart';
 
-enum _SchoolSettingPage { hub, streamCapacity, classTeachers, academicTerms }
+enum _SchoolSettingPage {
+  hub,
+  streamCapacity,
+  classTeachers,
+  academicTerms,
+  staffAuthorisations,
+}
 
 class SchoolSettingsScreen extends StatefulWidget {
   const SchoolSettingsScreen({
@@ -45,6 +52,14 @@ class _SchoolSettingsScreenState extends State<SchoolSettingsScreen> {
     }
     if (_page == _SchoolSettingPage.academicTerms) {
       return AcademicTermManagementScreen(
+        customSchoolId: widget.customSchoolId,
+        accessToken: widget.accessToken,
+        onRefreshAccessToken: widget.onRefreshAccessToken,
+        onBack: () => setState(() => _page = _SchoolSettingPage.hub),
+      );
+    }
+    if (_page == _SchoolSettingPage.staffAuthorisations) {
+      return StaffAuthorisationsScreen(
         customSchoolId: widget.customSchoolId,
         accessToken: widget.accessToken,
         onRefreshAccessToken: widget.onRefreshAccessToken,
@@ -244,14 +259,22 @@ class _SchoolSettingsScreenState extends State<SchoolSettingsScreen> {
                 title: 'Role & Permission Settings',
                 description:
                     'Manage school staff roles, approval rules, and access restrictions.',
-                status: 'Planned',
-                actionLabel: 'Review',
+                status: 'Available',
+                actionLabel: 'Manage',
                 summary: const [
-                  _SettingSummary(label: 'Roles', value: 'School staff'),
-                  _SettingSummary(label: 'Approvals', value: 'Planned'),
-                  _SettingSummary(label: 'Access rules', value: 'Planned'),
+                  _SettingSummary(label: 'Job titles', value: 'Configurable'),
+                  _SettingSummary(
+                    label: 'Sensitive changes',
+                    value: 'Approval',
+                  ),
+                  _SettingSummary(
+                    label: 'Individual rules',
+                    value: 'Allow or block',
+                  ),
                 ],
-                onTap: () => _showComingSoon('Role & Permission Settings'),
+                onTap: () => setState(
+                  () => _page = _SchoolSettingPage.staffAuthorisations,
+                ),
               ),
             ],
           ),
