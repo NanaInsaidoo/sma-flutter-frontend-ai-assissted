@@ -33,7 +33,10 @@ jobs:
       - name: Test
         run: flutter test
       - name: Build web application
-        run: flutter build web --release --dart-define=SMA_API_BASE_URL="$UAT_API_BASE_URL"
+        run: |
+          flutter build web --release --dart-define=SMA_API_BASE_URL="$UAT_API_BASE_URL"
+          sed -i "s/__SMA_BUILD_ID__/${GITHUB_SHA}/g" build/web/index.html
+          grep -Fq "flutter_bootstrap.js?build=${GITHUB_SHA}" build/web/index.html
 
   deploy-uat:
     if: github.ref == 'refs/heads/develop' && github.event_name != 'pull_request'
@@ -56,6 +59,8 @@ jobs:
         run: |
           flutter pub get
           flutter build web --release --dart-define=SMA_API_BASE_URL="$UAT_API_BASE_URL"
+          sed -i "s/__SMA_BUILD_ID__/${GITHUB_SHA}/g" build/web/index.html
+          grep -Fq "flutter_bootstrap.js?build=${GITHUB_SHA}" build/web/index.html
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Configure temporary AWS credentials
