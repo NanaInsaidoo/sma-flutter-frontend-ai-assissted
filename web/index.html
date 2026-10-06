@@ -45,6 +45,10 @@
   </style>
 </head>
 <body>
-  <script src="flutter_bootstrap.js" async></script>
+  <!--
+    Keep the bootstrap request outside an older Flutter service worker cache.
+    CI replaces the build id with the commit SHA for every deployment.
+  -->
+  <script src="flutter_bootstrap.js?build=__SMA_BUILD_ID__" async></script>
 </body>
 </html>
