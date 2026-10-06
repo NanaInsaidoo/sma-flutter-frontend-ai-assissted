@@ -57,7 +57,7 @@ jobs:
       - name: Configure temporary AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.UAT_AWS_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::196337091584:role/sma-uat-frontend-github-deploy
           aws-region: ${{ env.AWS_REGION }}
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
