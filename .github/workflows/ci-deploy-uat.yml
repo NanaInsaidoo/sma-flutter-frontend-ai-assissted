@@ -1,5 +1,8 @@
 name: Frontend CI and UAT deployment
 
+env:
+  UAT_API_BASE_URL: https://sma-uat.3-147-133-40.sslip.io/Narellallc/sma-v1/1.0.0
+
 on:
   pull_request:
     branches: [develop, master]
@@ -30,7 +33,7 @@ jobs:
       - name: Test
         run: flutter test
       - name: Build web application
-        run: flutter build web --release --dart-define=SMA_API_BASE_URL=/Narellallc/sma-v1/1.0.0
+        run: flutter build web --release --dart-define=SMA_API_BASE_URL="$UAT_API_BASE_URL"
 
   deploy-uat:
     if: github.ref == 'refs/heads/develop' && github.event_name != 'pull_request'
@@ -52,7 +55,7 @@ jobs:
       - name: Build web application
         run: |
           flutter pub get
-          flutter build web --release --dart-define=SMA_API_BASE_URL=/Narellallc/sma-v1/1.0.0
+          flutter build web --release --dart-define=SMA_API_BASE_URL="$UAT_API_BASE_URL"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Configure temporary AWS credentials
