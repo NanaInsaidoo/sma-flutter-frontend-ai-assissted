@@ -89,6 +89,12 @@ class HeadmasterTermClosureApiClient
     int n(Object? x) => int.tryParse('$x') ?? 0;
     Map<String, dynamic> m(String k) =>
         j[k] is Map ? Map<String, dynamic>.from(j[k] as Map) : {};
+    final transitionPreview = m('transitionPreview');
+    await _addTermDates(
+      schoolId: s,
+      currentTermId: n(j['termId']),
+      preview: transitionPreview,
+    );
     return HeadmasterTermClosure(
       termId: n(j['termId']),
       status: '${j['closureStatus']}',
@@ -109,9 +115,57 @@ class HeadmasterTermClosureApiClient
       ).map((k, v) => MapEntry(k, '$v')),
       facilities: m('facilities'),
       summary: m('summary'),
-      transitionPreview: m('transitionPreview'),
+      transitionPreview: transitionPreview,
       transition: m('transition'),
     );
+  }
+
+  Future<void> _addTermDates({
+    required String schoolId,
+    required int currentTermId,
+    required Map<String, dynamic> preview,
+  }) async {
+    if (preview['available'] != true) return;
+    final nextTermId = int.tryParse('${preview['nextTermId']}');
+    if (currentTermId <= 0 || nextTermId == null || nextTermId <= 0) return;
+    try {
+      final current = await _term(schoolId, currentTermId);
+      final next = await _term(schoolId, nextTermId);
+      preview['currentTermClosingDate'] =
+          current['closingDate'] ?? current['endDate'];
+      preview['operationalStartDate'] =
+          next['operationalStartDate'] ?? next['startDate'];
+      preview['teachingStartDate'] =
+          next['teachingStartDate'] ?? next['startDate'];
+      preview['teachingEndDate'] = next['teachingEndDate'] ?? next['endDate'];
+      preview['closingDate'] = next['closingDate'] ?? next['endDate'];
+    } catch (_) {
+      // Keep the closure endpoint's partial preview if term-date hydration fails.
+    }
+  }
+
+  Future<Map<String, dynamic>> _term(String schoolId, int termId) async {
+    Future<http.Response> get() => _client.get(
+      Uri.parse(
+        '${ApiConfig.baseUrl}/api/academic-terms/$termId?customSchoolId=${Uri.encodeQueryComponent(schoolId)}',
+      ),
+      headers: {
+        'Accept': 'application/json',
+        if (accessToken?.isNotEmpty == true)
+          'Authorization': 'Bearer $accessToken',
+      },
+    );
+
+    var response = await get();
+    if ((response.statusCode == 401 || response.statusCode == 403) &&
+        onRefreshAccessToken != null) {
+      accessToken = await onRefreshAccessToken!();
+      response = await get();
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception(_error(response));
+    }
+    return Map<String, dynamic>.from(jsonDecode(response.body) as Map);
   }
 
   String _error(http.Response r) {

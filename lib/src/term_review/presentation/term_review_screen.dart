@@ -6,7 +6,16 @@ import '../domain/bursar_term_closure_models.dart';
 import '../domain/headmaster_term_closure_models.dart';
 import 'teacher_review_management_panel.dart';
 import 'bursar_term_closing_screen.dart';
+import 'facility_inspection_prototype.dart';
 import 'headmaster_term_closure_screen.dart';
+
+enum _TermReviewView {
+  dashboard,
+  teacherReviews,
+  finance,
+  staffReviews,
+  facilityInspection,
+}
 
 class TermReviewScreen extends StatefulWidget {
   const TermReviewScreen({
@@ -18,6 +27,13 @@ class TermReviewScreen extends StatefulWidget {
     this.headmasterClosureRepository,
     this.reviewerUserId,
     this.onTermTransitioned,
+    this.onOpenAttendance,
+    this.onOpenStaffAttendance,
+    this.onOpenEvaluations,
+    this.onOpenFinalReports,
+    this.onOpenIncidents,
+    this.onOpenSettings,
+    this.onOpenTermDates,
   });
   final String schoolId;
   final StaffReviewRepository repository;
@@ -26,24 +42,38 @@ class TermReviewScreen extends StatefulWidget {
   final HeadmasterTermClosureRepository? headmasterClosureRepository;
   final int? reviewerUserId;
   final VoidCallback? onTermTransitioned;
+  final VoidCallback? onOpenAttendance;
+  final VoidCallback? onOpenStaffAttendance;
+  final VoidCallback? onOpenEvaluations;
+  final VoidCallback? onOpenFinalReports;
+  final VoidCallback? onOpenIncidents;
+  final VoidCallback? onOpenSettings;
+  final Future<bool> Function()? onOpenTermDates;
   @override
   State<TermReviewScreen> createState() => _TermReviewScreenState();
 }
 
 class _TermReviewScreenState extends State<TermReviewScreen> {
   late Future<StaffReviewDashboardData> _future;
+  late _TermReviewView _view;
   int _termGeneration = 0;
   String _filter = 'ALL';
   String _query = '';
   @override
   void initState() {
     super.initState();
+    _view = widget.headmasterClosureRepository == null
+        ? _TermReviewView.staffReviews
+        : _TermReviewView.dashboard;
     _load();
   }
 
   void _load() => _future = widget.repository.getDashboard(widget.schoolId);
   Future<void> _refresh() async {
-    setState(_load);
+    setState(() {
+      _termGeneration++;
+      _load();
+    });
     await _future;
   }
 
@@ -53,6 +83,26 @@ class _TermReviewScreenState extends State<TermReviewScreen> {
       _load();
     });
     widget.onTermTransitioned?.call();
+  }
+
+  void _handleWorkstreamChanged() {
+    if (!mounted) return;
+    setState(() {
+      _termGeneration++;
+      _load();
+    });
+  }
+
+  void _showView(_TermReviewView view) {
+    setState(() => _view = view);
+  }
+
+  void _backToDashboard() {
+    setState(() {
+      _view = _TermReviewView.dashboard;
+      _termGeneration++;
+      _load();
+    });
   }
 
   @override
@@ -75,167 +125,232 @@ class _TermReviewScreenState extends State<TermReviewScreen> {
               (review.staffName.toLowerCase().contains(q) ||
                   review.role.toLowerCase().contains(q));
         }).toList();
-        return RefreshIndicator(
-          onRefresh: _refresh,
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(28, 28, 28, 48),
+        return switch (_view) {
+          _TermReviewView.dashboard => _dashboardView(),
+          _TermReviewView.teacherReviews => _teacherReviewView(),
+          _TermReviewView.finance => _financeView(),
+          _TermReviewView.staffReviews => _staffReviewView(data, rows),
+          _TermReviewView.facilityInspection => FacilityInspectionPrototype(
+            onBack: _backToDashboard,
+            schoolId: widget.schoolId,
+            termName: data.termName,
+            repository: widget.headmasterClosureRepository!,
+            actorUserId: widget.reviewerUserId,
+            onChanged: _handleWorkstreamChanged,
+          ),
+        };
+      },
+    ),
+  );
+
+  Widget _dashboardView() => RefreshIndicator(
+    onRefresh: _refresh,
+    child: ListView(
+      padding: EdgeInsets.zero,
+      children: [
+        HeadmasterTermClosureScreen(
+          key: ValueKey('headmaster-closure-$_termGeneration'),
+          schoolId: widget.schoolId,
+          actorUserId: widget.reviewerUserId,
+          repository: widget.headmasterClosureRepository!,
+          embedded: true,
+          onOpenTermDates: widget.onOpenTermDates,
+          onOpenFacilities: () => _showView(_TermReviewView.facilityInspection),
+          workstreamActions: {
+            if (widget.teacherReviewRepository != null)
+              'TEACHER_REVIEWS': () =>
+                  _showView(_TermReviewView.teacherReviews),
+            if (widget.bursarClosureRepository != null)
+              'FINANCE': () => _showView(_TermReviewView.finance),
+            'STAFF_REVIEWS': () => _showView(_TermReviewView.staffReviews),
+            if (widget.onOpenAttendance != null)
+              'STUDENT_ATTENDANCE': widget.onOpenAttendance!,
+            if (widget.onOpenStaffAttendance != null)
+              'STAFF_ATTENDANCE': widget.onOpenStaffAttendance!,
+            if (widget.onOpenFinalReports != null)
+              'REPORTS': widget.onOpenFinalReports!,
+            if (widget.onOpenFinalReports != null)
+              'REPORT_CORRECTIONS': widget.onOpenFinalReports!,
+            if (widget.onOpenEvaluations != null)
+              'EVALUATION_APPROVALS': widget.onOpenEvaluations!,
+            if (widget.onOpenIncidents != null)
+              'INCIDENTS': widget.onOpenIncidents!,
+            if (widget.onOpenSettings != null)
+              'NEXT_TERM': widget.onOpenSettings!,
+            if (widget.onOpenSettings != null)
+              'TERM_DATE': widget.onOpenSettings!,
+            if (widget.onOpenSettings != null)
+              'CLOSING_DATE': widget.onOpenSettings!,
+            if (widget.onOpenSettings != null)
+              'TERM_CLOSING_DATE': widget.onOpenSettings!,
+          },
+          onTermTransitioned: _handleTermTransitioned,
+        ),
+      ],
+    ),
+  );
+
+  Widget _teacherReviewView() => RefreshIndicator(
+    onRefresh: _refresh,
+    child: ListView(
+      padding: const EdgeInsets.fromLTRB(28, 24, 28, 48),
+      children: [
+        _backButton(),
+        const SizedBox(height: 16),
+        TeacherReviewManagementPanel(
+          key: ValueKey('teacher-reviews-$_termGeneration'),
+          schoolId: widget.schoolId,
+          actorUserId: widget.reviewerUserId,
+          repository: widget.teacherReviewRepository!,
+          onChanged: _handleWorkstreamChanged,
+        ),
+      ],
+    ),
+  );
+
+  Widget _financeView() => RefreshIndicator(
+    onRefresh: _refresh,
+    child: ListView(
+      padding: const EdgeInsets.fromLTRB(28, 24, 28, 48),
+      children: [
+        _backButton(),
+        const SizedBox(height: 16),
+        BursarTermClosingScreen(
+          key: ValueKey('bursar-closure-$_termGeneration'),
+          schoolId: widget.schoolId,
+          actorUserId: widget.reviewerUserId,
+          repository: widget.bursarClosureRepository!,
+          management: true,
+          embedded: true,
+          onChanged: _handleWorkstreamChanged,
+        ),
+      ],
+    ),
+  );
+
+  Widget _staffReviewView(
+    StaffReviewDashboardData data,
+    List<StaffReview> rows,
+  ) => RefreshIndicator(
+    onRefresh: _refresh,
+    child: ListView(
+      padding: const EdgeInsets.fromLTRB(28, 28, 28, 48),
+      children: [
+        if (widget.headmasterClosureRepository != null) ...[
+          _backButton(),
+          const SizedBox(height: 16),
+        ],
+        Row(
+          children: [
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Staff performance reviews',
+                    style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.text,
+                    ),
+                  ),
+                  SizedBox(height: 5),
+                  Text(
+                    'Review every staff member before the term is closed.',
+                    style: TextStyle(color: AppColors.muted),
+                  ),
+                ],
+              ),
+            ),
+            _Pill(icon: Icons.calendar_today_outlined, label: data.termName),
+          ],
+        ),
+        const SizedBox(height: 24),
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: [
+            _Metric(
+              label: 'All staff',
+              value: data.total,
+              color: AppColors.green,
+            ),
+            _Metric(
+              label: 'Not started',
+              value: data.notStarted,
+              color: AppColors.muted,
+            ),
+            _Metric(label: 'Draft', value: data.draft, color: AppColors.amber),
+            _Metric(
+              label: 'Completed',
+              value: data.completed,
+              color: AppColors.green,
+            ),
+          ],
+        ),
+        const SizedBox(height: 22),
+        Container(
+          decoration: _card(),
+          padding: const EdgeInsets.all(20),
+          child: Column(
             children: [
-              if (widget.headmasterClosureRepository != null) ...[
-                SizedBox(
-                  height: 1500,
-                  child: HeadmasterTermClosureScreen(
-                    key: ValueKey('headmaster-closure-$_termGeneration'),
-                    schoolId: widget.schoolId,
-                    actorUserId: widget.reviewerUserId,
-                    repository: widget.headmasterClosureRepository!,
-                    onTermTransitioned: _handleTermTransitioned,
-                  ),
-                ),
-                const SizedBox(height: 24),
-              ],
-              if (widget.teacherReviewRepository != null) ...[
-                TeacherReviewManagementPanel(
-                  key: ValueKey('teacher-reviews-$_termGeneration'),
-                  schoolId: widget.schoolId,
-                  actorUserId: widget.reviewerUserId,
-                  repository: widget.teacherReviewRepository!,
-                ),
-                const SizedBox(height: 24),
-              ],
-              if (widget.bursarClosureRepository != null) ...[
-                SizedBox(
-                  // The management view includes the approval actions and the
-                  // submitted reconciliation details. 510px clipped the action
-                  // buttons, which made a submitted closure impossible to
-                  // approve from the administrator UI.
-                  height: 760,
-                  child: BursarTermClosingScreen(
-                    key: ValueKey('bursar-closure-$_termGeneration'),
-                    schoolId: widget.schoolId,
-                    actorUserId: widget.reviewerUserId,
-                    repository: widget.bursarClosureRepository!,
-                    management: true,
-                  ),
-                ),
-                const SizedBox(height: 24),
-              ],
               Row(
                 children: [
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Staff performance reviews',
-                          style: TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.w800,
-                            color: AppColors.text,
-                          ),
-                        ),
-                        SizedBox(height: 5),
-                        Text(
-                          'Review every staff member before the term is closed.',
-                          style: TextStyle(color: AppColors.muted),
-                        ),
-                      ],
-                    ),
-                  ),
-                  _Pill(
-                    icon: Icons.calendar_today_outlined,
-                    label: data.termName,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-              Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: [
-                  _Metric(
-                    label: 'All staff',
-                    value: data.total,
-                    color: AppColors.green,
-                  ),
-                  _Metric(
-                    label: 'Not started',
-                    value: data.notStarted,
-                    color: AppColors.muted,
-                  ),
-                  _Metric(
-                    label: 'Draft',
-                    value: data.draft,
-                    color: AppColors.amber,
-                  ),
-                  _Metric(
-                    label: 'Completed',
-                    value: data.completed,
-                    color: AppColors.green,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 22),
-              Container(
-                decoration: _card(),
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            onChanged: (v) => setState(() => _query = v),
-                            decoration: const InputDecoration(
-                              prefixIcon: Icon(Icons.search),
-                              hintText: 'Search staff or role',
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 14),
-                        DropdownButton<String>(
-                          value: _filter,
-                          items: const [
-                            DropdownMenuItem(
-                              value: 'ALL',
-                              child: Text('All statuses'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'NOT_STARTED',
-                              child: Text('Not started'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'DRAFT',
-                              child: Text('Draft'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'COMPLETED',
-                              child: Text('Completed'),
-                            ),
-                          ],
-                          onChanged: (v) => setState(() => _filter = v!),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 18),
-                    if (rows.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.all(36),
-                        child: Text('No staff match this filter.'),
-                      )
-                    else
-                      ...rows.map(
-                        (review) => _ReviewRow(
-                          review: review,
-                          onOpen: () => _open(review),
-                        ),
+                  Expanded(
+                    child: TextField(
+                      onChanged: (v) => setState(() => _query = v),
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search),
+                        hintText: 'Search staff or role',
                       ),
-                  ],
-                ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  DropdownButton<String>(
+                    value: _filter,
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'ALL',
+                        child: Text('All statuses'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'NOT_STARTED',
+                        child: Text('Not started'),
+                      ),
+                      DropdownMenuItem(value: 'DRAFT', child: Text('Draft')),
+                      DropdownMenuItem(
+                        value: 'COMPLETED',
+                        child: Text('Completed'),
+                      ),
+                    ],
+                    onChanged: (v) => setState(() => _filter = v!),
+                  ),
+                ],
               ),
+              const SizedBox(height: 18),
+              if (rows.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(36),
+                  child: Text('No staff match this filter.'),
+                )
+              else
+                ...rows.map(
+                  (review) =>
+                      _ReviewRow(review: review, onOpen: () => _open(review)),
+                ),
             ],
           ),
-        );
-      },
+        ),
+      ],
+    ),
+  );
+
+  Widget _backButton() => Align(
+    alignment: Alignment.centerLeft,
+    child: TextButton.icon(
+      onPressed: _backToDashboard,
+      icon: const Icon(Icons.arrow_back_rounded),
+      label: const Text('Back to Term Closure'),
     ),
   );
 

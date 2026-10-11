@@ -8,10 +8,12 @@ class TeacherReviewManagementPanel extends StatefulWidget {
     required this.schoolId,
     required this.actorUserId,
     required this.repository,
+    this.onChanged,
   });
   final String schoolId;
   final int? actorUserId;
   final TeacherTermReviewRepository repository;
+  final VoidCallback? onChanged;
   @override
   State<TeacherReviewManagementPanel> createState() =>
       _TeacherReviewManagementPanelState();
@@ -224,6 +226,7 @@ class _TeacherReviewManagementPanelState
         deadline: deadline,
       );
       reload();
+      widget.onChanged?.call();
     }
   }
 
@@ -253,6 +256,7 @@ class _TeacherReviewManagementPanelState
         actorUserId: widget.actorUserId,
       );
       reload();
+      widget.onChanged?.call();
     }
   }
 
@@ -290,6 +294,7 @@ class _TeacherReviewManagementPanelState
         reason: reason,
       );
       reload();
+      widget.onChanged?.call();
     }
   }
 

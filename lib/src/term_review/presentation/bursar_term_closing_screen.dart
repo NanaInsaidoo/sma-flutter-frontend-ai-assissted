@@ -11,12 +11,16 @@ class BursarTermClosingScreen extends StatefulWidget {
     this.management = false,
     this.onOpenFees,
     this.onOpenExpenses,
+    this.embedded = false,
+    this.onChanged,
   });
   final String schoolId;
   final BursarTermClosureRepository repository;
   final int? actorUserId;
   final bool management;
   final VoidCallback? onOpenFees, onOpenExpenses;
+  final bool embedded;
+  final VoidCallback? onChanged;
   @override
   State<BursarTermClosingScreen> createState() => _State();
 }
@@ -80,8 +84,8 @@ class _State extends State<BursarTermClosingScreen> {
       }
       hydrate(s.requireData);
       final x = data!;
-      return ListView(
-        padding: const EdgeInsets.fromLTRB(28, 28, 28, 48),
+      final content = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
@@ -113,6 +117,11 @@ class _State extends State<BursarTermClosingScreen> {
           const SizedBox(height: 18),
           if (widget.management) _management(x) else _form(x),
         ],
+      );
+      if (widget.embedded) return content;
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(28, 28, 28, 48),
+        children: [content],
       );
     },
   );
@@ -804,6 +813,7 @@ class _State extends State<BursarTermClosingScreen> {
         saving = false;
       });
       notice(message);
+      widget.onChanged?.call();
     } catch (e) {
       if (mounted) {
         setState(() => saving = false);

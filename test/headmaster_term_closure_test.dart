@@ -12,6 +12,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final repo = _Repo();
+    var reportsOpened = false;
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -19,26 +20,40 @@ void main() {
             schoolId: 'TEST',
             actorUserId: 1,
             repository: repo,
+            workstreamActions: {'REPORTS': () => reportsOpened = true},
           ),
         ),
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Term readiness and closure'), findsOneWidget);
+    expect(find.text('Term Closure Dashboard'), findsOneWidget);
+    expect(find.text('All closure actions'), findsOneWidget);
+    expect(find.text('3 all actions'), findsOneWidget);
+    expect(find.text('1 cleared'), findsOneWidget);
+    expect(find.text('Needs attention'), findsOneWidget);
+    expect(find.text('Needs review'), findsOneWidget);
+    expect(find.text('Final closure'), findsOneWidget);
     expect(find.text('ACTION REQUIRED'), findsWidgets);
     expect(find.text('Finance and petty cash'), findsOneWidget);
-    expect(
-      find.text('Reason for accepting this warning before closure'),
-      findsOneWidget,
-    );
-    await tester.enterText(
-      find.byType(TextField).first,
-      'Accepted for final report',
-    );
-    expect(find.text('Close term and begin next term'), findsOneWidget);
-    await tester.tap(find.text('Save closure draft'));
+    expect(find.text('Student report cards'), findsOneWidget);
+    expect(find.text('Complete'), findsOneWidget);
+    expect(find.text('View'), findsOneWidget);
+    await tester.tap(find.text('View'));
+    expect(reportsOpened, isTrue);
+    expect(find.text('Warning acknowledgements'), findsNothing);
+    await tester.tap(find.text('Review warning'));
+    await tester.pumpAndSettle();
+    expect(find.text('Reason for accepting this warning'), findsOneWidget);
+    await tester.enterText(find.byType(TextField), 'Accepted for final report');
+    await tester.pump();
+    await tester.tap(find.text('Save acknowledgement'));
     await tester.pumpAndSettle();
     expect(repo.saved, isTrue);
+    expect(find.text('Reviewed'), findsOneWidget);
+    expect(find.text('2 cleared'), findsOneWidget);
+    expect(find.text('1 reviewed'), findsOneWidget);
+    expect(find.textContaining('need review'), findsNothing);
+    expect(find.text('Final closure'), findsOneWidget);
   });
 
   testWidgets('reloads the new operational term after a rollover', (
@@ -64,6 +79,19 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.text('Term transition summary'), findsOneWidget);
+    expect(find.text('Current term closes'), findsOneWidget);
+    expect(find.text('Office opens / vacation begins'), findsOneWidget);
+    expect(find.text('Teaching starts'), findsOneWidget);
+    expect(find.text('Teaching ends'), findsOneWidget);
+    expect(find.text('Next term closes'), findsOneWidget);
+    expect(find.text('12 Dec 2026'), findsOneWidget);
+    expect(find.text('14 Jan 2027'), findsOneWidget);
+    expect(find.text('31 Mar 2027'), findsOneWidget);
+    expect(find.text('30 Apr 2027'), findsOneWidget);
+    expect(find.text('Students'), findsNothing);
+    expect(find.text('Balances forward'), findsNothing);
+
     await tester.scrollUntilVisible(
       find.text('Close term and begin next term'),
       500,
@@ -85,6 +113,92 @@ void main() {
     expect(find.text('New-term setup'), findsOneWidget);
     expect(find.text('Old-term ready item'), findsNothing);
   });
+
+  testWidgets('opens the same date editor from summary and checklist', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 2200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    var editorOpens = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: HeadmasterTermClosureScreen(
+            schoolId: 'TEST',
+            repository: _DateRepo(),
+            onOpenTermDates: () async {
+              editorOpens++;
+              return false;
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('View dates'));
+    await tester.pump();
+    expect(editorOpens, 1);
+
+    await tester.scrollUntilVisible(
+      find.text('Modify dates'),
+      400,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('Modify dates'));
+    await tester.pump();
+    expect(editorOpens, 2);
+  });
+}
+
+class _DateRepo implements HeadmasterTermClosureRepository {
+  static const value = HeadmasterTermClosure(
+    termId: 1,
+    status: 'DRAFT',
+    termClosed: false,
+    readyToClose: false,
+    items: [
+      TermClosureItem(
+        key: 'CLOSING_DATE',
+        label: 'Term closing date',
+        status: 'SCHEDULED',
+        severity: 'BLOCKER',
+        detail: 'This term cannot close before 2026-12-11.',
+      ),
+    ],
+    acknowledgements: {},
+    facilities: {},
+    summary: {},
+    transitionPreview: {
+      'available': true,
+      'nextTermName': 'Second Term',
+      'currentTermClosingDate': '2026-12-11',
+      'operationalStartDate': '2026-12-12',
+      'teachingStartDate': '2027-01-14',
+      'teachingEndDate': '2027-03-31',
+      'closingDate': '2027-04-30',
+    },
+  );
+
+  @override
+  Future<HeadmasterTermClosure> get(String schoolId) async => value;
+
+  @override
+  Future<HeadmasterTermClosure> saveDraft(
+    String schoolId,
+    HeadmasterTermClosureInput input,
+  ) async => value;
+
+  @override
+  Future<HeadmasterTermClosure> close(
+    String schoolId,
+    HeadmasterTermClosureInput input,
+  ) async => value;
+
+  @override
+  Future<List<int>> downloadReport(String schoolId) async => [];
 }
 
 class _Repo implements HeadmasterTermClosureRepository {
@@ -109,6 +223,13 @@ class _Repo implements HeadmasterTermClosureRepository {
         severity: 'WARNING',
         detail: 'One incident remains open.',
       ),
+      TermClosureItem(
+        key: 'REPORTS',
+        label: 'Student report cards',
+        status: 'READY',
+        severity: 'BLOCKER',
+        detail: 'All report cards are published.',
+      ),
     ],
     acknowledgements: {},
     facilities: {},
@@ -122,7 +243,16 @@ class _Repo implements HeadmasterTermClosureRepository {
     HeadmasterTermClosureInput i,
   ) async {
     saved = true;
-    return value;
+    return HeadmasterTermClosure(
+      termId: value.termId,
+      status: value.status,
+      termClosed: value.termClosed,
+      readyToClose: value.readyToClose,
+      items: value.items,
+      acknowledgements: i.acknowledgements,
+      facilities: i.facilities,
+      summary: value.summary,
+    );
   }
 
   @override
@@ -157,10 +287,11 @@ class _RolloverRepo implements HeadmasterTermClosureRepository {
     transitionPreview: {
       'available': true,
       'nextTermName': 'Second Term',
-      'operationalStartDate': '2026-08-21',
-      'teachingStartDate': '2027-01-11',
-      'students': 5,
-      'balancesToCarryForward': 6090,
+      'currentTermClosingDate': '2026-12-11',
+      'operationalStartDate': '2026-12-12',
+      'teachingStartDate': '2027-01-14',
+      'teachingEndDate': '2027-03-31',
+      'closingDate': '2027-04-30',
     },
   );
 

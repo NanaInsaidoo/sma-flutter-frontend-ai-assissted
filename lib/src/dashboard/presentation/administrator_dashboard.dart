@@ -28,6 +28,7 @@ import '../../fees/data/fee_api_client.dart';
 import '../../fees/domain/fee_models.dart' hide FeeSummary;
 import '../../incidents/data/incident_api_client.dart';
 import '../../incidents/presentation/incidents_screen.dart';
+import '../../settings/presentation/academic_term_management_screen.dart';
 import '../../settings/presentation/school_settings_screen.dart';
 import '../../term_review/presentation/term_review_screen.dart';
 import '../../term_review/data/staff_review_api_client.dart';
@@ -52,6 +53,7 @@ import '../../readiness/data/school_readiness_repository.dart';
 import '../../readiness/domain/school_readiness.dart';
 import '../../notifications/data/school_notification_api_client.dart';
 import '../../notifications/domain/school_notification_models.dart';
+import '../../reports/presentation/reports_library_screen.dart';
 
 enum _SchoolAdminPage {
   dashboard,
@@ -73,6 +75,7 @@ enum _SchoolAdminPage {
   shop,
   expenses,
   incidents,
+  reports,
   calendar,
   termReview,
   auditActivity,
@@ -1162,6 +1165,17 @@ class _DashboardBody extends StatelessWidget {
       );
     }
 
+    if (selectedPage == _SchoolAdminPage.reports) {
+      return ReportsLibraryScreen(
+        schoolName: data.schoolName,
+        schoolId: schoolId,
+        academicYear: data.academicYear,
+        currentTerm: data.term,
+        accessToken: accessToken,
+        onRefreshAccessToken: onRefreshAccessToken,
+      );
+    }
+
     if (selectedPage == _SchoolAdminPage.classes) {
       if (_isTeachingRole(role)) {
         return TeacherClassesScreen(
@@ -1244,6 +1258,19 @@ class _DashboardBody extends StatelessWidget {
         teacherReviewRepository: teacherRepository,
         bursarClosureRepository: bursarRepository,
         headmasterClosureRepository: HeadmasterTermClosureApiClient(
+          accessToken: accessToken,
+          onRefreshAccessToken: onRefreshAccessToken,
+        ),
+        onOpenAttendance: () => onSelectPage(_SchoolAdminPage.attendance),
+        onOpenStaffAttendance: () =>
+            onSelectPage(_SchoolAdminPage.staffAttendance),
+        onOpenEvaluations: () => onSelectPage(_SchoolAdminPage.evaluations),
+        onOpenFinalReports: () => onSelectPage(_SchoolAdminPage.finalReports),
+        onOpenIncidents: () => onSelectPage(_SchoolAdminPage.incidents),
+        onOpenSettings: () => onSelectPage(_SchoolAdminPage.settings),
+        onOpenTermDates: () => showPreparedTermDateEditor(
+          context: context,
+          schoolId: schoolId,
           accessToken: accessToken,
           onRefreshAccessToken: onRefreshAccessToken,
         ),
@@ -6954,10 +6981,12 @@ class _Sidebar extends StatelessWidget {
                       icon: Icons.bar_chart_rounded,
                       label: 'Reports',
                       collapsed: collapsed,
+                      active: selectedPage == _SchoolAdminPage.reports,
+                      onTap: () => onSelectPage(_SchoolAdminPage.reports),
                     ),
                   _SidebarButton(
                     icon: Icons.event_available_outlined,
-                    label: 'Term Review',
+                    label: isTeacher ? 'Term Review' : 'Term Closure',
                     collapsed: collapsed,
                     active: selectedPage == _SchoolAdminPage.termReview,
                     onTap: () => onSelectPage(_SchoolAdminPage.termReview),

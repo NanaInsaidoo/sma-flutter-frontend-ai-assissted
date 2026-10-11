@@ -6,6 +6,42 @@ import 'package:http/http.dart' as http;
 import '../../config/api_config.dart';
 import '../../theme/app_theme.dart';
 
+Future<bool> showPreparedTermDateEditor({
+  required BuildContext context,
+  required String schoolId,
+  required String? accessToken,
+  Future<String?> Function()? onRefreshAccessToken,
+}) async {
+  final api = _AcademicTermManagementApi(
+    accessToken: accessToken,
+    onRefreshAccessToken: onRefreshAccessToken,
+  );
+  try {
+    final terms = await api.terms(schoolId);
+    if (!context.mounted) return false;
+    final prepared = terms
+        .where((term) => term.status == 'PREPARED' && !term.isCurrent)
+        .firstOrNull;
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _CreatePreparedTermDialog(
+        schoolId: schoolId,
+        api: api,
+        existing: prepared,
+      ),
+    );
+    return saved == true;
+  } catch (error) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unable to open term dates: $error')),
+      );
+    }
+    return false;
+  }
+}
+
 class AcademicTermManagementScreen extends StatefulWidget {
   const AcademicTermManagementScreen({
     super.key,
@@ -119,7 +155,7 @@ class _AcademicTermManagementScreenState
                 SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'The operational start is when the office, admissions and fee collection begin. Teaching may start later. A prepared term becomes current only when the current term is closed.',
+                    'The operational start is when the office may reopen and admissions for the next term can begin, even during vacation. Fee collection may also start then; teaching begins separately.',
                     style: TextStyle(color: AppColors.text, height: 1.35),
                   ),
                 ),
@@ -151,7 +187,16 @@ class _AcademicTermManagementScreenState
                 );
               }
               return Column(
-                children: terms.map((term) => _TermCard(term: term)).toList(),
+                children: terms
+                    .map(
+                      (term) => _TermCard(
+                        term: term,
+                        onEdit: term.status == 'PREPARED'
+                            ? () => _editTerm(term)
+                            : null,
+                      ),
+                    )
+                    .toList(),
               );
             },
           ),
@@ -159,12 +204,35 @@ class _AcademicTermManagementScreenState
       ),
     );
   }
+
+  Future<void> _editTerm(_ManagedTerm term) async {
+    final updated = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _CreatePreparedTermDialog(
+        schoolId: widget.customSchoolId,
+        api: _api,
+        existing: term,
+      ),
+    );
+    if (updated == true && mounted) {
+      await _reload();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('The next-term dates have been updated.'),
+          backgroundColor: AppColors.green,
+        ),
+      );
+    }
+  }
 }
 
 class _TermCard extends StatelessWidget {
-  const _TermCard({required this.term});
+  const _TermCard({required this.term, this.onEdit});
 
   final _ManagedTerm term;
+  final VoidCallback? onEdit;
 
   @override
   Widget build(BuildContext context) {
@@ -257,6 +325,17 @@ class _TermCard extends StatelessWidget {
                       style: const TextStyle(color: AppColors.muted),
                     ),
                   ],
+                  if (onEdit != null) ...[
+                    const SizedBox(height: 10),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        onPressed: onEdit,
+                        icon: const Icon(Icons.edit_calendar_outlined),
+                        label: const Text('Modify dates'),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -300,10 +379,15 @@ class _DateSummary extends StatelessWidget {
 }
 
 class _CreatePreparedTermDialog extends StatefulWidget {
-  const _CreatePreparedTermDialog({required this.schoolId, required this.api});
+  const _CreatePreparedTermDialog({
+    required this.schoolId,
+    required this.api,
+    this.existing,
+  });
 
   final String schoolId;
   final _AcademicTermManagementApi api;
+  final _ManagedTerm? existing;
 
   @override
   State<_CreatePreparedTermDialog> createState() =>
@@ -311,11 +395,8 @@ class _CreatePreparedTermDialog extends StatefulWidget {
 }
 
 class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
-  late final Future<List<List<_LookupOption>>> _lookups = Future.wait([
-    widget.api.academicYears(),
-    widget.api.termTypes(),
-  ]);
-  final _description = TextEditingController();
+  late final Future<List<List<_LookupOption>>> _lookups;
+  late final TextEditingController _description;
   int? _academicYearId;
   int? _termTypeId;
   DateTime? _operationalStart;
@@ -324,6 +405,23 @@ class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
   DateTime? _closingDate;
   bool _saving = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    _lookups = Future.wait([
+      widget.api.academicYears(),
+      widget.api.termTypes(),
+    ]);
+    _description = TextEditingController(text: existing?.description ?? '');
+    _academicYearId = existing?.academicYearId;
+    _termTypeId = existing?.termTypeId;
+    _operationalStart = existing?.operationalStart;
+    _teachingStart = existing?.teachingStart;
+    _teachingEnd = existing?.teachingEnd;
+    _closingDate = existing?.closingDate;
+  }
 
   @override
   void dispose() {
@@ -385,8 +483,25 @@ class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
       _error = null;
     });
     try {
-      await widget.api.createPreparedTerm(
+      final terms = await widget.api.terms(widget.schoolId);
+      final duplicate = terms.any(
+        (term) =>
+            term.id != widget.existing?.id &&
+            term.academicYearId == _academicYearId &&
+            term.termTypeId == _termTypeId,
+      );
+      if (duplicate) {
+        if (mounted) {
+          setState(() {
+            _error =
+                'This academic year and term already exist. Choose a different term.';
+          });
+        }
+        return;
+      }
+      await widget.api.savePreparedTerm(
         schoolId: widget.schoolId,
+        existing: widget.existing,
         academicYearId: _academicYearId!,
         termTypeId: _termTypeId!,
         operationalStart: _operationalStart!,
@@ -403,10 +518,87 @@ class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
     }
   }
 
+  Future<void> _showDateHelp() => showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.help_outline_rounded, color: AppColors.green),
+          SizedBox(width: 10),
+          Text('Understanding the term dates'),
+        ],
+      ),
+      content: const SizedBox(
+        width: 560,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Use the dates in this order. They describe when the school begins operating, when lessons run and when closing work is complete.',
+                style: TextStyle(color: AppColors.muted),
+              ),
+              SizedBox(height: 18),
+              _TermDateExplanation(
+                number: '1',
+                title: 'Office opens / vacation begins',
+                description:
+                    'The school may be on vacation, but the office can reopen and admissions for the next term can begin from this date. Fee collection and payments may also start before teaching begins.',
+              ),
+              _TermDateExplanation(
+                number: '2',
+                title: 'Teaching starts',
+                description:
+                    'The first instructional day for students. Normal attendance, lessons and academic records begin from this date.',
+              ),
+              _TermDateExplanation(
+                number: '3',
+                title: 'Teaching ends',
+                description:
+                    'The final day of normal lessons. Assessments, reports, reviews and other closing work may continue afterward.',
+              ),
+              _TermDateExplanation(
+                number: '4',
+                title: 'Term closes',
+                description:
+                    'The earliest date the term can be formally closed. All readiness blockers must also be resolved before closure.',
+                last: true,
+              ),
+              SizedBox(height: 14),
+              _TermDateOrderNotice(),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Got it'),
+        ),
+      ],
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Prepare the next term'),
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              widget.existing == null
+                  ? 'Prepare the next term'
+                  : 'Modify the next term',
+            ),
+          ),
+          TextButton.icon(
+            onPressed: _showDateHelp,
+            icon: const Icon(Icons.help_outline_rounded),
+            label: const Text('Date help'),
+          ),
+        ],
+      ),
       content: SizedBox(
         width: 620,
         child: FutureBuilder<List<List<_LookupOption>>>(
@@ -425,7 +617,7 @@ class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const Text(
-                    'This creates a prepared term. It will not replace the current term until term closure is completed.',
+                    'Choose the next academic period and set when the office reopens, teaching runs and the term may close.',
                     style: TextStyle(color: AppColors.muted),
                   ),
                   const SizedBox(height: 16),
@@ -547,11 +739,116 @@ class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : const Icon(Icons.check_rounded),
-          label: Text(_saving ? 'Preparing...' : 'Prepare term'),
+          label: Text(
+            _saving
+                ? 'Saving...'
+                : widget.existing == null
+                ? 'Prepare term'
+                : 'Save changes',
+          ),
         ),
       ],
     );
   }
+}
+
+class _TermDateExplanation extends StatelessWidget {
+  const _TermDateExplanation({
+    required this.number,
+    required this.title,
+    required this.description,
+    this.last = false,
+  });
+
+  final String number;
+  final String title;
+  final String description;
+  final bool last;
+
+  @override
+  Widget build(BuildContext context) => IntrinsicHeight(
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Column(
+          children: [
+            Container(
+              width: 30,
+              height: 30,
+              alignment: Alignment.center,
+              decoration: const BoxDecoration(
+                color: AppColors.greenSoft,
+                shape: BoxShape.circle,
+              ),
+              child: Text(
+                number,
+                style: const TextStyle(
+                  color: AppColors.green,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            if (!last)
+              Expanded(
+                child: Container(
+                  width: 2,
+                  margin: const EdgeInsets.symmetric(vertical: 5),
+                  color: AppColors.border,
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Padding(
+            padding: EdgeInsets.only(bottom: last ? 0 : 18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  description,
+                  style: const TextStyle(color: AppColors.muted, height: 1.35),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _TermDateOrderNotice extends StatelessWidget {
+  const _TermDateOrderNotice();
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: AppColors.blue.withValues(alpha: .08),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: AppColors.blue.withValues(alpha: .2)),
+    ),
+    child: const Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(Icons.info_outline_rounded, color: AppColors.blue),
+        SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            'Required order: Office opens → Teaching starts → Teaching ends → Term closes. Dates may be the same day, but they cannot move backward.',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _DialogDate extends StatelessWidget {
@@ -606,6 +903,8 @@ class _TermError extends StatelessWidget {
 class _ManagedTerm {
   const _ManagedTerm({
     required this.id,
+    required this.academicYearId,
+    required this.termTypeId,
     required this.academicYear,
     required this.termName,
     required this.status,
@@ -615,9 +914,12 @@ class _ManagedTerm {
     required this.teachingEnd,
     required this.closingDate,
     required this.description,
+    required this.raw,
   });
 
   final int id;
+  final int academicYearId;
+  final int termTypeId;
   final String academicYear;
   final String termName;
   final String status;
@@ -627,10 +929,13 @@ class _ManagedTerm {
   final DateTime teachingEnd;
   final DateTime closingDate;
   final String description;
+  final Map<String, dynamic> raw;
 
   factory _ManagedTerm.fromJson(Map<String, dynamic> json) {
     return _ManagedTerm(
       id: (json['id'] as num).toInt(),
+      academicYearId: _nestedId(json['academicYear']),
+      termTypeId: _nestedId(json['termType']),
       academicYear: _nestedName(json['academicYear']),
       termName: _nestedName(json['termType']),
       status:
@@ -644,6 +949,7 @@ class _ManagedTerm {
       teachingEnd: _jsonDate(json['teachingEndDate'] ?? json['endDate']),
       closingDate: _jsonDate(json['closingDate'] ?? json['endDate']),
       description: '${json['description'] ?? ''}'.trim(),
+      raw: Map<String, dynamic>.from(json),
     );
   }
 }
@@ -688,8 +994,9 @@ class _AcademicTermManagementApi {
     }).toList();
   }
 
-  Future<void> createPreparedTerm({
+  Future<void> savePreparedTerm({
     required String schoolId,
+    required _ManagedTerm? existing,
     required int academicYearId,
     required int termTypeId,
     required DateTime operationalStart,
@@ -698,23 +1005,27 @@ class _AcademicTermManagementApi {
     required DateTime closingDate,
     required String description,
   }) async {
+    final body = <String, dynamic>{
+      if (existing != null) ...existing.raw,
+      'academicYear': {'id': academicYearId},
+      'termType': {'id': termTypeId},
+      'startDate': _iso(operationalStart),
+      'endDate': _iso(closingDate),
+      'operationalStartDate': _iso(operationalStart),
+      'teachingStartDate': _iso(teachingStart),
+      'teachingEndDate': _iso(teachingEnd),
+      'closingDate': _iso(closingDate),
+      'lifecycleStatus': 'PREPARED',
+      'description': description.trim().isEmpty
+          ? 'Prepared from Academic Term Settings'
+          : description.trim(),
+    };
     await _send(
-      'POST',
-      '/api/academic-terms?customSchoolId=${Uri.encodeQueryComponent(schoolId)}',
-      body: jsonEncode({
-        'academicYear': {'id': academicYearId},
-        'termType': {'id': termTypeId},
-        'startDate': _iso(operationalStart),
-        'endDate': _iso(closingDate),
-        'operationalStartDate': _iso(operationalStart),
-        'teachingStartDate': _iso(teachingStart),
-        'teachingEndDate': _iso(teachingEnd),
-        'closingDate': _iso(closingDate),
-        'lifecycleStatus': 'PREPARED',
-        'description': description.trim().isEmpty
-            ? 'Prepared from Academic Term Settings'
-            : description.trim(),
-      }),
+      existing == null ? 'POST' : 'PUT',
+      existing == null
+          ? '/api/academic-terms?customSchoolId=${Uri.encodeQueryComponent(schoolId)}'
+          : '/api/academic-terms/${existing.id}?customSchoolId=${Uri.encodeQueryComponent(schoolId)}',
+      body: jsonEncode(body),
     );
   }
 
@@ -730,9 +1041,11 @@ class _AcademicTermManagementApi {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ${accessToken?.trim() ?? ''}',
       };
-      return method == 'POST'
-          ? http.post(uri, headers: headers, body: body)
-          : http.get(uri, headers: headers);
+      return switch (method) {
+        'POST' => http.post(uri, headers: headers, body: body),
+        'PUT' => http.put(uri, headers: headers, body: body),
+        _ => http.get(uri, headers: headers),
+      };
     }
 
     var response = await send();
@@ -761,6 +1074,11 @@ class _AcademicTermManagementApi {
 String _nestedName(Object? value) {
   if (value is Map) return '${value['name'] ?? ''}'.trim();
   return '${value ?? ''}'.trim();
+}
+
+int _nestedId(Object? value) {
+  if (value is Map) return int.tryParse('${value['id']}') ?? 0;
+  return 0;
 }
 
 DateTime _jsonDate(Object? value) {
