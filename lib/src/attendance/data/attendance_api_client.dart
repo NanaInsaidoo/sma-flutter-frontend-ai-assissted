@@ -67,7 +67,7 @@ class AttendanceApiClient
           final stats = _map(item['todayStats']) ?? const {};
           final submitted = stats['submitted'] == true;
           return AttendanceClassSummary(
-            gradeId: _integer(item['gradeId']),
+            gradeId: _integer(item['schoolGradeLevelId'] ?? item['gradeId']),
             gradeName: _string(item['grade']),
             streamId: _integer(item['streamId']),
             streamName: _string(item['stream']),

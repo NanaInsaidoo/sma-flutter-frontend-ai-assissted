@@ -122,6 +122,23 @@ void main() {
     expect(find.text('Email address 2 (optional)'), findsOneWidget);
     expect(find.text('Add another phone'), findsOneWidget);
     expect(find.text('Add another email'), findsOneWidget);
+    expect(find.text('Uses WhatsApp'), findsNWidgets(2));
+    expect(
+      tester
+          .widget<CheckboxListTile>(
+            find.byKey(const ValueKey('Phone WhatsApp 0')),
+          )
+          .value,
+      isTrue,
+    );
+    expect(
+      tester
+          .widget<DropdownButtonFormField<String>>(
+            find.byKey(const ValueKey('Phone type 0')),
+          )
+          .initialValue,
+      'mobile',
+    );
 
     await tester.ensureVisible(find.text('Add another phone'));
     await tester.tap(find.text('Add another phone'));
@@ -223,13 +240,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Nursery 1'), findsOneWidget);
-    expect(find.text('Custom early-years classes'), findsOneWidget);
+    expect(find.text('Custom classes'), findsOneWidget);
     expect(find.text('GES kindergarten'), findsOneWidget);
     expect(
-      tester.getTopLeft(find.text('Custom early-years classes')).dy,
+      tester.getTopLeft(find.text('Custom classes')).dy,
       lessThan(tester.getTopLeft(find.text('GES kindergarten')).dy),
     );
-    expect(find.text('CUSTOM CLASS · KG SUBJECTS SUGGESTED'), findsOneWidget);
+    expect(find.text('CUSTOM CLASS · KG SUBJECTS SUGGESTED'), findsNothing);
     expect(find.text('2 grades selected'), findsOneWidget);
   });
 
@@ -276,6 +293,159 @@ void main() {
       expect(find.text('Select Yes or No'), findsNothing);
     },
   );
+
+  testWidgets('education level replaces the redundant school category', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repository = _BasicInfoRepository();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchoolCreationScreen(
+            accessToken: 'preview',
+            onRefreshAccessToken: () async => null,
+            repository: repository,
+            existingSchool: _school,
+            initialStep: 0,
+            singleStepEdit: true,
+            initialLookups: _basicInfoLookups,
+            lookupLoader: () async => _basicInfoLookups,
+            initialRecord: _basicInfoRecord,
+            onBack: () {},
+            onCreated: () {},
+            onStepUpdated: () async {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('School category'), findsNothing);
+    expect(find.text('Education level'), findsOneWidget);
+    expect(find.text('Junior High'), findsOneWidget);
+    final mottoField = tester.widget<TextField>(
+      find.descendant(
+        of: find.byKey(const ValueKey('school-motto')),
+        matching: find.byType(TextField),
+      ),
+    );
+    expect(mottoField.minLines, 2);
+    expect(mottoField.maxLines, 4);
+    expect(mottoField.maxLength, 160);
+
+    await tester.tap(find.text('Junior High'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Primary').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save Changes'));
+    await tester.pumpAndSettle();
+
+    expect(repository.savedDraft, isNotNull);
+    expect(repository.savedDraft!.educationLevel, 'Primary');
+    expect(repository.savedDraft!.educationLevelId, 2);
+    expect(repository.savedDraft!.schoolType, 'Primary');
+    expect(repository.savedDraft!.schoolTypeId, 2);
+  });
+
+  testWidgets('social welfare step can be saved without any details', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repository = _BasicInfoRepository();
+    const lookups = _basicInfoLookups;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchoolCreationScreen(
+            accessToken: 'preview',
+            onRefreshAccessToken: () async => null,
+            repository: repository,
+            existingSchool: _school,
+            initialStep: 2,
+            singleStepEdit: true,
+            initialLookups: lookups,
+            lookupLoader: () async => lookups,
+            initialRecord: _socialWelfareRecord,
+            onBack: () {},
+            onCreated: () {},
+            onStepUpdated: () async {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text(
+        'Optional approval and compliance details. These can be added later.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Approval officer name (optional)'), findsOneWidget);
+    expect(find.text('Approval date (optional)'), findsOneWidget);
+    expect(find.text('Compliance status (optional)'), findsOneWidget);
+
+    await tester.tap(find.text('Save Changes'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('highlighted required fields'), findsNothing);
+    expect(repository.savedDraft, isNotNull);
+    expect(repository.savedDraft!.socialWelfareNumber, isEmpty);
+    expect(repository.savedDraft!.socialWelfareOfficer, isEmpty);
+    expect(repository.savedDraft!.socialWelfareDate, isEmpty);
+    expect(repository.savedDraft!.socialWelfareStatusId, isNull);
+  });
+
+  testWidgets('all supporting documents are optional', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repository = _BasicInfoRepository();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchoolCreationScreen(
+            accessToken: 'preview',
+            onRefreshAccessToken: () async => null,
+            repository: repository,
+            existingSchool: _school,
+            initialStep: 5,
+            singleStepEdit: true,
+            initialLookups: _basicInfoLookups,
+            lookupLoader: () async => _basicInfoLookups,
+            initialRecord: _socialWelfareRecord,
+            onBack: () {},
+            onCreated: () {},
+            onStepUpdated: () async {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Supporting Documents'), findsWidgets);
+    expect(
+      find.text('Add registration and compliance documents now or later.'),
+      findsOneWidget,
+    );
+    expect(find.text('Required'), findsNothing);
+    expect(find.text('Social welfare approval'), findsOneWidget);
+
+    await tester.tap(find.text('Save Changes'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('Upload the required documents before continuing'),
+      findsNothing,
+    );
+    expect(repository.savedDraft, isNotNull);
+    expect(repository.savedDraft!.documents, isEmpty);
+  });
 }
 
 const _school = ManagedSchool(
@@ -297,6 +467,95 @@ const _school = ManagedSchool(
   administratorName: '',
   administratorPhone: '',
   administratorEmail: '',
+);
+
+const _basicInfoLookups = SchoolCreationLookups(
+  schoolCategories: [
+    'Kindergarten',
+    'Primary',
+    'Junior High School',
+    'Basic School (KG-Primary-JHS)',
+    'Special School',
+  ],
+  schoolCategoryIds: {
+    'Kindergarten': 1,
+    'Primary': 2,
+    'Junior High School': 3,
+    'Basic School (KG-Primary-JHS)': 4,
+    'Special School': 5,
+  },
+  educationLevels: [
+    'Kindergarten',
+    'Primary',
+    'Junior High',
+    'Special Education',
+  ],
+  educationLevelIds: {
+    'Kindergarten': 1,
+    'Primary': 2,
+    'Junior High': 3,
+    'Special Education': 4,
+  },
+  gesRegistrationTypes: [],
+  gesRegistrationTypeIds: {},
+  businessRegistrationTypes: [],
+  businessRegistrationTypeIds: {},
+  socialWelfareStatuses: [],
+  socialWelfareStatusIds: {},
+  countries: [],
+  countryIds: {},
+  regions: [],
+  regionIds: {},
+  academicYears: [],
+  academicYearIds: {},
+  termTypes: [],
+  termTypeIds: {},
+  socialMediaPlatforms: [],
+  socialMediaPlatformIds: {},
+  eventTypes: [],
+  eventTypeIds: {},
+  gradeLevels: [],
+  gradeLevelIds: {},
+  cities: [],
+  cityIds: {},
+  districts: [],
+  districtIds: {},
+);
+
+const _basicInfoRecord = SchoolOnboardingRecord(
+  data: {
+    'customSchoolId': 'SCH-ADDRESS',
+    'schoolName': 'Address Test School',
+    'category': {'id': 3, 'name': 'Junior High School'},
+    'educationLevel': {'id': 3, 'level': 'Junior High'},
+    'yearFounded': 2020,
+    'motto': 'Learn and serve',
+    'registrationStatus': 'IN_PROGRESS',
+    'currentStep': 'BASIC_INFO',
+    'completedSteps': [],
+  },
+  progress: SchoolOnboardingProgress(
+    customSchoolId: 'SCH-ADDRESS',
+    registrationStatus: 'IN_PROGRESS',
+    currentStep: 'BASIC_INFO',
+    completedSteps: [],
+  ),
+);
+
+const _socialWelfareRecord = SchoolOnboardingRecord(
+  data: {
+    'customSchoolId': 'SCH-ADDRESS',
+    'schoolName': 'Address Test School',
+    'registrationStatus': 'IN_PROGRESS',
+    'currentStep': 'SOCIAL_WELFARE_COMPLIANCE',
+    'completedSteps': ['BASIC_INFO', 'REGISTRATION_DETAILS'],
+  },
+  progress: SchoolOnboardingProgress(
+    customSchoolId: 'SCH-ADDRESS',
+    registrationStatus: 'IN_PROGRESS',
+    currentStep: 'SOCIAL_WELFARE_COMPLIANCE',
+    completedSteps: ['BASIC_INFO', 'REGISTRATION_DETAILS'],
+  ),
 );
 
 final _addressLookups = SchoolCreationLookups.empty().copyWith(
@@ -346,11 +605,11 @@ const _contactRecord = SchoolOnboardingRecord(
     'schoolName': 'Address Test School',
     'contactInfo': {
       'personalPhoneNumbers': [
-        {'number': '+233 30 111 1111', 'type': 'office'},
+        {'number': '+233 30 111 1111', 'type': 'whatsapp'},
       ],
       'workPhoneNumbers': [
-        {'number': '+233 30 111 1111', 'type': 'office'},
-        {'number': '+233 30 222 2222', 'type': 'office'},
+        {'number': '+233 30 111 1111', 'type': 'office', 'isWhatsApp': false},
+        {'number': '+233 30 222 2222', 'type': 'office', 'isWhatsApp': false},
       ],
       'emails': ['office@school.test', 'accounts@school.test'],
     },
@@ -458,6 +717,24 @@ class _AddressRepository extends FakePlatformRepository {
   Future<SchoolOnboardingRecord> getSchoolOnboardingRecord(
     String customSchoolId,
   ) async => _addressRecord;
+}
+
+class _BasicInfoRepository extends _AddressRepository {
+  SchoolOnboardingDraft? savedDraft;
+
+  @override
+  Future<SchoolOnboardingProgress> saveSchoolOnboardingStep({
+    required int stepIndex,
+    required SchoolOnboardingDraft draft,
+  }) async {
+    savedDraft = draft;
+    return const SchoolOnboardingProgress(
+      customSchoolId: 'SCH-ADDRESS',
+      registrationStatus: 'IN_PROGRESS',
+      currentStep: 'REGISTRATION_DETAILS',
+      completedSteps: ['BASIC_INFO'],
+    );
+  }
 }
 
 class _ContactRepository extends _AddressRepository {

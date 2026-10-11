@@ -690,16 +690,6 @@ extension ManagedSchoolAttentionRules on ManagedSchool {
       reasons.add('School waiting for approval for more than 3 days');
     }
 
-    if (statusText.contains('ges') && statusText.contains('missing')) {
-      reasons.add('GES registration missing');
-    }
-
-    if (statusText.contains('business') &&
-        statusText.contains('registration') &&
-        (statusText.contains('missing') || statusText.contains('6 months'))) {
-      reasons.add('Business registration missing for more than 6 months');
-    }
-
     return reasons.toSet().toList();
   }
 }
@@ -745,11 +735,13 @@ class SchoolPhoneContact {
     required this.number,
     required this.type,
     this.isPrimary = false,
+    this.isWhatsApp = false,
   });
 
   final String number;
   final String type;
   final bool isPrimary;
+  final bool isWhatsApp;
 }
 
 class SchoolOnboardingDraft {

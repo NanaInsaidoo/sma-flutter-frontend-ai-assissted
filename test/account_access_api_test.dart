@@ -269,6 +269,46 @@ void main() {
     );
   });
 
+  testWidgets('local recovery exposes and prefills the testing code', (
+    tester,
+  ) async {
+    final api = AccountAccessApiClient(
+      client: MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'challengeId': 'challenge-1',
+            'deliveryChannel': 'EMAIL',
+            'maskedDestination': 'r***@gmail.com',
+            'message':
+                'If an eligible account exists, a verification code has been sent.',
+            'testingCode': '456789',
+          }),
+          200,
+        );
+      }),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AccountRecoveryScreen(
+          kind: AccountRecoveryKind.password,
+          onBackToLogin: () {},
+          api: api,
+        ),
+      ),
+    );
+
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Global username'),
+      'superadmin',
+    );
+    await tester.tap(find.text('Send verification code'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Local testing code: 456789'), findsOneWidget);
+    final codeField = find.widgetWithText(TextFormField, 'Verification code');
+    expect(tester.widget<TextFormField>(codeField).controller?.text, '456789');
+  });
+
   test(
     'invitation verification sends only supplied optional evidence',
     () async {

@@ -1185,7 +1185,7 @@ class _DashboardBody extends StatelessWidget {
         accessToken: accessToken,
         onRefreshAccessToken: onRefreshAccessToken,
         onOpenAttendance: () => onSelectPage(_SchoolAdminPage.attendance),
-        onOpenAssessments: () => onSelectPage(_SchoolAdminPage.assessments),
+        onOpenAssessments: onOpenAssessmentsForStream,
         onOpenIncidents: () => onSelectPage(_SchoolAdminPage.incidents),
         onOpenCalendar: () => onSelectPage(_SchoolAdminPage.calendar),
       );

@@ -161,7 +161,8 @@ class AccountAccessApiClient {
         .whereType<String>()
         .firstWhere(
           (value) => value.trim().isNotEmpty,
-          orElse: () => 'Something went wrong. Please try again.',
+          orElse: () =>
+              'Request failed (${response.statusCode}). Please try again.',
         );
     throw AccountAccessException(message, response.statusCode);
   }

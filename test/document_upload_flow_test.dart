@@ -475,6 +475,37 @@ void main() {
     );
   });
 
+  test('empty optional social welfare step sends an empty body', () async {
+    final client = MockClient((request) async {
+      expect(request.method, 'PUT');
+      expect(
+        request.url.queryParameters['currentStep'],
+        'SOCIAL_WELFARE_COMPLIANCE',
+      );
+      expect(jsonDecode(request.body), <String, dynamic>{});
+      return http.Response(
+        jsonEncode({
+          'customSchoolId': 'SCH-001',
+          'currentStep': 'ADDRESS',
+          'completedSteps': [
+            'BASIC_INFO',
+            'REGISTRATION_DETAILS',
+            'SOCIAL_WELFARE_COMPLIANCE',
+          ],
+        }),
+        200,
+      );
+    });
+
+    final progress = await LivePlatformRepository(
+      accessToken: 'test-token',
+      client: client,
+    ).saveSchoolOnboardingStep(stepIndex: 2, draft: _documentDraft());
+
+    expect(progress.currentStep, 'ADDRESS');
+    expect(progress.completedSteps, contains('SOCIAL_WELFARE_COMPLIANCE'));
+  });
+
   test(
     'education level is included in the basic information request',
     () async {
@@ -608,11 +639,11 @@ void main() {
       final body = jsonDecode(request.body) as Map<String, dynamic>;
       expect(body['contactInfo'], {
         'personalPhoneNumbers': [
-          {'number': '0299000000', 'type': 'office'},
-          {'number': '0244000000', 'type': 'mobile'},
+          {'number': '0299000000', 'type': 'office', 'isWhatsApp': false},
+          {'number': '0244000000', 'type': 'mobile', 'isWhatsApp': true},
         ],
         'workPhoneNumbers': [
-          {'number': '0302000000', 'type': 'office'},
+          {'number': '0302000000', 'type': 'office', 'isWhatsApp': false},
         ],
         'emails': ['office@school.test', 'accounts@school.test'],
         'socialMedia': <dynamic>[],
@@ -639,7 +670,11 @@ void main() {
             type: 'office',
             isPrimary: true,
           ),
-          SchoolPhoneContact(number: '0244000000', type: 'mobile'),
+          SchoolPhoneContact(
+            number: '0244000000',
+            type: 'mobile',
+            isWhatsApp: true,
+          ),
           SchoolPhoneContact(number: '0302000000', type: 'office'),
         ],
         email: 'office@school.test, accounts@school.test',

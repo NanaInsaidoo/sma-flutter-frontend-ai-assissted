@@ -258,6 +258,22 @@ class _AccountRecoveryScreenState extends State<AccountRecoveryScreen> {
             '${_challenge!.message} ${_challenge!.deliveryChannel}: ${_challenge!.maskedDestination}',
           ),
         ),
+        if (_challenge!.testingCode?.isNotEmpty ?? false) ...[
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF7E8),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFFF2D08A)),
+            ),
+            child: Text(
+              'Local testing code: ${_challenge!.testingCode}',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
         const SizedBox(height: 14),
         TextFormField(
           controller: _code,

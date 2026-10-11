@@ -483,6 +483,20 @@ class ClassesApiClient implements ClassesRepository {
   }
 
   @override
+  Future<void> renameStream({
+    required String customSchoolId,
+    required int streamId,
+    required String streamName,
+  }) async {
+    final encoded = Uri.encodeComponent(customSchoolId);
+    await _send(
+      'PUT',
+      '/api/grade-levels/school/$encoded/streams/$streamId',
+      body: {'name': streamName, 'alias': streamName},
+    );
+  }
+
+  @override
   Future<void> updateStreamCapacities({
     required String customSchoolId,
     required List<StreamCapacityUpdate> updates,
@@ -691,9 +705,12 @@ class ClassesApiClient implements ClassesRepository {
     Map<String, dynamic> json, {
     required int fallbackGradeLevelId,
   }) {
+    final alias = _string(json['alias'] ?? json['Alias']);
     return ClassStreamSummary(
       id: _integer(json['streamId'] ?? json['id']),
-      name: _string(json['streamName'] ?? json['name'] ?? json['section']),
+      name: alias.isNotEmpty
+          ? alias
+          : _string(json['streamName'] ?? json['name'] ?? json['section']),
       gradeLevelId: _integer(
         json['gradeLevelId'] ?? json['schoolGradeLevelId'],
         fallback: fallbackGradeLevelId,

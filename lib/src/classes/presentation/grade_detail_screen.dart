@@ -32,6 +32,8 @@ class GradeDetailScreen extends StatefulWidget {
     this.teacherView = false,
     required this.repository,
     this.onClassTeachersChanged,
+    this.onRenameSection,
+    this.onDeleteSection,
     required this.onBack,
   });
 
@@ -56,6 +58,8 @@ class GradeDetailScreen extends StatefulWidget {
   final bool teacherView;
   final ClassesRepository repository;
   final Future<void> Function()? onClassTeachersChanged;
+  final Future<void> Function()? onRenameSection;
+  final Future<void> Function()? onDeleteSection;
   final VoidCallback onBack;
 
   @override
@@ -139,6 +143,9 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
   List<ClassSubject> _subjects = const [];
   List<SubjectTeacherAssignment> _subjectTeachers = const [];
   List<SchoolStaffOption> _staff = const [];
+  List<SubjectAcademicTerm> _subjectTerms = const [];
+  int? _selectedSubjectTermId;
+  final Map<int, SubjectTermAvailability> _subjectAvailability = {};
   bool _loadingSubjects = true;
   bool _subjectActionBusy = false;
   String? _subjectError;
@@ -154,7 +161,17 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
   bool _attendanceRegisterOpen = false;
   DateTime? _attendanceRegisterDate;
 
-  int get _totalSubjects => _subjects.length;
+  int get _totalSubjects =>
+      _subjects.where(_subjectIsAvailableInCurrentStream).length;
+
+  bool _subjectIsAvailableInCurrentStream(ClassSubject subject) {
+    final schoolSubjectId = subject.schoolSubjectId;
+    if (schoolSubjectId == null || schoolSubjectId <= 0) return subject.active;
+    final configuration = _subjectAvailability[schoolSubjectId];
+    return configuration == null
+        ? subject.active
+        : configuration.streamIds.contains(widget.streamId);
+  }
 
   @override
   void dispose() {
@@ -276,16 +293,45 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
           customSchoolId: widget.customSchoolId,
           streamId: widget.streamId,
         ),
+        widget.repository.getSubjectAcademicTerms(widget.customSchoolId),
         if (!widget.teacherView)
           widget.repository.getSchoolStaff(widget.customSchoolId),
       ]);
+      final subjects = result[0] as List<ClassSubject>;
+      final terms = result[2] as List<SubjectAcademicTerm>;
+      final selectedTermId =
+          terms
+              .where((term) => term.current)
+              .map((term) => term.id)
+              .firstOrNull ??
+          terms.firstOrNull?.id;
+      final availability = <int, SubjectTermAvailability>{};
+      if (selectedTermId != null) {
+        await Future.wait(
+          subjects.map((subject) async {
+            final schoolSubjectId = subject.schoolSubjectId;
+            if (schoolSubjectId == null || schoolSubjectId <= 0) return;
+            availability[schoolSubjectId] = await widget.repository
+                .getSubjectTermAvailability(
+                  customSchoolId: widget.customSchoolId,
+                  schoolSubjectId: schoolSubjectId,
+                  academicTermId: selectedTermId,
+                );
+          }),
+        );
+      }
       if (!mounted) return;
       setState(() {
-        _subjects = result[0] as List<ClassSubject>;
+        _subjects = subjects;
         _subjectTeachers = result[1] as List<SubjectTeacherAssignment>;
+        _subjectTerms = terms;
+        _selectedSubjectTermId = selectedTermId;
+        _subjectAvailability
+          ..clear()
+          ..addAll(availability);
         _staff = widget.teacherView
             ? const []
-            : (result[2] as List<SchoolStaffOption>)
+            : (result[3] as List<SchoolStaffOption>)
                   .where((s) => s.active)
                   .toList();
         _loadingSubjects = false;
@@ -297,6 +343,216 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
           _loadingSubjects = false;
         });
       }
+    }
+  }
+
+  SubjectAcademicTerm? get _selectedSubjectTerm {
+    for (final term in _subjectTerms) {
+      if (term.id == _selectedSubjectTermId) return term;
+    }
+    return null;
+  }
+
+  Future<void> _addSubjectToStream() async {
+    final term = _selectedSubjectTerm;
+    if (term == null || !term.editable) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select an open academic term first.')),
+      );
+      return;
+    }
+    final name = TextEditingController();
+    var assessedForFinalReports = false;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Add custom subject'),
+          content: SizedBox(
+            width: 460,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  key: const ValueKey('stream-subject-name'),
+                  controller: name,
+                  autofocus: true,
+                  decoration: const InputDecoration(labelText: 'Subject name'),
+                  onChanged: (_) => setDialogState(() {}),
+                ),
+                const SizedBox(height: 20),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Assess for final reports?',
+                    style: TextStyle(
+                      color: AppColors.text,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Choose whether this subject’s scores appear in final reports.',
+                    style: TextStyle(color: AppColors.muted, fontSize: 13),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<bool>(
+                    key: const ValueKey('subject-final-report-choice'),
+                    segments: const [
+                      ButtonSegment<bool>(value: true, label: Text('Yes')),
+                      ButtonSegment<bool>(value: false, label: Text('No')),
+                    ],
+                    selected: {assessedForFinalReports},
+                    onSelectionChanged: (selection) => setDialogState(
+                      () => assessedForFinalReports = selection.first,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              key: const ValueKey('confirm-stream-add-subject'),
+              onPressed: name.text.trim().isEmpty
+                  ? null
+                  : () => Navigator.pop(context, true),
+              child: const Text('Add subject'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final subjectName = name.text.trim();
+    if (confirmed != true || subjectName.isEmpty) return;
+    setState(() => _subjectActionBusy = true);
+    try {
+      final created = await widget.repository.createCustomSubject(
+        customSchoolId: widget.customSchoolId,
+        gradeLevelId: widget.subjectGradeLevelId,
+        name: subjectName,
+        code: '',
+        examinable: assessedForFinalReports,
+      );
+      final schoolSubjectId = created.schoolSubjectId;
+      if (schoolSubjectId != null && schoolSubjectId > 0) {
+        await widget.repository.saveSubjectTermAvailability(
+          customSchoolId: widget.customSchoolId,
+          schoolSubjectId: schoolSubjectId,
+          academicTermId: term.id,
+          streamIds: [widget.streamId],
+          status: 'ACTIVE',
+        );
+      }
+      await _loadSubjects();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$subjectName added to ${widget.streamName}.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not add the subject. $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _subjectActionBusy = false);
+    }
+  }
+
+  Future<void> _setSubjectAvailableInStream(
+    ClassSubject subject,
+    bool enabled,
+  ) async {
+    final term = _selectedSubjectTerm;
+    final schoolSubjectId = subject.schoolSubjectId;
+    if (term == null ||
+        !term.editable ||
+        schoolSubjectId == null ||
+        schoolSubjectId <= 0) {
+      return;
+    }
+    if (!enabled) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Make ${subject.name} inactive?'),
+          content: Text(
+            'This subject will not be used for new assessments, teacher '
+            'assignments, grading, or report cards in ${widget.streamName} '
+            'for ${term.label}. Existing scores and historical reports will '
+            'be kept.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              key: const ValueKey('confirm-subject-deactivation'),
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Make inactive'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    setState(() => _subjectActionBusy = true);
+    try {
+      final current =
+          _subjectAvailability[schoolSubjectId] ??
+          await widget.repository.getSubjectTermAvailability(
+            customSchoolId: widget.customSchoolId,
+            schoolSubjectId: schoolSubjectId,
+            academicTermId: term.id,
+          );
+      final streamIds = current.streamIds.toSet();
+      enabled
+          ? streamIds.add(widget.streamId)
+          : streamIds.remove(widget.streamId);
+      final saved = await widget.repository.saveSubjectTermAvailability(
+        customSchoolId: widget.customSchoolId,
+        schoolSubjectId: schoolSubjectId,
+        academicTermId: term.id,
+        streamIds: streamIds.toList(),
+        status: 'ACTIVE',
+      );
+      if (!mounted) return;
+      final assignments = await widget.repository.getSubjectTeacherAssignments(
+        customSchoolId: widget.customSchoolId,
+        streamId: widget.streamId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _subjectAvailability[schoolSubjectId] = saved;
+        _subjectTeachers = assignments;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${subject.name} is now ${enabled ? 'active' : 'inactive'} in '
+            '${widget.streamName}.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not update the subject. $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _subjectActionBusy = false);
     }
   }
 
@@ -333,6 +589,9 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
               gradeName: widget.gradeName,
               streamName: widget.streamName,
               onBack: widget.onBack,
+              onOpenAssessments: widget.onOpenAssessments,
+              onRenameSection: widget.onRenameSection,
+              onDeleteSection: widget.onDeleteSection,
             ),
             Expanded(
               child: SingleChildScrollView(
@@ -346,7 +605,6 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
                         _StreamDetailTabs(
                           selected: _selectedTab,
                           pendingAttendance: 0,
-                          onOpenAssessments: widget.onOpenAssessments,
                           onOpenEvaluations: widget.onOpenEvaluations,
                           onChanged: (tab) =>
                               setState(() => _selectedTab = tab),
@@ -393,10 +651,22 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
                                     child: _SidePanel(
                                       totalSubjects: _totalSubjects,
                                       gesCount: _subjects
-                                          .where((subject) => !subject.custom)
+                                          .where(
+                                            (subject) =>
+                                                !subject.custom &&
+                                                _subjectIsAvailableInCurrentStream(
+                                                  subject,
+                                                ),
+                                          )
                                           .length,
                                       customCount: _subjects
-                                          .where((subject) => subject.custom)
+                                          .where(
+                                            (subject) =>
+                                                subject.custom &&
+                                                _subjectIsAvailableInCurrentStream(
+                                                  subject,
+                                                ),
+                                          )
                                           .length,
                                       onManageSubjects: () => setState(
                                         () => _selectedTab =
@@ -441,10 +711,14 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
                           _StreamDetailTab.subjects => _StreamSubjectsCard(
                             subjects: _subjects,
                             assignments: _subjectTeachers,
+                            streamId: widget.streamId,
+                            availability: _subjectAvailability,
                             loading: _loadingSubjects,
                             busy: _subjectActionBusy,
                             error: _subjectError,
                             onRetry: _loadSubjects,
+                            onAddSubject: _addSubjectToStream,
+                            onAvailabilityChanged: _setSubjectAvailableInStream,
                             onManage: _manageSubjectTeachers,
                             editable: !widget.teacherView,
                           ),
@@ -1050,11 +1324,17 @@ class _DetailTopBar extends StatelessWidget {
     required this.gradeName,
     required this.streamName,
     required this.onBack,
+    this.onOpenAssessments,
+    this.onRenameSection,
+    this.onDeleteSection,
   });
 
   final String gradeName;
   final String streamName;
   final VoidCallback onBack;
+  final VoidCallback? onOpenAssessments;
+  final Future<void> Function()? onRenameSection;
+  final Future<void> Function()? onDeleteSection;
 
   @override
   Widget build(BuildContext context) {
@@ -1099,6 +1379,56 @@ class _DetailTopBar extends StatelessWidget {
             ),
           ),
           const Spacer(),
+          if (onOpenAssessments != null) ...[
+            OutlinedButton.icon(
+              key: const ValueKey('stream-go-assessments'),
+              onPressed: onOpenAssessments,
+              icon: const Icon(Icons.assignment_outlined, size: 17),
+              label: const Text('Go to Assessments'),
+            ),
+            const SizedBox(width: 8),
+          ],
+          if (onRenameSection != null || onDeleteSection != null) ...[
+            PopupMenuButton<_StreamPageAction>(
+              key: const ValueKey('stream-detail-actions'),
+              tooltip: 'Section actions',
+              onSelected: (action) async {
+                switch (action) {
+                  case _StreamPageAction.rename:
+                    await onRenameSection?.call();
+                    break;
+                  case _StreamPageAction.delete:
+                    await onDeleteSection?.call();
+                    break;
+                }
+              },
+              itemBuilder: (context) => [
+                if (onRenameSection != null)
+                  const PopupMenuItem(
+                    value: _StreamPageAction.rename,
+                    child: ListTile(
+                      dense: true,
+                      leading: Icon(Icons.edit_outlined),
+                      title: Text('Rename section'),
+                    ),
+                  ),
+                if (onDeleteSection != null)
+                  const PopupMenuItem(
+                    value: _StreamPageAction.delete,
+                    child: ListTile(
+                      dense: true,
+                      leading: Icon(Icons.delete_outline, color: AppColors.red),
+                      title: Text(
+                        'Delete section',
+                        style: TextStyle(color: AppColors.red),
+                      ),
+                    ),
+                  ),
+              ],
+              icon: const Icon(Icons.more_horiz_rounded),
+            ),
+            const SizedBox(width: 6),
+          ],
           OutlinedButton.icon(
             onPressed: null,
             icon: const Icon(Icons.download_rounded, size: 16),
@@ -1109,6 +1439,8 @@ class _DetailTopBar extends StatelessWidget {
     );
   }
 }
+
+enum _StreamPageAction { rename, delete }
 
 class _TeacherClassOverview {
   const _TeacherClassOverview({
@@ -1437,14 +1769,12 @@ class _StreamDetailTabs extends StatelessWidget {
     required this.selected,
     required this.pendingAttendance,
     required this.onChanged,
-    this.onOpenAssessments,
     this.onOpenEvaluations,
   });
 
   final _StreamDetailTab selected;
   final int pendingAttendance;
   final ValueChanged<_StreamDetailTab> onChanged;
-  final VoidCallback? onOpenAssessments;
   final VoidCallback? onOpenEvaluations;
 
   @override
@@ -1463,17 +1793,21 @@ class _StreamDetailTabs extends StatelessWidget {
               Icons.dashboard_outlined,
             ),
             _tab(
+              _StreamDetailTab.students,
+              'Students',
+              Icons.people_outline_rounded,
+            ),
+            _tab(
+              _StreamDetailTab.subjects,
+              'Subjects',
+              Icons.menu_book_outlined,
+            ),
+            _tab(
               _StreamDetailTab.attendance,
               'Attendance',
               Icons.fact_check_outlined,
               badge: pendingAttendance,
             ),
-            if (onOpenAssessments != null)
-              _action(
-                'Assessments',
-                Icons.assignment_outlined,
-                onOpenAssessments!,
-              ),
             if (onOpenEvaluations != null)
               _action(
                 'Evaluations',
@@ -1522,6 +1856,7 @@ class _StreamDetailTabs extends StatelessWidget {
   }) {
     final active = selected == value;
     return InkWell(
+      key: ValueKey('stream-tab-${value.name}'),
       onTap: () => onChanged(value),
       borderRadius: BorderRadius.circular(12),
       child: AnimatedContainer(
@@ -2526,7 +2861,7 @@ class _ClassTeachersCard extends StatelessWidget {
                     FilledButton.icon(
                       onPressed: busy ? null : onAddTeacher,
                       icon: const Icon(Icons.add_rounded, size: 18),
-                      label: const Text('Add teacher'),
+                      label: const Text('Add class teacher'),
                     ),
                   ],
                 ],
@@ -2561,7 +2896,7 @@ class _ClassTeachersCard extends StatelessWidget {
                         OutlinedButton.icon(
                           onPressed: busy ? null : onAddTeacher,
                           icon: const Icon(Icons.add_rounded, size: 18),
-                          label: const Text('Add teacher'),
+                          label: const Text('Add class teacher'),
                         ),
                       ],
                     ),
@@ -2935,18 +3270,26 @@ class _StreamSubjectsCard extends StatelessWidget {
   const _StreamSubjectsCard({
     required this.subjects,
     required this.assignments,
+    required this.streamId,
+    required this.availability,
     required this.loading,
     required this.busy,
     required this.error,
     required this.onRetry,
+    required this.onAddSubject,
+    required this.onAvailabilityChanged,
     required this.onManage,
     this.editable = true,
   });
   final List<ClassSubject> subjects;
   final List<SubjectTeacherAssignment> assignments;
+  final int streamId;
+  final Map<int, SubjectTermAvailability> availability;
   final bool loading, busy;
   final String? error;
   final VoidCallback onRetry;
+  final VoidCallback onAddSubject;
+  final void Function(ClassSubject subject, bool enabled) onAvailabilityChanged;
   final ValueChanged<ClassSubject> onManage;
   final bool editable;
 
@@ -2966,7 +3309,7 @@ class _StreamSubjectsCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Subjects and teachers',
+                      'Subjects',
                       style: TextStyle(
                         fontSize: 17,
                         fontWeight: FontWeight.w900,
@@ -2974,14 +3317,21 @@ class _StreamSubjectsCard extends StatelessWidget {
                     ),
                     Text(
                       editable
-                          ? 'Each subject belongs to this grade. Assign one or more teachers for this stream.'
+                          ? 'Manage the subjects used in this section. Inactive subjects keep their history.'
                           : 'Subjects and assigned teachers for this class.',
                       style: const TextStyle(color: AppColors.muted),
                     ),
                   ],
                 ),
               ),
-              if (!loading)
+              if (editable)
+                FilledButton.icon(
+                  key: const ValueKey('stream-add-subject'),
+                  onPressed: loading || busy ? null : onAddSubject,
+                  icon: const Icon(Icons.add_rounded, size: 18),
+                  label: const Text('Add subject'),
+                )
+              else if (!loading)
                 Text(
                   '${subjects.length} subjects',
                   style: const TextStyle(
@@ -3016,59 +3366,21 @@ class _StreamSubjectsCard extends StatelessWidget {
               padding: EdgeInsets.all(18),
               child: Text('No subjects are configured for this grade level.'),
             )
-          else
-            ...subjects.map((subject) {
-              final type = subject.custom ? 'CUSTOM' : 'GES';
-              final assigned = assignments
-                  .where(
-                    (a) =>
-                        a.active &&
-                        a.subjectId == subject.id &&
-                        a.subjectType == type,
-                  )
-                  .toList();
-              return ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-                leading: CircleAvatar(
-                  backgroundColor: AppColors.green.withValues(alpha: .12),
-                  child: Text(
-                    subject.name.isEmpty ? '?' : subject.name[0],
-                    style: const TextStyle(
-                      color: AppColors.green,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ),
-                title: Text(
-                  subject.name,
-                  style: const TextStyle(fontWeight: FontWeight.w800),
-                ),
-                subtitle: Text(
-                  assigned.isEmpty
-                      ? 'No subject teacher assigned'
-                      : assigned.map((a) => a.staffName).join(', '),
-                ),
-                trailing: editable
-                    ? OutlinedButton.icon(
-                        onPressed: busy ? null : () => onManage(subject),
-                        icon: Icon(
-                          assigned.isEmpty
-                              ? Icons.person_add_alt_1
-                              : Icons.edit_outlined,
-                          size: 18,
-                        ),
-                        label: Text(
-                          assigned.isEmpty ? 'Assign teachers' : 'Manage',
-                        ),
-                      )
-                    : assigned.isEmpty
-                    ? const Text(
-                        'Not assigned',
-                        style: TextStyle(color: AppColors.muted),
-                      )
-                    : null,
-              );
-            }),
+          else ...[
+            _buildSubjectGroup(
+              context,
+              title: 'GES subjects',
+              emptyMessage: 'No GES subjects are configured for this class.',
+              groupSubjects: subjects.where((subject) => !subject.custom),
+            ),
+            const SizedBox(height: 18),
+            _buildSubjectGroup(
+              context,
+              title: 'Custom subjects',
+              emptyMessage: 'No custom subjects have been added.',
+              groupSubjects: subjects.where((subject) => subject.custom),
+            ),
+          ],
           if (assignments.any((a) => !a.active)) ...[
             const Divider(height: 28),
             ExpansionTile(
@@ -3101,6 +3413,188 @@ class _StreamSubjectsCard extends StatelessWidget {
       ),
     ),
   );
+
+  Widget _buildSubjectGroup(
+    BuildContext context, {
+    required String title,
+    required String emptyMessage,
+    required Iterable<ClassSubject> groupSubjects,
+  }) {
+    final items = groupSubjects.toList();
+    final active = items.where(_isAvailableHere).toList();
+    final inactive = items
+        .where((subject) => !_isAvailableHere(subject))
+        .toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+            Text(
+              '${active.length} active',
+              style: const TextStyle(
+                color: AppColors.muted,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        if (items.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Text(
+              emptyMessage,
+              style: const TextStyle(color: AppColors.muted),
+            ),
+          )
+        else ...[
+          ...active.map((subject) => _buildSubjectTile(context, subject)),
+          if (inactive.isNotEmpty)
+            ExpansionTile(
+              key: PageStorageKey<String>('inactive-$title'),
+              tilePadding: const EdgeInsets.symmetric(horizontal: 4),
+              childrenPadding: EdgeInsets.zero,
+              title: Text(
+                'Inactive (${inactive.length})',
+                style: const TextStyle(
+                  color: AppColors.muted,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              children: inactive
+                  .map((subject) => _buildSubjectTile(context, subject))
+                  .toList(),
+            ),
+        ],
+      ],
+    );
+  }
+
+  bool _isAvailableHere(ClassSubject subject) {
+    final schoolSubjectId = subject.schoolSubjectId;
+    if (schoolSubjectId == null || schoolSubjectId <= 0) return subject.active;
+    final configuration = availability[schoolSubjectId];
+    return configuration == null
+        ? subject.active
+        : configuration.streamIds.contains(streamId);
+  }
+
+  Widget _buildSubjectTile(BuildContext context, ClassSubject subject) {
+    final type = subject.custom ? 'CUSTOM' : 'GES';
+    final availableHere = _isAvailableHere(subject);
+    final assigned = assignments
+        .where(
+          (assignment) =>
+              assignment.active &&
+              assignment.subjectId == subject.id &&
+              assignment.subjectType == type,
+        )
+        .toList();
+    final teacherSummary = _teacherSummary(assigned);
+    return Opacity(
+      opacity: availableHere ? 1 : .62,
+      child: ListTile(
+        key: ValueKey('stream-subject-${subject.id}'),
+        onTap: editable && availableHere && !busy
+            ? () => onManage(subject)
+            : null,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+        leading: CircleAvatar(
+          backgroundColor: AppColors.green.withValues(alpha: .12),
+          child: Text(
+            subject.name.isEmpty ? '?' : subject.name[0],
+            style: const TextStyle(
+              color: AppColors.green,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ),
+        title: Text(
+          subject.name,
+          style: const TextStyle(fontWeight: FontWeight.w800),
+        ),
+        subtitle: Text(
+          !availableHere ? 'Inactive in this section' : teacherSummary,
+        ),
+        trailing: editable
+            ? Wrap(
+                spacing: 10,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        availableHere ? 'Active' : 'Inactive',
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      Switch(
+                        key: ValueKey('stream-subject-enabled-${subject.id}'),
+                        value: availableHere,
+                        onChanged: busy
+                            ? null
+                            : (value) => onAvailabilityChanged(subject, value),
+                      ),
+                    ],
+                  ),
+                  if (availableHere)
+                    Tooltip(
+                      message: assigned.isEmpty
+                          ? 'Assign subject teachers'
+                          : 'Manage subject teachers',
+                      child: OutlinedButton.icon(
+                        key: ValueKey('stream-subject-teachers-${subject.id}'),
+                        onPressed: busy ? null : () => onManage(subject),
+                        icon: Icon(
+                          assigned.isEmpty
+                              ? Icons.person_add_alt_1
+                              : Icons.edit_outlined,
+                          size: 18,
+                        ),
+                        label: Text(assigned.isEmpty ? 'Assign' : 'Manage'),
+                      ),
+                    ),
+                ],
+              )
+            : assigned.isEmpty
+            ? Text(
+                availableHere ? 'Not assigned' : 'Inactive',
+                style: const TextStyle(color: AppColors.muted),
+              )
+            : null,
+      ),
+    );
+  }
+
+  String _teacherSummary(List<SubjectTeacherAssignment> assigned) {
+    final names =
+        assigned
+            .map((assignment) => assignment.staffName.trim())
+            .where((name) => name.isNotEmpty)
+            .toSet()
+            .toList()
+          ..sort(
+            (left, right) => left.toLowerCase().compareTo(right.toLowerCase()),
+          );
+    if (names.isEmpty) return 'No teacher assigned';
+    if (names.length == 1) return names.first;
+    return '${names.first} +${names.length - 1} more';
+  }
 }
 
 class _SidePanel extends StatelessWidget {

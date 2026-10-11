@@ -353,7 +353,7 @@ class _ClassTeacherSettingsScreenState
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: Text('Add teacher to ${stream.name}'),
+          title: Text('Add class teacher to ${stream.name}'),
           content: SizedBox(
             width: 460,
             child: Column(
@@ -396,7 +396,7 @@ class _ClassTeacherSettingsScreenState
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('Add teacher'),
+              child: const Text('Add class teacher'),
             ),
           ],
         ),
@@ -446,7 +446,7 @@ class _ClassTeacherSettingsScreenState
       _showMessage('Class teacher added.');
     } catch (error) {
       if (!mounted) return;
-      _showMessage('Could not add teacher. $error');
+      _showMessage('Could not add class teacher. $error');
     }
   }
 
@@ -976,7 +976,7 @@ class _TeacherTile extends StatelessWidget {
             child: OutlinedButton.icon(
               onPressed: onAddTeacher,
               icon: const Icon(Icons.person_add_alt_1_rounded),
-              label: const Text('Add teacher'),
+              label: const Text('Add class teacher'),
             ),
           ),
           const SizedBox(height: 8),

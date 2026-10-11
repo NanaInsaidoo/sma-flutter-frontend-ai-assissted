@@ -99,14 +99,45 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     try {
       final grades = await _repository.getGradeLevels(widget.customSchoolId);
       if (!mounted) return;
+      final preferredGrade = grades
+          .where((grade) => grade.id == widget.initialGradeLevelId)
+          .firstOrNull;
+      final targetStreamId = widget.initialStreamId;
+
+      // Some attendance overview responses use the curriculum grade ID while
+      // the grade selector uses the school's grade ID. The stream ID is the
+      // stable identifier in both responses, so resolve the owning grade from
+      // that stream instead of silently falling back to the first class.
+      if (targetStreamId != null && grades.isNotEmpty) {
+        final orderedGrades = <AttendanceGradeLevel>[
+          if (preferredGrade != null) preferredGrade,
+          ...grades.where((grade) => grade.id != preferredGrade?.id),
+        ];
+        for (final grade in orderedGrades) {
+          final streams = await _repository.getStreams(
+            customSchoolId: widget.customSchoolId,
+            gradeLevelId: grade.id,
+          );
+          final targetStream = streams
+              .where((stream) => stream.id == targetStreamId)
+              .firstOrNull;
+          if (targetStream == null) continue;
+          if (!mounted) return;
+          setState(() {
+            _grades = grades;
+            _selectedGrade = grade;
+            _streams = streams;
+            _selectedStream = targetStream;
+          });
+          await _loadRoster();
+          return;
+        }
+      }
+
+      if (!mounted) return;
       setState(() {
         _grades = grades;
-        _selectedGrade = grades.isEmpty
-            ? null
-            : grades
-                      .where((grade) => grade.id == widget.initialGradeLevelId)
-                      .firstOrNull ??
-                  grades.first;
+        _selectedGrade = grades.isEmpty ? null : preferredGrade ?? grades.first;
       });
       if (_selectedGrade != null) await _loadStreams(_selectedGrade!.id);
     } catch (error) {

@@ -4,7 +4,6 @@ import '../data/classes_api_client.dart';
 import '../domain/class_models.dart';
 import '../../attendance/domain/attendance_models.dart';
 import '../../theme/app_theme.dart';
-import 'grade_detail_screen.dart';
 import 'class_subject_configuration_screen.dart';
 
 class GradeStreamsScreen extends StatefulWidget {
@@ -25,7 +24,7 @@ class GradeStreamsScreen extends StatefulWidget {
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
   final VoidCallback? onOpenAttendance;
-  final VoidCallback? onOpenAssessments;
+  final ValueChanged<int>? onOpenAssessments;
   final VoidCallback? onOpenIncidents;
   final VoidCallback? onOpenCalendar;
   final AttendanceRepository? attendanceRepository;
@@ -43,10 +42,10 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
         onRefreshAccessToken: widget.onRefreshAccessToken,
       );
   List<_GradeLevel> _levels = const [];
-  _PhaseFilter _phase = _PhaseFilter.all;
-  _StreamStatusFilter _status = _StreamStatusFilter.all;
+  _ClassSort _sort = _ClassSort.progression;
   String _search = '';
-  _SelectedStream? _selectedStream;
+  int? _selectedGradeId;
+  final ScrollController _scrollController = ScrollController();
   bool _loading = true;
   String? _error;
 
@@ -54,41 +53,43 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
     final query = _search.trim().toLowerCase();
     final visible = <_GradeLevel>[];
     for (final level in _levels) {
-      if (_phase != _PhaseFilter.all && level.phase != _phase) continue;
-      final gradeMatches =
-          query.isEmpty || level.name.toLowerCase().contains(query);
-      final streams = level.streams.where((stream) {
-        final matchesSearch =
-            gradeMatches ||
-            stream.name.toLowerCase().contains(query) ||
-            stream.teacherName.toLowerCase().contains(query);
-        final matchesStatus = switch (_status) {
-          _StreamStatusFilter.all => true,
-          _StreamStatusFilter.active => stream.active,
-          _StreamStatusFilter.inactive => !stream.active,
-          _StreamStatusFilter.noTeacher => stream.teacherName.isEmpty,
-        };
-        return matchesSearch && matchesStatus;
-      }).toList();
-      final showActiveGradeWithoutStreams =
-          level.streams.isEmpty &&
-          gradeMatches &&
-          (_status == _StreamStatusFilter.all ||
-              _status == _StreamStatusFilter.active);
-      if (streams.isEmpty && !showActiveGradeWithoutStreams) continue;
-      visible.add(
-        _GradeLevel(
-          id: level.id,
-          gradeLevelId: level.gradeLevelId,
-          name: level.name,
-          phase: level.phase,
-          custom: level.custom,
-          displayOrder: level.displayOrder,
-          streams: streams,
-        ),
-      );
+      final matchesSearch =
+          query.isEmpty ||
+          level.name.toLowerCase().contains(query) ||
+          level.streams.any(
+            (stream) =>
+                stream.name.toLowerCase().contains(query) ||
+                stream.teacherName.toLowerCase().contains(query),
+          );
+      if (matchesSearch) visible.add(level);
     }
+    visible.sort(_compareVisibleLevels);
     return visible;
+  }
+
+  int _compareVisibleLevels(_GradeLevel left, _GradeLevel right) {
+    if (_sort == _ClassSort.activeFirst && left.active != right.active) {
+      return left.active ? -1 : 1;
+    }
+    if (_sort == _ClassSort.inactiveFirst && left.active != right.active) {
+      return left.active ? 1 : -1;
+    }
+    if (_sort == _ClassSort.name) {
+      return left.name.toLowerCase().compareTo(right.name.toLowerCase());
+    }
+    if (left.custom != right.custom) return left.custom ? -1 : 1;
+    if (left.custom) {
+      final displayOrder = left.displayOrder.compareTo(right.displayOrder);
+      return displayOrder != 0
+          ? displayOrder
+          : _naturalNameCompare(left.name, right.name);
+    }
+    final progression = _gradeProgressionRank(
+      left.name,
+    ).compareTo(_gradeProgressionRank(right.name));
+    return progression != 0
+        ? progression
+        : _naturalNameCompare(left.name, right.name);
   }
 
   @override
@@ -97,14 +98,22 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
     _loadGradeStreams();
   }
 
-  Future<void> _loadGradeStreams() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadGradeStreams({bool showLoading = true}) async {
+    if (showLoading) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final results = await Future.wait([
-        _repository.getGradeStreams(widget.customSchoolId),
+        _repository.getAllGradeLevels(widget.customSchoolId),
         _repository.getAllStreams(widget.customSchoolId),
       ]);
       final levels = _mergeLiveStreamMetrics(
@@ -124,6 +133,7 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
       setState(() {
         _levels = orderedLevels;
         _loading = false;
+        _error = null;
       });
     } catch (error) {
       if (!mounted) return;
@@ -131,38 +141,6 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
         _error = '$error';
         _loading = false;
       });
-    }
-  }
-
-  Future<void> _openClassConfiguration({bool addCustomClass = false}) async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => Scaffold(
-          appBar: AppBar(title: const Text('Classes and subjects')),
-          body: ClassSubjectConfigurationScreen(
-            customSchoolId: widget.customSchoolId,
-            accessToken: widget.accessToken,
-            onRefreshAccessToken: widget.onRefreshAccessToken,
-            repository: _repository,
-            startWithAddCustomClass: addCustomClass,
-          ),
-        ),
-      ),
-    );
-    await _loadGradeStreams();
-  }
-
-  Future<void> _showAddClassOrSectionDialog() async {
-    final choice = await showDialog<_AddClassOrSectionChoice>(
-      context: context,
-      builder: (context) => const _AddClassOrSectionDialog(),
-    );
-    if (!mounted || choice == null) return;
-    switch (choice) {
-      case _AddClassOrSectionChoice.classLevel:
-        await _openClassConfiguration(addCustomClass: true);
-      case _AddClassOrSectionChoice.section:
-        await _showAddStreamDialog();
     }
   }
 
@@ -208,341 +186,227 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
     }).toList();
   }
 
+  Future<void> _toggleGrade(_GradeLevel level, bool active) async {
+    if (active) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Activate ${level.name}?'),
+          content: Text(
+            level.streams.isEmpty
+                ? '${level.name} does not have a section yet. Section 1 will be created because every active class must have at least one section.'
+                : '${level.name} and its sections will become available for admissions, teacher assignments, attendance, and assessments.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(
+                level.streams.isEmpty
+                    ? 'Create section and activate'
+                    : 'Activate class',
+              ),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+    if (!mounted) return;
+    final enrolled = level.streams.fold<int>(
+      0,
+      (total, stream) => total + stream.enrolled,
+    );
+    if (!active && enrolled > 0) {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Cannot make ${level.name} inactive'),
+          content: Text(
+            '${level.name} has $enrolled actively enrolled student${enrolled == 1 ? '' : 's'}. Transfer, promote, withdraw, or graduate them before making this class inactive.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    if (!active) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Make ${level.name} inactive?'),
+          content: Text(
+            '${level.name} and its sections will no longer be available for new admissions, teacher assignments, attendance, or assessments. Existing records will remain available.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Keep active'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Make inactive'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+    try {
+      await _repository.setGradeLevelActive(
+        customSchoolId: widget.customSchoolId,
+        gradeLevelId: level.gradeLevelId,
+        active: active,
+      );
+      await _loadGradeStreams(showLoading: false);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not update ${level.name}. $error')),
+      );
+    }
+  }
+
+  Future<void> _addCustomClass() async {
+    final name = TextEditingController();
+    var sections = 1;
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Add custom class'),
+          content: SizedBox(
+            width: 480,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Create a school-defined class. Examples include Creche, Nursery 1, and Nursery 2. Custom classes appear before KG1.',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+                const SizedBox(height: 18),
+                TextField(
+                  key: const ValueKey('unified-custom-class-name'),
+                  controller: name,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Class name',
+                    hintText: 'e.g. Creche or Nursery 1',
+                  ),
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<int>(
+                  value: sections,
+                  decoration: const InputDecoration(labelText: 'Sections'),
+                  items: List.generate(10, (index) => index + 1)
+                      .map(
+                        (value) => DropdownMenuItem(
+                          value: value,
+                          child: Text('$value section${value == 1 ? '' : 's'}'),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) =>
+                      setDialogState(() => sections = value ?? 1),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (name.text.trim().isNotEmpty) Navigator.pop(context, true);
+              },
+              child: const Text('Create class'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (submitted != true) return;
+    try {
+      await _repository.createCustomGradeLevel(
+        customSchoolId: widget.customSchoolId,
+        name: name.text.trim(),
+        streamCount: sections,
+      );
+      await _loadGradeStreams(showLoading: false);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not add the class. $error')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final selected = _selectedStream;
-    if (selected != null) {
-      return GradeDetailScreen(
+    final selectedGradeId = _selectedGradeId;
+    if (selectedGradeId != null) {
+      return ClassSubjectConfigurationScreen(
+        key: ValueKey('class-workspace-$selectedGradeId'),
         customSchoolId: widget.customSchoolId,
-        streamId: selected.streamId,
-        gradeLevelId: selected.gradeLevelId,
-        subjectGradeLevelId: selected.subjectGradeLevelId,
-        gradeName: selected.gradeName,
-        streamName: selected.streamName,
-        enrolled: selected.enrolled,
-        capacity: selected.capacity,
-        active: selected.active,
-        classTeacherName: selected.classTeacherName,
         accessToken: widget.accessToken,
         onRefreshAccessToken: widget.onRefreshAccessToken,
         repository: _repository,
-        onClassTeachersChanged: _loadGradeStreams,
         onOpenAttendance: widget.onOpenAttendance,
         onOpenAssessments: widget.onOpenAssessments,
         onOpenIncidents: widget.onOpenIncidents,
         onOpenCalendar: widget.onOpenCalendar,
         attendanceRepository: widget.attendanceRepository,
-        onBack: () => setState(() => _selectedStream = null),
+        initialGradeId: selectedGradeId,
+        onBack: () async {
+          setState(() => _selectedGradeId = null);
+          await _loadGradeStreams(showLoading: false);
+        },
       );
     }
-
     final totalStreams = _levels.fold<int>(
       0,
       (total, level) => total + level.streams.length,
     );
+    final activeClasses = _levels.where((level) => level.active).length;
 
-    return Column(
-      children: [
-        _Header(
-          totalStreams: totalStreams,
-          onConfigure: () => _openClassConfiguration(),
-        ),
-        _PhaseTabs(
-          selected: _phase,
-          counts: _phaseCounts,
-          onChanged: (phase) => setState(() => _phase = phase),
-        ),
-        _Toolbar(
-          search: _search,
-          status: _status,
-          onSearchChanged: (value) => setState(() => _search = value),
-          onStatusChanged: (value) => setState(() => _status = value),
-          onAddClassOrSection: _showAddClassOrSectionDialog,
-        ),
-        Expanded(
-          child: _GradeStreamsBody(
-            loading: _loading,
-            error: _error,
-            visibleLevels: _visibleLevels,
-            onRetry: _loadGradeStreams,
-            onOpenStream: _openStream,
-            onDeleteStream: _deleteStream,
-            onAddStream: (level) => _showAddStreamDialog(level.id),
-          ),
-        ),
-      ],
-    );
-  }
-
-  void _openStream(_GradeLevel level, _StreamSummary stream) {
-    setState(() {
-      _selectedStream = _SelectedStream(
-        streamId: stream.id,
-        // Attendance and student roster endpoints use the canonical grade-level
-        // id carried by the live stream, not the school-grade configuration id.
-        gradeLevelId: stream.gradeLevelId > 0
-            ? stream.gradeLevelId
-            : level.gradeLevelId,
-        // Subject configuration is attached to the school's grade record.
-        // Custom grades can have a different canonical roster grade id.
-        subjectGradeLevelId: level.gradeLevelId,
-        gradeName: level.name,
-        streamName: stream.name,
-        enrolled: stream.enrolled,
-        capacity: stream.capacity,
-        active: stream.active,
-        classTeacherName: stream.teacherName,
-      );
-    });
-  }
-
-  Future<void> _deleteStream(_GradeLevel level, _StreamSummary stream) async {
-    final completeLevel = _levels.firstWhere(
-      (candidate) => candidate.id == level.id,
-      orElse: () => level,
-    );
-    final activeStreamCount = completeLevel.streams
-        .where((candidate) => candidate.active)
-        .length;
-    if (stream.active && activeStreamCount <= 1) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Every active class must keep at least one section. Make the class inactive before deleting its final section.',
-          ),
-        ),
-      );
-      return;
-    }
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete section?'),
-        content: Text(
-          'This will delete ${stream.name} from ${level.name}. Continue only if this section is no longer needed.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: AppColors.red),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-
-    try {
-      await _repository.deleteStreams(
-        customSchoolId: widget.customSchoolId,
-        streamIds: [stream.id],
-      );
-      await _loadGradeStreams();
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not delete section. $error')),
-      );
-      return;
-    }
-    if (!mounted) return;
-    setState(() => _phase = level.phase);
-  }
-
-  Map<_PhaseFilter, int> get _phaseCounts {
-    final counts = <_PhaseFilter, int>{
-      for (final phase in _PhaseFilter.values) phase: 0,
-    };
-    for (final level in _levels) {
-      counts[_PhaseFilter.all] = (counts[_PhaseFilter.all] ?? 0) + 1;
-      counts[level.phase] = (counts[level.phase] ?? 0) + 1;
-    }
-    return counts;
-  }
-
-  Future<void> _showAddStreamDialog([int? initialGradeInternalId]) async {
-    if (_levels.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Add a class before creating a section.')),
-      );
-      return;
-    }
-    final created = await showDialog<_NewStreamDraft>(
-      context: context,
-      builder: (context) => _AddStreamDialog(
-        levels: _levels,
-        initialGradeInternalId: initialGradeInternalId,
-      ),
-    );
-    if (created == null) return;
-
-    final level = _levels.firstWhere(
-      (level) => level.id == created.gradeInternalId,
-      orElse: () => _levels.first,
-    );
-    setState(() => _error = null);
-    try {
-      await _repository.createStream(
-        customSchoolId: widget.customSchoolId,
-        gradeLevelId: level.gradeLevelId,
-        streamName: created.streamName,
-      );
-      await _loadGradeStreams();
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Could not add section. $error')));
-      return;
-    }
-    if (!mounted) return;
-    setState(() {
-      _phase = level.phase;
-      _status = _StreamStatusFilter.all;
-      _search = '';
-    });
-  }
-}
-
-class _Header extends StatelessWidget {
-  const _Header({required this.totalStreams, required this.onConfigure});
-
-  final int totalStreams;
-  final VoidCallback onConfigure;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 58,
-      padding: const EdgeInsets.symmetric(horizontal: 18),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: AppColors.border)),
-      ),
-      child: Row(
-        children: [
-          Text(
-            'Classes & Sections',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              color: AppColors.text,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          const Spacer(),
-          OutlinedButton.icon(
-            onPressed: onConfigure,
-            icon: const Icon(Icons.tune_rounded, size: 18),
-            label: const Text('Manage classes & subjects'),
-          ),
-          const SizedBox(width: 14),
-          Text(
-            '$totalStreams sections configured',
-            style: const TextStyle(
-              color: AppColors.muted,
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PhaseTabs extends StatelessWidget {
-  const _PhaseTabs({
-    required this.selected,
-    required this.counts,
-    required this.onChanged,
-  });
-
-  final _PhaseFilter selected;
-  final Map<_PhaseFilter, int> counts;
-  final ValueChanged<_PhaseFilter> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 54,
-      padding: const EdgeInsets.symmetric(horizontal: 18),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: AppColors.border)),
-      ),
-      child: Row(
-        children: _PhaseFilter.values
-            .map(
-              (phase) => _TopTab(
-                label: phase.label,
-                count: counts[phase] ?? 0,
-                selected: phase == selected,
-                onTap: () => onChanged(phase),
-              ),
-            )
-            .toList(),
-      ),
-    );
-  }
-}
-
-class _TopTab extends StatelessWidget {
-  const _TopTab({
-    required this.label,
-    required this.count,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final int count;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = selected ? AppColors.green : AppColors.muted;
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        height: 54,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        decoration: BoxDecoration(
-          border: Border(
-            bottom: BorderSide(
-              color: selected ? AppColors.green : Colors.transparent,
-              width: 2,
-            ),
-          ),
-        ),
-        child: Row(
+    return ColoredBox(
+      color: const Color(0xFFF6F8F7),
+      child: SingleChildScrollView(
+        key: const ValueKey('classes-page-scroll'),
+        controller: _scrollController,
+        child: Column(
           children: [
-            Text(
-              label,
-              style: TextStyle(
-                color: color,
-                fontSize: 13,
-                fontWeight: FontWeight.w900,
-              ),
+            _Header(
+              totalClasses: _levels.length,
+              activeClasses: activeClasses,
+              totalStreams: totalStreams,
+              onAddCustomClass: _addCustomClass,
             ),
-            const SizedBox(width: 7),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-              decoration: BoxDecoration(
-                color: selected ? AppColors.greenSoft : const Color(0xFFEFF3F7),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Text(
-                '$count',
-                style: TextStyle(
-                  color: color,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
+            _Toolbar(
+              search: _search,
+              sort: _sort,
+              onSearchChanged: (value) => setState(() => _search = value),
+              onSortChanged: (value) => setState(() => _sort = value),
+            ),
+            _GradeStreamsBody(
+              loading: _loading,
+              error: _error,
+              visibleLevels: _visibleLevels,
+              onRetry: _loadGradeStreams,
+              onOpenGrade: (level) =>
+                  setState(() => _selectedGradeId = level.id),
+              onGradeActiveChanged: _toggleGrade,
             ),
           ],
         ),
@@ -551,75 +415,221 @@ class _TopTab extends StatelessWidget {
   }
 }
 
+class _Header extends StatelessWidget {
+  const _Header({
+    required this.totalClasses,
+    required this.activeClasses,
+    required this.totalStreams,
+    required this.onAddCustomClass,
+  });
+
+  final int totalClasses;
+  final int activeClasses;
+  final int totalStreams;
+  final VoidCallback onAddCustomClass;
+
+  @override
+  Widget build(BuildContext context) {
+    final inactiveClasses = totalClasses - activeClasses;
+    return Container(
+      color: const Color(0xFFF6F8F7),
+      padding: const EdgeInsets.fromLTRB(24, 26, 24, 18),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1120),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final details = Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Classes & Sections',
+                    style: TextStyle(
+                      color: AppColors.text,
+                      fontSize: 26,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -.4,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Activate classes here. Open a class to manage its sections and subjects.',
+                    style: TextStyle(color: AppColors.muted, fontSize: 13),
+                  ),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 18,
+                    runSpacing: 8,
+                    children: [
+                      _OverviewMetric(
+                        value: '$activeClasses',
+                        label: 'active',
+                        color: AppColors.green,
+                      ),
+                      _OverviewMetric(
+                        value: '$inactiveClasses',
+                        label: 'inactive',
+                        color: AppColors.muted,
+                      ),
+                      _OverviewMetric(
+                        value: '$totalStreams',
+                        label: 'sections',
+                        color: AppColors.blue,
+                      ),
+                    ],
+                  ),
+                ],
+              );
+              final addButton = FilledButton.icon(
+                key: const ValueKey('add-class-or-section'),
+                onPressed: onAddCustomClass,
+                icon: const Icon(Icons.add_rounded, size: 18),
+                label: const Text('Add custom class'),
+              );
+              if (constraints.maxWidth < 720) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [details, const SizedBox(height: 18), addButton],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: details),
+                  const SizedBox(width: 24),
+                  addButton,
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _OverviewMetric extends StatelessWidget {
+  const _OverviewMetric({
+    required this.value,
+    required this.label,
+    required this.color,
+  });
+
+  final String value;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 7,
+          height: 7,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 7),
+        Text(
+          '$value $label',
+          style: const TextStyle(
+            color: AppColors.text,
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _Toolbar extends StatelessWidget {
   const _Toolbar({
     required this.search,
-    required this.status,
+    required this.sort,
     required this.onSearchChanged,
-    required this.onStatusChanged,
-    required this.onAddClassOrSection,
+    required this.onSortChanged,
   });
 
   final String search;
-  final _StreamStatusFilter status;
+  final _ClassSort sort;
   final ValueChanged<String> onSearchChanged;
-  final ValueChanged<_StreamStatusFilter> onStatusChanged;
-  final VoidCallback onAddClassOrSection;
+  final ValueChanged<_ClassSort> onSortChanged;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 82,
-      padding: const EdgeInsets.symmetric(horizontal: 18),
-      decoration: const BoxDecoration(
-        color: Color(0xFFF4F6F8),
-        border: Border(bottom: BorderSide(color: AppColors.border)),
-      ),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 260,
-            child: TextField(
-              onChanged: onSearchChanged,
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search_rounded, size: 18),
-                hintText: 'Search classes or sections...',
-              ),
+      color: const Color(0xFFF6F8F7),
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 18),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1120),
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppColors.border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final searchField = TextField(
+                      onChanged: onSearchChanged,
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search_rounded, size: 19),
+                        hintText: 'Search classes',
+                        isDense: true,
+                      ),
+                    );
+                    final sortField = DropdownButtonFormField<_ClassSort>(
+                      key: const ValueKey('class-sort'),
+                      value: sort,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Sort',
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        isDense: true,
+                      ),
+                      items: _ClassSort.values
+                          .map(
+                            (item) => DropdownMenuItem(
+                              value: item,
+                              child: Text(item.label),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value != null) onSortChanged(value);
+                      },
+                    );
+                    if (constraints.maxWidth < 520) {
+                      return Column(
+                        children: [
+                          searchField,
+                          const SizedBox(height: 10),
+                          sortField,
+                        ],
+                      );
+                    }
+                    return Row(
+                      children: [
+                        Expanded(child: searchField),
+                        const SizedBox(width: 12),
+                        SizedBox(width: 210, child: sortField),
+                      ],
+                    );
+                  },
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: 10),
-          SizedBox(
-            width: 220,
-            child: DropdownButtonFormField<_StreamStatusFilter>(
-              value: status,
-              decoration: const InputDecoration(
-                contentPadding: EdgeInsets.all(12),
-              ),
-              items: _StreamStatusFilter.values
-                  .map(
-                    (item) =>
-                        DropdownMenuItem(value: item, child: Text(item.label)),
-                  )
-                  .toList(),
-              onChanged: (value) {
-                if (value != null) onStatusChanged(value);
-              },
-            ),
-          ),
-          const Spacer(),
-          OutlinedButton.icon(
-            onPressed: null,
-            icon: const Icon(Icons.download_rounded, size: 16),
-            label: const Text('Export'),
-          ),
-          const SizedBox(width: 10),
-          FilledButton.icon(
-            key: const ValueKey('add-class-or-section'),
-            onPressed: onAddClassOrSection,
-            icon: const Icon(Icons.add_rounded, size: 18),
-            label: const Text('Add class or section'),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -631,26 +641,26 @@ class _GradeStreamsBody extends StatelessWidget {
     required this.error,
     required this.visibleLevels,
     required this.onRetry,
-    required this.onOpenStream,
-    required this.onDeleteStream,
-    required this.onAddStream,
+    required this.onOpenGrade,
+    required this.onGradeActiveChanged,
   });
 
   final bool loading;
   final String? error;
   final List<_GradeLevel> visibleLevels;
   final VoidCallback onRetry;
-  final void Function(_GradeLevel level, _StreamSummary stream) onOpenStream;
-  final void Function(_GradeLevel level, _StreamSummary stream) onDeleteStream;
-  final ValueChanged<_GradeLevel> onAddStream;
+  final ValueChanged<_GradeLevel> onOpenGrade;
+  final void Function(_GradeLevel level, bool active) onGradeActiveChanged;
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(18, 22, 18, 32),
+    final customLevels = visibleLevels.where((level) => level.custom).toList();
+    final gesLevels = visibleLevels.where((level) => !level.custom).toList();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 4, 24, 36),
       child: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 1320),
+          constraints: const BoxConstraints(maxWidth: 1120),
           child: Builder(
             builder: (context) {
               if (loading) return const _StreamsLoadingCard();
@@ -658,41 +668,31 @@ class _GradeStreamsBody extends StatelessWidget {
                 return _StreamsErrorCard(message: error!, onRetry: onRetry);
               }
               if (visibleLevels.isEmpty) return const _EmptyStreamsCard();
-              final children = <Widget>[];
-              var customHeadingAdded = false;
-              var standardHeadingAdded = false;
-              for (final level in visibleLevels) {
-                if (level.custom && !customHeadingAdded) {
-                  children.add(
-                    const _GradeGroupHeading(
-                      title: 'Custom early-years classes',
+              return Column(
+                children: [
+                  if (customLevels.isNotEmpty)
+                    _ClassGroupPanel(
+                      title: 'Custom classes',
                       subtitle:
-                          'School-defined Creche and Nursery classes · ordered before KG1',
+                          'School-defined classes shown before Kindergarten',
+                      icon: Icons.auto_awesome_outlined,
+                      levels: customLevels,
+                      onOpenGrade: onOpenGrade,
+                      onGradeActiveChanged: onGradeActiveChanged,
                     ),
-                  );
-                  customHeadingAdded = true;
-                } else if (!level.custom && !standardHeadingAdded) {
-                  children.add(
-                    const _GradeGroupHeading(
+                  if (customLevels.isNotEmpty && gesLevels.isNotEmpty)
+                    const SizedBox(height: 18),
+                  if (gesLevels.isNotEmpty)
+                    _ClassGroupPanel(
                       title: 'GES grade levels',
                       subtitle: 'Kindergarten, Basic School and Junior High',
+                      icon: Icons.school_outlined,
+                      levels: gesLevels,
+                      onOpenGrade: onOpenGrade,
+                      onGradeActiveChanged: onGradeActiveChanged,
                     ),
-                  );
-                  standardHeadingAdded = true;
-                }
-                children.add(
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 26),
-                    child: _GradeLevelSection(
-                      level: level,
-                      onOpenStream: onOpenStream,
-                      onDeleteStream: onDeleteStream,
-                      onAddStream: () => onAddStream(level),
-                    ),
-                  ),
-                );
-              }
-              return Column(children: children);
+                ],
+              );
             },
           ),
         ),
@@ -701,494 +701,211 @@ class _GradeStreamsBody extends StatelessWidget {
   }
 }
 
-class _GradeGroupHeading extends StatelessWidget {
-  const _GradeGroupHeading({required this.title, required this.subtitle});
+class _ClassGroupPanel extends StatelessWidget {
+  const _ClassGroupPanel({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.levels,
+    required this.onOpenGrade,
+    required this.onGradeActiveChanged,
+  });
 
   final String title;
   final String subtitle;
+  final IconData icon;
+  final List<_GradeLevel> levels;
+  final ValueChanged<_GradeLevel> onOpenGrade;
+  final void Function(_GradeLevel level, bool active) onGradeActiveChanged;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
         children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: AppColors.greenSoft,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(
-              Icons.auto_awesome_outlined,
-              color: AppColors.green,
-              size: 18,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
+            child: Row(
               children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: AppColors.text,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w900,
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: AppColors.greenSoft,
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                  child: Icon(icon, color: AppColors.green, size: 19),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          color: AppColors.text,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                Text(
-                  subtitle,
-                  style: const TextStyle(color: AppColors.muted, fontSize: 11),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF1F4F5),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    '${levels.length}',
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
                 ),
               ],
             ),
           ),
+          const Divider(height: 1),
+          for (var index = 0; index < levels.length; index++) ...[
+            _ClassOverviewRow(
+              level: levels[index],
+              onOpen: () => onOpenGrade(levels[index]),
+              onActiveChanged: (active) =>
+                  onGradeActiveChanged(levels[index], active),
+            ),
+            if (index != levels.length - 1)
+              const Divider(height: 1, indent: 72),
+          ],
         ],
       ),
     );
   }
 }
 
-class _GradeLevelSection extends StatelessWidget {
-  const _GradeLevelSection({
+class _ClassOverviewRow extends StatelessWidget {
+  const _ClassOverviewRow({
     required this.level,
-    required this.onOpenStream,
-    required this.onDeleteStream,
-    required this.onAddStream,
+    required this.onOpen,
+    required this.onActiveChanged,
   });
 
   final _GradeLevel level;
-  final void Function(_GradeLevel level, _StreamSummary stream) onOpenStream;
-  final void Function(_GradeLevel level, _StreamSummary stream) onDeleteStream;
-  final VoidCallback onAddStream;
+  final VoidCallback onOpen;
+  final ValueChanged<bool> onActiveChanged;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Row(
-          children: [
-            Text(
-              level.name,
-              style: const TextStyle(
-                color: AppColors.text,
-                fontSize: 13,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-            const SizedBox(width: 8),
-            const Expanded(child: Divider(height: 1)),
-            const SizedBox(width: 8),
-            Text(
-              '${level.streams.length} section${level.streams.length == 1 ? '' : 's'}',
-              style: const TextStyle(
-                color: AppColors.muted,
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(width: 10),
-            OutlinedButton.icon(
-              key: ValueKey('add-section-${level.id}'),
-              onPressed: onAddStream,
-              icon: const Icon(Icons.add_rounded, size: 16),
-              label: const Text('Add section'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        if (level.streams.isEmpty)
-          Card(
-            margin: EdgeInsets.zero,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
-              child: Row(
-                children: [
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: level.phase.color.withValues(alpha: .12),
-                      borderRadius: BorderRadius.circular(11),
-                    ),
-                    child: Icon(
-                      Icons.meeting_room_outlined,
-                      color: level.phase.color,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'No sections configured yet',
-                          style: TextStyle(
-                            color: AppColors.text,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                        SizedBox(height: 3),
-                        Text(
-                          'This class is active. Add its first section to assign students and teachers.',
-                          style: TextStyle(
-                            color: AppColors.muted,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          )
-        else
-          Card(
-            margin: EdgeInsets.zero,
-            clipBehavior: Clip.antiAlias,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: SizedBox(
-                width: 1280,
-                child: DataTable(
-                  headingRowHeight: 42,
-                  dataRowMinHeight: 58,
-                  dataRowMaxHeight: 58,
-                  columnSpacing: 28,
-                  headingRowColor: WidgetStateProperty.all(
-                    const Color(0xFFF8FAF9),
-                  ),
-                  headingTextStyle: const TextStyle(
-                    color: AppColors.muted,
-                    fontSize: 11,
-                    letterSpacing: .55,
-                    fontWeight: FontWeight.w900,
-                  ),
-                  dataTextStyle: const TextStyle(
-                    color: AppColors.text,
-                    fontSize: 13,
-                  ),
-                  columns: const [
-                    DataColumn(label: Text('SECTION')),
-                    DataColumn(label: Text('CLASS TEACHER')),
-                    DataColumn(label: Text('ENROLLED / CAPACITY')),
-                    DataColumn(label: Text('FILL')),
-                    DataColumn(label: Text('STATUS')),
-                    DataColumn(label: Text('')),
-                  ],
-                  rows: level.streams
-                      .map(
-                        (stream) => DataRow(
-                          key: ValueKey('stream-row-${stream.id}'),
-                          cells: [
-                            DataCell(
-                              _OpenStreamButton(
-                                stream: stream,
-                                onOpen: () => onOpenStream(level, stream),
-                              ),
-                            ),
-                            DataCell(_TeacherCell(name: stream.teacherName)),
-                            DataCell(_EnrollmentText(stream: stream)),
-                            DataCell(_FillCell(stream: stream)),
-                            DataCell(_StatusChip(active: stream.active)),
-                            DataCell(
-                              _StreamActionsMenu(
-                                onOpen: () => onOpenStream(level, stream),
-                                onDelete: () => onDeleteStream(level, stream),
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                      .toList(),
+    final statusColor = level.active ? AppColors.green : AppColors.muted;
+    final studentCount = level.streams.fold<int>(
+      0,
+      (total, stream) => total + stream.enrolled,
+    );
+    final sectionCount = level.streams.length;
+    return ColoredBox(
+      color: level.active ? Colors.white : const Color(0xFFFAFBFC),
+      child: InkWell(
+        key: ValueKey('open-grade-${level.id}'),
+        onTap: onOpen,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+          child: Row(
+            children: [
+              Container(
+                width: 4,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: statusColor,
+                  borderRadius: BorderRadius.circular(99),
                 ),
               ),
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-class _OpenStreamButton extends StatelessWidget {
-  const _OpenStreamButton({required this.stream, required this.onOpen});
-
-  final _StreamSummary stream;
-  final VoidCallback onOpen;
-
-  @override
-  Widget build(BuildContext context) {
-    return TextButton(
-      onPressed: onOpen,
-      style: TextButton.styleFrom(
-        foregroundColor: AppColors.text,
-        padding: EdgeInsets.zero,
-        minimumSize: Size.zero,
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        alignment: Alignment.centerLeft,
-      ),
-      child: _StreamNameCell(stream: stream),
-    );
-  }
-}
-
-class _StreamNameCell extends StatelessWidget {
-  const _StreamNameCell({required this.stream});
-
-  final _StreamSummary stream;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Container(
-          width: 30,
-          height: 30,
-          decoration: BoxDecoration(
-            color: stream.phase.color.withValues(alpha: .14),
-            borderRadius: BorderRadius.circular(7),
-          ),
-          child: Center(
-            child: Text(
-              stream.initials,
-              style: TextStyle(
-                color: stream.phase.color,
-                fontSize: 11,
-                fontWeight: FontWeight.w900,
+              const SizedBox(width: 12),
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: .1),
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: Icon(
+                  level.custom
+                      ? Icons.auto_awesome_outlined
+                      : Icons.school_outlined,
+                  color: statusColor,
+                  size: 20,
+                ),
               ),
-            ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      level.name,
+                      style: TextStyle(
+                        color: level.active
+                            ? AppColors.text
+                            : const Color(0xFF6B7788),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '$sectionCount section${sectionCount == 1 ? '' : 's'}  ·  $studentCount student${studentCount == 1 ? '' : 's'}',
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                level.active ? 'Active' : 'Inactive',
+                style: TextStyle(
+                  color: statusColor,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Semantics(
+                label:
+                    '${level.name} is ${level.active ? 'active' : 'inactive'}',
+                child: Switch(
+                  key: ValueKey('grade-active-${level.id}'),
+                  value: level.active,
+                  onChanged: onActiveChanged,
+                ),
+              ),
+              const SizedBox(width: 6),
+              const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
+            ],
           ),
         ),
-        const SizedBox(width: 18),
-        Text(stream.name, style: const TextStyle(fontWeight: FontWeight.w900)),
-      ],
-    );
-  }
-}
-
-class _TeacherCell extends StatelessWidget {
-  const _TeacherCell({required this.name});
-
-  final String name;
-
-  @override
-  Widget build(BuildContext context) {
-    if (name.trim().isEmpty) {
-      return const Text(
-        'Not assigned',
-        style: TextStyle(color: AppColors.muted, fontStyle: FontStyle.italic),
-      );
-    }
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 6),
-          decoration: BoxDecoration(
-            color: AppColors.greenSoft,
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: AppColors.green.withValues(alpha: .16)),
-          ),
-          child: Text(
-            _initials(name),
-            style: const TextStyle(
-              color: AppColors.green,
-              fontSize: 10,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Text(name),
-      ],
-    );
-  }
-}
-
-class _EnrollmentText extends StatelessWidget {
-  const _EnrollmentText({required this.stream});
-
-  final _StreamSummary stream;
-
-  @override
-  Widget build(BuildContext context) {
-    final capacityText = stream.capacity == null
-        ? 'Not set'
-        : '${stream.capacity}';
-    return RichText(
-      text: TextSpan(
-        style: const TextStyle(
-          color: AppColors.muted,
-          fontSize: 13,
-          fontWeight: FontWeight.w700,
-        ),
-        children: [
-          TextSpan(
-            text: '${stream.enrolled}',
-            style: const TextStyle(
-              color: AppColors.text,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          TextSpan(text: ' / $capacityText'),
-        ],
       ),
-    );
-  }
-}
-
-class _FillCell extends StatelessWidget {
-  const _FillCell({required this.stream});
-
-  final _StreamSummary stream;
-
-  @override
-  Widget build(BuildContext context) {
-    if (stream.capacity == null || stream.capacity! <= 0) {
-      return const Text(
-        'Capacity not set',
-        style: TextStyle(
-          color: AppColors.muted,
-          fontSize: 12,
-          fontWeight: FontWeight.w800,
-        ),
-      );
-    }
-    final percentage = (stream.capacityRate * 100).round();
-    final color = switch (stream.capacityState) {
-      _CapacityState.ok => AppColors.green,
-      _CapacityState.warning => AppColors.amber,
-      _CapacityState.full => AppColors.red,
-    };
-    return Row(
-      children: [
-        SizedBox(
-          width: 94,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(99),
-            child: LinearProgressIndicator(
-              value: stream.capacityRate.clamp(0, 1),
-              minHeight: 5,
-              color: color,
-              backgroundColor: const Color(0xFFEFF3F7),
-            ),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Text(
-          '$percentage%',
-          style: TextStyle(
-            color: percentage > 100 ? AppColors.red : AppColors.muted,
-            fontSize: 12,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _StatusChip extends StatelessWidget {
-  const _StatusChip({required this.active});
-
-  final bool active;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = active ? AppColors.green : AppColors.muted;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: .12),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 6),
-          Text(
-            active ? 'Active' : 'Inactive',
-            style: TextStyle(
-              color: color,
-              fontSize: 12,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _StreamActionsMenu extends StatelessWidget {
-  const _StreamActionsMenu({required this.onOpen, required this.onDelete});
-
-  final VoidCallback onOpen;
-  final VoidCallback onDelete;
-
-  @override
-  Widget build(BuildContext context) {
-    return PopupMenuButton<_StreamAction>(
-      tooltip: 'Section actions',
-      onSelected: (action) {
-        switch (action) {
-          case _StreamAction.open:
-            onOpen();
-          case _StreamAction.delete:
-            onDelete();
-        }
-      },
-      itemBuilder: (context) => const [
-        PopupMenuItem(
-          value: _StreamAction.open,
-          child: _MenuActionLabel(
-            icon: Icons.chevron_right_rounded,
-            label: 'Open section',
-          ),
-        ),
-        PopupMenuDivider(),
-        PopupMenuItem(
-          value: _StreamAction.delete,
-          child: _MenuActionLabel(
-            icon: Icons.delete_outline_rounded,
-            label: 'Delete section',
-            danger: true,
-          ),
-        ),
-      ],
-      child: const Icon(Icons.more_horiz_rounded, color: AppColors.muted),
-    );
-  }
-}
-
-class _MenuActionLabel extends StatelessWidget {
-  const _MenuActionLabel({
-    required this.icon,
-    required this.label,
-    this.danger = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool danger;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = danger ? AppColors.red : AppColors.text;
-    return Row(
-      children: [
-        Icon(icon, size: 18, color: color),
-        const SizedBox(width: 10),
-        Text(label, style: TextStyle(color: color)),
-      ],
     );
   }
 }
@@ -1332,403 +1049,42 @@ class _StreamsErrorCard extends StatelessWidget {
   }
 }
 
-class _AddClassOrSectionDialog extends StatelessWidget {
-  const _AddClassOrSectionDialog();
+enum _ClassSort {
+  progression('Level order'),
+  activeFirst('Active first'),
+  inactiveFirst('Inactive first'),
+  name('Name A–Z');
 
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 560),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(22, 18, 14, 12),
-              child: Row(
-                children: [
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Add class or section',
-                          style: TextStyle(
-                            color: AppColors.text,
-                            fontSize: 20,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                        SizedBox(height: 4),
-                        Text(
-                          'What would you like to add?',
-                          style: TextStyle(color: AppColors.muted),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Close',
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close_rounded),
-                  ),
-                ],
-              ),
-            ),
-            const Divider(height: 1),
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                children: [
-                  _AddChoiceCard(
-                    key: const ValueKey('add-new-class-choice'),
-                    icon: Icons.school_outlined,
-                    title: 'Create a new class',
-                    description:
-                        'Add a school-specific class such as Creche or Nursery 1.',
-                    onTap: () => Navigator.of(
-                      context,
-                    ).pop(_AddClassOrSectionChoice.classLevel),
-                  ),
-                  const SizedBox(height: 12),
-                  _AddChoiceCard(
-                    key: const ValueKey('add-section-choice'),
-                    icon: Icons.meeting_room_outlined,
-                    title: 'Add a section to an existing class',
-                    description:
-                        'Choose a class and add another section, such as A or Section 2.',
-                    onTap: () => Navigator.of(
-                      context,
-                    ).pop(_AddClassOrSectionChoice.section),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _AddChoiceCard extends StatelessWidget {
-  const _AddChoiceCard({
-    super.key,
-    required this.icon,
-    required this.title,
-    required this.description,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String title;
-  final String description;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: const BorderSide(color: AppColors.border),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: AppColors.greenSoft,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, color: AppColors.green),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        color: AppColors.text,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      description,
-                      style: const TextStyle(
-                        color: AppColors.muted,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 10),
-              const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _AddStreamDialog extends StatefulWidget {
-  const _AddStreamDialog({required this.levels, this.initialGradeInternalId});
-
-  final List<_GradeLevel> levels;
-  final int? initialGradeInternalId;
-
-  @override
-  State<_AddStreamDialog> createState() => _AddStreamDialogState();
-}
-
-class _AddStreamDialogState extends State<_AddStreamDialog> {
-  final _formKey = GlobalKey<FormState>();
-  late int _gradeInternalId;
-  final _streamController = TextEditingController();
-
-  bool get _classIsLocked =>
-      widget.initialGradeInternalId != null &&
-      widget.levels.any((level) => level.id == widget.initialGradeInternalId);
-
-  _GradeLevel get _selectedLevel => widget.levels.firstWhere(
-    (level) => level.id == _gradeInternalId,
-    orElse: () => widget.levels.first,
-  );
-
-  @override
-  void initState() {
-    super.initState();
-    final requested = widget.initialGradeInternalId;
-    _gradeInternalId =
-        requested != null && widget.levels.any((level) => level.id == requested)
-        ? requested
-        : widget.levels.first.id;
-  }
-
-  @override
-  void dispose() {
-    _streamController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(22, 18, 14, 12),
-                child: Row(
-                  children: [
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Add section',
-                            style: TextStyle(
-                              color: AppColors.text,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                          SizedBox(height: 4),
-                          Text(
-                            'Create another section under an existing class.',
-                            style: TextStyle(color: AppColors.muted),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      icon: const Icon(Icons.close_rounded),
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(height: 1),
-              Padding(
-                padding: const EdgeInsets.all(22),
-                child: Column(
-                  children: [
-                    if (_classIsLocked)
-                      InputDecorator(
-                        key: const ValueKey('locked-section-class'),
-                        decoration: const InputDecoration(labelText: 'Class'),
-                        child: Row(
-                          children: [
-                            const Icon(
-                              Icons.school_outlined,
-                              size: 18,
-                              color: AppColors.green,
-                            ),
-                            const SizedBox(width: 10),
-                            Text(
-                              _selectedLevel.name,
-                              style: const TextStyle(
-                                color: AppColors.text,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                    else
-                      DropdownButtonFormField<int>(
-                        value: _gradeInternalId,
-                        decoration: const InputDecoration(labelText: 'Class'),
-                        items: widget.levels
-                            .map(
-                              (level) => DropdownMenuItem(
-                                value: level.id,
-                                child: Text(level.name),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) {
-                          if (value != null) {
-                            setState(() => _gradeInternalId = value);
-                          }
-                        },
-                      ),
-                    const SizedBox(height: 14),
-                    TextFormField(
-                      controller: _streamController,
-                      decoration: const InputDecoration(
-                        labelText: 'Section name',
-                        hintText: 'e.g. Section 1 or A',
-                      ),
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return 'Enter a section name';
-                        }
-                        return null;
-                      },
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(height: 1),
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    OutlinedButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Cancel'),
-                    ),
-                    const SizedBox(width: 10),
-                    FilledButton.icon(
-                      onPressed: _submit,
-                      icon: const Icon(Icons.add_rounded, size: 18),
-                      label: const Text('Add section'),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _submit() {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
-    Navigator.of(context).pop(
-      _NewStreamDraft(
-        gradeInternalId: _gradeInternalId,
-        streamName: _streamController.text.trim(),
-      ),
-    );
-  }
-}
-
-enum _PhaseFilter {
-  all('All', AppColors.green),
-  earlyYears('Early Years', AppColors.green),
-  kindergarten('Kindergarten', AppColors.amber),
-  basic('Basic School', AppColors.blue),
-  jhs('Junior High', AppColors.purple);
-
-  const _PhaseFilter(this.label, this.color);
-
-  final String label;
-  final Color color;
-}
-
-enum _StreamStatusFilter {
-  all('All Status'),
-  active('Active'),
-  inactive('Inactive'),
-  noTeacher('No teacher');
-
-  const _StreamStatusFilter(this.label);
+  const _ClassSort(this.label);
 
   final String label;
 }
-
-enum _StreamAction { open, delete }
-
-enum _AddClassOrSectionChoice { classLevel, section }
-
-enum _CapacityState { ok, warning, full }
 
 class _GradeLevel {
   const _GradeLevel({
     required this.id,
     required this.gradeLevelId,
     required this.name,
-    required this.phase,
     required this.custom,
+    required this.active,
     required this.displayOrder,
     required this.streams,
   });
 
   factory _GradeLevel.fromApi(ClassGradeLevel level) {
-    final phase = level.custom
-        ? _PhaseFilter.earlyYears
-        : _phaseForGradeName(level.name);
     return _GradeLevel(
       id: level.id,
       gradeLevelId: level.gradeLevelId,
       name: level.name,
-      phase: phase,
       custom: level.custom,
+      active: level.active,
       displayOrder: level.displayOrder,
       streams: level.streams
           .map(
             (stream) => _StreamSummary(
-              id: stream.id,
-              gradeLevelId: stream.gradeLevelId,
               name: stream.name,
-              phase: phase,
               teacherName: stream.teacherName,
               enrolled: stream.enrolled,
-              capacity: stream.capacity,
-              active: stream.active,
             ),
           )
           .toList(),
@@ -1738,100 +1094,22 @@ class _GradeLevel {
   final int id;
   final int gradeLevelId;
   final String name;
-  final _PhaseFilter phase;
   final bool custom;
+  final bool active;
   final int displayOrder;
   final List<_StreamSummary> streams;
 }
 
-class _SelectedStream {
-  const _SelectedStream({
-    required this.streamId,
-    required this.gradeLevelId,
-    required this.subjectGradeLevelId,
-    required this.gradeName,
-    required this.streamName,
-    required this.enrolled,
-    required this.capacity,
-    required this.active,
-    required this.classTeacherName,
-  });
-
-  final int streamId;
-  final int gradeLevelId;
-  final int subjectGradeLevelId;
-  final String gradeName;
-  final String streamName;
-  final int enrolled;
-  final int? capacity;
-  final bool active;
-  final String classTeacherName;
-}
-
-class _NewStreamDraft {
-  const _NewStreamDraft({
-    required this.gradeInternalId,
-    required this.streamName,
-  });
-
-  final int gradeInternalId;
-  final String streamName;
-}
-
 class _StreamSummary {
   const _StreamSummary({
-    required this.id,
-    required this.gradeLevelId,
     required this.name,
-    required this.phase,
     required this.teacherName,
     required this.enrolled,
-    required this.capacity,
-    required this.active,
   });
 
-  final int id;
-  final int gradeLevelId;
   final String name;
-  final _PhaseFilter phase;
   final String teacherName;
   final int enrolled;
-  final int? capacity;
-  final bool active;
-
-  double get capacityRate =>
-      capacity == null || capacity! <= 0 ? 0 : enrolled / capacity!;
-
-  _CapacityState get capacityState {
-    if (capacityRate >= 1) return _CapacityState.full;
-    if (capacityRate >= .85) return _CapacityState.warning;
-    return _CapacityState.ok;
-  }
-
-  String get initials {
-    final parts = name
-        .replaceAll('-', ' ')
-        .replaceAll('_', ' ')
-        .split(RegExp(r'\s+'))
-        .where((part) => part.isNotEmpty)
-        .toList();
-    if (parts.isEmpty) return 'S';
-    if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
-    return '${parts.first[0]}${parts[1][0]}'.toUpperCase();
-  }
-}
-
-_PhaseFilter _phaseForGradeName(String name) {
-  final normalized = name.trim().toLowerCase();
-  if (normalized.startsWith('kg') ||
-      normalized.contains('kindergarten') ||
-      normalized.contains('nursery')) {
-    return _PhaseFilter.kindergarten;
-  }
-  if (normalized.startsWith('jhs') || normalized.contains('junior high')) {
-    return _PhaseFilter.jhs;
-  }
-  return _PhaseFilter.basic;
 }
 
 bool _isSeniorSecondaryGrade(String value) {
@@ -1841,14 +1119,33 @@ bool _isSeniorSecondaryGrade(String value) {
       normalized.startsWith('SENIOR SECONDARY');
 }
 
-String _initials(String name) {
-  final parts = name
-      .trim()
-      .replaceAll('_', ' ')
-      .split(RegExp(r'\s+'))
-      .where((part) => part.isNotEmpty)
-      .toList();
-  if (parts.isEmpty) return '?';
-  if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
-  return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
+int _gradeProgressionRank(String value) {
+  final normalized = value.trim().toLowerCase();
+  final number =
+      int.tryParse(RegExp(r'\d+').firstMatch(normalized)?.group(0) ?? '') ?? 99;
+  if (normalized.startsWith('kg') || normalized.contains('kindergarten')) {
+    return 100 + number;
+  }
+  if (normalized.startsWith('basic')) return 200 + number;
+  if (normalized.startsWith('jhs') || normalized.contains('junior high')) {
+    return 300 + number;
+  }
+  return 1000 + number;
+}
+
+int _naturalNameCompare(String left, String right) {
+  final leftNumber = int.tryParse(
+    RegExp(r'\d+').firstMatch(left)?.group(0) ?? '',
+  );
+  final rightNumber = int.tryParse(
+    RegExp(r'\d+').firstMatch(right)?.group(0) ?? '',
+  );
+  final leftBase = left.replaceAll(RegExp(r'\d+'), '').trim().toLowerCase();
+  final rightBase = right.replaceAll(RegExp(r'\d+'), '').trim().toLowerCase();
+  final base = leftBase.compareTo(rightBase);
+  if (base != 0) return base;
+  if (leftNumber != null && rightNumber != null) {
+    return leftNumber.compareTo(rightNumber);
+  }
+  return left.toLowerCase().compareTo(right.toLowerCase());
 }

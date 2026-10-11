@@ -17,11 +17,7 @@ const _schoolDocumentLabels = [
   'School front photo',
 ];
 
-const _requiredSchoolDocumentLabels = {
-  'Business registration certificate',
-  'GES registration document',
-  'Social welfare approval',
-};
+const _requiredSchoolDocumentLabels = <String>{};
 
 enum _SubmissionAction { schools, viewSchool }
 
@@ -187,7 +183,7 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
   static const _steps = [
     _SetupStep(
       'School Information',
-      'School name, category, year founded, and motto.',
+      'School name, education level, year founded, and motto.',
       Icons.school_outlined,
     ),
     _SetupStep(
@@ -197,7 +193,7 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
     ),
     _SetupStep(
       'Social Welfare',
-      'Social welfare approval number and compliance status.',
+      'Optional approval and compliance details. These can be added later.',
       Icons.verified_user_outlined,
     ),
     _SetupStep(
@@ -211,8 +207,8 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
       Icons.contact_phone_outlined,
     ),
     _SetupStep(
-      'Required Documents',
-      'Upload supporting registration and compliance documents.',
+      'Supporting Documents',
+      'Add registration and compliance documents now or later.',
       Icons.upload_file_outlined,
     ),
     _SetupStep(
@@ -227,7 +223,7 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
     ),
     _SetupStep(
       'Review & Submit',
-      'Review all information and submit the school for approval.',
+      'Review all information and complete school onboarding.',
       Icons.task_alt_outlined,
     ),
   ];
@@ -726,7 +722,6 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
       administratorName: _administratorName,
       administratorPhone: _administratorPhone,
       administratorEmail: _administratorEmail,
-      category: _schoolCategory,
       educationLevel: _educationLevel,
       gesRegistrationType: _gesRegistrationType,
       businessRegistrationType: _businessRegistrationType,
@@ -741,8 +736,13 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
       loadingDistricts: _loadingDistricts,
       loadingCities: _loadingCities,
       levels: _levels,
-      onCategoryChanged: (value) => _schoolCategory = value,
-      onEducationLevelChanged: (value) => _educationLevel = value,
+      onEducationLevelChanged: (value) {
+        _educationLevel = value;
+        _schoolCategory = _legacyCategoryForEducationLevel(
+          value,
+          fallback: _schoolCategory,
+        );
+      },
       onGesRegistrationTypeChanged: (value) => _gesRegistrationType = value,
       onBusinessRegistrationTypeChanged: (value) =>
           _businessRegistrationType = value,
@@ -949,6 +949,7 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
     final status =
         _text(submitted.data, ['registrationStatus', 'status']) ??
         submitted.progress.registrationStatus;
+    final approved = status.trim().toUpperCase() == 'APPROVED';
     final action = await showDialog<_SubmissionAction>(
       context: context,
       barrierDismissible: false,
@@ -974,14 +975,21 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
                 ),
               ),
               const SizedBox(height: 18),
-              const Text(
-                'School submitted successfully',
+              Text(
+                approved
+                    ? 'School created and approved'
+                    : 'School submitted successfully',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
               const SizedBox(height: 8),
               Text(
-                '$schoolName has been submitted for approval.',
+                approved
+                    ? '$schoolName is approved and ready to use.'
+                    : '$schoolName has been submitted for approval.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: AppColors.muted, height: 1.45),
               ),
@@ -1209,10 +1217,18 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
       if (number == null || number.isEmpty) continue;
       final normalized = number.replaceAll(RegExp(r'\D'), '');
       if (normalized.isNotEmpty && !savedPhoneNumbers.add(normalized)) continue;
-      final type = _text(phone, ['type']) ?? 'mobile';
+      final savedType = (_text(phone, ['type']) ?? 'mobile').toLowerCase();
+      final isLegacyWhatsApp = savedType == 'whatsapp';
+      final type = isLegacyWhatsApp ? 'mobile' : savedType;
+      final isWhatsApp = phone['isWhatsApp'] == true || isLegacyWhatsApp;
       final isPrimary = _phoneContacts.isEmpty || phone['isPrimary'] == true;
       _phoneContacts.add(
-        SchoolPhoneContact(number: number, type: type, isPrimary: isPrimary),
+        SchoolPhoneContact(
+          number: number,
+          type: type,
+          isPrimary: isPrimary,
+          isWhatsApp: isWhatsApp,
+        ),
       );
       if (isPrimary || _phone.text.trim().isEmpty) {
         _phone.text = number;
@@ -1233,8 +1249,16 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
         if (normalized.isNotEmpty && !savedPhoneNumbers.add(normalized)) {
           continue;
         }
-        final type = _text(phone, ['type']) ?? 'office';
-        _phoneContacts.add(SchoolPhoneContact(number: number, type: type));
+        final savedType = (_text(phone, ['type']) ?? 'office').toLowerCase();
+        final isLegacyWhatsApp = savedType == 'whatsapp';
+        final type = isLegacyWhatsApp ? 'mobile' : savedType;
+        _phoneContacts.add(
+          SchoolPhoneContact(
+            number: number,
+            type: type,
+            isWhatsApp: phone['isWhatsApp'] == true || isLegacyWhatsApp,
+          ),
+        );
         savedWorkPhones.add(number);
       }
       _officePhone.text = savedWorkPhones.join(', ');
@@ -1584,13 +1608,19 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
   }
 
   SchoolOnboardingDraft _onboardingDraft() {
+    final schoolCategory = _legacyCategoryForEducationLevel(
+      _educationLevel,
+      fallback: _schoolCategory,
+    );
     return SchoolOnboardingDraft(
       customSchoolId: _customSchoolId,
       schoolName: _schoolName.text.trim().isEmpty
           ? 'New School'
           : _schoolName.text.trim(),
-      schoolType: _schoolCategory,
-      schoolTypeId: _lookups.schoolCategoryIds[_schoolCategory],
+      // The backend still requires this legacy reference. Education level is
+      // the only value selected by the user and determines it automatically.
+      schoolType: schoolCategory,
+      schoolTypeId: _lookups.schoolCategoryIds[schoolCategory],
       educationLevel: _educationLevel,
       educationLevelId: _lookups.educationLevelIds[_educationLevel],
       yearFounded: int.tryParse(_yearFounded.text.trim()) ?? 0,
@@ -1688,6 +1718,33 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
         ),
       ),
     );
+  }
+
+  String _legacyCategoryForEducationLevel(
+    String educationLevel, {
+    required String fallback,
+  }) {
+    const categoryByEducationLevel = {
+      'kindergarten': 'Kindergarten',
+      'early childhood': 'Kindergarten',
+      'primary': 'Primary',
+      'junior high': 'Junior High School',
+      'junior high school': 'Junior High School',
+      'basic school': 'Basic School (KG-Primary-JHS)',
+      'special education': 'Special School',
+      'special school': 'Special School',
+    };
+    final desired =
+        categoryByEducationLevel[educationLevel.trim().toLowerCase()];
+    if (desired != null) {
+      for (final category in _lookups.schoolCategories) {
+        if (category.trim().toLowerCase() == desired.toLowerCase()) {
+          return category;
+        }
+      }
+    }
+    if (fallback.trim().isNotEmpty) return fallback;
+    return desired ?? educationLevel.trim();
   }
 
   @override
@@ -2021,7 +2078,6 @@ class _StepFormDialog extends StatefulWidget {
     required this.administratorName,
     required this.administratorPhone,
     required this.administratorEmail,
-    required this.category,
     required this.educationLevel,
     required this.gesRegistrationType,
     required this.businessRegistrationType,
@@ -2036,7 +2092,6 @@ class _StepFormDialog extends StatefulWidget {
     required this.loadingDistricts,
     required this.loadingCities,
     required this.levels,
-    required this.onCategoryChanged,
     required this.onEducationLevelChanged,
     required this.onGesRegistrationTypeChanged,
     required this.onBusinessRegistrationTypeChanged,
@@ -2112,7 +2167,6 @@ class _StepFormDialog extends StatefulWidget {
   final TextEditingController administratorName;
   final TextEditingController administratorPhone;
   final TextEditingController administratorEmail;
-  final String category;
   final String educationLevel;
   final String gesRegistrationType;
   final String businessRegistrationType;
@@ -2127,7 +2181,6 @@ class _StepFormDialog extends StatefulWidget {
   final bool loadingDistricts;
   final bool loadingCities;
   final Set<String> levels;
-  final ValueChanged<String> onCategoryChanged;
   final ValueChanged<String> onEducationLevelChanged;
   final ValueChanged<String> onGesRegistrationTypeChanged;
   final ValueChanged<String> onBusinessRegistrationTypeChanged;
@@ -2170,7 +2223,6 @@ class _StepFormDialog extends StatefulWidget {
 
 class _StepFormDialogState extends State<_StepFormDialog> {
   final _formKey = GlobalKey<FormState>();
-  late String _category = widget.category;
   late String _educationLevel = widget.educationLevel;
   late String _gesRegistrationType = widget.gesRegistrationType;
   late String _businessRegistrationType = widget.businessRegistrationType;
@@ -2346,7 +2398,6 @@ class _StepFormDialogState extends State<_StepFormDialog> {
     if (_saving) return;
     setState(() => _saving = true);
     try {
-      widget.onCategoryChanged(_category);
       widget.onEducationLevelChanged(_educationLevel);
       widget.onGesRegistrationTypeChanged(_gesRegistrationType);
       widget.onBusinessRegistrationTypeChanged(_businessRegistrationType);
@@ -2402,7 +2453,6 @@ class _StepFormDialogState extends State<_StepFormDialog> {
     final value = switch (widget.index) {
       0 => [
         widget.schoolName.text.trim(),
-        _category,
         _educationLevel,
         widget.yearFounded.text.trim(),
         widget.motto.text.trim(),
@@ -2440,7 +2490,8 @@ class _StepFormDialogState extends State<_StepFormDialog> {
         widget.phoneNetwork.text.trim(),
         widget.secondaryPhone.text.trim(),
         widget.secondaryPhoneNetwork.text.trim(),
-        for (final row in _phoneRows) [row.number.text.trim(), row.type],
+        for (final row in _phoneRows)
+          [row.number.text.trim(), row.type, row.isWhatsApp],
         for (final controller in _emailRows) controller.text.trim(),
         widget.website.text.trim(),
         for (final row in _socialMediaRows)
@@ -2792,12 +2843,6 @@ class _StepFormDialogState extends State<_StepFormDialog> {
           'Enter the registered school name',
         ),
         _dropdown(
-          label: 'School category',
-          value: _category,
-          values: widget.lookups.schoolCategories,
-          onChanged: (value) => setState(() => _category = value),
-        ),
-        _dropdown(
           label: 'Education level',
           value: _educationLevel,
           values: widget.lookups.educationLevels,
@@ -2810,11 +2855,7 @@ class _StepFormDialogState extends State<_StepFormDialog> {
             'e.g. 2012',
             keyboardType: TextInputType.number,
           ),
-          _optionalField(
-            'School motto',
-            widget.motto,
-            'Knowledge and character',
-          ),
+          _mottoField(widget.motto),
         ),
       ]),
       1 => _fields([
@@ -2860,24 +2901,27 @@ class _StepFormDialogState extends State<_StepFormDialog> {
         ),
       ]),
       2 => _fields([
-        _requiredField(
+        _optionalField(
           'Social welfare approval number',
           widget.socialWelfareNumber,
           'e.g. SWA-2024-0023',
+          optional: true,
         ),
         _pair(
-          _requiredField(
+          _optionalField(
             'Approval officer name',
             widget.socialWelfareOfficer,
             'Full name of approving officer',
+            optional: true,
           ),
-          _requiredDateField('Approval date', widget.socialWelfareDate),
+          _optionalDateField('Approval date', widget.socialWelfareDate),
         ),
         _dropdown(
           label: 'Compliance status',
           value: _socialWelfareStatus,
           values: widget.lookups.socialWelfareStatuses,
           onChanged: (value) => setState(() => _socialWelfareStatus = value),
+          required: false,
         ),
       ]),
       3 => _fields([
@@ -3051,7 +3095,6 @@ class _StepFormDialogState extends State<_StepFormDialog> {
       ),
       _ => _ReviewSetup(
         schoolName: widget.schoolName.text,
-        category: _category,
         educationLevel: _educationLevel,
         yearFounded: widget.yearFounded.text,
         motto: widget.motto.text,
@@ -3243,14 +3286,17 @@ class _StepFormDialogState extends State<_StepFormDialog> {
     required String value,
     required List<String> values,
     required ValueChanged<String> onChanged,
+    bool required = true,
   }) {
     final options = values.contains(value) ? values : [value, ...values];
     return DropdownButtonFormField<String>(
       value: value,
-      validator: (selected) =>
-          selected == null || selected.trim().isEmpty ? 'Required' : null,
+      validator: required
+          ? (selected) =>
+                selected == null || selected.trim().isEmpty ? 'Required' : null
+          : null,
       decoration: InputDecoration(
-        labelText: label,
+        labelText: required ? label : '$label (optional)',
         border: const OutlineInputBorder(),
       ),
       items: options
@@ -3385,6 +3431,36 @@ class _StepFormDialogState extends State<_StepFormDialog> {
         ),
       );
 
+  Widget _optionalDateField(String label, TextEditingController controller) =>
+      TextFormField(
+        controller: controller,
+        readOnly: true,
+        onTap: () async {
+          final current = _parseDate(controller.text);
+          final picked = await showDatePicker(
+            context: context,
+            initialDate: current ?? DateTime.now(),
+            firstDate: DateTime(1900),
+            lastDate: DateTime.now().add(const Duration(days: 365 * 10)),
+          );
+          if (picked != null) {
+            setState(() => controller.text = _formatDate(picked));
+          }
+        },
+        decoration: InputDecoration(
+          labelText: '$label (optional)',
+          hintText: 'Select date',
+          suffixIcon: controller.text.trim().isEmpty
+              ? const Icon(Icons.calendar_month_outlined)
+              : IconButton(
+                  tooltip: 'Clear date',
+                  onPressed: () => setState(controller.clear),
+                  icon: const Icon(Icons.close_rounded),
+                ),
+          border: const OutlineInputBorder(),
+        ),
+      );
+
   String _formatDate(DateTime value) =>
       '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
 
@@ -3445,7 +3521,10 @@ class _StepFormDialogState extends State<_StepFormDialog> {
       rows.add(
         _SchoolPhoneFormRow(
           number: contact.number,
-          type: contact.type.trim().isEmpty ? 'mobile' : contact.type,
+          type: contact.type.trim().isEmpty || contact.type == 'whatsapp'
+              ? 'mobile'
+              : contact.type,
+          isWhatsApp: contact.isWhatsApp || contact.type == 'whatsapp',
         ),
       );
     }
@@ -3479,6 +3558,7 @@ class _StepFormDialogState extends State<_StepFormDialog> {
               number: entry.value.number.text.trim(),
               type: entry.value.type,
               isPrimary: entry.key == 0,
+              isWhatsApp: entry.value.isWhatsApp,
             ),
           )
           .toList(growable: false),
@@ -3523,7 +3603,7 @@ class _StepFormDialogState extends State<_StepFormDialog> {
   }
 
   Widget _phoneNumberRow(int index, _SchoolPhoneFormRow row) {
-    const types = ['mobile', 'whatsapp', 'office', 'home', 'other'];
+    const types = ['mobile', 'office', 'home', 'other'];
     final type = types.contains(row.type) ? row.type : 'other';
     final numberField = TextFormField(
       key: ValueKey('Phone number $index'),
@@ -3541,6 +3621,7 @@ class _StepFormDialogState extends State<_StepFormDialog> {
       ),
     );
     final typeField = DropdownButtonFormField<String>(
+      key: ValueKey('Phone type $index'),
       isExpanded: true,
       value: type,
       decoration: const InputDecoration(
@@ -3562,6 +3643,32 @@ class _StepFormDialogState extends State<_StepFormDialog> {
           _syncContactRows();
         });
       },
+    );
+    final whatsAppField = Container(
+      constraints: const BoxConstraints(minHeight: 56),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: CheckboxListTile(
+        key: ValueKey('Phone WhatsApp $index'),
+        value: row.isWhatsApp,
+        onChanged: (value) {
+          setState(() {
+            row.isWhatsApp = value ?? false;
+            _syncContactRows();
+          });
+        },
+        controlAffinity: ListTileControlAffinity.leading,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+        dense: true,
+        visualDensity: VisualDensity.compact,
+        title: const Text(
+          'Uses WhatsApp',
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+        ),
+      ),
     );
     final primaryBadge = Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -3610,8 +3717,16 @@ class _StepFormDialogState extends State<_StepFormDialog> {
                 numberField,
                 const SizedBox(height: 10),
                 typeField,
+                const SizedBox(height: 10),
+                whatsAppField,
                 if (index > 0)
-                  Align(alignment: Alignment.centerRight, child: removeButton),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: removeButton,
+                    ),
+                  ),
               ],
             );
           }
@@ -3621,6 +3736,8 @@ class _StepFormDialogState extends State<_StepFormDialog> {
               Expanded(flex: 3, child: numberField),
               const SizedBox(width: 12),
               Expanded(flex: 2, child: typeField),
+              const SizedBox(width: 12),
+              SizedBox(width: 170, child: whatsAppField),
               const SizedBox(width: 12),
               if (index == 0)
                 Padding(
@@ -3742,6 +3859,23 @@ class _StepFormDialogState extends State<_StepFormDialog> {
       border: const OutlineInputBorder(),
     ),
   );
+
+  Widget _mottoField(TextEditingController controller) => TextFormField(
+    key: const ValueKey('school-motto'),
+    controller: controller,
+    keyboardType: TextInputType.multiline,
+    textCapitalization: TextCapitalization.sentences,
+    minLines: 2,
+    maxLines: 4,
+    maxLength: 160,
+    decoration: const InputDecoration(
+      labelText: 'School motto',
+      hintText: 'e.g. Knowledge and character',
+      helperText: 'A short statement that represents the school.',
+      alignLabelWithHint: true,
+      border: OutlineInputBorder(),
+    ),
+  );
 }
 
 class _SocialMediaFormRow {
@@ -3755,11 +3889,15 @@ class _SocialMediaFormRow {
 }
 
 class _SchoolPhoneFormRow {
-  _SchoolPhoneFormRow({String number = '', required this.type})
-    : number = TextEditingController(text: number);
+  _SchoolPhoneFormRow({
+    String number = '',
+    required this.type,
+    this.isWhatsApp = false,
+  }) : number = TextEditingController(text: number);
 
   final TextEditingController number;
   String type;
+  bool isWhatsApp;
 
   void dispose() => number.dispose();
 }
@@ -3963,8 +4101,8 @@ class _GradeLevelSetupState extends State<_GradeLevelSetup> {
                               ),
                             ),
                             Text(
-                              group.key == 'Custom early-years classes'
-                                  ? 'Creche and nursery levels appear before KG1 and start with editable KG subject suggestions.'
+                              group.key == 'Custom classes'
+                                  ? 'School-defined classes, such as Creche or Nursery, appear before KG1.'
                                   : '${_selectedInGroup(group.value)} of ${group.value.length} selected',
                               style: const TextStyle(
                                 color: AppColors.muted,
@@ -3974,7 +4112,7 @@ class _GradeLevelSetupState extends State<_GradeLevelSetup> {
                           ],
                         ),
                       ),
-                      if (group.key == 'Custom early-years classes')
+                      if (group.key == 'Custom classes')
                         OutlinedButton.icon(
                           key: const ValueKey('add-custom-grade-level'),
                           onPressed: widget.canCreateCustomGradeLevel
@@ -4007,17 +4145,16 @@ class _GradeLevelSetupState extends State<_GradeLevelSetup> {
                         ),
                     ],
                   ),
-                  if (group.key == 'Custom early-years classes' &&
+                  if (group.key == 'Custom classes' &&
                       !widget.canCreateCustomGradeLevel) ...[
                     const SizedBox(height: 8),
                     const Text(
-                      'Save the school information first, then add Creche or Nursery classes here.',
+                      'Save the school information first, then add a custom class here.',
                       style: TextStyle(color: AppColors.muted, fontSize: 11),
                     ),
                   ],
                   const SizedBox(height: 12),
-                  if (group.key == 'Custom early-years classes' &&
-                      group.value.isEmpty)
+                  if (group.key == 'Custom classes' && group.value.isEmpty)
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.all(14),
@@ -4027,7 +4164,7 @@ class _GradeLevelSetupState extends State<_GradeLevelSetup> {
                         border: Border.all(color: AppColors.border),
                       ),
                       child: const Text(
-                        'No custom early-years classes have been added yet.',
+                        'No custom classes have been added yet.',
                         style: TextStyle(color: AppColors.muted, fontSize: 12),
                       ),
                     ),
@@ -4068,19 +4205,6 @@ class _GradeLevelSetupState extends State<_GradeLevelSetup> {
                                     fontWeight: FontWeight.w800,
                                   ),
                                 ),
-                                if (widget.customGradeLevels.contains(grade))
-                                  const Padding(
-                                    padding: EdgeInsets.only(top: 3),
-                                    child: Text(
-                                      'CUSTOM CLASS · KG SUBJECTS SUGGESTED',
-                                      style: TextStyle(
-                                        color: AppColors.purple,
-                                        fontSize: 9,
-                                        fontWeight: FontWeight.w900,
-                                        letterSpacing: .35,
-                                      ),
-                                    ),
-                                  ),
                                 const SizedBox(height: 2),
                                 Text(
                                   active
@@ -4214,7 +4338,7 @@ class _GradeLevelSetupState extends State<_GradeLevelSetup> {
 
   Map<String, List<String>> get _groupedLevels {
     final grouped = <String, List<String>>{
-      'Custom early-years classes': <String>[],
+      'Custom classes': <String>[],
       for (final entry in groups.entries) entry.key: <String>[],
     };
     final custom = <String>[];
@@ -4238,11 +4362,11 @@ class _GradeLevelSetupState extends State<_GradeLevelSetup> {
         extras.add(grade);
       }
     }
-    grouped['Custom early-years classes'] = custom;
+    grouped['Custom classes'] = custom;
     if (extras.isNotEmpty) grouped['Other'] = extras;
     return {
       for (final entry in grouped.entries)
-        if (entry.value.isNotEmpty || entry.key == 'Custom early-years classes')
+        if (entry.value.isNotEmpty || entry.key == 'Custom classes')
           entry.key: entry.value,
     };
   }
@@ -4251,7 +4375,7 @@ class _GradeLevelSetupState extends State<_GradeLevelSetup> {
     'GES kindergarten' => Icons.child_care_rounded,
     'Primary School' => Icons.menu_book_rounded,
     'Junior High School' => Icons.school_rounded,
-    'Custom early-years classes' => Icons.auto_awesome_outlined,
+    'Custom classes' => Icons.auto_awesome_outlined,
     _ => Icons.school_outlined,
   };
 
@@ -4276,7 +4400,7 @@ class _GradeLevelSetupState extends State<_GradeLevelSetup> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Use this for an early-years class such as Creche, Nursery 1, or Nursery 2.',
+                  'Create a school-defined class. Examples include Creche, Nursery 1, and Nursery 2. Custom classes appear before KG1.',
                   style: TextStyle(color: AppColors.muted, height: 1.4),
                 ),
                 const SizedBox(height: 16),
@@ -4310,31 +4434,6 @@ class _GradeLevelSetupState extends State<_GradeLevelSetup> {
                   onChanged: saving
                       ? null
                       : (value) => streams = value ?? streams,
-                ),
-                const SizedBox(height: 14),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: AppColors.greenSoft,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(
-                        Icons.info_outline_rounded,
-                        size: 18,
-                        color: AppColors.green,
-                      ),
-                      SizedBox(width: 9),
-                      Expanded(
-                        child: Text(
-                          'The class is placed below KG1. KG subjects are suggested automatically and can be edited later under Classes and Subjects.',
-                          style: TextStyle(fontSize: 11, height: 1.4),
-                        ),
-                      ),
-                    ],
-                  ),
                 ),
                 if (error != null) ...[
                   const SizedBox(height: 10),
@@ -5096,7 +5195,6 @@ class _EventEditor extends StatelessWidget {
 class _ReviewSetup extends StatelessWidget {
   const _ReviewSetup({
     required this.schoolName,
-    required this.category,
     required this.educationLevel,
     required this.yearFounded,
     required this.motto,
@@ -5143,7 +5241,6 @@ class _ReviewSetup extends StatelessWidget {
     required this.onEdit,
   });
   final String schoolName,
-      category,
       educationLevel,
       yearFounded,
       motto,
@@ -5256,7 +5353,6 @@ class _ReviewSetup extends StatelessWidget {
         rows: [
           ('School Name', schoolName),
           ('Custom School ID', 'Generated on submission'),
-          ('Category', category),
           ('Education Level', educationLevel),
           ('Year Founded', yearFounded),
           ('School Motto', motto),
@@ -5274,7 +5370,8 @@ class _ReviewSetup extends StatelessWidget {
                 entry.key == 0
                     ? 'Primary Phone'
                     : 'Additional Phone ${entry.key}',
-                '${entry.value.number} · ${entry.value.type}',
+                '${entry.value.number} · ${entry.value.type}'
+                    '${entry.value.isWhatsApp ? ' · WhatsApp' : ''}',
               ),
             )
           else ...[
@@ -5362,7 +5459,7 @@ class _ReviewSetup extends StatelessWidget {
           style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800),
         ),
         subtitle: const Text(
-          'Submitting will send this school onboarding record for approval.',
+          'Submitting will complete onboarding and apply the appropriate approval status.',
           style: TextStyle(color: AppColors.muted, fontSize: 11),
         ),
       ),

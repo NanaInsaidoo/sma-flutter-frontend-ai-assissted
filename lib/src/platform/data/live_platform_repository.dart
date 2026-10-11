@@ -1381,18 +1381,23 @@ class LivePlatformRepository implements PlatformRepository {
     },
   };
 
-  Map<String, dynamic> _socialWelfareBody(SchoolOnboardingDraft draft) => {
-    'socialWelfareCompliance': {
-      'approvalNumber': draft.socialWelfareNumber,
-      'approvalDate': draft.socialWelfareDate,
-      'approvalOfficerName': draft.socialWelfareOfficer,
-      'expiryDate': '',
-      'complianceStatusId': draft.socialWelfareStatusId,
+  Map<String, dynamic> _socialWelfareBody(SchoolOnboardingDraft draft) {
+    final compliance = <String, dynamic>{
+      if (draft.socialWelfareNumber.trim().isNotEmpty)
+        'approvalNumber': draft.socialWelfareNumber.trim(),
+      if (draft.socialWelfareDate.trim().isNotEmpty)
+        'approvalDate': draft.socialWelfareDate.trim(),
+      if (draft.socialWelfareOfficer.trim().isNotEmpty)
+        'approvalOfficerName': draft.socialWelfareOfficer.trim(),
+      if (draft.socialWelfareStatusId != null)
+        'complianceStatusId': draft.socialWelfareStatusId,
       if (draft.socialWelfareStatusId != null)
         'complianceStatus': {'id': draft.socialWelfareStatusId},
-      'notes': '',
-    },
-  };
+    };
+    return compliance.isEmpty
+        ? <String, dynamic>{}
+        : {'socialWelfareCompliance': compliance};
+  }
 
   Map<String, dynamic> _addressBody(SchoolOnboardingDraft draft) => {
     'address': {
@@ -1430,6 +1435,7 @@ class LivePlatformRepository implements PlatformRepository {
                       'type': contact.type.trim().isEmpty
                           ? 'mobile'
                           : contact.type.trim(),
+                      'isWhatsApp': contact.isWhatsApp,
                     },
                   )
                   .toList()
@@ -1439,6 +1445,7 @@ class LivePlatformRepository implements PlatformRepository {
                   'type': draft.phoneNetwork.trim().isEmpty
                       ? 'mobile'
                       : draft.phoneNetwork.trim(),
+                  'isWhatsApp': false,
                 },
                 if (draft.secondaryPhone.trim().isNotEmpty)
                   {
@@ -1446,6 +1453,7 @@ class LivePlatformRepository implements PlatformRepository {
                     'type': draft.secondaryPhoneNetwork.trim().isEmpty
                         ? 'mobile'
                         : draft.secondaryPhoneNetwork.trim(),
+                    'isWhatsApp': false,
                   },
               ],
         'workPhoneNumbers': hasStructuredPhones
@@ -1457,6 +1465,7 @@ class LivePlatformRepository implements PlatformRepository {
                     (contact) => {
                       'number': contact.number.trim(),
                       'type': contact.type,
+                      'isWhatsApp': contact.isWhatsApp,
                     },
                   )
                   .toList()
@@ -1464,7 +1473,13 @@ class LivePlatformRepository implements PlatformRepository {
                   .split(',')
                   .map((number) => number.trim())
                   .where((number) => number.isNotEmpty)
-                  .map((number) => {'number': number, 'type': 'office'})
+                  .map(
+                    (number) => {
+                      'number': number,
+                      'type': 'office',
+                      'isWhatsApp': false,
+                    },
+                  )
                   .toList(),
         'emails': draft.email
             .split(',')

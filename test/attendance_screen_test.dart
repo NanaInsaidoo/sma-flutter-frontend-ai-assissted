@@ -399,6 +399,76 @@ void main() {
     expect(find.text('Escalated'), findsOneWidget);
     expect(find.text('Escalated to the headmaster.'), findsOneWidget);
   });
+
+  testWidgets('initial stream resolves its class when grade IDs differ', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final repository = _MismatchedGradeIdAttendanceRepository();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: AttendanceScreen(
+            customSchoolId: 'SCH-001',
+            repository: repository,
+            initialGradeLevelId: 5,
+            initialStreamId: 75,
+            showClassSelectors: false,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Basic 5 · Section 1'), findsOneWidget);
+    expect(find.textContaining('Infants'), findsNothing);
+    expect(repository.lastRosterGradeId, 500);
+    expect(repository.lastRosterStreamId, 75);
+  });
+}
+
+class _MismatchedGradeIdAttendanceRepository extends _FakeAttendanceRepository {
+  int? lastRosterGradeId;
+  int? lastRosterStreamId;
+
+  @override
+  Future<List<AttendanceGradeLevel>> getGradeLevels(
+    String customSchoolId,
+  ) async => const [
+    AttendanceGradeLevel(id: 100, name: 'Infants'),
+    AttendanceGradeLevel(id: 500, name: 'Basic 5'),
+  ];
+
+  @override
+  Future<List<AttendanceStream>> getStreams({
+    required String customSchoolId,
+    required int gradeLevelId,
+  }) async => gradeLevelId == 100
+      ? const [
+          AttendanceStream(
+            id: 10,
+            name: 'Infants - Section 1',
+            gradeLevelId: 100,
+          ),
+        ]
+      : const [AttendanceStream(id: 75, name: 'Section 1', gradeLevelId: 500)];
+
+  @override
+  Future<AttendanceRoster> getRoster({
+    required String customSchoolId,
+    required int gradeLevelId,
+    required int streamId,
+    required DateTime date,
+  }) async {
+    lastRosterGradeId = gradeLevelId;
+    lastRosterStreamId = streamId;
+    return const AttendanceRoster(students: [], records: []);
+  }
 }
 
 class _FakeAttendanceRepository implements AttendanceRepository {

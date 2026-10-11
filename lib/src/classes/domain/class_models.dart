@@ -71,6 +71,12 @@ abstract class ClassesRepository {
     required String streamName,
   });
 
+  Future<void> renameStream({
+    required String customSchoolId,
+    required int streamId,
+    required String streamName,
+  });
+
   Future<void> updateStreamCapacities({
     required String customSchoolId,
     required List<StreamCapacityUpdate> updates,

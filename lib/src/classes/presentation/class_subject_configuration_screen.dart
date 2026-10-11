@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
+import '../../attendance/domain/attendance_models.dart';
 import '../../theme/app_theme.dart';
 import '../data/classes_api_client.dart';
 import '../domain/class_models.dart';
+import 'grade_detail_screen.dart';
 
 bool _isSeniorSecondaryGrade(String value) {
   final normalized = value.trim().toUpperCase();
@@ -17,14 +19,26 @@ class ClassSubjectConfigurationScreen extends StatefulWidget {
     required this.customSchoolId,
     this.accessToken,
     this.onRefreshAccessToken,
-    this.startWithAddCustomClass = false,
+    this.initialGradeId,
+    this.onBack,
+    this.onOpenAttendance,
+    this.onOpenAssessments,
+    this.onOpenIncidents,
+    this.onOpenCalendar,
+    this.attendanceRepository,
     ClassesRepository? repository,
   }) : _repository = repository;
 
   final String customSchoolId;
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
-  final bool startWithAddCustomClass;
+  final int? initialGradeId;
+  final VoidCallback? onBack;
+  final VoidCallback? onOpenAttendance;
+  final ValueChanged<int>? onOpenAssessments;
+  final VoidCallback? onOpenIncidents;
+  final VoidCallback? onOpenCalendar;
+  final AttendanceRepository? attendanceRepository;
   final ClassesRepository? _repository;
 
   @override
@@ -41,34 +55,43 @@ class _ClassSubjectConfigurationScreenState
         onRefreshAccessToken: widget.onRefreshAccessToken,
       );
   List<ClassGradeLevel> _grades = const [];
+  final ScrollController _scrollController = ScrollController();
+  int? _selectedGradeId;
+  int? _selectedStreamId;
   bool _loading = true;
   String? _error;
-  bool _initialAddClassOpened = false;
+
+  ClassGradeLevel? get _selectedGrade {
+    final selectedId = _selectedGradeId;
+    if (selectedId == null) return null;
+    for (final grade in _grades) {
+      if (grade.id == selectedId) return grade;
+    }
+    return null;
+  }
 
   @override
   void initState() {
     super.initState();
+    _selectedGradeId = widget.initialGradeId;
     _load();
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> _load({bool showLoading = true}) async {
+    if (showLoading) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final grades = await _repository.getAllGradeLevels(widget.customSchoolId);
       if (!mounted) return;
       setState(() {
         _grades = grades;
         _loading = false;
+        _error = null;
       });
-      if (widget.startWithAddCustomClass && !_initialAddClassOpened) {
-        _initialAddClassOpened = true;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _addCustomClass();
-        });
-      }
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -78,14 +101,22 @@ class _ClassSubjectConfigurationScreenState
     }
   }
 
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
   Future<void> _toggle(ClassGradeLevel grade, bool active) async {
-    if (active && grade.streams.isEmpty) {
+    if (active) {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
           title: Text('Activate ${grade.name}?'),
           content: Text(
-            '${grade.name} does not have a section yet. Section 1 will be created because every active class must have at least one section.',
+            grade.streams.isEmpty
+                ? '${grade.name} does not have a section yet. Section 1 will be created because every active class must have at least one section.'
+                : '${grade.name} and its sections will become available for admissions, teacher assignments, attendance, and assessments.',
           ),
           actions: [
             TextButton(
@@ -94,7 +125,11 @@ class _ClassSubjectConfigurationScreenState
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('Create section and activate'),
+              child: Text(
+                grade.streams.isEmpty
+                    ? 'Create section and activate'
+                    : 'Activate class',
+              ),
             ),
           ],
         ),
@@ -103,12 +138,30 @@ class _ClassSubjectConfigurationScreenState
     }
     if (!mounted) return;
     if (!active && grade.studentCount > 0) {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Cannot make ${grade.name} inactive'),
+          content: Text(
+            '${grade.name} has ${grade.studentCount} actively enrolled student${grade.studentCount == 1 ? '' : 's'}. Transfer, promote, withdraw, or graduate them before making this class inactive.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    if (!active) {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
           title: Text('Make ${grade.name} inactive?'),
           content: Text(
-            '${grade.name} has ${grade.studentCount} enrolled student${grade.studentCount == 1 ? '' : 's'}. Existing records will remain available, but new admissions and assignments will be stopped.',
+            '${grade.name} and its sections will no longer be available for new admissions, teacher assignments, attendance, or assessments. Existing records will remain available.',
           ),
           actions: [
             TextButton(
@@ -130,7 +183,7 @@ class _ClassSubjectConfigurationScreenState
         gradeLevelId: grade.gradeLevelId,
         active: active,
       );
-      await _load();
+      await _load(showLoading: false);
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -147,7 +200,7 @@ class _ClassSubjectConfigurationScreenState
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Add custom early-years class'),
+          title: const Text('Add custom class'),
           content: SizedBox(
             width: 480,
             child: Column(
@@ -155,7 +208,7 @@ class _ClassSubjectConfigurationScreenState
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Custom classes are placed below KG1. KG subjects will be suggested and can be edited after creation.',
+                  'Create a school-defined class. Examples include Creche, Nursery 1, and Nursery 2. Custom classes are placed before KG1.',
                   style: TextStyle(color: AppColors.muted),
                 ),
                 const SizedBox(height: 18),
@@ -181,18 +234,6 @@ class _ClassSubjectConfigurationScreenState
                       .toList(),
                   onChanged: (value) =>
                       setDialogState(() => streams = value ?? 1),
-                ),
-                const SizedBox(height: 12),
-                const Row(
-                  children: [
-                    Icon(
-                      Icons.vertical_align_bottom_rounded,
-                      size: 18,
-                      color: AppColors.green,
-                    ),
-                    SizedBox(width: 8),
-                    Text('Level position: Below KG1'),
-                  ],
                 ),
               ],
             ),
@@ -229,17 +270,217 @@ class _ClassSubjectConfigurationScreenState
     }
   }
 
-  Future<void> _manageSubjects(ClassGradeLevel grade) async {
-    await showModalBottomSheet<void>(
+  Future<void> _addSection(ClassGradeLevel grade) async {
+    final name = TextEditingController();
+    final submitted = await showDialog<bool>(
       context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (_) => _SubjectManager(
-        repository: _repository,
-        customSchoolId: widget.customSchoolId,
-        grade: grade,
+      builder: (context) => AlertDialog(
+        title: Text('Add section to ${grade.name}'),
+        content: SizedBox(
+          width: 440,
+          child: TextField(
+            key: const ValueKey('class-workspace-section-name'),
+            controller: name,
+            autofocus: true,
+            decoration: InputDecoration(
+              labelText: 'Section name',
+              hintText: 'e.g. Section 2 or B',
+              prefixText: '${grade.name} - ',
+              prefixStyle: const TextStyle(
+                color: AppColors.text,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            onSubmitted: (_) {
+              if (name.text.trim().isNotEmpty) Navigator.pop(context, true);
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            onPressed: () {
+              if (name.text.trim().isNotEmpty) Navigator.pop(context, true);
+            },
+            icon: const Icon(Icons.add_rounded, size: 18),
+            label: const Text('Add section'),
+          ),
+        ],
       ),
     );
+    if (submitted != true) return;
+    final sectionName = '${grade.name} - ${name.text.trim()}';
+    try {
+      await _repository.createStream(
+        customSchoolId: widget.customSchoolId,
+        gradeLevelId: grade.gradeLevelId,
+        streamName: sectionName,
+      );
+      await _load(showLoading: false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$sectionName was added.')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not add section. $error')));
+    }
+  }
+
+  Future<void> _renameSection(
+    ClassGradeLevel grade,
+    ClassStreamSummary stream,
+  ) async {
+    final prefix = '${grade.name} - ';
+    final currentName =
+        stream.name.toLowerCase().startsWith(prefix.toLowerCase())
+        ? stream.name.substring(prefix.length)
+        : stream.name;
+    final name = TextEditingController(text: currentName);
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename section'),
+        content: SizedBox(
+          width: 440,
+          child: TextField(
+            key: const ValueKey('rename-section-name'),
+            controller: name,
+            autofocus: true,
+            decoration: InputDecoration(
+              labelText: 'Section name',
+              hintText: 'e.g. Section A or Gold',
+              prefixText: prefix,
+              prefixStyle: const TextStyle(
+                color: AppColors.text,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            onSubmitted: (_) {
+              if (name.text.trim().isNotEmpty) Navigator.pop(context, true);
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (name.text.trim().isNotEmpty) Navigator.pop(context, true);
+            },
+            child: const Text('Save name'),
+          ),
+        ],
+      ),
+    );
+    if (submitted != true) return;
+    final qualifiedName = '$prefix${name.text.trim()}';
+    try {
+      await _repository.renameStream(
+        customSchoolId: widget.customSchoolId,
+        streamId: stream.id,
+        streamName: qualifiedName,
+      );
+      await _load(showLoading: false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Section renamed to $qualifiedName.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not rename the section. $error')),
+      );
+    }
+  }
+
+  Future<void> _deleteSection(
+    ClassGradeLevel grade,
+    ClassStreamSummary stream,
+  ) async {
+    if (stream.enrolled > 0) {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Section has students'),
+          content: Text(
+            '${stream.name} has ${stream.enrolled} enrolled student${stream.enrolled == 1 ? '' : 's'}. Move them to another section before deleting it.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Got it'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    final activeSections = grade.streams
+        .where((candidate) => candidate.active)
+        .length;
+    if (grade.active && stream.active && activeSections <= 1) {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Keep one active section'),
+          content: const Text(
+            'An active class must keep at least one section. Add another section or make the class inactive first.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Got it'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Delete ${stream.name}?'),
+        content: const Text(
+          'This permanently removes the empty section. This action cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep section'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete section'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await _repository.deleteStreams(
+        customSchoolId: widget.customSchoolId,
+        streamIds: [stream.id],
+      );
+      await _load(showLoading: false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('${stream.name} was deleted.')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not delete the section. $error')),
+      );
+    }
   }
 
   Future<void> _editCustomClass(ClassGradeLevel grade) async {
@@ -268,7 +509,7 @@ class _ClassSubjectConfigurationScreenState
                 DropdownButtonFormField<int>(
                   value: position,
                   decoration: const InputDecoration(
-                    labelText: 'Position below KG1',
+                    labelText: 'Position before KG1',
                   ),
                   items: List.generate(
                     custom.length,
@@ -344,6 +585,57 @@ class _ClassSubjectConfigurationScreenState
         ),
       );
     }
+    final selectedGrade = _selectedGrade;
+    final selectedStreamId = _selectedStreamId;
+    if (selectedGrade != null && selectedStreamId != null) {
+      final selectedStream = selectedGrade.streams
+          .where((stream) => stream.id == selectedStreamId)
+          .firstOrNull;
+      if (selectedStream != null) {
+        return GradeDetailScreen(
+          key: ValueKey('stream-details-${selectedStream.id}'),
+          customSchoolId: widget.customSchoolId,
+          streamId: selectedStream.id,
+          gradeLevelId: selectedGrade.id,
+          subjectGradeLevelId: selectedGrade.gradeLevelId,
+          gradeName: selectedGrade.name,
+          streamName: selectedStream.name,
+          enrolled: selectedStream.enrolled,
+          capacity: selectedStream.capacity,
+          active: selectedStream.active,
+          classTeacherName: selectedStream.teacherName,
+          accessToken: widget.accessToken,
+          onRefreshAccessToken: widget.onRefreshAccessToken,
+          onOpenAttendance: widget.onOpenAttendance,
+          onOpenAssessments: widget.onOpenAssessments == null
+              ? null
+              : () => widget.onOpenAssessments!(selectedStream.id),
+          onOpenIncidents: widget.onOpenIncidents,
+          onOpenCalendar: widget.onOpenCalendar,
+          attendanceRepository: widget.attendanceRepository,
+          repository: _repository,
+          onClassTeachersChanged: () => _load(showLoading: false),
+          onRenameSection: () => _renameSection(selectedGrade, selectedStream),
+          onDeleteSection: () => _deleteSection(selectedGrade, selectedStream),
+          onBack: () => setState(() => _selectedStreamId = null),
+        );
+      }
+    }
+    if (selectedGrade != null) {
+      return _ClassWorkspace(
+        grade: selectedGrade,
+        onBack: widget.onBack ?? () => setState(() => _selectedGradeId = null),
+        onActiveChanged: (value) => _toggle(selectedGrade, value),
+        onAddSection: () => _addSection(selectedGrade),
+        onOpenSection: (stream) =>
+            setState(() => _selectedStreamId = stream.id),
+        onRenameSection: (stream) => _renameSection(selectedGrade, stream),
+        onDeleteSection: (stream) => _deleteSection(selectedGrade, stream),
+        onEdit: selectedGrade.custom
+            ? () => _editCustomClass(selectedGrade)
+            : null,
+      );
+    }
     final ges =
         _grades
             .where(
@@ -354,6 +646,7 @@ class _ClassSubjectConfigurationScreenState
     final custom = _grades.where((grade) => grade.custom).toList()
       ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
     return SingleChildScrollView(
+      controller: _scrollController,
       padding: const EdgeInsets.all(24),
       child: Center(
         child: ConstrainedBox(
@@ -368,7 +661,7 @@ class _ClassSubjectConfigurationScreenState
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Classes and subjects',
+                          'Classes',
                           style: TextStyle(
                             fontSize: 28,
                             fontWeight: FontWeight.w800,
@@ -376,7 +669,7 @@ class _ClassSubjectConfigurationScreenState
                         ),
                         SizedBox(height: 6),
                         Text(
-                          'Review onboarding selections, enable GES levels, and add school-specific classes or subjects.',
+                          'View every class, manage its status, and open it to manage sections.',
                           style: TextStyle(color: AppColors.muted),
                         ),
                       ],
@@ -391,9 +684,9 @@ class _ClassSubjectConfigurationScreenState
               ),
               const SizedBox(height: 28),
               _SectionTitle(
-                title: 'Custom early-years classes',
+                title: 'Custom classes',
                 subtitle:
-                    'Creche and nursery levels appear before KG1 and start with editable KG subject suggestions.',
+                    'School-defined classes, such as Creche or Nursery, appear before KG1.',
                 count: custom.length,
               ),
               const SizedBox(height: 12),
@@ -404,8 +697,7 @@ class _ClassSubjectConfigurationScreenState
                   (grade) => _GradeCard(
                     grade: grade,
                     onActiveChanged: (value) => _toggle(grade, value),
-                    onSubjects: () => _manageSubjects(grade),
-                    onEdit: () => _editCustomClass(grade),
+                    onOpen: () => setState(() => _selectedGradeId = grade.id),
                   ),
                 ),
               const SizedBox(height: 28),
@@ -420,8 +712,7 @@ class _ClassSubjectConfigurationScreenState
                 (grade) => _GradeCard(
                   grade: grade,
                   onActiveChanged: (value) => _toggle(grade, value),
-                  onSubjects: () => _manageSubjects(grade),
-                  onEdit: null,
+                  onOpen: () => setState(() => _selectedGradeId = grade.id),
                 ),
               ),
             ],
@@ -465,90 +756,531 @@ class _GradeCard extends StatelessWidget {
   const _GradeCard({
     required this.grade,
     required this.onActiveChanged,
-    required this.onSubjects,
-    required this.onEdit,
+    required this.onOpen,
   });
   final ClassGradeLevel grade;
   final ValueChanged<bool> onActiveChanged;
-  final VoidCallback onSubjects;
-  final VoidCallback? onEdit;
+  final VoidCallback onOpen;
   @override
-  Widget build(BuildContext context) => Card(
-    margin: const EdgeInsets.only(bottom: 10),
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        children: [
-          CircleAvatar(
-            backgroundColor: (grade.active ? AppColors.green : AppColors.muted)
-                .withValues(alpha: .12),
-            child: Icon(
-              grade.custom
-                  ? Icons.auto_awesome_outlined
-                  : Icons.school_outlined,
-              color: grade.active ? AppColors.green : AppColors.muted,
-            ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+  Widget build(BuildContext context) {
+    final statusColor = grade.active ? AppColors.green : AppColors.muted;
+    final backgroundColor = grade.active
+        ? Colors.white
+        : const Color(0xFFF3F5F7);
+    return Card(
+      key: ValueKey(
+        'class-card-${grade.id}-${grade.active ? 'active' : 'inactive'}',
+      ),
+      margin: const EdgeInsets.only(bottom: 10),
+      color: backgroundColor,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(
+          color: grade.active
+              ? AppColors.green.withValues(alpha: .28)
+              : const Color(0xFFD5DBE1),
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        key: ValueKey('open-class-${grade.id}'),
+        onTap: onOpen,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                width: 4,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: statusColor,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+              const SizedBox(width: 12),
+              CircleAvatar(
+                backgroundColor: statusColor.withValues(alpha: .12),
+                child: Icon(
+                  grade.custom
+                      ? Icons.auto_awesome_outlined
+                      : Icons.school_outlined,
+                  color: statusColor,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       grade.name,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w800,
+                        color: grade.active
+                            ? AppColors.text
+                            : const Color(0xFF647184),
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(height: 4),
                     Text(
-                      grade.custom ? 'CUSTOM · BELOW KG1' : 'GES',
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: AppColors.muted,
-                        fontWeight: FontWeight.w700,
+                      '${grade.streams.length} section${grade.streams.length == 1 ? '' : 's'} · ${grade.studentCount} students',
+                      style: const TextStyle(color: AppColors.muted),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Container(
+                key: ValueKey(
+                  'class-status-${grade.id}-${grade.active ? 'active' : 'inactive'}',
+                ),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: .12),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      grade.active
+                          ? Icons.check_circle_outline_rounded
+                          : Icons.pause_circle_outline_rounded,
+                      size: 15,
+                      color: statusColor,
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      grade.active ? 'Active' : 'Inactive',
+                      style: TextStyle(
+                        color: statusColor,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  '${grade.streams.length} section${grade.streams.length == 1 ? '' : 's'} · ${grade.studentCount} students',
-                  style: const TextStyle(color: AppColors.muted),
+              ),
+              const SizedBox(width: 8),
+              Semantics(
+                label:
+                    '${grade.name} is ${grade.active ? 'active' : 'inactive'}',
+                child: Switch(value: grade.active, onChanged: onActiveChanged),
+              ),
+              const SizedBox(width: 4),
+              const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ClassWorkspace extends StatelessWidget {
+  const _ClassWorkspace({
+    required this.grade,
+    required this.onBack,
+    required this.onActiveChanged,
+    required this.onAddSection,
+    required this.onOpenSection,
+    required this.onRenameSection,
+    required this.onDeleteSection,
+    required this.onEdit,
+  });
+
+  final ClassGradeLevel grade;
+  final VoidCallback onBack;
+  final ValueChanged<bool> onActiveChanged;
+  final VoidCallback onAddSection;
+  final ValueChanged<ClassStreamSummary> onOpenSection;
+  final ValueChanged<ClassStreamSummary> onRenameSection;
+  final ValueChanged<ClassStreamSummary> onDeleteSection;
+  final VoidCallback? onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final statusColor = grade.active ? AppColors.green : AppColors.muted;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1080),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextButton.icon(
+                key: const ValueKey('back-to-all-classes'),
+                onPressed: onBack,
+                icon: const Icon(Icons.arrow_back_rounded, size: 18),
+                label: const Text('All classes'),
+              ),
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(22),
+                decoration: BoxDecoration(
+                  color: grade.active ? Colors.white : const Color(0xFFF3F5F7),
+                  border: Border.all(
+                    color: grade.active
+                        ? AppColors.green.withValues(alpha: .28)
+                        : const Color(0xFFD5DBE1),
+                  ),
+                  borderRadius: BorderRadius.circular(16),
                 ),
-                if (grade.custom) ...[
-                  const SizedBox(height: 3),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 25,
+                      backgroundColor: statusColor.withValues(alpha: .12),
+                      child: Icon(
+                        grade.custom
+                            ? Icons.auto_awesome_outlined
+                            : Icons.school_outlined,
+                        color: statusColor,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            grade.name,
+                            style: const TextStyle(
+                              fontSize: 26,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${grade.streams.length} section${grade.streams.length == 1 ? '' : 's'} · ${grade.studentCount} students',
+                            style: const TextStyle(color: AppColors.muted),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (onEdit != null) ...[
+                      OutlinedButton.icon(
+                        onPressed: onEdit,
+                        icon: const Icon(Icons.edit_outlined, size: 18),
+                        label: const Text('Class settings'),
+                      ),
+                      const SizedBox(width: 12),
+                    ],
+                    _ClassStatusPill(active: grade.active),
+                    const SizedBox(width: 8),
+                    Semantics(
+                      label:
+                          '${grade.name} is ${grade.active ? 'active' : 'inactive'}',
+                      child: Switch(
+                        value: grade.active,
+                        onChanged: onActiveChanged,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              _WorkspaceSection(
+                icon: Icons.meeting_room_outlined,
+                title: 'Sections',
+                subtitle:
+                    'Create and review the sections that belong to ${grade.name}.',
+                action: FilledButton.icon(
+                  key: ValueKey('workspace-add-section-${grade.id}'),
+                  onPressed: onAddSection,
+                  icon: const Icon(Icons.add_rounded, size: 18),
+                  label: const Text('Add section'),
+                ),
+                child: grade.streams.isEmpty
+                    ? const _EmptyWorkspaceState(
+                        icon: Icons.meeting_room_outlined,
+                        title: 'No sections yet',
+                        message: 'Add the first section for this class.',
+                      )
+                    : Column(
+                        children: grade.streams
+                            .map(
+                              (stream) => _WorkspaceSectionRow(
+                                stream: stream,
+                                onOpen: () => onOpenSection(stream),
+                                onRename: () => onRenameSection(stream),
+                                onDelete: () => onDeleteSection(stream),
+                              ),
+                            )
+                            .toList(),
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ClassStatusPill extends StatelessWidget {
+  const _ClassStatusPill({required this.active});
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = active ? AppColors.green : AppColors.muted;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            active
+                ? Icons.check_circle_outline_rounded
+                : Icons.pause_circle_outline_rounded,
+            size: 15,
+            color: color,
+          ),
+          const SizedBox(width: 5),
+          Text(
+            active ? 'Active' : 'Inactive',
+            style: TextStyle(
+              color: color,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WorkspaceSection extends StatelessWidget {
+  const _WorkspaceSection({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    this.action,
+    required this.child,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Widget? action;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(20),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      border: Border.all(color: AppColors.border),
+      borderRadius: BorderRadius.circular(16),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: AppColors.greenSoft,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(icon, color: AppColors.green, size: 21),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   Text(
-                    'Progresses to ${grade.nextGradeLevelName ?? 'the next active class'}',
+                    title,
                     style: const TextStyle(
-                      color: AppColors.green,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 13,
                     ),
                   ),
                 ],
+              ),
+            ),
+            if (action != null) action!,
+          ],
+        ),
+        const SizedBox(height: 16),
+        const Divider(height: 1),
+        const SizedBox(height: 16),
+        child,
+      ],
+    ),
+  );
+}
+
+class _WorkspaceSectionRow extends StatelessWidget {
+  const _WorkspaceSectionRow({
+    required this.stream,
+    required this.onOpen,
+    required this.onRename,
+    required this.onDelete,
+  });
+  final ClassStreamSummary stream;
+  final VoidCallback onOpen;
+  final VoidCallback onRename;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final statusColor = stream.active ? AppColors.green : AppColors.muted;
+    final capacity = stream.capacity == null
+        ? 'No capacity set'
+        : '${stream.capacity} capacity';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: const Color(0xFFF9FBFA),
+        child: InkWell(
+          key: ValueKey('open-stream-${stream.id}'),
+          onTap: onOpen,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(
+              children: [
+                Icon(Icons.meeting_room_outlined, color: statusColor),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        stream.name,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        stream.teacherName.trim().isEmpty
+                            ? 'No class teacher assigned'
+                            : 'Class teacher: ${stream.teacherName}',
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Text(
+                  '${stream.enrolled} students · $capacity',
+                  style: const TextStyle(color: AppColors.muted, fontSize: 12),
+                ),
+                const SizedBox(width: 16),
+                _ClassStatusPill(active: stream.active),
+                const SizedBox(width: 4),
+                const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
+                const SizedBox(width: 4),
+                PopupMenuButton<_SectionAction>(
+                  key: ValueKey('section-actions-${stream.id}'),
+                  tooltip: 'Section actions',
+                  onSelected: (action) {
+                    switch (action) {
+                      case _SectionAction.rename:
+                        onRename();
+                      case _SectionAction.delete:
+                        onDelete();
+                    }
+                  },
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(
+                      value: _SectionAction.rename,
+                      child: Row(
+                        children: [
+                          Icon(Icons.edit_outlined, size: 18),
+                          SizedBox(width: 10),
+                          Text('Rename section'),
+                        ],
+                      ),
+                    ),
+                    PopupMenuDivider(),
+                    PopupMenuItem(
+                      value: _SectionAction.delete,
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.delete_outline_rounded,
+                            size: 18,
+                            color: AppColors.red,
+                          ),
+                          SizedBox(width: 10),
+                          Text(
+                            'Delete section',
+                            style: TextStyle(color: AppColors.red),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  icon: const Icon(
+                    Icons.more_horiz_rounded,
+                    color: AppColors.muted,
+                  ),
+                ),
               ],
             ),
           ),
-          OutlinedButton.icon(
-            onPressed: onSubjects,
-            icon: const Icon(Icons.menu_book_outlined),
-            label: const Text('Subjects'),
-          ),
-          if (onEdit != null) ...[
-            const SizedBox(width: 8),
-            IconButton(
-              tooltip: 'Edit class and progression',
-              onPressed: onEdit,
-              icon: const Icon(Icons.edit_outlined),
-            ),
-          ],
-          const SizedBox(width: 14),
-          const Text('Active'),
-          Switch(value: grade.active, onChanged: onActiveChanged),
+        ),
+      ),
+    );
+  }
+}
+
+enum _SectionAction { rename, delete }
+
+class _EmptyWorkspaceState extends StatelessWidget {
+  const _EmptyWorkspaceState({
+    required this.icon,
+    required this.title,
+    required this.message,
+  });
+
+  final IconData icon;
+  final String title;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 16),
+    child: Center(
+      child: Column(
+        children: [
+          Icon(icon, color: AppColors.muted, size: 30),
+          const SizedBox(height: 8),
+          Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 3),
+          Text(message, style: const TextStyle(color: AppColors.muted)),
         ],
       ),
     ),
@@ -571,22 +1303,22 @@ class _EmptyCustom extends StatelessWidget {
         const Icon(Icons.child_care_rounded, size: 34, color: AppColors.green),
         const SizedBox(height: 8),
         const Text(
-          'No custom early-years classes yet',
+          'No custom classes yet',
           style: TextStyle(fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: onAdd,
           icon: const Icon(Icons.add),
-          label: const Text('Add Creche or Nursery'),
+          label: const Text('Add custom class'),
         ),
       ],
     ),
   );
 }
 
-class _SubjectManager extends StatefulWidget {
-  const _SubjectManager({
+class _WorkspaceSubjectsList extends StatefulWidget {
+  const _WorkspaceSubjectsList({
     required this.repository,
     required this.customSchoolId,
     required this.grade,
@@ -595,10 +1327,10 @@ class _SubjectManager extends StatefulWidget {
   final String customSchoolId;
   final ClassGradeLevel grade;
   @override
-  State<_SubjectManager> createState() => _SubjectManagerState();
+  State<_WorkspaceSubjectsList> createState() => _WorkspaceSubjectsListState();
 }
 
-class _SubjectManagerState extends State<_SubjectManager> {
+class _WorkspaceSubjectsListState extends State<_WorkspaceSubjectsList> {
   List<ClassSubject>? _subjects;
   List<SubjectAcademicTerm> _terms = const [];
   int? _selectedTermId;
@@ -666,39 +1398,122 @@ class _SubjectManagerState extends State<_SubjectManager> {
   Future<void> _add() async {
     final name = TextEditingController();
     final code = TextEditingController();
-    var examinable = true;
+    final term = _selectedTerm;
+    final sections = [...widget.grade.streams]
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    final selectedSectionIds = <int>{};
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
+        builder: (context, setDialogState) => AlertDialog(
           title: Text('Add subject to ${widget.grade.name}'),
           content: SizedBox(
-            width: 430,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: name,
-                  decoration: const InputDecoration(labelText: 'Subject name'),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: code,
-                  decoration: const InputDecoration(
-                    labelText: 'Subject code (optional)',
+            width: 520,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: name,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Subject name',
+                    ),
+                    onChanged: (_) => setDialogState(() {}),
                   ),
-                ),
-                const SizedBox(height: 8),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Examinable'),
-                  subtitle: const Text(
-                    'Include scores and grades on report cards',
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: code,
+                    decoration: const InputDecoration(
+                      labelText: 'Subject code (optional)',
+                    ),
                   ),
-                  value: examinable,
-                  onChanged: (v) => setState(() => examinable = v),
-                ),
-              ],
+                  const SizedBox(height: 8),
+                  const ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text('Examinable'),
+                    subtitle: Text(
+                      'School-added subjects are always non-examinable',
+                    ),
+                    trailing: Text(
+                      'No',
+                      style: TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                  const Divider(height: 24),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Which sections study this subject?',
+                          style: TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                      if (term != null)
+                        _ContextPill(
+                          icon: Icons.calendar_month_outlined,
+                          label: term.label,
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Select every active section where this subject is taught.',
+                    style: TextStyle(color: AppColors.muted, fontSize: 12),
+                  ),
+                  if (sections.where((section) => section.active).isNotEmpty)
+                    Row(
+                      children: [
+                        TextButton(
+                          onPressed: () => setDialogState(() {
+                            selectedSectionIds
+                              ..clear()
+                              ..addAll(
+                                sections
+                                    .where((section) => section.active)
+                                    .map((section) => section.id),
+                              );
+                          }),
+                          child: const Text('Select all'),
+                        ),
+                        TextButton(
+                          onPressed: () =>
+                              setDialogState(selectedSectionIds.clear),
+                          child: const Text('Clear'),
+                        ),
+                      ],
+                    ),
+                  if (sections.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 16),
+                      child: Text(
+                        'Add a section to this class before adding a subject.',
+                        style: TextStyle(color: AppColors.muted),
+                      ),
+                    )
+                  else
+                    ...sections.map(
+                      (section) => CheckboxListTile(
+                        key: ValueKey('add-subject-section-${section.id}'),
+                        contentPadding: EdgeInsets.zero,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        value: selectedSectionIds.contains(section.id),
+                        onChanged: section.active && term?.editable == true
+                            ? (checked) => setDialogState(() {
+                                checked == true
+                                    ? selectedSectionIds.add(section.id)
+                                    : selectedSectionIds.remove(section.id);
+                              })
+                            : null,
+                        title: Text(section.name),
+                        subtitle: section.active
+                            ? null
+                            : const Text('Inactive section'),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
           actions: [
@@ -707,9 +1522,13 @@ class _SubjectManagerState extends State<_SubjectManager> {
               child: const Text('Cancel'),
             ),
             FilledButton(
-              onPressed: () {
-                if (name.text.trim().isNotEmpty) Navigator.pop(context, true);
-              },
+              key: const ValueKey('confirm-add-subject'),
+              onPressed:
+                  name.text.trim().isNotEmpty &&
+                      selectedSectionIds.isNotEmpty &&
+                      term?.editable == true
+                  ? () => Navigator.pop(context, true)
+                  : null,
               child: const Text('Add subject'),
             ),
           ],
@@ -722,20 +1541,28 @@ class _SubjectManagerState extends State<_SubjectManager> {
       gradeLevelId: widget.grade.gradeLevelId,
       name: name.text.trim(),
       code: code.text.trim(),
-      examinable: examinable,
+      examinable: false,
     );
+    final schoolSubjectId = created.schoolSubjectId;
+    if (term != null && schoolSubjectId != null && schoolSubjectId > 0) {
+      await widget.repository.saveSubjectTermAvailability(
+        customSchoolId: widget.customSchoolId,
+        schoolSubjectId: schoolSubjectId,
+        academicTermId: term.id,
+        streamIds: selectedSectionIds.toList(),
+        status: 'ACTIVE',
+      );
+    }
     await _load();
-    if (mounted) await _editAvailability(created);
   }
 
   Future<void> _edit(ClassSubject subject) async {
     final name = TextEditingController(text: subject.name);
     final code = TextEditingController(text: subject.code);
-    var examinable = subject.examinable;
     final saved = await showDialog<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
+        builder: (context, _) => AlertDialog(
           title: const Text('Edit custom subject'),
           content: SizedBox(
             width: 430,
@@ -751,15 +1578,16 @@ class _SubjectManagerState extends State<_SubjectManager> {
                   controller: code,
                   decoration: const InputDecoration(labelText: 'Subject code'),
                 ),
-                SwitchListTile(
+                const ListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('Examinable'),
-                  subtitle: const Text(
-                    'Include scores and grades on report cards',
+                  title: Text('Examinable'),
+                  subtitle: Text(
+                    'School-added subjects are always non-examinable',
                   ),
-                  value: examinable,
-                  onChanged: (value) =>
-                      setDialogState(() => examinable = value),
+                  trailing: Text(
+                    'No',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
                 ),
               ],
             ),
@@ -786,7 +1614,7 @@ class _SubjectManagerState extends State<_SubjectManager> {
         code: code.text.trim(),
         custom: true,
         active: subject.active,
-        examinable: examinable,
+        examinable: false,
         schoolSubjectId: subject.schoolSubjectId,
         definitionId: subject.definitionId,
       ),
@@ -848,56 +1676,56 @@ class _SubjectManagerState extends State<_SubjectManager> {
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
           final readOnly = !term.editable;
+          final activeSections = configuration.availableSections
+              .where((section) => section.active)
+              .toList();
+          final selectedActiveCount = activeSections
+              .where((section) => selected.contains(section.id))
+              .length;
           return AlertDialog(
-            title: Text('${subject.name} sections'),
+            title: Text(
+              'Which ${widget.grade.name} sections study ${subject.name}?',
+            ),
             content: SizedBox(
               width: 520,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: AppColors.green.withValues(alpha: .07),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.calendar_month_outlined,
-                          color: AppColors.green,
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                term.label,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                              Text(
-                                configuration.copiedFromTermId != null &&
-                                        configuration.status.toUpperCase() ==
-                                            'DRAFT'
-                                    ? 'Copied from the previous term · Review before activating'
-                                    : readOnly
-                                    ? 'Historical setup · Read-only'
-                                    : 'Choose the sections that study this subject',
-                                style: const TextStyle(color: AppColors.muted),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
+                  Text(
+                    'Select every section where ${subject.name} is taught. This applies only to ${term.label}.',
+                    style: const TextStyle(color: AppColors.muted),
                   ),
-                  const SizedBox(height: 14),
-                  if (!readOnly && configuration.availableSections.isNotEmpty)
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      _ContextPill(
+                        icon: Icons.calendar_month_outlined,
+                        label: term.label,
+                      ),
+                      _ContextPill(
+                        icon: Icons.view_week_outlined,
+                        label:
+                            '$selectedActiveCount of ${activeSections.length} selected',
+                      ),
+                      if (readOnly)
+                        const _ContextPill(
+                          icon: Icons.lock_outline,
+                          label: 'Read-only',
+                        )
+                      else if (configuration.copiedFromTermId != null &&
+                          configuration.status.toUpperCase() == 'DRAFT')
+                        const _ContextPill(
+                          icon: Icons.content_copy_outlined,
+                          label: 'Copied draft',
+                        ),
+                    ],
+                  ),
+                  if (!readOnly && activeSections.isNotEmpty) ...[
+                    const SizedBox(height: 8),
                     Row(
                       children: [
                         TextButton(
@@ -905,9 +1733,7 @@ class _SubjectManagerState extends State<_SubjectManager> {
                             selected
                               ..clear()
                               ..addAll(
-                                configuration.availableSections
-                                    .where((section) => section.active)
-                                    .map((section) => section.id),
+                                activeSections.map((section) => section.id),
                               );
                           }),
                           child: const Text('Select all'),
@@ -918,6 +1744,7 @@ class _SubjectManagerState extends State<_SubjectManager> {
                         ),
                       ],
                     ),
+                  ],
                   Flexible(
                     child: configuration.availableSections.isEmpty
                         ? const Padding(
@@ -932,26 +1759,53 @@ class _SubjectManagerState extends State<_SubjectManager> {
                             children: configuration.availableSections.map((
                               section,
                             ) {
-                              return CheckboxListTile(
-                                value: selected.contains(section.id),
-                                onChanged: readOnly || !section.active
-                                    ? null
-                                    : (checked) => setDialogState(() {
-                                        checked == true
-                                            ? selected.add(section.id)
-                                            : selected.remove(section.id);
-                                      }),
-                                title: Text(section.name),
-                                subtitle: section.active
-                                    ? null
-                                    : const Text('Inactive section'),
-                                controlAffinity:
-                                    ListTileControlAffinity.leading,
-                                contentPadding: EdgeInsets.zero,
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 8),
+                                decoration: BoxDecoration(
+                                  color: selected.contains(section.id)
+                                      ? AppColors.green.withValues(alpha: .07)
+                                      : Colors.white,
+                                  border: Border.all(
+                                    color: selected.contains(section.id)
+                                        ? AppColors.green.withValues(alpha: .35)
+                                        : AppColors.border,
+                                  ),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: CheckboxListTile(
+                                  value: selected.contains(section.id),
+                                  onChanged: readOnly || !section.active
+                                      ? null
+                                      : (checked) => setDialogState(() {
+                                          checked == true
+                                              ? selected.add(section.id)
+                                              : selected.remove(section.id);
+                                        }),
+                                  title: Text(
+                                    section.name,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  subtitle: section.active
+                                      ? const Text(
+                                          'Subject will be taught here',
+                                        )
+                                      : const Text('Inactive section'),
+                                  controlAffinity:
+                                      ListTileControlAffinity.leading,
+                                ),
                               );
                             }).toList(),
                           ),
                   ),
+                  if (!readOnly) ...[
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Applying this makes the subject available to teachers and assessment setup for the selected sections.',
+                      style: TextStyle(fontSize: 12, color: AppColors.muted),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -963,11 +1817,13 @@ class _SubjectManagerState extends State<_SubjectManager> {
               if (!readOnly) ...[
                 OutlinedButton(
                   onPressed: () => Navigator.pop(context, 'DRAFT'),
-                  child: const Text('Save as draft'),
+                  child: const Text('Save for later'),
                 ),
                 FilledButton(
-                  onPressed: () => Navigator.pop(context, 'ACTIVE'),
-                  child: const Text('Make available'),
+                  onPressed: selectedActiveCount == 0
+                      ? null
+                      : () => Navigator.pop(context, 'ACTIVE'),
+                  child: const Text('Apply to selected sections'),
                 ),
               ],
             ],
@@ -1032,51 +1888,199 @@ class _SubjectManagerState extends State<_SubjectManager> {
     await _load();
   }
 
-  @override
-  Widget build(BuildContext context) => FractionallySizedBox(
-    heightFactor: .9,
-    child: Padding(
-      padding: const EdgeInsets.all(24),
+  String _subjectCode(ClassSubject subject) =>
+      subject.code.trim().isEmpty ? 'No subject code' : subject.code.trim();
+
+  String _sectionSummary(SubjectTermAvailability? availability) {
+    if (availability == null) return 'Section assignment unavailable';
+    final activeIds = availability.availableSections
+        .where((section) => section.active)
+        .map((section) => section.id)
+        .toSet();
+    final assigned = availability.streamIds.where(activeIds.contains).length;
+    final total = activeIds.length;
+    if (availability.status.toUpperCase() == 'DRAFT') {
+      return 'Draft · $assigned of $total sections selected';
+    }
+    if (assigned == 0) return 'Not assigned to any section';
+    return 'Applies to $assigned of $total sections';
+  }
+
+  Widget _subjectGroupHeader({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required int count,
+  }) => Padding(
+    padding: const EdgeInsets.only(top: 6, bottom: 10),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 38,
+          height: 38,
+          decoration: BoxDecoration(
+            color: AppColors.greenSoft,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, size: 20, color: AppColors.green),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: const TextStyle(fontSize: 13, color: AppColors.muted),
+              ),
+            ],
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF4F7F6),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Text(
+            '$count',
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _subjectCard(ClassSubject subject) {
+    final availability = subject.schoolSubjectId == null
+        ? null
+        : _availability[subject.schoolSubjectId!];
+    final draft = availability?.status.toUpperCase() == 'DRAFT';
+    final detail = subject.custom
+        ? _sectionSummary(availability)
+        : 'Applies to every active ${widget.grade.name} section';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(14),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              CircleAvatar(
+                radius: 20,
+                backgroundColor: subject.custom
+                    ? AppColors.greenSoft
+                    : const Color(0xFFF0F3F8),
+                foregroundColor: subject.custom
+                    ? AppColors.green
+                    : AppColors.muted,
+                child: Text(
+                  subject.name.trim().isEmpty
+                      ? '?'
+                      : subject.name.trim().characters.first.toUpperCase(),
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '${widget.grade.name} subjects',
+                      subject.name,
                       style: const TextStyle(
-                        fontSize: 24,
+                        fontSize: 15,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-                    const Text(
-                      'Add school subjects and choose whether each one is examinable.',
-                      style: TextStyle(color: AppColors.muted),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${_subjectCode(subject)} · $detail',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color:
+                            subject.custom &&
+                                (availability == null ||
+                                    availability.streamIds.isEmpty)
+                            ? AppColors.amber
+                            : AppColors.muted,
+                      ),
                     ),
                   ],
                 ),
               ),
-              FilledButton.icon(
-                onPressed: _add,
-                icon: const Icon(Icons.add),
-                label: const Text('Add subject'),
-              ),
               const SizedBox(width: 8),
-              IconButton(
-                onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.close),
+              _SubjectTypePill(
+                examinable: subject.custom ? false : subject.examinable,
               ),
             ],
           ),
-          const SizedBox(height: 20),
-          if (_terms.isNotEmpty) ...[
-            SizedBox(
-              width: 340,
+          if (subject.custom) ...[
+            const SizedBox(height: 12),
+            const Divider(height: 1),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 4,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                TextButton.icon(
+                  key: ValueKey('assign-sections-${subject.id}'),
+                  onPressed: () => _editAvailability(subject),
+                  icon: Icon(
+                    draft
+                        ? Icons.pending_actions_outlined
+                        : Icons.view_week_outlined,
+                    size: 18,
+                  ),
+                  label: Text(
+                    draft ? 'Review section draft' : 'Assign sections',
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: () => _edit(subject),
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  label: const Text('Edit'),
+                ),
+                IconButton(
+                  tooltip: 'Remove subject',
+                  onPressed: () => _delete(subject),
+                  icon: const Icon(Icons.delete_outline),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Row(
+        children: [
+          if (_terms.isNotEmpty)
+            Expanded(
               child: DropdownButtonFormField<int>(
+                isExpanded: true,
                 value: _selectedTermId,
                 decoration: const InputDecoration(
                   labelText: 'Academic term',
@@ -1095,90 +2099,151 @@ class _SubjectManagerState extends State<_SubjectManager> {
                     .toList(),
                 onChanged: _changeTerm,
               ),
-            ),
-            const SizedBox(height: 16),
-          ],
-          if (_error != null)
-            Text(_error!, style: const TextStyle(color: AppColors.red))
-          else if (_subjects == null)
-            const Expanded(child: Center(child: CircularProgressIndicator()))
-          else if (_subjects!.isEmpty)
-            Expanded(
-              child: Center(
-                child: Text(
-                  widget.grade.custom
-                      ? 'No subjects found. Add a subject or use the KG suggestions created with this class.'
-                      : 'No subjects configured for this grade.',
-                ),
-              ),
             )
           else
+            const Spacer(),
+          const SizedBox(width: 12),
+          FilledButton.icon(
+            key: ValueKey('workspace-add-subject-${widget.grade.id}'),
+            onPressed: _add,
+            icon: const Icon(Icons.add_rounded, size: 18),
+            label: const Text('Add subject'),
+          ),
+        ],
+      ),
+      const SizedBox(height: 18),
+      if (_error != null)
+        Row(
+          children: [
+            const Icon(Icons.error_outline_rounded, color: AppColors.red),
+            const SizedBox(width: 10),
             Expanded(
-              child: ListView.separated(
-                itemCount: _subjects!.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (_, index) {
-                  final subject = _subjects![index];
-                  final subjectAvailability = subject.schoolSubjectId == null
-                      ? null
-                      : _availability[subject.schoolSubjectId!];
-                  return ListTile(
-                    leading: CircleAvatar(
-                      child: Text(subject.name.characters.first),
-                    ),
-                    title: Text(subject.name),
-                    subtitle: Text(
-                      subject.custom
-                          ? '${subject.code.isEmpty ? 'No code' : subject.code} · Custom · '
-                                '${subjectAvailability == null
-                                    ? 'Section setup unavailable'
-                                    : subjectAvailability.streamIds.isEmpty
-                                    ? 'No sections'
-                                    : '${subjectAvailability.streamIds.length} section${subjectAvailability.streamIds.length == 1 ? '' : 's'}'}'
-                          : '${subject.code.isEmpty ? 'No code' : subject.code} · GES · All sections',
-                    ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Chip(
-                          label: Text(
-                            subject.examinable
-                                ? 'Examinable'
-                                : 'Non-examinable',
-                          ),
-                        ),
-                        if (subject.custom) ...[
-                          TextButton.icon(
-                            onPressed: () => _editAvailability(subject),
-                            icon: const Icon(
-                              Icons.view_week_outlined,
-                              size: 18,
-                            ),
-                            label: Text(
-                              subjectAvailability?.status.toUpperCase() ==
-                                      'DRAFT'
-                                  ? 'Sections · Draft'
-                                  : 'Sections',
-                            ),
-                          ),
-                          IconButton(
-                            tooltip: 'Edit subject',
-                            onPressed: () => _edit(subject),
-                            icon: const Icon(Icons.edit_outlined),
-                          ),
-                          IconButton(
-                            tooltip: 'Remove subject',
-                            onPressed: () => _delete(subject),
-                            icon: const Icon(Icons.delete_outline),
-                          ),
-                        ],
-                      ],
-                    ),
-                  );
-                },
+              child: Text(
+                'Subjects could not be loaded. $_error',
+                style: const TextStyle(color: AppColors.muted),
               ),
             ),
-        ],
+            TextButton(onPressed: _load, child: const Text('Try again')),
+          ],
+        )
+      else if (_subjects == null)
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 20),
+          child: Center(child: CircularProgressIndicator()),
+        )
+      else if (_subjects!.isEmpty)
+        _EmptyWorkspaceState(
+          icon: Icons.menu_book_outlined,
+          title: 'No subjects yet',
+          message: widget.grade.custom
+              ? 'Add a subject or use the KG suggestions created with this class.'
+              : 'Add the first school subject for this class.',
+        )
+      else
+        Builder(
+          builder: (context) {
+            final curriculum = _subjects!
+                .where((subject) => !subject.custom)
+                .toList();
+            final school = _subjects!
+                .where((subject) => subject.custom)
+                .toList();
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (curriculum.isNotEmpty) ...[
+                  _subjectGroupHeader(
+                    icon: Icons.account_balance_outlined,
+                    title: 'Curriculum subjects',
+                    subtitle:
+                        'Official curriculum subjects · available to every active section',
+                    count: curriculum.length,
+                  ),
+                  ...curriculum.map(_subjectCard),
+                  const SizedBox(height: 14),
+                ],
+                _subjectGroupHeader(
+                  icon: Icons.auto_awesome_outlined,
+                  title: 'School-added subjects',
+                  subtitle:
+                      'Add subjects here, then choose the sections where they are taught',
+                  count: school.length,
+                ),
+                if (school.isEmpty)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF9FBFA),
+                      border: Border.all(color: AppColors.border),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Text(
+                      'No school-added subjects yet.',
+                      style: TextStyle(color: AppColors.muted),
+                    ),
+                  )
+                else
+                  ...school.map(_subjectCard),
+              ],
+            );
+          },
+        ),
+    ],
+  );
+}
+
+class _ContextPill extends StatelessWidget {
+  const _ContextPill({required this.icon, required this.label});
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+    decoration: BoxDecoration(
+      color: const Color(0xFFF4F7F6),
+      border: Border.all(color: AppColors.border),
+      borderRadius: BorderRadius.circular(999),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 16, color: AppColors.green),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+        ),
+      ],
+    ),
+  );
+}
+
+class _SubjectTypePill extends StatelessWidget {
+  const _SubjectTypePill({required this.examinable});
+  final bool examinable;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+    decoration: BoxDecoration(
+      color: examinable
+          ? AppColors.green.withValues(alpha: .08)
+          : const Color(0xFFF4F5F7),
+      border: Border.all(
+        color: examinable
+            ? AppColors.green.withValues(alpha: .3)
+            : AppColors.border,
+      ),
+      borderRadius: BorderRadius.circular(9),
+    ),
+    child: Text(
+      examinable ? 'Examinable' : 'Non-examinable',
+      style: TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w700,
+        color: examinable ? AppColors.green : AppColors.muted,
       ),
     ),
   );

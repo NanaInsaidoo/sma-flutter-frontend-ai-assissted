@@ -2408,16 +2408,36 @@ class _AttentionSchoolsScreenState extends State<_AttentionSchoolsScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Needs attention ($totalCount)',
-                style: const TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w800,
-                ),
+              Row(
+                children: [
+                  const Text(
+                    'Needs attention',
+                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(width: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.red.withValues(alpha: .1),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      '$totalCount',
+                      style: const TextStyle(
+                        color: AppColors.red,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 4),
               const Text(
-                'Grouped by the action you need to take.',
+                'Required actions that are blocking setup or awaiting your decision.',
                 style: TextStyle(color: AppColors.muted, fontSize: 12),
               ),
               const SizedBox(height: 18),
@@ -2430,22 +2450,21 @@ class _AttentionSchoolsScreenState extends State<_AttentionSchoolsScreen> {
                   },
                 )
               else ...[
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: [
-                    for (var index = 0; index < categories.length; index++)
-                      SizedBox(
-                        width: 250,
-                        child: _AttentionSummaryCard(
+                if (categories.length > 1) ...[
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (var index = 0; index < categories.length; index++)
+                        _AttentionCategoryChip(
                           group: _attentionGroupForCategory(categories[index]),
                           selected: index == _selectedIndex,
                           onTap: () => _selectGroup(index),
                         ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 18),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                ],
                 if (selectedGroup != null)
                   FutureBuilder<NeedsAttentionPage>(
                     key: ValueKey('${selectedGroup.category}|$_page|$_query'),
@@ -2617,12 +2636,6 @@ NeedsAttentionSummary _assignedSchoolAttentionSummary(
       count: schools.where(_isAssignedSchoolOnboardingStalled).length,
       priority: 'HIGH',
     ),
-    NeedsAttentionCategory(
-      category: 'COMPLIANCE_MISSING',
-      label: 'Compliance missing',
-      count: schools.where(_isAssignedSchoolComplianceMissing).length,
-      priority: 'MEDIUM',
-    ),
   ].where((category) => category.count > 0).toList();
   return NeedsAttentionSummary(
     total: categories.fold<int>(0, (total, category) => total + category.count),
@@ -2641,7 +2654,6 @@ NeedsAttentionPage _assignedSchoolAttentionPage({
   final filtered = schools.where((school) {
     final matchesCategory = switch (category) {
       'ONBOARDING_STALLED' => _isAssignedSchoolOnboardingStalled(school),
-      'COMPLIANCE_MISSING' => _isAssignedSchoolComplianceMissing(school),
       _ => false,
     };
     if (!matchesCategory) return false;
@@ -2657,17 +2669,13 @@ NeedsAttentionPage _assignedSchoolAttentionPage({
     return NeedsAttentionItem(
       id: '${category}_${school.code}',
       category: category,
-      priority: category == 'ONBOARDING_STALLED' ? 'HIGH' : 'MEDIUM',
+      priority: 'HIGH',
       title: school.name,
-      description: category == 'ONBOARDING_STALLED'
-          ? 'Setup has not moved forward recently.'
-          : 'Registration or compliance information needs follow-up.',
+      description: 'Setup has not moved forward recently.',
       entityType: 'SCHOOL',
       entityId: school.code,
       status: school.status.apiValue,
-      actionTarget: category == 'ONBOARDING_STALLED'
-          ? 'SCHOOL_ONBOARDING_FORM'
-          : 'SCHOOL_COMPLIANCE_SECTION',
+      actionTarget: 'SCHOOL_ONBOARDING_FORM',
     );
   }).toList();
   return NeedsAttentionPage(
@@ -2685,16 +2693,8 @@ bool _isAssignedSchoolOnboardingStalled(ManagedSchool school) {
       school.progress < 1;
 }
 
-bool _isAssignedSchoolComplianceMissing(ManagedSchool school) {
-  final reasons = school.needsAttentionReasons.join(' ').toLowerCase();
-  return reasons.contains('ges') ||
-      reasons.contains('business registration') ||
-      reasons.contains('compliance') ||
-      reasons.contains('registration missing');
-}
-
-class _AttentionSummaryCard extends StatelessWidget {
-  const _AttentionSummaryCard({
+class _AttentionCategoryChip extends StatelessWidget {
+  const _AttentionCategoryChip({
     required this.group,
     required this.selected,
     required this.onTap,
@@ -2706,68 +2706,21 @@ class _AttentionSummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(16),
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: selected ? group.color.withValues(alpha: .08) : Colors.white,
-            border: Border.all(
-              color: selected ? group.color : AppColors.border,
-              width: selected ? 1.4 : 1,
-            ),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    color: group.color.withValues(alpha: .12),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(group.icon, color: group.color, size: 20),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '${group.count}',
-                        style: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        group.title,
-                        style: const TextStyle(
-                          color: AppColors.muted,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                if (selected)
-                  Icon(
-                    Icons.check_circle_rounded,
-                    color: group.color,
-                    size: 18,
-                  ),
-              ],
-            ),
-          ),
-        ),
+    return ChoiceChip(
+      selected: selected,
+      onSelected: (_) => onTap(),
+      avatar: Icon(group.icon, size: 17),
+      label: Text('${group.title}  ${group.count}'),
+      labelStyle: TextStyle(
+        color: selected ? group.color : AppColors.text,
+        fontWeight: FontWeight.w800,
+        fontSize: 12,
       ),
+      side: BorderSide(color: selected ? group.color : AppColors.border),
+      selectedColor: group.color.withValues(alpha: .09),
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+      showCheckmark: false,
     );
   }
 }
@@ -2788,37 +2741,8 @@ class _AttentionLoadingState extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           const Text(
-            'Loading action items from the platform.',
+            'Required actions that are blocking setup or awaiting your decision.',
             style: TextStyle(color: AppColors.muted, fontSize: 12),
-          ),
-          const SizedBox(height: 18),
-          Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children: List.generate(
-              4,
-              (_) => const SizedBox(
-                width: 250,
-                child: _SkeletonCard(
-                  child: Row(
-                    children: [
-                      _SkeletonBox(width: 38, height: 38, radius: 12),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _SkeletonBox(width: 48, height: 20),
-                            SizedBox(height: 8),
-                            _SkeletonBox(width: 150, height: 10),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
           ),
           const SizedBox(height: 18),
           const Card(
@@ -2882,7 +2806,7 @@ class _AttentionEmptyState extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             const Text(
-              'Account manager approvals, school approvals, stalled onboarding, and missing compliance items will appear here when they need action.',
+              'Account manager approvals, school approvals, and stalled onboarding will appear here when they need action.',
               style: TextStyle(color: AppColors.muted, height: 1.5),
             ),
             const SizedBox(height: 18),
@@ -2893,7 +2817,6 @@ class _AttentionEmptyState extends StatelessWidget {
                 _AttentionEmptyChip('Account manager approvals'),
                 _AttentionEmptyChip('School approvals'),
                 _AttentionEmptyChip('Onboarding stalled'),
-                _AttentionEmptyChip('Compliance missing'),
               ],
             ),
           ],
@@ -3068,6 +2991,9 @@ class _AttentionListPanel extends StatelessWidget {
     final showingTo = totalItems == 0
         ? 0
         : (page * _AttentionSchoolsScreenState._pageSize + visibleItems.length);
+    final showSearch = totalItems > 5 || query.trim().isNotEmpty;
+    final showPagination = totalPages > 1;
+    final wide = MediaQuery.sizeOf(context).width >= 900;
 
     return Card(
       child: Column(
@@ -3091,7 +3017,7 @@ class _AttentionListPanel extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '${group.title} ($totalItems)',
+                        group.title,
                         style: const TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w900,
@@ -3110,15 +3036,15 @@ class _AttentionListPanel extends StatelessWidget {
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
+                    horizontal: 9,
+                    vertical: 5,
                   ),
                   decoration: BoxDecoration(
                     color: group.color.withValues(alpha: .1),
                     borderRadius: BorderRadius.circular(999),
                   ),
                   child: Text(
-                    group.actionLabel,
+                    '$totalItems action${totalItems == 1 ? '' : 's'}',
                     style: TextStyle(
                       color: group.color,
                       fontSize: 10.5,
@@ -3129,17 +3055,19 @@ class _AttentionListPanel extends StatelessWidget {
               ],
             ),
           ),
-          const Divider(height: 1, color: AppColors.border),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: TextField(
-              onChanged: onQueryChanged,
-              decoration: InputDecoration(
-                hintText: 'Search ${group.title.toLowerCase()}...',
-                prefixIcon: const Icon(Icons.search_rounded, size: 18),
+          if (showSearch) ...[
+            const Divider(height: 1, color: AppColors.border),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: TextField(
+                onChanged: onQueryChanged,
+                decoration: const InputDecoration(
+                  hintText: 'Search schools or actions',
+                  prefixIcon: Icon(Icons.search_rounded, size: 18),
+                ),
               ),
             ),
-          ),
+          ],
           const Divider(height: 1, color: AppColors.border),
           if (loading)
             const _AttentionRowsLoading()
@@ -3151,39 +3079,72 @@ class _AttentionListPanel extends StatelessWidget {
                 style: TextStyle(color: AppColors.muted),
               ),
             )
-          else
+          else ...[
+            if (wide) const _AttentionTableHeader(),
             ...visibleItems.map(
               (item) => _AttentionActionRow(
                 item: item,
                 color: group.color,
                 opening: openingItemId == item.id,
+                compact: !wide,
                 onTap: () => onItemTap(item),
               ),
             ),
-          const Divider(height: 1, color: AppColors.border),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(18, 12, 18, 12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Showing $showingFrom-$showingTo of $totalItems',
-                    style: const TextStyle(
-                      color: AppColors.muted,
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w700,
+          ],
+          if (showPagination) ...[
+            const Divider(height: 1, color: AppColors.border),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 12, 18, 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Showing $showingFrom-$showingTo of $totalItems',
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
-                ),
-                OutlinedButton(
-                  onPressed: onPrevious,
-                  child: const Text('Previous'),
-                ),
-                const SizedBox(width: 8),
-                OutlinedButton(onPressed: onNext, child: const Text('Next')),
-              ],
+                  OutlinedButton(
+                    onPressed: onPrevious,
+                    child: const Text('Previous'),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton(onPressed: onNext, child: const Text('Next')),
+                ],
+              ),
             ),
-          ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _AttentionTableHeader extends StatelessWidget {
+  const _AttentionTableHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    const style = TextStyle(
+      color: AppColors.muted,
+      fontSize: 10,
+      fontWeight: FontWeight.w800,
+      letterSpacing: .45,
+    );
+    return Container(
+      color: AppColors.background,
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+      child: const Row(
+        children: [
+          Expanded(flex: 3, child: Text('SCHOOL OR ACCOUNT', style: style)),
+          SizedBox(width: 20),
+          Expanded(flex: 4, child: Text('REQUIRED ACTION', style: style)),
+          SizedBox(width: 20),
+          SizedBox(width: 92, child: Text('WAITING', style: style)),
+          SizedBox(width: 152, child: Text('ACTION', style: style)),
         ],
       ),
     );
@@ -3229,89 +3190,145 @@ class _AttentionActionRow extends StatelessWidget {
     required this.item,
     required this.color,
     required this.opening,
+    required this.compact,
     required this.onTap,
   });
 
   final NeedsAttentionItem item;
   final Color color;
   final bool opening;
+  final bool compact;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: AppColors.greenSoft,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                _initialsForName(item.title),
+    final identity = Row(
+      children: [
+        Container(
+          width: 40,
+          height: 40,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: AppColors.greenSoft,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            _initialsForName(item.title),
+            style: const TextStyle(
+              color: AppColors.green,
+              fontWeight: FontWeight.w900,
+              fontSize: 12,
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                item.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                  color: AppColors.green,
-                  fontWeight: FontWeight.w900,
-                  fontSize: 12,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
+              if (item.entityId.trim().isNotEmpty) ...[
+                const SizedBox(height: 3),
+                Text(
+                  item.entityId,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppColors.muted,
+                    fontSize: 10.5,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+    final actionButton = OutlinedButton(
+      onPressed: opening ? null : onTap,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: color,
+        side: BorderSide(color: color.withValues(alpha: .55)),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      ),
+      child: opening
+          ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : Text(_attentionActionLabel(item)),
+    );
+
+    return InkWell(
+      onTap: opening ? null : onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: AppColors.border)),
+        ),
+        child: compact
+            ? Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    item.title,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
+                  identity,
+                  const SizedBox(height: 12),
                   Text(
                     item.description,
-                    style: const TextStyle(
-                      color: AppColors.muted,
-                      fontSize: 11,
-                    ),
+                    style: const TextStyle(fontSize: 12, height: 1.35),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _attentionItemMeta(item),
+                          style: const TextStyle(
+                            color: AppColors.muted,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      actionButton,
+                    ],
                   ),
                 ],
-              ),
-            ),
-            if (opening)
-              const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
               )
-            else if (_attentionItemMeta(item).isNotEmpty) ...[
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: .1),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: Text(
-                  _attentionItemMeta(item),
-                  style: TextStyle(
-                    color: color,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w900,
+            : Row(
+                children: [
+                  Expanded(flex: 3, child: identity),
+                  const SizedBox(width: 20),
+                  Expanded(
+                    flex: 4,
+                    child: Text(
+                      item.description,
+                      style: const TextStyle(fontSize: 12, height: 1.35),
+                    ),
                   ),
-                ),
+                  const SizedBox(width: 20),
+                  SizedBox(
+                    width: 92,
+                    child: Text(
+                      _attentionItemMeta(item),
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: 152, child: actionButton),
+                ],
               ),
-              const SizedBox(width: 8),
-            ],
-            const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
-          ],
-        ),
       ),
     );
   }
@@ -3321,7 +3338,6 @@ class _AttentionGroup {
   const _AttentionGroup({
     required this.title,
     required this.description,
-    required this.actionLabel,
     required this.icon,
     required this.color,
     required this.category,
@@ -3330,7 +3346,6 @@ class _AttentionGroup {
 
   final String title;
   final String description;
-  final String actionLabel;
   final IconData icon;
   final Color color;
   final String category;
@@ -3344,7 +3359,6 @@ _AttentionGroup _attentionGroupForCategory(NeedsAttentionCategory category) {
           ? 'Account manager approvals'
           : category.label,
       description: 'Registrations waiting for Super Admin approval.',
-      actionLabel: 'Open list',
       icon: Icons.manage_accounts_rounded,
       color: AppColors.red,
       category: category.category,
@@ -3353,7 +3367,6 @@ _AttentionGroup _attentionGroupForCategory(NeedsAttentionCategory category) {
     'SCHOOL_APPROVALS' => _AttentionGroup(
       title: category.label.isEmpty ? 'School approvals' : category.label,
       description: 'Schools submitted and waiting for review.',
-      actionLabel: 'Review',
       icon: Icons.rule_folder_rounded,
       color: AppColors.amber,
       category: category.category,
@@ -3363,25 +3376,14 @@ _AttentionGroup _attentionGroupForCategory(NeedsAttentionCategory category) {
       title: category.label.isEmpty ? 'Onboarding stalled' : category.label,
       description:
           'Schools have not moved to the next setup step after 5 days.',
-      actionLabel: 'Continue',
       icon: Icons.timeline_rounded,
       color: AppColors.blue,
-      category: category.category,
-      count: category.count,
-    ),
-    'COMPLIANCE_MISSING' => _AttentionGroup(
-      title: category.label.isEmpty ? 'Compliance missing' : category.label,
-      description: 'Registration or compliance information needs follow-up.',
-      actionLabel: 'Fix record',
-      icon: Icons.fact_check_rounded,
-      color: AppColors.purple,
       category: category.category,
       count: category.count,
     ),
     _ => _AttentionGroup(
       title: category.label.isEmpty ? category.category : category.label,
       description: 'Items requiring Super Admin action.',
-      actionLabel: 'Open',
       icon: Icons.pending_actions_rounded,
       color: AppColors.green,
       category: category.category,
@@ -3392,8 +3394,27 @@ _AttentionGroup _attentionGroupForCategory(NeedsAttentionCategory category) {
 
 String _attentionItemMeta(NeedsAttentionItem item) {
   final age = item.ageInDays;
-  if (age != null) return age == 1 ? '1 day' : '$age days';
-  return item.status;
+  if (age != null) {
+    if (age == 0) return 'Today';
+    return age == 1 ? '1 day' : '$age days';
+  }
+  return item.status
+      .trim()
+      .toLowerCase()
+      .split('_')
+      .where((part) => part.isNotEmpty)
+      .map((part) => '${part[0].toUpperCase()}${part.substring(1)}')
+      .join(' ');
+}
+
+String _attentionActionLabel(NeedsAttentionItem item) {
+  return switch (item.actionTarget) {
+    'ACCOUNT_MANAGER_DETAIL' => 'Review manager',
+    'SCHOOL_ONBOARDING_FORM' => 'Continue setup',
+    'SCHOOL_REVIEW' => 'Review school',
+    'SCHOOL_COMPLIANCE_SECTION' => 'Complete details',
+    _ => 'Open record',
+  };
 }
 
 String _stageForProgress(double progress) {
