@@ -535,6 +535,7 @@ void main() {
     await tester.tap(find.text('Manage roles'));
     await tester.pumpAndSettle();
 
+    expect(find.text('Owner / Proprietor'), findsWidgets);
     expect(find.text('Teacher'), findsWidgets);
     expect(
       find.textContaining('subject assignments managed automatically'),

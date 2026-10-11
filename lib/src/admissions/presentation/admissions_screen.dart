@@ -5793,6 +5793,29 @@ const _studentLeavingReasons = [
   'Completed previous level',
 ];
 
+const _otherAdmissionSource = 'OTHER';
+const _admissionSourceOptions = <String, String>{
+  'PARENT_GUARDIAN_REFERRAL': 'Parent or guardian referral',
+  'STAFF_REFERRAL': 'Staff referral',
+  'COMMUNITY_OUTREACH_EVENT': 'Community outreach or school event',
+  'SOCIAL_MEDIA': 'Social media',
+  'SCHOOL_WEBSITE_ONLINE_SEARCH': 'School website or online search',
+  'WALK_IN_SIGNAGE': 'Walk-in or school signage',
+  'PREVIOUS_SCHOOL_RECOMMENDATION': 'Previous school recommendation',
+  _otherAdmissionSource: 'Other',
+  'PREFER_NOT_TO_SAY': 'Prefer not to say',
+};
+
+String _normaliseAdmissionSource(Object? value) {
+  final text = _admissionText(value);
+  if (text.isEmpty) return '';
+  if (_admissionSourceOptions.containsKey(text)) return text;
+  for (final entry in _admissionSourceOptions.entries) {
+    if (entry.value.toLowerCase() == text.toLowerCase()) return entry.key;
+  }
+  return _otherAdmissionSource;
+}
+
 class _StudentAdmissionDraft {
   final firstName = TextEditingController();
   final middleName = TextEditingController();
@@ -5804,6 +5827,7 @@ class _StudentAdmissionDraft {
   final lastGradeAttended = TextEditingController();
   final previousSchoolFees = TextEditingController();
   final reasonForLeaving = TextEditingController();
+  final admissionSourceOther = TextEditingController();
   final skillsAndInterests = TextEditingController();
   final birthCityDraft = _AddressDraft();
   final addressDraft = _AddressDraft();
@@ -5818,6 +5842,7 @@ class _StudentAdmissionDraft {
   int? countryOfBirthId;
   int? cityOfBirthId;
   String reasonForLeavingChoice = '';
+  String admissionSource = '';
   final selectedLanguages = <AdmissionLookupOption>[];
   final selectedSkillsAndInterests = <AdmissionLookupOption>[];
   final conditionAnswers = <int, bool>{};
@@ -5840,6 +5865,15 @@ class _StudentAdmissionDraft {
     middleName.text = _admissionText(json['middleName']);
     lastName.text = _admissionText(json['lastName']);
     dateOfBirth.text = _admissionDate(json['dateOfBirth'] ?? json['dob']);
+    final rawAdmissionSource =
+        json['admissionSourceCode'] ?? json['admissionSource'];
+    admissionSource = _normaliseAdmissionSource(rawAdmissionSource);
+    admissionSourceOther.text = _admissionText(
+      json['admissionSourceOther'] ??
+          (admissionSource == _otherAdmissionSource
+              ? rawAdmissionSource
+              : null),
+    );
     genderId = _admissionInt(
       _admissionMap(json['gender'])?['id'] ?? json['genderId'],
     );
@@ -6016,6 +6050,10 @@ class _StudentAdmissionDraft {
           .map((item) => item.name.trim())
           .where((name) => name.isNotEmpty)
           .toList(),
+      if (admissionSource.isNotEmpty) 'admissionSource': admissionSource,
+      if (admissionSource == _otherAdmissionSource &&
+          admissionSourceOther.text.trim().isNotEmpty)
+        'admissionSourceOther': admissionSourceOther.text.trim(),
     };
     if (countryOfBirthId != null) {
       payload['countryOfBirthId'] = countryOfBirthId;
@@ -6151,6 +6189,7 @@ class _StudentAdmissionDraft {
     lastGradeAttended.dispose();
     previousSchoolFees.dispose();
     reasonForLeaving.dispose();
+    admissionSourceOther.dispose();
     skillsAndInterests.dispose();
     for (final controller in conditionNotes.values) {
       controller.dispose();
@@ -6536,6 +6575,8 @@ class _AdmissionSideDrawerState extends State<_AdmissionSideDrawer> {
               s.religionId,
               s.countryOfBirthId,
               s.cityOfBirthId,
+              s.admissionSource,
+              s.admissionSourceOther.text,
               options(s.selectedLanguages),
             ],
             1 => address(s.addressDraft),
@@ -6652,6 +6693,16 @@ class _AdmissionSideDrawerState extends State<_AdmissionSideDrawer> {
         }
         if (_studentDraft.selectedLanguages.isEmpty) {
           errors['languages'] = 'Select at least one language.';
+        }
+        if (_studentDraft.customStudentId == null &&
+            _studentDraft.admissionSource.isEmpty) {
+          errors['admissionSource'] =
+              'Select how the family first heard about the school.';
+        }
+        if (_studentDraft.admissionSource == _otherAdmissionSource &&
+            _studentDraft.admissionSourceOther.text.trim().isEmpty) {
+          errors['admissionSourceOther'] =
+              'Enter how the family first heard about the school.';
         }
       case 3:
         if (_studentDraft.vaccinationStatuses.isEmpty) {
@@ -9316,6 +9367,56 @@ class _StudentBasicInfoFormState extends State<_StudentBasicInfoForm> {
               },
             ),
           ],
+        ),
+        const SizedBox(height: 12),
+        _DrawerFormSection(
+          title: 'Admission source',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              DropdownButtonFormField<String>(
+                key: const Key('admission-source'),
+                value:
+                    _admissionSourceOptions.containsKey(draft.admissionSource)
+                    ? draft.admissionSource
+                    : null,
+                isExpanded: true,
+                decoration: InputDecoration(
+                  labelText: 'How did you first hear about our school? *',
+                  hintText: 'Select one primary source',
+                  errorText: widget.errors['admissionSource'],
+                ),
+                items: _admissionSourceOptions.entries
+                    .map(
+                      (entry) => DropdownMenuItem<String>(
+                        value: entry.key,
+                        child: Text(entry.value),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) => setState(() {
+                  draft.admissionSource = value ?? '';
+                  if (value != _otherAdmissionSource) {
+                    draft.admissionSourceOther.clear();
+                  }
+                }),
+              ),
+              if (draft.admissionSource == _otherAdmissionSource) ...[
+                const SizedBox(height: 12),
+                _Field(
+                  label: 'Please specify *',
+                  hint: 'Enter the source',
+                  controller: draft.admissionSourceOther,
+                  errorText: widget.errors['admissionSourceOther'],
+                ),
+              ],
+              const SizedBox(height: 8),
+              const Text(
+                'Choose the first source the family remembers. This is used for admissions reporting.',
+                style: TextStyle(color: AppColors.muted, fontSize: 12),
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 12),
         _DrawerFormSection(

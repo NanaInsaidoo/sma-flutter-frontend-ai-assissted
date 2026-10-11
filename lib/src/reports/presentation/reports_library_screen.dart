@@ -4,6 +4,7 @@ import '../../assessments/presentation/report_pdf_download.dart';
 import '../../theme/app_theme.dart';
 import '../data/management_report_api_client.dart';
 import '../domain/management_report_models.dart';
+import '../domain/report_access_policy.dart';
 
 enum _ReportCategory { all, term, academic, finance, operations }
 
@@ -14,6 +15,7 @@ class ReportsLibraryScreen extends StatefulWidget {
     required this.schoolId,
     required this.academicYear,
     required this.currentTerm,
+    required this.viewerRole,
     this.accessToken,
     this.onRefreshAccessToken,
     this.repository,
@@ -23,6 +25,7 @@ class ReportsLibraryScreen extends StatefulWidget {
   final String schoolId;
   final String academicYear;
   final String currentTerm;
+  final String viewerRole;
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
   final ManagementReportRepository? repository;
@@ -54,6 +57,15 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
     _load();
   }
 
+  @override
+  void didUpdateWidget(covariant ReportsLibraryScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (ReportAccessPolicy.normalizeRole(oldWidget.viewerRole) !=
+        ReportAccessPolicy.normalizeRole(widget.viewerRole)) {
+      _clearFilters();
+    }
+  }
+
   Future<void> _load() async {
     try {
       final reports = await _repository.list(widget.schoolId);
@@ -78,9 +90,19 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
     super.dispose();
   }
 
+  List<_ReportItem> get _accessibleReports => _reports
+      .where(
+        (report) => ReportAccessPolicy.canViewReport(
+          role: widget.viewerRole,
+          type: report.type,
+          category: report.category.name,
+        ),
+      )
+      .toList(growable: false);
+
   List<_ReportItem> get _visibleReports {
     final query = _searchController.text.trim().toLowerCase();
-    return _reports.where((report) {
+    return _accessibleReports.where((report) {
       final matchesSearch =
           query.isEmpty ||
           report.title.toLowerCase().contains(query) ||
@@ -113,6 +135,8 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _buildHeader(compact),
+                    const SizedBox(height: 16),
+                    _buildAccessNotice(),
                     const SizedBox(height: 20),
                     _buildPreviewNotice(),
                     const SizedBox(height: 20),
@@ -153,7 +177,7 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Reports',
+          'Management reports',
           style: TextStyle(
             color: AppColors.text,
             fontSize: 32,
@@ -163,7 +187,7 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
         ),
         const SizedBox(height: 8),
         Text(
-          'View current and historical school reports in one place.',
+          'View the current and historical reports available to your workspace.',
           style: TextStyle(
             color: AppColors.muted,
             fontSize: compact ? 15 : 17,
@@ -194,6 +218,56 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
         Expanded(child: title),
         help,
       ],
+    );
+  }
+
+  Widget _buildAccessNotice() {
+    final roleLabel = ReportAccessPolicy.roleLabel(widget.viewerRole);
+    return Container(
+      key: const ValueKey('report-access-notice'),
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF1FF),
+        border: Border.all(color: const Color(0xFFC9D8F5)),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.verified_user_outlined,
+            color: AppColors.blue,
+            size: 22,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$roleLabel report access',
+                  style: const TextStyle(
+                    color: AppColors.text,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  '${ReportAccessPolicy.accessDescription(widget.viewerRole)} '
+                  'Reports outside this responsibility are hidden.',
+                  style: const TextStyle(
+                    color: AppColors.muted,
+                    fontSize: 13,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -251,7 +325,7 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
   );
 
   String get _latestClosedLabel {
-    final closed = _reports
+    final closed = _accessibleReports
         .where((r) => r.status == _ReportStatus.finalReport)
         .toList();
     if (closed.isEmpty) return 'No term has been closed yet';
@@ -272,7 +346,7 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
         _SummaryCard(
           width: cardWidth,
           label: 'Available reports',
-          value: '${_reports.length}',
+          value: '${_accessibleReports.length}',
           icon: Icons.folder_copy_outlined,
           color: AppColors.blue,
         ),
@@ -280,7 +354,7 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
           width: cardWidth,
           label: 'Final & locked',
           value:
-              '${_reports.where((r) => r.status == _ReportStatus.finalReport).length}',
+              '${_accessibleReports.where((r) => r.status == _ReportStatus.finalReport).length}',
           icon: Icons.lock_outline_rounded,
           color: AppColors.green,
         ),
@@ -324,11 +398,11 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
   }
 
   Widget _buildFeaturedReports(double width) {
-    final closed = _reports
+    final closed = _accessibleReports
         .where((item) => item.status == _ReportStatus.finalReport)
         .toList();
     final latestId = closed.isEmpty ? null : closed.first.termId;
-    final items = _reports
+    final items = _accessibleReports
         .where((item) => item.featured && item.termId == latestId)
         .toList();
     if (items.isEmpty) return const SizedBox.shrink();
@@ -363,11 +437,17 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
     );
     final years = [
       'All years',
-      ..._reports.map((e) => e.year).where((e) => e.isNotEmpty).toSet(),
+      ..._accessibleReports
+          .map((e) => e.year)
+          .where((e) => e.isNotEmpty)
+          .toSet(),
     ];
     final terms = [
       'All terms',
-      ..._reports.map((e) => e.term).where((e) => e.isNotEmpty).toSet(),
+      ..._accessibleReports
+          .map((e) => e.term)
+          .where((e) => e.isNotEmpty)
+          .toSet(),
     ];
     final year = DropdownButtonFormField<String>(
       value: _year,
@@ -448,6 +528,7 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
   Widget _buildReportList() {
     final reports = _visibleReports;
     if (reports.isEmpty) {
+      final noRoleReports = _accessibleReports.isEmpty;
       return Card(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 42),
@@ -460,19 +541,28 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
                   size: 38,
                 ),
                 const SizedBox(height: 12),
-                const Text(
-                  'No reports match these filters.',
-                  style: TextStyle(
+                Text(
+                  noRoleReports
+                      ? 'No reports are available for this workspace yet.'
+                      : 'No reports match these filters.',
+                  style: const TextStyle(
                     color: AppColors.text,
                     fontSize: 16,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
                 const SizedBox(height: 8),
-                TextButton(
-                  onPressed: _clearFilters,
-                  child: const Text('Clear filters'),
-                ),
+                if (noRoleReports)
+                  Text(
+                    'Reports will appear here when an authorised report is generated for the ${ReportAccessPolicy.roleLabel(widget.viewerRole).toLowerCase()} workspace.',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: AppColors.muted),
+                  )
+                else
+                  TextButton(
+                    onPressed: _clearFilters,
+                    child: const Text('Clear filters'),
+                  ),
               ],
             ),
           ),
@@ -503,6 +593,7 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
           ),
           ...reports.indexed.map(
             (entry) => _ReportRow(
+              key: ValueKey('report-row-${entry.$2.termId}-${entry.$2.type}'),
               report: entry.$2,
               showDivider: entry.$1 != reports.length - 1,
               onView: () => _openPreview(entry.$2),
@@ -566,6 +657,10 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
   }
 
   Future<void> _downloadReport(_ReportItem report) async {
+    if (!_canAccess(report)) {
+      _showAccessChangedMessage();
+      return;
+    }
     final key = '${report.title}-${report.term}-${report.year}';
     if (_downloading.contains(key)) return;
     setState(() => _downloading.add(key));
@@ -608,6 +703,10 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
   }
 
   void _openPreview(_ReportItem report) {
+    if (!_canAccess(report)) {
+      _showAccessChangedMessage();
+      return;
+    }
     showDialog<void>(
       context: context,
       builder: (context) => _ReportPreviewDialog(
@@ -618,6 +717,24 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
         },
       ),
     );
+  }
+
+  bool _canAccess(_ReportItem report) => ReportAccessPolicy.canViewReport(
+    role: widget.viewerRole,
+    type: report.type,
+    category: report.category.name,
+  );
+
+  void _showAccessChangedMessage() {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This report is not available in your current workspace.',
+          ),
+        ),
+      );
   }
 }
 
@@ -759,6 +876,9 @@ class _FeaturedReportCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: FilledButton.icon(
+                    key: ValueKey(
+                      'featured-report-view-${report.termId}-${report.type}',
+                    ),
                     onPressed: onView,
                     icon: const Icon(Icons.visibility_outlined, size: 18),
                     label: const Text('Preview'),
@@ -769,6 +889,9 @@ class _FeaturedReportCard extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 OutlinedButton.icon(
+                  key: ValueKey(
+                    'featured-report-download-${report.termId}-${report.type}',
+                  ),
                   onPressed: onDownload,
                   icon: const Icon(Icons.download_outlined, size: 18),
                   label: const Text('PDF'),
@@ -784,6 +907,7 @@ class _FeaturedReportCard extends StatelessWidget {
 
 class _ReportRow extends StatelessWidget {
   const _ReportRow({
+    super.key,
     required this.report,
     required this.showDivider,
     required this.onView,
@@ -847,11 +971,15 @@ class _ReportRow extends StatelessWidget {
                 _StatusPill(status: report.status),
                 const SizedBox(width: 10),
                 TextButton.icon(
+                  key: ValueKey('report-view-${report.termId}-${report.type}'),
                   onPressed: onView,
                   icon: const Icon(Icons.visibility_outlined, size: 18),
                   label: const Text('View'),
                 ),
                 TextButton.icon(
+                  key: ValueKey(
+                    'report-download-${report.termId}-${report.type}',
+                  ),
                   onPressed: onDownload,
                   icon: const Icon(Icons.download_outlined, size: 18),
                   label: const Text('Download'),

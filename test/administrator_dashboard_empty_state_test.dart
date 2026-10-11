@@ -1036,6 +1036,10 @@ void main() {
             ? findsOneWidget
             : findsNothing,
       );
+      expect(
+        find.text('Reports'),
+        role == 'STAFF' ? findsNothing : findsOneWidget,
+      );
       expect(tester.takeException(), isNull);
     });
   }

@@ -2757,6 +2757,7 @@ class _ManageRolesDialogState extends State<_ManageRolesDialog> {
         ? 'SUBJECT_TEACHER'
         : 'CLASS_TEACHER';
     _options = [
+      ('OWNER', 'Owner / Proprietor'),
       ('ADMINISTRATOR', 'Administrator'),
       ('HEADMASTER', 'Headmaster'),
       ('HEAD_TEACHER', 'Head teacher'),

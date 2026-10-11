@@ -53,6 +53,7 @@ import '../../readiness/data/school_readiness_repository.dart';
 import '../../readiness/domain/school_readiness.dart';
 import '../../notifications/data/school_notification_api_client.dart';
 import '../../notifications/domain/school_notification_models.dart';
+import '../../reports/domain/report_access_policy.dart';
 import '../../reports/presentation/reports_library_screen.dart';
 
 enum _SchoolAdminPage {
@@ -1171,6 +1172,7 @@ class _DashboardBody extends StatelessWidget {
         schoolId: schoolId,
         academicYear: data.academicYear,
         currentTerm: data.term,
+        viewerRole: role ?? '',
         accessToken: accessToken,
         onRefreshAccessToken: onRefreshAccessToken,
       );
@@ -6976,7 +6978,7 @@ class _Sidebar extends StatelessWidget {
                         collapsed: collapsed,
                       ),
                   ],
-                  if (!isTeacher)
+                  if (ReportAccessPolicy.canOpenLibrary(role))
                     _SidebarButton(
                       icon: Icons.bar_chart_rounded,
                       label: 'Reports',

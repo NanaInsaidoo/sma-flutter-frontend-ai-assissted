@@ -18,7 +18,11 @@ void wide(WidgetTester tester) {
   addTearDown(tester.view.resetDevicePixelRatio);
 }
 
-Future<void> editor(WidgetTester tester, AdmissionsApiClient api) async {
+Future<void> editor(
+  WidgetTester tester,
+  AdmissionsApiClient api, {
+  int initialStep = 1,
+}) async {
   wide(tester);
   await tester.pumpWidget(
     MaterialApp(
@@ -31,7 +35,7 @@ Future<void> editor(WidgetTester tester, AdmissionsApiClient api) async {
               api: api,
               school: 'SCHOOL',
               studentId: 'STU-1',
-              initialStep: 1,
+              initialStep: initialStep,
             ),
             child: const Text('Edit'),
           ),
@@ -200,6 +204,103 @@ void main() {
           .text,
       'My New Town',
     );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('admission source hydrates and Other details are submitted', (
+    tester,
+  ) async {
+    Map<String, dynamic>? submitted;
+    final api = AdmissionsApiClient(
+      accessToken: 'test',
+      client: MockClient((request) async {
+        final path = request.url.path;
+        if (path.endsWith('/record-changes/context')) {
+          return json({
+            'baseVersion': 'v1',
+            'student': {
+              'customStudentId': 'STU-1',
+              'householdId': 10,
+              'status': 'DRAFT',
+              'firstName': 'Ama',
+              'lastName': 'Mensah',
+              'dateOfBirth': '2016-02-03',
+              'gradeLevelId': 1,
+              'schoolGradeLevelId': 11,
+              'genderId': 2,
+              'religion': {'id': 3, 'religionName': 'Christian'},
+              'languageSpoken': ['English'],
+              'admissionSource': 'PARENT_GUARDIAN_REFERRAL',
+            },
+          });
+        }
+        if (path == '/api/grade-levels/school/SCHOOL') {
+          return json([
+            {'gradeLevelId': 1, 'gradeName': 'Basic 1', 'id': 11},
+          ]);
+        }
+        if (path.endsWith('/streams')) return json([]);
+        if (path.endsWith('/genders')) {
+          return json([
+            {'id': 2, 'name': 'Female'},
+          ]);
+        }
+        if (path.endsWith('/religions')) {
+          return json([
+            {'id': 3, 'name': 'Christian'},
+          ]);
+        }
+        if (path.endsWith('/languages')) {
+          return json([
+            {'id': 4, 'name': 'English'},
+          ]);
+        }
+        if (path.endsWith('/record-changes/preview')) {
+          return json({'requiresApproval': false, 'before': {}});
+        }
+        if (path.endsWith('/record-changes') && request.method == 'POST') {
+          submitted = jsonDecode(request.body) as Map<String, dynamic>;
+          return json({'status': 'APPLIED'});
+        }
+        return json([]);
+      }),
+    );
+
+    await editor(tester, api, initialStep: 0);
+    final source = find.byKey(const Key('admission-source'));
+    expect(source, findsOneWidget);
+    expect(
+      tester.widget<DropdownButtonFormField<String>>(source).initialValue,
+      'PARENT_GUARDIAN_REFERRAL',
+    );
+
+    await tester.ensureVisible(source);
+    await tester.pumpAndSettle();
+    await tester.tap(source);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Other').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Please specify *'),
+      'Neighbourhood banner',
+    );
+    await tester.tap(find.text('Review changes'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Reason for this change'),
+      'Record the admission source',
+    );
+    await tester.pump();
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save changes'));
+    await tester.pumpAndSettle();
+
+    final basic = Map<String, dynamic>.from(
+      submitted?['sections']['basic'] as Map,
+    );
+    expect(basic['admissionSource'], 'OTHER');
+    expect(basic['admissionSourceOther'], 'Neighbourhood banner');
     expect(tester.takeException(), isNull);
   });
 

@@ -54,6 +54,33 @@ class _FakeReports implements ManagementReportRepository {
       'Student attendance report',
       category: 'OPERATIONS',
     ),
+    _report(
+      'STUDENT_REPORTS',
+      'Student report-card summary',
+      category: 'ACADEMIC',
+    ),
+    _report(
+      'ACADEMIC_PERFORMANCE',
+      'Academic performance report',
+      category: 'ACADEMIC',
+    ),
+    _report('ADMISSIONS', 'Admissions report', category: 'OPERATIONS'),
+    _report(
+      'STAFF_ATTENDANCE',
+      'Staff attendance report',
+      category: 'OPERATIONS',
+    ),
+    _report('INCIDENTS', 'Incident report', category: 'OPERATIONS'),
+    _report(
+      'STAFF_PERFORMANCE',
+      'Staff performance report',
+      category: 'OPERATIONS',
+    ),
+    _report(
+      'CONFIDENTIAL_NEW',
+      'Unclassified confidential report',
+      category: 'OPERATIONS',
+    ),
     ManagementReport(
       id: '2:READINESS',
       termId: 2,
@@ -94,7 +121,7 @@ class _FakeReports implements ManagementReportRepository {
 
 void main() {
   late _FakeReports reports;
-  Widget buildScreen() {
+  Widget buildScreen({String role = 'OWNER'}) {
     reports = _FakeReports();
     return MaterialApp(
       theme: AppTheme.light,
@@ -104,6 +131,7 @@ void main() {
           schoolId: 'SMA-001',
           academicYear: '2026-2027',
           currentTerm: 'Second Term',
+          viewerRole: role,
           repository: reports,
         ),
       ),
@@ -130,6 +158,7 @@ void main() {
     expect(find.text('Headmaster management report'), findsWidgets);
     expect(find.text('Owner / board summary'), findsWidgets);
     expect(find.text('End-of-term facility inspection'), findsWidgets);
+    expect(find.text('Owner / Proprietor report access'), findsOneWidget);
     expect(find.text('Final · Locked'), findsWidgets);
     expect(find.text('Live'), findsWidgets);
   });
@@ -140,9 +169,10 @@ void main() {
     size(tester);
     await tester.pumpWidget(buildScreen());
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('View').at(3));
+    final view = find.byKey(const ValueKey('report-view-1-FINANCE'));
+    await tester.ensureVisible(view);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('View').at(3));
+    await tester.tap(view);
     await tester.pumpAndSettle();
     expect(find.text('Collection pace'), findsOneWidget);
     expect(find.text('80%'), findsOneWidget);
@@ -159,8 +189,159 @@ void main() {
     size(tester);
     await tester.pumpWidget(buildScreen());
     await tester.pumpAndSettle();
-    await tester.tap(find.text('PDF').first);
+    await tester.tap(
+      find.byKey(const ValueKey('featured-report-download-1-HEADMASTER')),
+    );
     await tester.pumpAndSettle();
     expect(reports.downloads, contains('SMA-001:1:HEADMASTER'));
+  });
+
+  final roleCases =
+      <
+        ({String role, String label, List<String> visible, List<String> hidden})
+      >[
+        (
+          role: 'OWNER',
+          label: 'Owner / Proprietor',
+          visible: [
+            'Owner / board summary',
+            'Headmaster management report',
+            'Finance closure report',
+            'Unclassified confidential report',
+          ],
+          hidden: [],
+        ),
+        (
+          role: 'HEADMASTER',
+          label: 'Headmaster',
+          visible: [
+            'Headmaster management report',
+            'Finance closure report',
+            'Incident report',
+          ],
+          hidden: ['Owner / board summary'],
+        ),
+        (
+          role: 'HEAD_TEACHER',
+          label: 'Head teacher',
+          visible: [
+            'Headmaster management report',
+            'Finance closure report',
+            'Academic performance report',
+          ],
+          hidden: ['Owner / board summary', 'Unclassified confidential report'],
+        ),
+        (
+          role: 'ASSISTANT_HEAD_TEACHER',
+          label: 'Assistant head teacher',
+          visible: [
+            'Academic performance report',
+            'Student attendance report',
+            'End-of-term facility inspection',
+          ],
+          hidden: [
+            'Owner / board summary',
+            'Headmaster management report',
+            'Finance closure report',
+          ],
+        ),
+        (
+          role: 'ADMINISTRATOR',
+          label: 'Administrator',
+          visible: [
+            'Finance closure report',
+            'Admissions report',
+            'Staff performance report',
+          ],
+          hidden: [
+            'Owner / board summary',
+            'Headmaster management report',
+            'Unclassified confidential report',
+          ],
+        ),
+        (
+          role: 'BURSAR',
+          label: 'Bursar',
+          visible: ['Finance closure report', 'Second Term readiness'],
+          hidden: [
+            'Owner / board summary',
+            'Headmaster management report',
+            'Academic performance report',
+            'End-of-term facility inspection',
+          ],
+        ),
+        (
+          role: 'SECRETARY',
+          label: 'Secretary',
+          visible: [
+            'Admissions report',
+            'Student attendance report',
+            'End-of-term facility inspection',
+          ],
+          hidden: [
+            'Owner / board summary',
+            'Finance closure report',
+            'Incident report',
+          ],
+        ),
+        (
+          role: 'CLASS_TEACHER',
+          label: 'Teacher',
+          visible: ['Student attendance report', 'Student report-card summary'],
+          hidden: [
+            'Owner / board summary',
+            'Finance closure report',
+            'Academic performance report',
+            'Staff attendance report',
+          ],
+        ),
+        (
+          role: 'SUBJECT_TEACHER',
+          label: 'Teacher',
+          visible: ['Student attendance report', 'Student report-card summary'],
+          hidden: ['Owner / board summary', 'Finance closure report'],
+        ),
+      ];
+
+  for (final roleCase in roleCases) {
+    testWidgets('${roleCase.role} sees only assigned reports', (tester) async {
+      size(tester);
+      await tester.pumpWidget(buildScreen(role: roleCase.role));
+      await tester.pumpAndSettle();
+
+      expect(find.text('${roleCase.label} report access'), findsOneWidget);
+      for (final title in roleCase.visible) {
+        expect(
+          find.text(title),
+          findsWidgets,
+          reason: '$title should be visible',
+        );
+      }
+      for (final title in roleCase.hidden) {
+        expect(
+          find.text(title),
+          findsNothing,
+          reason: '$title should be hidden',
+        );
+      }
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('restricted role downloads only an assigned report', (
+    tester,
+  ) async {
+    size(tester);
+    await tester.pumpWidget(buildScreen(role: 'BURSAR'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('report-download-1-OWNER')), findsNothing);
+    final financeDownload = find.byKey(
+      const ValueKey('report-download-1-FINANCE'),
+    );
+    await tester.ensureVisible(financeDownload);
+    await tester.tap(financeDownload);
+    await tester.pumpAndSettle();
+    expect(reports.downloads, ['SMA-001:1:FINANCE']);
   });
 }
