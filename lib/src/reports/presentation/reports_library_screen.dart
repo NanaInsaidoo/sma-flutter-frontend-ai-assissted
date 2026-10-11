@@ -1441,6 +1441,8 @@ class _ReportItem {
       'OWNER' => Icons.corporate_fare_outlined,
       'ACADEMIC_PERFORMANCE' => Icons.analytics_outlined,
       'FINANCE' => Icons.account_balance_outlined,
+      'ADMISSIONS' => Icons.person_add_alt_1_outlined,
+      'STAFF_PERFORMANCE' => Icons.reviews_outlined,
       'FACILITY' => Icons.domain_verification_outlined,
       'STUDENT_REPORTS' => Icons.school_outlined,
       'STUDENT_ATTENDANCE' => Icons.how_to_reg_outlined,

@@ -19,7 +19,7 @@ class _FakeReports implements ManagementReportRepository {
   @override
   Future<List<ManagementReport>> list(String schoolId) async => [
     _report('HEADMASTER', 'Headmaster management report'),
-    _report('OWNER', 'Owner / board summary'),
+    _report('OWNER', 'Full school term management report'),
     _report(
       'FACILITY',
       'End-of-term facility inspection',
@@ -31,7 +31,7 @@ class _FakeReports implements ManagementReportRepository {
     ),
     _report(
       'FINANCE',
-      'Finance closure report',
+      'Comprehensive term financial report',
       category: 'FINANCE',
       metrics: const {
         'billed': 12000.0,
@@ -64,7 +64,7 @@ class _FakeReports implements ManagementReportRepository {
       'Academic performance report',
       category: 'ACADEMIC',
     ),
-    _report('ADMISSIONS', 'Admissions report', category: 'OPERATIONS'),
+    _report('ADMISSIONS', 'Admissions term report', category: 'OPERATIONS'),
     _report(
       'STAFF_ATTENDANCE',
       'Staff attendance report',
@@ -73,7 +73,7 @@ class _FakeReports implements ManagementReportRepository {
     _report('INCIDENTS', 'Incident report', category: 'OPERATIONS'),
     _report(
       'STAFF_PERFORMANCE',
-      'Staff performance report',
+      'Staff performance review report',
       category: 'OPERATIONS',
     ),
     _report(
@@ -156,7 +156,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Headmaster management report'), findsWidgets);
-    expect(find.text('Owner / board summary'), findsWidgets);
+    expect(find.text('Full school term management report'), findsWidgets);
     expect(find.text('End-of-term facility inspection'), findsWidgets);
     expect(find.text('Owner / Proprietor report access'), findsOneWidget);
     expect(find.text('Final · Locked'), findsWidgets);
@@ -204,9 +204,9 @@ void main() {
           role: 'OWNER',
           label: 'Owner / Proprietor',
           visible: [
-            'Owner / board summary',
+            'Full school term management report',
             'Headmaster management report',
-            'Finance closure report',
+            'Comprehensive term financial report',
             'Unclassified confidential report',
           ],
           hidden: [],
@@ -216,20 +216,23 @@ void main() {
           label: 'Headmaster',
           visible: [
             'Headmaster management report',
-            'Finance closure report',
+            'Comprehensive term financial report',
             'Incident report',
           ],
-          hidden: ['Owner / board summary'],
+          hidden: ['Full school term management report'],
         ),
         (
           role: 'HEAD_TEACHER',
           label: 'Head teacher',
           visible: [
             'Headmaster management report',
-            'Finance closure report',
+            'Comprehensive term financial report',
             'Academic performance report',
           ],
-          hidden: ['Owner / board summary', 'Unclassified confidential report'],
+          hidden: [
+            'Full school term management report',
+            'Unclassified confidential report',
+          ],
         ),
         (
           role: 'ASSISTANT_HEAD_TEACHER',
@@ -240,21 +243,21 @@ void main() {
             'End-of-term facility inspection',
           ],
           hidden: [
-            'Owner / board summary',
+            'Full school term management report',
             'Headmaster management report',
-            'Finance closure report',
+            'Comprehensive term financial report',
           ],
         ),
         (
           role: 'ADMINISTRATOR',
           label: 'Administrator',
           visible: [
-            'Finance closure report',
-            'Admissions report',
-            'Staff performance report',
+            'Comprehensive term financial report',
+            'Admissions term report',
+            'Staff performance review report',
           ],
           hidden: [
-            'Owner / board summary',
+            'Full school term management report',
             'Headmaster management report',
             'Unclassified confidential report',
           ],
@@ -262,9 +265,12 @@ void main() {
         (
           role: 'BURSAR',
           label: 'Bursar',
-          visible: ['Finance closure report', 'Second Term readiness'],
+          visible: [
+            'Comprehensive term financial report',
+            'Second Term readiness',
+          ],
           hidden: [
-            'Owner / board summary',
+            'Full school term management report',
             'Headmaster management report',
             'Academic performance report',
             'End-of-term facility inspection',
@@ -274,13 +280,13 @@ void main() {
           role: 'SECRETARY',
           label: 'Secretary',
           visible: [
-            'Admissions report',
+            'Admissions term report',
             'Student attendance report',
             'End-of-term facility inspection',
           ],
           hidden: [
-            'Owner / board summary',
-            'Finance closure report',
+            'Full school term management report',
+            'Comprehensive term financial report',
             'Incident report',
           ],
         ),
@@ -289,8 +295,8 @@ void main() {
           label: 'Teacher',
           visible: ['Student attendance report', 'Student report-card summary'],
           hidden: [
-            'Owner / board summary',
-            'Finance closure report',
+            'Full school term management report',
+            'Comprehensive term financial report',
             'Academic performance report',
             'Staff attendance report',
           ],
@@ -299,7 +305,10 @@ void main() {
           role: 'SUBJECT_TEACHER',
           label: 'Teacher',
           visible: ['Student attendance report', 'Student report-card summary'],
-          hidden: ['Owner / board summary', 'Finance closure report'],
+          hidden: [
+            'Full school term management report',
+            'Comprehensive term financial report',
+          ],
         ),
       ];
 
