@@ -52,11 +52,29 @@ void main() {
       }
     });
 
-    test('headmaster receives all classified reports except owner report', () {
+    test('senior leadership receives the full school report', () {
+      for (final role in const [
+        'HEADMASTER',
+        'HEAD_TEACHER',
+        'ADMINISTRATOR',
+      ]) {
+        expect(
+          ReportAccessPolicy.canViewReport(
+            role: role,
+            type: 'OWNER',
+            category: 'TERM',
+          ),
+          isTrue,
+          reason: '$role should receive the full school report',
+        );
+      }
+    });
+
+    test('headmaster receives all classified reports', () {
       expect(
         ReportAccessPolicy.canViewReport(
           role: 'HEADMASTER',
-          type: 'OWNER',
+          type: 'BOARD_CONFIDENTIAL',
           category: 'TERM',
         ),
         isFalse,

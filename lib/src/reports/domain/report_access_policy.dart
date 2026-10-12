@@ -56,6 +56,14 @@ abstract final class ReportAccessPolicy {
     final area = classify(type: normalizedType, category: category);
 
     if (normalizedRole == 'OWNER') return true;
+    if (normalizedType == 'OWNER' &&
+        const {
+          'ADMINISTRATOR',
+          'HEADMASTER',
+          'HEAD_TEACHER',
+        }.contains(normalizedRole)) {
+      return true;
+    }
     if (normalizedRole == 'HEADMASTER') return area != ReportArea.owner;
 
     if (_isTeacher(normalizedRole)) {
@@ -206,13 +214,13 @@ abstract final class ReportAccessPolicy {
     'OWNER' =>
       'Complete school-wide management, finance, academic and operational reports.',
     'HEADMASTER' =>
-      'School leadership and detailed operational reports. Owner-only board reports are hidden.',
+      'Full school management report and detailed leadership and operational reports.',
     'HEAD_TEACHER' =>
-      'Leadership, academic, finance and operational reports for the school.',
+      'Full school management report plus academic, finance and operational reports.',
     'ASSISTANT_HEAD_TEACHER' =>
       'Academic, attendance, admissions, incident and facilities reports.',
     'ADMINISTRATOR' =>
-      'Operational, finance, academic and staff administration reports.',
+      'Full school management report plus operational, finance, academic and staff reports.',
     'BURSAR' =>
       'Finance, collections, expenses, petty cash, shop and term finance reports.',
     'SECRETARY' =>

@@ -215,24 +215,23 @@ void main() {
           role: 'HEADMASTER',
           label: 'Headmaster',
           visible: [
+            'Full school term management report',
             'Headmaster management report',
             'Comprehensive term financial report',
             'Incident report',
           ],
-          hidden: ['Full school term management report'],
+          hidden: [],
         ),
         (
           role: 'HEAD_TEACHER',
           label: 'Head teacher',
           visible: [
+            'Full school term management report',
             'Headmaster management report',
             'Comprehensive term financial report',
             'Academic performance report',
           ],
-          hidden: [
-            'Full school term management report',
-            'Unclassified confidential report',
-          ],
+          hidden: ['Unclassified confidential report'],
         ),
         (
           role: 'ASSISTANT_HEAD_TEACHER',
@@ -252,12 +251,12 @@ void main() {
           role: 'ADMINISTRATOR',
           label: 'Administrator',
           visible: [
+            'Full school term management report',
             'Comprehensive term financial report',
             'Admissions term report',
             'Staff performance review report',
           ],
           hidden: [
-            'Full school term management report',
             'Headmaster management report',
             'Unclassified confidential report',
           ],
