@@ -190,7 +190,7 @@ void main() {
     await tester.pumpWidget(buildScreen());
     await tester.pumpAndSettle();
     await tester.tap(
-      find.byKey(const ValueKey('featured-report-download-1-HEADMASTER')),
+      find.byKey(const ValueKey('report-download-1-HEADMASTER')),
     );
     await tester.pumpAndSettle();
     expect(reports.downloads, contains('SMA-001:1:HEADMASTER'));

@@ -150,10 +150,6 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
                     ],
                     _buildSummary(contentWidth),
                     const SizedBox(height: 28),
-                    _sectionHeading('Latest closed term', _latestClosedLabel),
-                    const SizedBox(height: 14),
-                    _buildFeaturedReports(contentWidth),
-                    const SizedBox(height: 30),
                     _sectionHeading(
                       'All reports',
                       'Find current and historical reports by school year, term or area.',
@@ -324,15 +320,6 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
     ),
   );
 
-  String get _latestClosedLabel {
-    final closed = _accessibleReports
-        .where((r) => r.status == _ReportStatus.finalReport)
-        .toList();
-    if (closed.isEmpty) return 'No term has been closed yet';
-    final report = closed.first;
-    return '${report.term} • ${report.year} • ${report.updated}';
-  }
-
   Widget _buildSummary(double width) {
     final cardWidth = width < 620
         ? width
@@ -394,34 +381,6 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
           style: const TextStyle(color: AppColors.muted, fontSize: 14),
         ),
       ],
-    );
-  }
-
-  Widget _buildFeaturedReports(double width) {
-    final closed = _accessibleReports
-        .where((item) => item.status == _ReportStatus.finalReport)
-        .toList();
-    final latestId = closed.isEmpty ? null : closed.first.termId;
-    final items = _accessibleReports
-        .where((item) => item.featured && item.termId == latestId)
-        .toList();
-    if (items.isEmpty) return const SizedBox.shrink();
-    final cardWidth = width < 760 ? width : (width - 28) / 3;
-    return Wrap(
-      spacing: 14,
-      runSpacing: 14,
-      children: items
-          .map(
-            (item) => SizedBox(
-              width: cardWidth,
-              child: _FeaturedReportCard(
-                report: item,
-                onView: () => _openPreview(item),
-                onDownload: () => _downloadReport(item),
-              ),
-            ),
-          )
-          .toList(),
     );
   }
 
@@ -799,106 +758,6 @@ class _SummaryCard extends StatelessWidget {
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _FeaturedReportCard extends StatelessWidget {
-  const _FeaturedReportCard({
-    required this.report,
-    required this.onView,
-    required this.onDownload,
-  });
-
-  final _ReportItem report;
-  final VoidCallback onView;
-  final VoidCallback onDownload;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: AppColors.greenSoft,
-                    borderRadius: BorderRadius.circular(11),
-                  ),
-                  child: Icon(report.icon, color: AppColors.green),
-                ),
-                const Spacer(),
-                _StatusPill(status: report.status),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Text(
-              report.title,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: AppColors.text,
-                fontSize: 17,
-                height: 1.2,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              report.description,
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: AppColors.muted,
-                fontSize: 13,
-                height: 1.4,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              report.updated,
-              style: const TextStyle(
-                color: AppColors.muted,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                Expanded(
-                  child: FilledButton.icon(
-                    key: ValueKey(
-                      'featured-report-view-${report.termId}-${report.type}',
-                    ),
-                    onPressed: onView,
-                    icon: const Icon(Icons.visibility_outlined, size: 18),
-                    label: const Text('Preview'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.green,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  key: ValueKey(
-                    'featured-report-download-${report.termId}-${report.type}',
-                  ),
-                  onPressed: onDownload,
-                  icon: const Icon(Icons.download_outlined, size: 18),
-                  label: const Text('PDF'),
-                ),
-              ],
-            ),
-          ],
         ),
       ),
     );
@@ -1410,7 +1269,6 @@ class _ReportItem {
     required this.metrics,
     required this.sections,
     required this.notes,
-    this.featured = false,
   });
 
   final int termId;
@@ -1423,7 +1281,6 @@ class _ReportItem {
   final _ReportStatus status;
   final String updated;
   final IconData icon;
-  final bool featured;
   final Map<String, Object?> metrics;
   final List<ManagementReportSection> sections;
   final List<String> notes;
@@ -1466,7 +1323,6 @@ class _ReportItem {
           ? 'Closed ${_shortDate(report.closedAt!)}'
           : 'Live report',
       icon: icon,
-      featured: const {'HEADMASTER', 'OWNER', 'FACILITY'}.contains(type),
       metrics: report.metrics,
       sections: report.sections,
       notes: report.notes,
