@@ -130,6 +130,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   Future<TeacherWorkspaceSnapshot>? _teacherWorkspace;
   bool _sidebarCollapsed = false;
   _SchoolAdminPage _selectedPage = _SchoolAdminPage.dashboard;
+  int _pageReloadRevision = 0;
   bool _openStartAdmissionOnNextAdmissions = false;
   bool _focusStudentSearchOnNextStudents = false;
   String? _studentProfileToOpenId;
@@ -366,9 +367,20 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
     if (_isTeachingRole(_activeRole) &&
         (page == _SchoolAdminPage.assessments ||
             page == _SchoolAdminPage.evaluations)) {
+      if (page == _selectedPage) {
+        setState(() {
+          _pageReloadRevision += 1;
+          _dashboard = _loadDashboard();
+          _feeWorkflowSummary = _loadFeeWorkflowSummary();
+          _approvalInbox = _loadApprovalInbox();
+          _notifications = _loadNotifications();
+        });
+        return;
+      }
       unawaited(_openTeacherScopedPage(page));
       return;
     }
+    final reloadingCurrentPage = page == _selectedPage;
     setState(() {
       _openFeeStructureOnNextFees = false;
       _focusStudentSearchOnNextStudents = false;
@@ -378,10 +390,13 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
       _evaluationStreamId = null;
       _evaluationStreamName = null;
       _selectedPage = page;
+      if (reloadingCurrentPage) {
+        _pageReloadRevision += 1;
+      }
       _feeWorkflowSummary = _loadFeeWorkflowSummary();
       _approvalInbox = _loadApprovalInbox();
       _notifications = _loadNotifications();
-      if (page == _SchoolAdminPage.dashboard) {
+      if (reloadingCurrentPage || page == _SchoolAdminPage.dashboard) {
         _dashboard = _loadDashboard();
         _readiness = widget.readinessRepository == null
             ? Future.value(SchoolReadiness.readySchool)
@@ -601,6 +616,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                         role: _activeRole,
                         userId: widget.userId,
                         selectedPage: _selectedPage,
+                        pageReloadRevision: _pageReloadRevision,
                         onSelectPage: _selectPage,
                         assessmentStreamId: _assessmentStreamId,
                         evaluationStreamId: _evaluationStreamId,
@@ -695,6 +711,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                 userId: widget.userId,
                 showMenu: true,
                 selectedPage: _selectedPage,
+                pageReloadRevision: _pageReloadRevision,
                 onSelectPage: _selectPage,
                 assessmentStreamId: _assessmentStreamId,
                 evaluationStreamId: _evaluationStreamId,
@@ -790,6 +807,7 @@ class _DashboardBody extends StatelessWidget {
     this.userId,
     this.showMenu = false,
     required this.selectedPage,
+    required this.pageReloadRevision,
     required this.onSelectPage,
     this.assessmentStreamId,
     this.evaluationStreamId,
@@ -841,6 +859,7 @@ class _DashboardBody extends StatelessWidget {
   final int? userId;
   final bool showMenu;
   final _SchoolAdminPage selectedPage;
+  final int pageReloadRevision;
   final ValueChanged<_SchoolAdminPage> onSelectPage;
   final int? assessmentStreamId;
   final int? evaluationStreamId;
@@ -911,7 +930,14 @@ class _DashboardBody extends StatelessWidget {
                     ? () => onSelectPage(_SchoolAdminPage.approvals)
                     : onOpenFeeWorkflow,
               ),
-            Expanded(child: _content(context)),
+            Expanded(
+              child: KeyedSubtree(
+                key: ValueKey(
+                  'school-admin-page-${selectedPage.name}-$pageReloadRevision',
+                ),
+                child: _content(context),
+              ),
+            ),
           ],
         );
       },

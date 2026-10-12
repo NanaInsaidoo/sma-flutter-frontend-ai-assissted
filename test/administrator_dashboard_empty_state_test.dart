@@ -504,6 +504,59 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('clicking the active menu item reloads its page', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final repository = _EmptyDashboardRepository(
+      calendarEvents: [
+        SchoolEvent(
+          id: 'holiday-1',
+          startDate: DateTime(2030, 10, 4),
+          endDate: DateTime(2030, 10, 4),
+          title: 'Founders Day',
+          category: 'HOLIDAY',
+          isSchoolDay: false,
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: AdministratorDashboard(
+          repository: repository,
+          schoolId: 'SCH-001',
+          schoolName: 'Test School',
+          userDisplayName: 'Eric',
+          role: 'ADMINISTRATOR',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('School Calendar'));
+    await tester.pumpAndSettle();
+
+    final searchField = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          widget.decoration?.hintText ==
+              'Search events by name, description, type, or date',
+    );
+    await tester.enterText(searchField, 'Founders');
+    await tester.pump();
+    expect(tester.widget<TextField>(searchField).controller?.text, 'Founders');
+
+    await tester.tap(find.text('School Calendar').first);
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<TextField>(searchField).controller?.text, isEmpty);
+    expect(repository.dashboardRequests, 2);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('calendar events open and crowded days show a more control', (
     tester,
   ) async {
@@ -1158,11 +1211,13 @@ class _EmptyDashboardRepository implements DashboardRepository {
   final List<CalendarEventType> calendarEventTypes;
   final List<CalendarEventChange> calendarEventChanges;
   final AttendanceSummary attendance;
+  int dashboardRequests = 0;
   int calendarEventTypeRequests = 0;
   final List<String> deletedEventIds = [];
 
   @override
   Future<DashboardSnapshot> getAdministratorDashboard(String schoolId) async {
+    dashboardRequests += 1;
     return DashboardSnapshot(
       schoolName: 'Test School',
       administratorName: 'Eric',
