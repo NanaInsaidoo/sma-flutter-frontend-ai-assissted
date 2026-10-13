@@ -3912,8 +3912,7 @@ class _SchoolsScreenState extends State<_SchoolsScreen> {
                         'Could not load all region filters. Showing available school regions.',
                     onRetry: _loadRegionLookups,
                   ),
-                if (MediaQuery.sizeOf(context).width >= 800)
-                  const _SchoolTableHeader(),
+                const _SchoolTableHeader(),
                 FutureBuilder<ManagedSchoolPage>(
                   key: ValueKey('$_region|$_district|$_status|$_page'),
                   future: _schoolsFuture,
@@ -4825,6 +4824,17 @@ class _SchoolTableHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < _schoolTableWidthBreakpoint) {
+          return const SizedBox.shrink();
+        }
+        return _buildHeader();
+      },
+    );
+  }
+
+  Widget _buildHeader() {
     const style = TextStyle(
       color: AppColors.muted,
       fontSize: 9.5,
@@ -4851,6 +4861,8 @@ class _SchoolTableHeader extends StatelessWidget {
   }
 }
 
+const _schoolTableWidthBreakpoint = 960.0;
+
 class _SchoolListRow extends StatelessWidget {
   const _SchoolListRow({required this.school, required this.onViewSchool});
   final ManagedSchool school;
@@ -4858,7 +4870,15 @@ class _SchoolListRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final wide = MediaQuery.sizeOf(context).width >= 800;
+    return LayoutBuilder(
+      builder: (context, constraints) => _buildRow(
+        context,
+        wide: constraints.maxWidth >= _schoolTableWidthBreakpoint,
+      ),
+    );
+  }
+
+  Widget _buildRow(BuildContext context, {required bool wide}) {
     final status = _schoolStatusPresentation(school.status);
     return InkWell(
       onTap: () => onViewSchool(school),

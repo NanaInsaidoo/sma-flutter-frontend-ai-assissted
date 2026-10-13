@@ -5,7 +5,9 @@
     "test:e2e": "playwright test",
     "test:e2e:finance": "playwright test --config=playwright.finance.config.js",
     "test:e2e:headed": "playwright test --headed",
-    "test:e2e:update": "playwright test --update-snapshots"
+    "test:e2e:update": "playwright test --update-snapshots",
+    "test:e2e:visual": "playwright test e2e/visual-regression.spec.js --project=mobile --project=tablet",
+    "test:e2e:visual:update": "playwright test e2e/visual-regression.spec.js --project=mobile --project=tablet --update-snapshots"
   },
   "devDependencies": {
     "@playwright/test": "^1.57.0",
