@@ -68,13 +68,19 @@ async function openPlatformRoute(page, path) {
 }
 
 test.describe('mobile and tablet visual regression', () => {
+  let apiMocks;
+
   test.beforeEach(async ({ page }, testInfo) => {
     test.skip(
       !supportedProjects.has(testInfo.project.name),
       'Visual baselines are intentionally scoped to mobile and tablet.',
     );
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    await installPlatformApiMocks(page);
+    apiMocks = await installPlatformApiMocks(page);
+  });
+
+  test.afterEach(() => {
+    expect(apiMocks.unexpectedRequests).toEqual([]);
   });
 
   test('login screen', async ({ page }) => {

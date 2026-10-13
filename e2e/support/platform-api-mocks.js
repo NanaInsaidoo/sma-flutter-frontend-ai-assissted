@@ -267,17 +267,35 @@ function responseFor(url) {
     return lookupResponse(pathname);
   }
 
-  return pageResponse([]);
+  return null;
 }
 
 async function installPlatformApiMocks(page) {
+  const unexpectedRequests = [];
   await page.route('**/Narellallc/sma-v1/1.0.0/api/**', async (route) => {
+    const request = route.request();
+    const response = responseFor(request.url());
+    if (response == null) {
+      const url = new URL(request.url());
+      unexpectedRequests.push(
+        `${request.method()} ${url.pathname}${url.search}`,
+      );
+      await route.fulfill({
+        status: 501,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          message: 'No deterministic Playwright fixture exists for this API.',
+        }),
+      });
+      return;
+    }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(responseFor(route.request().url())),
+      body: JSON.stringify(response),
     });
   });
+  return { unexpectedRequests };
 }
 
 module.exports = {
