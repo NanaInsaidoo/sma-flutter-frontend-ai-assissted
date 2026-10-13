@@ -234,6 +234,34 @@ void main() {
     );
   });
 
+  testWidgets('approvals use readable cards on a phone viewport', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final item = _scoreCorrection();
+    final api = _SingleApprovalApiClient(item);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: ApprovalsScreen(schoolId: 'SCH-1', repository: api),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(ValueKey('approval-mobile-row-${item.key}')),
+      findsOneWidget,
+    );
+    expect(find.byKey(ValueKey('approval-row-${item.key}')), findsNothing);
+    expect(find.text('Sort: Date'), findsOneWidget);
+    expect(tester.widget<Text>(find.text(item.title)).style?.fontSize, 16);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'opening a correction source waits for the approval panel to close',
     (tester) async {

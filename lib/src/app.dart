@@ -90,6 +90,15 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
             final suffix = state.uri.path.substring(currentBase.length);
             return '$expectedBase$suffix';
           }
+          final role = platformRoleFromApiRole(
+            _session!.role,
+            isAccountManager: _session!.isAccountManager,
+          );
+          final requestedPage = _platformRouteFromPath(state.uri.path).page;
+          if (requestedPage == PlatformPage.accountManagers &&
+              !role.canManageAccountManagers) {
+            return expectedBase;
+          }
         }
         if (signedIn && _session != null && _session!.isGuardianRole) {
           if (state.matchedLocation != '/guardian') return '/guardian';
@@ -558,6 +567,13 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
       theme: AppTheme.light,
       scaffoldMessengerKey: _scaffoldMessengerKey,
       routerConfig: _router,
+      builder: (context, child) => Theme(
+        data: AppTheme.forViewport(
+          Theme.of(context),
+          MediaQuery.sizeOf(context).width,
+        ),
+        child: child ?? const SizedBox.shrink(),
+      ),
     );
   }
 }

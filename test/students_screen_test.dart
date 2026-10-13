@@ -155,6 +155,26 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('student register fits a phone viewport', (tester) async {
+    await pumpStudents(tester, viewportSize: const Size(390, 1100));
+
+    final subtitle = find.text(
+      'Enrolled student register and current-term progress.',
+    );
+    expect(subtitle, findsOneWidget);
+    expect(tester.getSize(subtitle).width, lessThanOrEqualTo(358));
+    expect(
+      tester.widget<Text>(subtitle).style?.fontSize,
+      greaterThanOrEqualTo(16),
+    );
+    expect(find.byKey(const Key('students-table-content')), findsNothing);
+    expect(
+      find.byKey(const Key('student-row-STU-FA1BC0-9043')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('focuses student search when opened from a quick action', (
     tester,
   ) async {

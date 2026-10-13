@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:school_management_app/src/app.dart';
 import 'package:school_management_app/src/auth/data/auth_api_client.dart';
 import 'package:school_management_app/src/platform/domain/platform_models.dart';
+import 'package:school_management_app/src/theme/app_theme.dart';
 
 void main() {
   testWidgets('shows the login screen first', (tester) async {
@@ -56,10 +57,35 @@ void main() {
     expect(paragraph.selections.single.isCollapsed, isFalse);
   });
 
+  testWidgets('applies readable body text on a phone viewport', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(const SchoolManagementApp());
+    await tester.pumpAndSettle();
+
+    final fieldContext = tester.element(find.byType(TextFormField).first);
+    expect(Theme.of(fieldContext).textTheme.bodyMedium?.fontSize, 16);
+    expect(tester.takeException(), isNull);
+  });
+
   test('only super platform roles can manage account managers', () {
     expect(PlatformRole.accountManager.canManageAccountManagers, isFalse);
     expect(PlatformRole.superAccountManager.canManageAccountManagers, isTrue);
     expect(PlatformRole.superAdmin.canManageAccountManagers, isTrue);
+  });
+
+  test('mobile viewport uses readable body typography', () {
+    expect(
+      AppTheme.forViewport(AppTheme.light, 390).textTheme.bodyMedium?.fontSize,
+      16,
+    );
+    expect(
+      AppTheme.forViewport(AppTheme.light, 834).textTheme.bodyMedium?.fontSize,
+      14,
+    );
   });
 
   test(

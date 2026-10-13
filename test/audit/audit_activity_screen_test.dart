@@ -122,6 +122,68 @@ void main() {
     expect(find.text('Close'), findsOneWidget);
   });
 
+  testWidgets('audit records use readable cards on a phone viewport', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final client = MockClient((request) async {
+      if (request.url.path.endsWith('/scopes')) {
+        return http.Response(
+          jsonEncode([
+            {
+              'value': 'platform',
+              'label': 'Platform activity',
+              'type': 'PLATFORM',
+            },
+          ]),
+          200,
+        );
+      }
+      if (request.url.path.endsWith('/statistics')) {
+        return http.Response(
+          jsonEncode({
+            'totalLogs': 1,
+            'createCount': 0,
+            'editCount': 0,
+            'accessChangeCount': 0,
+            'failedLoginCount': 0,
+          }),
+          200,
+        );
+      }
+      return http.Response(
+        jsonEncode({
+          'logs': [_record],
+          'totalElements': 1,
+          'totalPages': 1,
+          'currentPage': 0,
+          'pageSize': 20,
+        }),
+        200,
+      );
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: AuditActivityScreen(
+            repository: AuditApiClient(accessToken: 'token', client: client),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('audit-mobile-row-41')), findsOneWidget);
+    expect(find.byKey(const ValueKey('audit-log-table')), findsNothing);
+    expect(find.text('Sort: Time'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('audit log uses compact raw columns and sorts the current page', (
     tester,
   ) async {

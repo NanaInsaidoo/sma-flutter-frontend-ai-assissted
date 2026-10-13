@@ -678,6 +678,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                 if (opened) _refreshApprovalInbox();
               },
               drawer: Drawer(
+                width: 280,
                 child: _Sidebar(
                   data: data,
                   isDrawer: true,
@@ -6626,8 +6627,6 @@ class _Sidebar extends StatelessWidget {
         : 250.0;
     final displaySchoolName = _displaySchoolName(data, schoolName);
     final displayRole = _displayRole(role);
-    final isBursar = role?.trim().toUpperCase() == 'BURSAR';
-    final isTeacher = _isTeachingRole(role);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
       width: width,
@@ -6762,272 +6761,15 @@ class _Sidebar extends StatelessWidget {
               ),
             const SizedBox(height: 14),
             Expanded(
-              child: ListView(
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                children: [
-                  _SidebarButton(
-                    icon: Icons.dashboard_rounded,
-                    label: 'Dashboard',
-                    collapsed: collapsed,
-                    active: selectedPage == _SchoolAdminPage.dashboard,
-                    onTap: () => onSelectPage(_SchoolAdminPage.dashboard),
-                  ),
-                  FutureBuilder<ApprovalInbox?>(
-                    future: approvalInbox,
-                    builder: (context, snapshot) {
-                      final inbox = snapshot.data;
-                      return _SidebarButton(
-                        icon: Icons.approval_outlined,
-                        label: 'Requests & Approvals',
-                        collapsed: collapsed,
-                        collapsedBadgeCount: inbox?.pendingTotal ?? 0,
-                        active: selectedPage == _SchoolAdminPage.approvals,
-                        onTap: () => onSelectPage(_SchoolAdminPage.approvals),
-                      );
-                    },
-                  ),
-                  if (!isBursar && !isTeacher)
-                    _SidebarButton(
-                      icon: Icons.manage_history_rounded,
-                      label: 'Audit & Activity',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.auditActivity,
-                      onTap: () => onSelectPage(_SchoolAdminPage.auditActivity),
-                    ),
-                  if (!isBursar && !isTeacher)
-                    _SidebarButton(
-                      icon: Icons.assignment_ind_rounded,
-                      label: 'Admissions',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.admissions,
-                      onTap: () => onSelectPage(_SchoolAdminPage.admissions),
-                    ),
-                  if (!isBursar && !isTeacher)
-                    _SidebarButton(
-                      icon: Icons.school_rounded,
-                      label: 'Students',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.students,
-                      onTap: () => onSelectPage(_SchoolAdminPage.students),
-                    ),
-                  if (isTeacher)
-                    _SidebarButton(
-                      icon: Icons.class_outlined,
-                      label: 'Classes',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.classes,
-                      onTap: () => onSelectPage(_SchoolAdminPage.classes),
-                    ),
-                  if (isTeacher)
-                    FutureBuilder<TeacherWorkspaceSnapshot>(
-                      future: teacherWorkspace,
-                      builder: (context, snapshot) {
-                        final hasActiveAssignments =
-                            snapshot.data?.assignedClasses.any(
-                              (assignment) => assignment.active,
-                            ) ==
-                            true;
-                        if (!hasActiveAssignments) {
-                          return const SizedBox.shrink();
-                        }
-                        return Column(
-                          children: [
-                            _SidebarButton(
-                              icon: Icons.assessment_outlined,
-                              label: 'Assessments',
-                              collapsed: collapsed,
-                              active:
-                                  selectedPage == _SchoolAdminPage.assessments,
-                              onTap: () =>
-                                  onSelectPage(_SchoolAdminPage.assessments),
-                            ),
-                            _SidebarButton(
-                              icon: Icons.fact_check_outlined,
-                              label: 'Evaluations & Comments',
-                              collapsed: collapsed,
-                              active:
-                                  selectedPage == _SchoolAdminPage.evaluations,
-                              onTap: () =>
-                                  onSelectPage(_SchoolAdminPage.evaluations),
-                            ),
-                          ],
-                        );
-                      },
-                    ),
-                  if (!isTeacher)
-                    _SidebarButton(
-                      icon: Icons.fact_check_outlined,
-                      label: 'Student Attendance',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.attendance,
-                      onTap: () => onSelectPage(_SchoolAdminPage.attendance),
-                    ),
-                  _SidebarButton(
-                    icon: Icons.calendar_month_outlined,
-                    label: 'School Calendar',
-                    collapsed: collapsed,
-                    active: selectedPage == _SchoolAdminPage.calendar,
-                    onTap: () => onSelectPage(_SchoolAdminPage.calendar),
-                  ),
-                  if (!isBursar && !isTeacher) ...[
-                    _SidebarButton(
-                      icon: Icons.badge_outlined,
-                      label: 'Staff Attendance',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.staffAttendance,
-                      onTap: () =>
-                          onSelectPage(_SchoolAdminPage.staffAttendance),
-                    ),
-                    _SidebarButton(
-                      icon: Icons.groups_rounded,
-                      label: 'Households & Guardians',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.households,
-                      onTap: () => onSelectPage(_SchoolAdminPage.households),
-                    ),
-                    _SidebarButton(
-                      icon: Icons.badge_rounded,
-                      label: 'Staff Management',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.staff,
-                      onTap: () => onSelectPage(_SchoolAdminPage.staff),
-                    ),
-                    _SidebarButton(
-                      icon: Icons.account_tree_rounded,
-                      label: 'Classes & Sections',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.classes,
-                      onTap: () => onSelectPage(_SchoolAdminPage.classes),
-                    ),
-                  ],
-                  FutureBuilder<bool>(
-                    future: payrollAccess,
-                    builder: (context, snapshot) => snapshot.data == true
-                        ? _SidebarButton(
-                            icon: Icons.payments_outlined,
-                            label: 'Payroll',
-                            collapsed: collapsed,
-                            active: selectedPage == _SchoolAdminPage.payroll,
-                            onTap: () => onSelectPage(_SchoolAdminPage.payroll),
-                          )
-                        : const SizedBox.shrink(),
-                  ),
-                  _SidebarButton(
-                    icon: Icons.event_note_outlined,
-                    label: 'My Leave',
-                    collapsed: collapsed,
-                    active: selectedPage == _SchoolAdminPage.myLeave,
-                    onTap: () => onSelectPage(_SchoolAdminPage.myLeave),
-                  ),
-                  if (_canManageLeave(role))
-                    _SidebarButton(
-                      icon: Icons.event_available_outlined,
-                      label: 'Leave Management',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.leave,
-                      onTap: () => onSelectPage(_SchoolAdminPage.leave),
-                    ),
-                  if (!isBursar && !isTeacher)
-                    _SidebarButton(
-                      icon: Icons.assessment_outlined,
-                      label: 'Assessments',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.assessments,
-                      onTap: () => onSelectPage(_SchoolAdminPage.assessments),
-                    ),
-                  if (!isBursar && !isTeacher)
-                    _SidebarButton(
-                      icon: Icons.fact_check_outlined,
-                      label: 'Evaluations & Comments',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.evaluations,
-                      onTap: () => onSelectPage(_SchoolAdminPage.evaluations),
-                    ),
-                  if (!isBursar && !isTeacher)
-                    _SidebarButton(
-                      icon: Icons.inventory_2_outlined,
-                      label: 'Final Report Management',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.finalReports,
-                      onTap: () => onSelectPage(_SchoolAdminPage.finalReports),
-                    ),
-                  if (!isTeacher)
-                    _SidebarButton(
-                      icon: Icons.account_balance_wallet_rounded,
-                      label: 'Fees & Requirements',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.fees,
-                      onTap: () => onSelectPage(_SchoolAdminPage.fees),
-                    ),
-                  if (!isTeacher)
-                    _SidebarButton(
-                      icon: Icons.storefront_outlined,
-                      label: 'School Shop',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.shop,
-                      onTap: () => onSelectPage(_SchoolAdminPage.shop),
-                    )
-                  else
-                    FutureBuilder<bool>(
-                      future: shopAccess,
-                      builder: (context, snapshot) => snapshot.data == true
-                          ? _SidebarButton(
-                              icon: Icons.storefront_outlined,
-                              label: 'School Shop',
-                              collapsed: collapsed,
-                              active: selectedPage == _SchoolAdminPage.shop,
-                              onTap: () => onSelectPage(_SchoolAdminPage.shop),
-                            )
-                          : const SizedBox.shrink(),
-                    ),
-                  _SidebarButton(
-                    icon: Icons.receipt_long_rounded,
-                    label: isTeacher
-                        ? 'My Requisitions & Expenses'
-                        : 'Expenses & Petty Cash',
-                    collapsed: collapsed,
-                    active: selectedPage == _SchoolAdminPage.expenses,
-                    onTap: () => onSelectPage(_SchoolAdminPage.expenses),
-                  ),
-                  if (!isBursar) ...[
-                    _SidebarButton(
-                      icon: Icons.warning_amber_rounded,
-                      label: isTeacher ? 'My Incidents' : 'Incident Management',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.incidents,
-                      onTap: () => onSelectPage(_SchoolAdminPage.incidents),
-                    ),
-                    if (!isTeacher)
-                      _SidebarButton(
-                        icon: Icons.campaign_rounded,
-                        label: 'Communication',
-                        collapsed: collapsed,
-                      ),
-                  ],
-                  if (ReportAccessPolicy.canOpenLibrary(role))
-                    _SidebarButton(
-                      icon: Icons.bar_chart_rounded,
-                      label: 'Reports',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.reports,
-                      onTap: () => onSelectPage(_SchoolAdminPage.reports),
-                    ),
-                  _SidebarButton(
-                    icon: Icons.event_available_outlined,
-                    label: isTeacher ? 'Term Review' : 'Term Closure',
-                    collapsed: collapsed,
-                    active: selectedPage == _SchoolAdminPage.termReview,
-                    onTap: () => onSelectPage(_SchoolAdminPage.termReview),
-                  ),
-                  if (!isBursar && !isTeacher)
-                    _SidebarButton(
-                      icon: Icons.admin_panel_settings_rounded,
-                      label: 'Settings',
-                      collapsed: collapsed,
-                      active: selectedPage == _SchoolAdminPage.settings,
-                      onTap: () => onSelectPage(_SchoolAdminPage.settings),
-                    ),
-                ],
+              child: _SidebarNavigation(
+                collapsed: collapsed,
+                role: role,
+                selectedPage: selectedPage,
+                approvalInbox: approvalInbox,
+                shopAccess: shopAccess,
+                payrollAccess: payrollAccess,
+                teacherWorkspace: teacherWorkspace,
+                onSelectPage: onSelectPage,
               ),
             ),
             Padding(
@@ -7052,6 +6794,464 @@ class _Sidebar extends StatelessWidget {
 
   String _displayRole(String? role) {
     return displayRoleName(role, fallback: 'School staff');
+  }
+}
+
+enum _SidebarSectionId { people, academics, finance, oversight }
+
+class _SidebarNavigation extends StatefulWidget {
+  const _SidebarNavigation({
+    required this.collapsed,
+    required this.role,
+    required this.selectedPage,
+    required this.approvalInbox,
+    required this.shopAccess,
+    required this.payrollAccess,
+    required this.teacherWorkspace,
+    required this.onSelectPage,
+  });
+
+  final bool collapsed;
+  final String? role;
+  final _SchoolAdminPage selectedPage;
+  final Future<ApprovalInbox?>? approvalInbox;
+  final Future<bool>? shopAccess;
+  final Future<bool>? payrollAccess;
+  final Future<TeacherWorkspaceSnapshot>? teacherWorkspace;
+  final ValueChanged<_SchoolAdminPage> onSelectPage;
+
+  @override
+  State<_SidebarNavigation> createState() => _SidebarNavigationState();
+}
+
+class _SidebarNavigationState extends State<_SidebarNavigation> {
+  late _SidebarSectionId? _expandedSection;
+
+  @override
+  void initState() {
+    super.initState();
+    _expandedSection =
+        _sectionForPage(widget.selectedPage) ?? _SidebarSectionId.academics;
+  }
+
+  @override
+  void didUpdateWidget(covariant _SidebarNavigation oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedPage != widget.selectedPage) {
+      final selectedSection = _sectionForPage(widget.selectedPage);
+      if (selectedSection != null) {
+        _expandedSection = selectedSection;
+      }
+    }
+  }
+
+  _SidebarSectionId? _sectionForPage(_SchoolAdminPage page) {
+    if (const {
+      _SchoolAdminPage.admissions,
+      _SchoolAdminPage.students,
+      _SchoolAdminPage.attendance,
+      _SchoolAdminPage.staffAttendance,
+      _SchoolAdminPage.households,
+      _SchoolAdminPage.staff,
+      _SchoolAdminPage.leave,
+    }.contains(page)) {
+      return _SidebarSectionId.people;
+    }
+    if (const {
+      _SchoolAdminPage.classes,
+      _SchoolAdminPage.assessments,
+      _SchoolAdminPage.evaluations,
+      _SchoolAdminPage.finalReports,
+      _SchoolAdminPage.termReview,
+    }.contains(page)) {
+      return _SidebarSectionId.academics;
+    }
+    if (const {
+      _SchoolAdminPage.payroll,
+      _SchoolAdminPage.fees,
+      _SchoolAdminPage.shop,
+      _SchoolAdminPage.expenses,
+    }.contains(page)) {
+      return _SidebarSectionId.finance;
+    }
+    if (const {
+      _SchoolAdminPage.auditActivity,
+      _SchoolAdminPage.incidents,
+      _SchoolAdminPage.reports,
+    }.contains(page)) {
+      return _SidebarSectionId.oversight;
+    }
+    return null;
+  }
+
+  void _toggleSection(_SidebarSectionId section) {
+    setState(() {
+      _expandedSection = _expandedSection == section ? null : section;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final role = widget.role;
+    final isBursar = role?.trim().toUpperCase() == 'BURSAR';
+    final isTeacher = _isTeachingRole(role);
+    final selectedSection = _sectionForPage(widget.selectedPage);
+
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      children: [
+        _navButton(
+          icon: Icons.dashboard_rounded,
+          label: 'Dashboard',
+          page: _SchoolAdminPage.dashboard,
+        ),
+        FutureBuilder<ApprovalInbox?>(
+          future: widget.approvalInbox,
+          builder: (context, snapshot) => _navButton(
+            icon: Icons.approval_outlined,
+            label: 'Requests & Approvals',
+            page: _SchoolAdminPage.approvals,
+            badgeCount: snapshot.data?.pendingTotal ?? 0,
+          ),
+        ),
+        _navButton(
+          icon: Icons.calendar_month_outlined,
+          label: 'School Calendar',
+          page: _SchoolAdminPage.calendar,
+        ),
+        _navButton(
+          icon: Icons.event_note_outlined,
+          label: 'My Leave',
+          page: _SchoolAdminPage.myLeave,
+        ),
+        if (!isBursar && !isTeacher || _canManageLeave(role))
+          _SidebarSection(
+            key: const ValueKey('sidebar-section-people'),
+            icon: Icons.groups_2_outlined,
+            label: 'People',
+            collapsed: widget.collapsed,
+            expanded: _expandedSection == _SidebarSectionId.people,
+            active: selectedSection == _SidebarSectionId.people,
+            onTap: () => _toggleSection(_SidebarSectionId.people),
+            children: [
+              if (!isBursar && !isTeacher) ...[
+                _navButton(
+                  icon: Icons.assignment_ind_rounded,
+                  label: 'Admissions',
+                  page: _SchoolAdminPage.admissions,
+                ),
+                _navButton(
+                  icon: Icons.school_rounded,
+                  label: 'Students',
+                  page: _SchoolAdminPage.students,
+                ),
+                _navButton(
+                  icon: Icons.fact_check_outlined,
+                  label: 'Student Attendance',
+                  page: _SchoolAdminPage.attendance,
+                ),
+                _navButton(
+                  icon: Icons.badge_outlined,
+                  label: 'Staff Attendance',
+                  page: _SchoolAdminPage.staffAttendance,
+                ),
+                _navButton(
+                  icon: Icons.groups_rounded,
+                  label: 'Households',
+                  page: _SchoolAdminPage.households,
+                ),
+                _navButton(
+                  icon: Icons.badge_rounded,
+                  label: 'Staff Management',
+                  page: _SchoolAdminPage.staff,
+                ),
+              ],
+              if (_canManageLeave(role))
+                _navButton(
+                  icon: Icons.event_available_outlined,
+                  label: 'Leave Management',
+                  page: _SchoolAdminPage.leave,
+                ),
+            ],
+          ),
+        _SidebarSection(
+          key: const ValueKey('sidebar-section-academics'),
+          icon: Icons.menu_book_outlined,
+          label: 'Academics',
+          collapsed: widget.collapsed,
+          expanded: _expandedSection == _SidebarSectionId.academics,
+          active: selectedSection == _SidebarSectionId.academics,
+          onTap: () => _toggleSection(_SidebarSectionId.academics),
+          children: [
+            if (isTeacher)
+              _navButton(
+                icon: Icons.class_outlined,
+                label: 'Classes',
+                page: _SchoolAdminPage.classes,
+              )
+            else if (!isBursar)
+              _navButton(
+                icon: Icons.account_tree_rounded,
+                label: 'Classes & Sections',
+                page: _SchoolAdminPage.classes,
+              ),
+            if (isTeacher)
+              FutureBuilder<TeacherWorkspaceSnapshot>(
+                future: widget.teacherWorkspace,
+                builder: (context, snapshot) {
+                  final hasActiveAssignments =
+                      snapshot.data?.assignedClasses.any(
+                        (assignment) => assignment.active,
+                      ) ==
+                      true;
+                  if (!hasActiveAssignments) return const SizedBox.shrink();
+                  return Column(
+                    children: [
+                      _navButton(
+                        icon: Icons.assessment_outlined,
+                        label: 'Assessments',
+                        page: _SchoolAdminPage.assessments,
+                      ),
+                      _navButton(
+                        icon: Icons.fact_check_outlined,
+                        label: 'Evaluations & Comments',
+                        page: _SchoolAdminPage.evaluations,
+                      ),
+                    ],
+                  );
+                },
+              ),
+            if (!isBursar && !isTeacher) ...[
+              _navButton(
+                icon: Icons.assessment_outlined,
+                label: 'Assessments',
+                page: _SchoolAdminPage.assessments,
+              ),
+              _navButton(
+                icon: Icons.fact_check_outlined,
+                label: 'Evaluations & Comments',
+                page: _SchoolAdminPage.evaluations,
+              ),
+              _navButton(
+                icon: Icons.inventory_2_outlined,
+                label: 'Final Reports',
+                page: _SchoolAdminPage.finalReports,
+              ),
+            ],
+            _navButton(
+              icon: Icons.event_available_outlined,
+              label: isTeacher ? 'Term Review' : 'Term Closure',
+              page: _SchoolAdminPage.termReview,
+            ),
+          ],
+        ),
+        _SidebarSection(
+          key: const ValueKey('sidebar-section-finance'),
+          icon: Icons.account_balance_wallet_outlined,
+          label: 'Finance & Operations',
+          collapsed: widget.collapsed,
+          expanded: _expandedSection == _SidebarSectionId.finance,
+          active: selectedSection == _SidebarSectionId.finance,
+          onTap: () => _toggleSection(_SidebarSectionId.finance),
+          children: [
+            FutureBuilder<bool>(
+              future: widget.payrollAccess,
+              builder: (context, snapshot) => snapshot.data == true
+                  ? _navButton(
+                      icon: Icons.payments_outlined,
+                      label: 'Payroll',
+                      page: _SchoolAdminPage.payroll,
+                    )
+                  : const SizedBox.shrink(),
+            ),
+            if (!isTeacher)
+              _navButton(
+                icon: Icons.account_balance_wallet_rounded,
+                label: 'Fees & Requirements',
+                page: _SchoolAdminPage.fees,
+              ),
+            if (!isTeacher)
+              _navButton(
+                icon: Icons.storefront_outlined,
+                label: 'School Shop',
+                page: _SchoolAdminPage.shop,
+              )
+            else
+              FutureBuilder<bool>(
+                future: widget.shopAccess,
+                builder: (context, snapshot) => snapshot.data == true
+                    ? _navButton(
+                        icon: Icons.storefront_outlined,
+                        label: 'School Shop',
+                        page: _SchoolAdminPage.shop,
+                      )
+                    : const SizedBox.shrink(),
+              ),
+            _navButton(
+              icon: Icons.receipt_long_rounded,
+              label: isTeacher
+                  ? 'My Requisitions & Expenses'
+                  : 'Expenses & Petty Cash',
+              page: _SchoolAdminPage.expenses,
+            ),
+          ],
+        ),
+        _SidebarSection(
+          key: const ValueKey('sidebar-section-oversight'),
+          icon: Icons.query_stats_outlined,
+          label: 'Insights & Oversight',
+          collapsed: widget.collapsed,
+          expanded: _expandedSection == _SidebarSectionId.oversight,
+          active: selectedSection == _SidebarSectionId.oversight,
+          onTap: () => _toggleSection(_SidebarSectionId.oversight),
+          children: [
+            if (!isBursar && !isTeacher)
+              _navButton(
+                icon: Icons.manage_history_rounded,
+                label: 'Audit & Activity',
+                page: _SchoolAdminPage.auditActivity,
+              ),
+            if (!isBursar) ...[
+              _navButton(
+                icon: Icons.warning_amber_rounded,
+                label: isTeacher ? 'My Incidents' : 'Incident Management',
+                page: _SchoolAdminPage.incidents,
+              ),
+              if (!isTeacher)
+                _SidebarButton(
+                  icon: Icons.campaign_rounded,
+                  label: 'Communication',
+                  collapsed: widget.collapsed,
+                ),
+            ],
+            if (ReportAccessPolicy.canOpenLibrary(role))
+              _navButton(
+                icon: Icons.bar_chart_rounded,
+                label: 'Reports',
+                page: _SchoolAdminPage.reports,
+              ),
+          ],
+        ),
+        if (!isBursar && !isTeacher)
+          _navButton(
+            icon: Icons.admin_panel_settings_rounded,
+            label: 'Settings',
+            page: _SchoolAdminPage.settings,
+          ),
+      ],
+    );
+  }
+
+  Widget _navButton({
+    required IconData icon,
+    required String label,
+    required _SchoolAdminPage page,
+    int badgeCount = 0,
+  }) {
+    return _SidebarButton(
+      icon: icon,
+      label: label,
+      collapsed: widget.collapsed,
+      active: widget.selectedPage == page,
+      collapsedBadgeCount: badgeCount,
+      onTap: () => widget.onSelectPage(page),
+    );
+  }
+}
+
+class _SidebarSection extends StatelessWidget {
+  const _SidebarSection({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.collapsed,
+    required this.expanded,
+    required this.active,
+    required this.onTap,
+    required this.children,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool collapsed;
+  final bool expanded;
+  final bool active;
+  final VoidCallback onTap;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Tooltip(
+            message: collapsed ? label : '',
+            child: Material(
+              color: active ? const Color(0xFF24483F) : const Color(0xFF182536),
+              borderRadius: BorderRadius.circular(10),
+              child: InkWell(
+                onTap: onTap,
+                borderRadius: BorderRadius.circular(10),
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: collapsed ? 16 : 14,
+                    vertical: 13,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: collapsed
+                        ? MainAxisAlignment.center
+                        : MainAxisAlignment.start,
+                    children: [
+                      Icon(
+                        icon,
+                        size: 20,
+                        color: active ? AppColors.green : Colors.white,
+                      ),
+                      if (!collapsed) ...[
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        AnimatedRotation(
+                          turns: expanded ? 0.25 : 0,
+                          duration: const Duration(milliseconds: 180),
+                          child: const Icon(
+                            Icons.chevron_right_rounded,
+                            color: Color(0xFF9DA8B8),
+                            size: 18,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 160),
+          child: expanded
+              ? Padding(
+                  key: ValueKey('$label-expanded'),
+                  padding: EdgeInsets.only(left: collapsed ? 0 : 10),
+                  child: Column(children: children),
+                )
+              : const SizedBox.shrink(),
+        ),
+      ],
+    );
   }
 }
 

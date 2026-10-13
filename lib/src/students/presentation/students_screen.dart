@@ -274,36 +274,32 @@ class _StudentsHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 18,
-      runSpacing: 14,
-      alignment: WrapAlignment.spaceBetween,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        SizedBox(
-          width: 560,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                teacherView ? 'My Students' : 'Students',
-                style: TextStyle(
-                  color: AppColors.text,
-                  fontSize: 28,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              SizedBox(height: 6),
-              Text(
-                teacherView
-                    ? 'Students connected to your active teaching assignments.'
-                    : 'Enrolled student register and current-term progress.',
-                style: TextStyle(color: AppColors.muted, fontSize: 15),
-              ),
-            ],
+    return SizedBox(
+      width: double.infinity,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            teacherView ? 'My Students' : 'Students',
+            style: const TextStyle(
+              color: AppColors.text,
+              fontSize: 28,
+              fontWeight: FontWeight.w800,
+            ),
           ),
-        ),
-      ],
+          const SizedBox(height: 6),
+          Text(
+            teacherView
+                ? 'Students connected to your active teaching assignments.'
+                : 'Enrolled student register and current-term progress.',
+            style: const TextStyle(
+              color: AppColors.muted,
+              fontSize: 16,
+              height: 1.4,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -765,64 +761,98 @@ class _StudentsRegisterState extends State<_StudentsRegister> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-            child: Wrap(
-              spacing: 18,
-              runSpacing: 12,
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Text(
-                  'Enrolled students (${widget.students.length})',
-                  style: const TextStyle(
-                    color: AppColors.text,
-                    fontSize: 17,
-                    fontWeight: FontWeight.w800,
-                  ),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final title = Text(
+                'Enrolled students (${widget.students.length})',
+                style: const TextStyle(
+                  color: AppColors.text,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
                 ),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (widget.compact)
-                      _StudentSortMenu(
-                        sortColumn: _sortColumn,
-                        onSelected: (column) {
-                          if (column != _sortColumn) _sortBy(column);
-                        },
-                      )
-                    else
-                      const Text(
-                        'Select a column heading to sort',
-                        style: TextStyle(color: AppColors.muted, fontSize: 12),
+              );
+              final sortMenu = widget.compact
+                  ? _StudentSortMenu(
+                      sortColumn: _sortColumn,
+                      onSelected: (column) {
+                        if (column != _sortColumn) _sortBy(column);
+                      },
+                    )
+                  : const Text(
+                      'Select a column heading to sort',
+                      style: TextStyle(color: AppColors.muted, fontSize: 12),
+                    );
+              final direction = widget.compact
+                  ? IconButton.outlined(
+                      key: const Key('students-sort-direction'),
+                      tooltip: _sortAscending
+                          ? 'Sorted ascending. Change to descending'
+                          : 'Sorted descending. Change to ascending',
+                      onPressed: () => _sortBy(_sortColumn),
+                      icon: Icon(
+                        _sortAscending
+                            ? Icons.arrow_upward_rounded
+                            : Icons.arrow_downward_rounded,
+                        size: 18,
                       ),
-                    if (widget.compact) ...[
-                      const SizedBox(width: 6),
-                      IconButton.outlined(
-                        key: const Key('students-sort-direction'),
-                        tooltip: _sortAscending
-                            ? 'Sorted ascending. Change to descending'
-                            : 'Sorted descending. Change to ascending',
-                        onPressed: () => _sortBy(_sortColumn),
-                        icon: Icon(
-                          _sortAscending
-                              ? Icons.arrow_upward_rounded
-                              : Icons.arrow_downward_rounded,
-                          size: 18,
-                        ),
+                    )
+                  : null;
+              final summary = Text(
+                widget.students.length == widget.totalStudents
+                    ? 'Current register'
+                    : 'Filtered from ${widget.totalStudents}',
+                style: const TextStyle(color: AppColors.muted),
+              );
+
+              if (constraints.maxWidth < 520) {
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      title,
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Flexible(child: sortMenu),
+                          if (direction != null) ...[
+                            const SizedBox(width: 6),
+                            direction,
+                          ],
+                        ],
                       ),
+                      const SizedBox(height: 8),
+                      summary,
                     ],
-                    const SizedBox(width: 12),
-                    Text(
-                      widget.students.length == widget.totalStudents
-                          ? 'Current register'
-                          : 'Filtered from ${widget.totalStudents}',
-                      style: const TextStyle(color: AppColors.muted),
+                  ),
+                );
+              }
+
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+                child: Wrap(
+                  spacing: 18,
+                  runSpacing: 12,
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    title,
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        sortMenu,
+                        if (direction != null) ...[
+                          const SizedBox(width: 6),
+                          direction,
+                        ],
+                        const SizedBox(width: 12),
+                        summary,
+                      ],
                     ),
                   ],
                 ),
-              ],
-            ),
+              );
+            },
           ),
           const Divider(height: 1),
           if (widget.students.isEmpty)
@@ -1502,7 +1532,14 @@ class _MiniValue extends StatelessWidget {
       children: [
         Icon(icon, size: 16, color: AppColors.muted),
         const SizedBox(width: 5),
-        Text(label, style: const TextStyle(color: AppColors.muted)),
+        Flexible(
+          child: Text(
+            label,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: AppColors.muted),
+          ),
+        ),
       ],
     );
   }

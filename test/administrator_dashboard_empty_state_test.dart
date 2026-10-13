@@ -132,11 +132,13 @@ void main() {
     expect(find.text('No admissions recorded for this term yet.'), findsOne);
     expect(find.text('No upcoming events have been added.'), findsOne);
     expect(find.text('No recent activity to display.'), findsOne);
-    expect(find.text('Final Report Management'), findsOneWidget);
+    expect(find.text('Final Reports'), findsOneWidget);
     expect(find.text('Evaluations & Comments'), findsOneWidget);
     expect(find.text('School Calendar'), findsOneWidget);
     expect(find.text('Quick actions'), findsOneWidget);
     expect(find.text('My Leave'), findsOneWidget);
+    await tester.tap(find.text('People'));
+    await tester.pumpAndSettle();
     expect(find.text('Leave Management'), findsOneWidget);
     expect(find.byKey(const ValueKey('dashboard-leave-panel')), findsNothing);
     expect(find.text('Staff leave'), findsNothing);
@@ -186,6 +188,54 @@ void main() {
     expect(find.text('Present'), findsNothing);
     expect(find.text('Absent'), findsNothing);
     expect(find.text('Late'), findsNothing);
+  });
+
+  testWidgets('sidebar groups keep only one destination section open', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: AdministratorDashboard(
+          repository: _EmptyDashboardRepository(),
+          schoolId: 'SCH-001',
+          schoolName: 'Test School',
+          userDisplayName: 'Eric',
+          role: 'ADMINISTRATOR',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('People'), findsOneWidget);
+    expect(find.text('Academics'), findsOneWidget);
+    expect(find.text('Finance & Operations'), findsOneWidget);
+    expect(find.text('Insights & Oversight'), findsOneWidget);
+    expect(find.text('Final Reports'), findsOneWidget);
+    expect(find.text('Staff Management'), findsNothing);
+    expect(find.text('Fees & Requirements'), findsNothing);
+    expect(find.text('Audit & Activity'), findsNothing);
+
+    await tester.tap(find.text('People'));
+    await tester.pumpAndSettle();
+    expect(find.text('Staff Management'), findsOneWidget);
+    expect(find.text('Final Reports'), findsNothing);
+
+    await tester.tap(find.text('Finance & Operations'));
+    await tester.pumpAndSettle();
+    expect(find.text('Fees & Requirements'), findsOneWidget);
+    expect(find.text('Staff Management'), findsNothing);
+
+    await tester.tap(find.text('Insights & Oversight'));
+    await tester.pumpAndSettle();
+    expect(find.text('Audit & Activity'), findsOneWidget);
+    expect(find.text('Fees & Requirements'), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('shows three attention items and opens the complete list', (
@@ -288,8 +338,10 @@ void main() {
       expect(find.text('Pending teaching tasks'), findsNothing);
       expect(find.text('Staff Management'), findsNothing);
       expect(find.text('Fees & Requirements'), findsNothing);
+      await tester.tap(find.text('Finance & Operations'));
+      await tester.pumpAndSettle();
       expect(find.text('My Requisitions & Expenses'), findsOneWidget);
-      expect(find.text('Final Report Management'), findsNothing);
+      expect(find.text('Final Reports'), findsNothing);
       expect(find.text('Evaluation Management'), findsNothing);
       expect(find.text('Dashboard data is not available yet.'), findsNothing);
       expect(tester.takeException(), isNull);
@@ -395,11 +447,15 @@ void main() {
     await tester.tap(find.text('Bursar').last);
     await tester.pumpAndSettle();
 
+    await tester.tap(find.text('Finance & Operations'));
+    await tester.pumpAndSettle();
     expect(find.text('Fees & Requirements'), findsOneWidget);
     expect(find.text('My Leave'), findsOneWidget);
     expect(find.text('School Calendar'), findsOneWidget);
-    expect(find.text('Leave Management'), findsOneWidget);
     expect(find.text('Expenses & Petty Cash'), findsOneWidget);
+    await tester.tap(find.text('People'));
+    await tester.pumpAndSettle();
+    expect(find.text('Leave Management'), findsOneWidget);
     expect(find.text('Find student'), findsOneWidget);
     expect(find.text('Record payment'), findsOneWidget);
     expect(find.text('Record expense'), findsOneWidget);
@@ -994,6 +1050,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Bursar').last);
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Finance & Operations'));
+    await tester.pumpAndSettle();
     expect(find.text('Expenses & Petty Cash'), findsOneWidget);
 
     await tester.pumpWidget(app(const ['CLASS_TEACHER']));
@@ -1032,6 +1090,8 @@ void main() {
             .myLeave,
         isTrue,
       );
+      await tester.tap(find.text('People'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Leave Management'));
       await tester.pumpAndSettle();
       expect(
@@ -1076,19 +1136,24 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('My Leave'), findsOneWidget);
+      final canManageLeave = [
+        'HEAD_TEACHER',
+        'HEADMASTER',
+        'ADMIN',
+        'ASSISTANT_HEAD_TEACHER',
+        'SECRETARY',
+        'OWNER',
+      ].contains(role);
+      if (find.text('People').evaluate().isNotEmpty) {
+        await tester.tap(find.text('People'));
+        await tester.pumpAndSettle();
+      }
       expect(
         find.text('Leave Management'),
-        [
-              'HEAD_TEACHER',
-              'HEADMASTER',
-              'ADMIN',
-              'ASSISTANT_HEAD_TEACHER',
-              'SECRETARY',
-              'OWNER',
-            ].contains(role)
-            ? findsOneWidget
-            : findsNothing,
+        canManageLeave ? findsOneWidget : findsNothing,
       );
+      await tester.tap(find.text('Insights & Oversight'));
+      await tester.pumpAndSettle();
       expect(
         find.text('Reports'),
         role == 'STAFF' ? findsNothing : findsOneWidget,

@@ -28,6 +28,8 @@ abstract final class AppTheme {
       colorScheme: colorScheme,
       scaffoldBackgroundColor: AppColors.background,
       fontFamily: 'Arial',
+      materialTapTargetSize: MaterialTapTargetSize.padded,
+      visualDensity: VisualDensity.standard,
       textTheme: const TextTheme(
         headlineSmall: TextStyle(
           color: AppColors.text,
@@ -37,7 +39,43 @@ abstract final class AppTheme {
           color: AppColors.text,
           fontWeight: FontWeight.w700,
         ),
-        bodyMedium: TextStyle(color: AppColors.text),
+        bodyLarge: TextStyle(color: AppColors.text, fontSize: 16, height: 1.5),
+        bodyMedium: TextStyle(
+          color: AppColors.text,
+          fontSize: 14,
+          height: 1.45,
+        ),
+        bodySmall: TextStyle(color: AppColors.muted, fontSize: 14, height: 1.4),
+      ),
+      iconButtonTheme: const IconButtonThemeData(
+        style: ButtonStyle(
+          minimumSize: WidgetStatePropertyAll(Size(44, 44)),
+          tapTargetSize: MaterialTapTargetSize.padded,
+        ),
+      ),
+      filledButtonTheme: const FilledButtonThemeData(
+        style: ButtonStyle(
+          minimumSize: WidgetStatePropertyAll(Size(44, 44)),
+          tapTargetSize: MaterialTapTargetSize.padded,
+        ),
+      ),
+      elevatedButtonTheme: const ElevatedButtonThemeData(
+        style: ButtonStyle(
+          minimumSize: WidgetStatePropertyAll(Size(44, 44)),
+          tapTargetSize: MaterialTapTargetSize.padded,
+        ),
+      ),
+      outlinedButtonTheme: const OutlinedButtonThemeData(
+        style: ButtonStyle(
+          minimumSize: WidgetStatePropertyAll(Size(44, 44)),
+          tapTargetSize: MaterialTapTargetSize.padded,
+        ),
+      ),
+      textButtonTheme: const TextButtonThemeData(
+        style: ButtonStyle(
+          minimumSize: WidgetStatePropertyAll(Size(44, 44)),
+          tapTargetSize: MaterialTapTargetSize.padded,
+        ),
       ),
       cardTheme: CardThemeData(
         color: Colors.white,
@@ -71,6 +109,11 @@ abstract final class AppTheme {
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: Colors.white,
+        constraints: const BoxConstraints(minHeight: 48),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 14,
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(9),
           borderSide: const BorderSide(color: AppColors.border),
@@ -82,6 +125,22 @@ abstract final class AppTheme {
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(9),
           borderSide: const BorderSide(color: AppColors.green, width: 1.5),
+        ),
+      ),
+    );
+  }
+
+  static ThemeData forViewport(ThemeData base, double width) {
+    if (width >= 600) return base;
+    return base.copyWith(
+      textTheme: base.textTheme.copyWith(
+        bodyLarge: base.textTheme.bodyLarge?.copyWith(
+          fontSize: 16,
+          height: 1.5,
+        ),
+        bodyMedium: base.textTheme.bodyMedium?.copyWith(
+          fontSize: 16,
+          height: 1.45,
         ),
       ),
     );

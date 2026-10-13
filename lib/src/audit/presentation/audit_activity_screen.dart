@@ -546,13 +546,210 @@ class _AuditActivityScreenState extends State<AuditActivityScreen> {
           if (_loading) const LinearProgressIndicator(minHeight: 2),
           _recordsToolbar(page, compact),
           const Divider(height: 1),
-          _activityTable(page.logs),
+          compact ? _activityList(page.logs) : _activityTable(page.logs),
           const Divider(height: 1),
           _pagination(page),
         ],
       ),
     );
   }
+
+  Widget _activityList(List<AuditLogRecord> sourceRecords) {
+    final records = [...sourceRecords]..sort(_compareRecords);
+    return Column(
+      children: [
+        Container(
+          color: const Color(0xFFF5F8F7),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: PopupMenuButton<_AuditSortField>(
+                  tooltip: 'Choose sort field',
+                  onSelected: (field) => setState(() {
+                    if (_sortField == field) {
+                      _sortAscending = !_sortAscending;
+                    } else {
+                      _sortField = field;
+                      _sortAscending = true;
+                    }
+                  }),
+                  itemBuilder: (context) => [
+                    for (final field in _AuditSortField.values)
+                      PopupMenuItem(
+                        value: field,
+                        child: Text(_auditSortLabel(field)),
+                      ),
+                  ],
+                  child: Container(
+                    constraints: const BoxConstraints(minHeight: 44),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      border: Border.all(color: AppColors.border),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.sort_rounded,
+                          size: 20,
+                          color: AppColors.green,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Sort: ${_auditSortLabel(_sortField)}',
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton.outlined(
+                tooltip: _sortAscending ? 'Sort descending' : 'Sort ascending',
+                onPressed: () =>
+                    setState(() => _sortAscending = !_sortAscending),
+                icon: Icon(
+                  _sortAscending
+                      ? Icons.arrow_upward_rounded
+                      : Icons.arrow_downward_rounded,
+                ),
+              ),
+            ],
+          ),
+        ),
+        for (final record in records) _activityListItem(record),
+      ],
+    );
+  }
+
+  Widget _activityListItem(AuditLogRecord record) {
+    final style = _actionStyle(record.actionType);
+    final selected = _selectedRecords.containsKey(record.id);
+    return Material(
+      key: ValueKey('audit-mobile-row-${record.id}'),
+      color: selected ? AppColors.greenSoft : Colors.white,
+      child: InkWell(
+        key: ValueKey('audit-open-${record.id}'),
+        onTap: () => _showDetails(record),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(8, 12, 12, 14),
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: AppColors.border)),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 48,
+                height: 48,
+                child: Checkbox(
+                  key: ValueKey('audit-select-${record.id}'),
+                  value: selected,
+                  onChanged: (value) =>
+                      _setRecordSelected(record, value ?? false),
+                ),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: style.color.withValues(alpha: .1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            record.actionType,
+                            style: TextStyle(
+                              color: style.color,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _dateTimeSingleLineOrUnknown(record.timestamp),
+                            textAlign: TextAlign.right,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: AppColors.muted,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 9),
+                    Text(
+                      record.description,
+                      style: const TextStyle(
+                        color: AppColors.text,
+                        fontSize: 16,
+                        height: 1.4,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 9),
+                    Text(
+                      '${record.actorName} → ${record.subjectName}',
+                      style: const TextStyle(
+                        color: AppColors.text,
+                        fontSize: 14,
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${_scopeLabel(record.customSchoolId)} · Event #${record.id}',
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 14,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Padding(
+                padding: EdgeInsets.only(top: 10),
+                child: Icon(
+                  Icons.chevron_right_rounded,
+                  color: AppColors.green,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _auditSortLabel(_AuditSortField field) => switch (field) {
+    _AuditSortField.time => 'Time',
+    _AuditSortField.id => 'Event ID',
+    _AuditSortField.action => 'Action',
+    _AuditSortField.actor => 'Actor',
+    _AuditSortField.target => 'Target',
+    _AuditSortField.scope => 'Scope',
+    _AuditSortField.event => 'Event',
+  };
 
   Widget _activityTable(List<AuditLogRecord> sourceRecords) {
     final records = [...sourceRecords]..sort(_compareRecords);

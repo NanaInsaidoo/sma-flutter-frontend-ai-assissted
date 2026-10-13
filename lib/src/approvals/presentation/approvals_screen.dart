@@ -585,31 +585,44 @@ class _ApprovalTable extends StatelessWidget {
         ),
         child: Column(
           children: [
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: SizedBox(
-                width: constraints.maxWidth < 1080
-                    ? 1080
-                    : constraints.maxWidth,
-                child: Column(
-                  children: [
-                    _ApprovalTableHeader(
-                      myApprovals: myApprovals,
-                      sortField: sortField,
-                      sortAscending: sortAscending,
-                      onSort: onSort,
-                    ),
-                    for (var i = 0; i < items.length; i++)
-                      _ApprovalTableRow(
-                        item: items[i],
+            if (constraints.maxWidth < 700) ...[
+              _ApprovalMobileSortBar(
+                sortField: sortField,
+                sortAscending: sortAscending,
+                onSort: onSort,
+              ),
+              for (final item in items)
+                _ApprovalMobileCard(
+                  item: item,
+                  myApprovals: myApprovals,
+                  onTap: () => onOpen(item),
+                ),
+            ] else
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: constraints.maxWidth < 1080
+                      ? 1080
+                      : constraints.maxWidth,
+                  child: Column(
+                    children: [
+                      _ApprovalTableHeader(
                         myApprovals: myApprovals,
-                        onTap: () => onOpen(items[i]),
-                        shaded: i.isOdd,
+                        sortField: sortField,
+                        sortAscending: sortAscending,
+                        onSort: onSort,
                       ),
-                  ],
+                      for (var i = 0; i < items.length; i++)
+                        _ApprovalTableRow(
+                          item: items[i],
+                          myApprovals: myApprovals,
+                          onTap: () => onOpen(items[i]),
+                          shaded: i.isOdd,
+                        ),
+                    ],
+                  ),
                 ),
               ),
-            ),
             _ApprovalPagination(
               totalItems: totalItems,
               firstItem: firstItem,
@@ -625,6 +638,225 @@ class _ApprovalTable extends StatelessWidget {
     },
   );
 }
+
+class _ApprovalMobileSortBar extends StatelessWidget {
+  const _ApprovalMobileSortBar({
+    required this.sortField,
+    required this.sortAscending,
+    required this.onSort,
+  });
+
+  final _ApprovalSortField sortField;
+  final bool sortAscending;
+  final ValueChanged<_ApprovalSortField> onSort;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    color: const Color(0xFFF6F9F8),
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    child: Row(
+      children: [
+        Expanded(
+          child: PopupMenuButton<_ApprovalSortField>(
+            tooltip: 'Choose sort field',
+            onSelected: onSort,
+            itemBuilder: (context) => [
+              for (final field in _ApprovalSortField.values)
+                PopupMenuItem(
+                  value: field,
+                  child: Text(_approvalSortLabel(field)),
+                ),
+            ],
+            child: Container(
+              constraints: const BoxConstraints(minHeight: 44),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border.all(color: AppColors.border),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.sort_rounded,
+                    size: 20,
+                    color: AppColors.green,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Sort: ${_approvalSortLabel(sortField)}',
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        IconButton.outlined(
+          tooltip: sortAscending ? 'Sort descending' : 'Sort ascending',
+          onPressed: () => onSort(sortField),
+          icon: Icon(
+            sortAscending
+                ? Icons.arrow_upward_rounded
+                : Icons.arrow_downward_rounded,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _ApprovalMobileCard extends StatelessWidget {
+  const _ApprovalMobileCard({
+    required this.item,
+    required this.myApprovals,
+    required this.onTap,
+  });
+
+  final ApprovalItem item;
+  final bool myApprovals;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    key: ValueKey('approval-mobile-row-${item.key}'),
+    color: item.pending ? const Color(0xFFFFFAEC) : Colors.white,
+    child: InkWell(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        constraints: const BoxConstraints(minHeight: 44),
+        padding: const EdgeInsets.fromLTRB(16, 14, 10, 14),
+        decoration: BoxDecoration(
+          border: Border(
+            left: item.pending
+                ? const BorderSide(color: Color(0xFFF59E0B), width: 4)
+                : BorderSide.none,
+            bottom: const BorderSide(color: AppColors.border),
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          item.title,
+                          style: const TextStyle(
+                            color: AppColors.navy,
+                            fontSize: 16,
+                            height: 1.35,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      _ApprovalStatusText(status: item.status),
+                    ],
+                  ),
+                  if (item.subtitle.trim().isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      item.type == 'STAFF_LEAVE'
+                          ? formatLeaveSummaryDates(item.subtitle)
+                          : item.subtitle,
+                      style: const TextStyle(
+                        color: AppColors.text,
+                        fontSize: 16,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      _ApprovalMobileMeta(
+                        icon: Icons.category_outlined,
+                        label: item.category.isEmpty ? 'Other' : item.category,
+                      ),
+                      _ApprovalMobileMeta(
+                        icon: Icons.person_outline_rounded,
+                        label: _approvalPerson(item, myApprovals),
+                      ),
+                      _ApprovalMobileMeta(
+                        icon: Icons.schedule_rounded,
+                        label: _dateText(_approvalItemDateOrNull(item)),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 4),
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Icon(Icons.chevron_right_rounded, color: AppColors.green),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+class _ApprovalMobileMeta extends StatelessWidget {
+  const _ApprovalMobileMeta({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+    decoration: BoxDecoration(
+      color: const Color(0xFFF3F6F5),
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 15, color: AppColors.muted),
+        const SizedBox(width: 5),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 220),
+          child: RichText(
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            text: TextSpan(
+              text: label,
+              style: DefaultTextStyle.of(context).style.copyWith(
+                color: AppColors.muted,
+                fontSize: 14,
+                height: 1.3,
+              ),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+String _approvalSortLabel(_ApprovalSortField field) => switch (field) {
+  _ApprovalSortField.request => 'Request',
+  _ApprovalSortField.details => 'Details',
+  _ApprovalSortField.category => 'Category',
+  _ApprovalSortField.person => 'Person',
+  _ApprovalSortField.date => 'Date',
+  _ApprovalSortField.status => 'Status',
+};
 
 class _ApprovalTableHeader extends StatelessWidget {
   const _ApprovalTableHeader({
@@ -916,8 +1148,10 @@ class _ApprovalStatusText extends StatelessWidget {
       'PENDING_APPROVAL' ||
       'PENDING_ACCEPTANCE' ||
       'CHANGES_REQUESTED' => const Color(0xFFB56F00),
-      'APPROVED' || 'PUBLISHED' || 'REGENERATED' || 'ACCEPTED' =>
-        AppColors.green,
+      'APPROVED' ||
+      'PUBLISHED' ||
+      'REGENERATED' ||
+      'ACCEPTED' => AppColors.green,
       'REJECTED' || 'CANCELLED' => AppColors.red,
       _ => AppColors.navy,
     };
@@ -3685,8 +3919,10 @@ class _StatusPill extends StatelessWidget {
     final color = switch (status) {
       'PENDING_APPROVAL' || 'PENDING_ACCEPTANCE' => const Color(0xFFD88A00),
       'CHANGES_REQUESTED' => const Color(0xFFD88A00),
-      'APPROVED' || 'PUBLISHED' || 'REGENERATED' || 'ACCEPTED' =>
-        AppColors.green,
+      'APPROVED' ||
+      'PUBLISHED' ||
+      'REGENERATED' ||
+      'ACCEPTED' => AppColors.green,
       'REJECTED' || 'CANCELLED' => Colors.red,
       _ => AppColors.blue,
     };

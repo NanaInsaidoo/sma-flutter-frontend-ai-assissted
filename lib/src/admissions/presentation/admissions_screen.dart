@@ -780,7 +780,7 @@ class _ResponsiveCardGrid extends StatelessWidget {
             crossAxisCount: columns,
             crossAxisSpacing: 12,
             mainAxisSpacing: 12,
-            mainAxisExtent: 140,
+            mainAxisExtent: 152,
           ),
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
