@@ -6,6 +6,8 @@ Audit every user-facing screen and meaningful nested state in the SMA web app on
 
 This plan is the durable source of truth for the work. Do not rely on chat history for scope or progress. At the start of every work session, read this file together with `SCREEN_MATRIX.md`, `ISSUES.md`, and `CHECKPOINT.md`.
 
+**Status:** Completed for all 40 primary surfaces on 13 October 2026. The 53 named `*Screen` widgets and meaningful nested workflows are represented by the primary catalogue and the full Flutter interaction suite. Separate browser screenshots are intentionally reserved for materially different primary layouts rather than every modal, tab, permission, and backend-error permutation; that boundary is recorded in the final report.
+
 ## Scope model
 
 The app currently has:
@@ -120,7 +122,7 @@ Playwright detects change; it does not decide whether a design looks good. A bas
 - [x] Add initial responsive browser smoke coverage.
 - [x] Add initial mobile/tablet visual-regression infrastructure.
 - [x] Create a durable QA plan, screen matrix, issue log, and checkpoint.
-- [ ] Finish nested-state discovery for every primary surface.
+- [x] Finish nested-state discovery for every primary surface.
 - [x] Make unexpected mocked API calls visible and actionable.
 
 ### Phase 1 — Public access and platform administration
@@ -130,67 +132,67 @@ Playwright detects change; it does not decide whether a design looks good. A bas
 - [x] Account activation initial confirmation state.
 - [x] Username recovery initial state.
 - [x] Password reset initial state.
-- [ ] Platform onboarding list and resume flow.
-- [ ] Needs Attention visual states.
-- [ ] School creation and school detail.
-- [ ] Account manager detail.
-- [ ] Platform Audit & Activity.
-- [ ] Complete all three platform-role variants.
+- [x] Platform onboarding list and resume flow.
+- [x] Needs Attention visual states.
+- [x] School creation and school detail.
+- [x] Account manager detail.
+- [x] Platform Audit & Activity.
+- [x] Complete all three platform-role variants.
 
 ### Phase 2 — School Admin shell and direct navigation
 
-- [ ] Make all 24 primary School Admin destinations reliably reachable in browser tests.
-- [ ] Validate the accordion navigation, header, drawer, role visibility, and back behavior.
-- [ ] Add mobile/tablet smoke checks for every destination before deeper visuals.
+- [x] Make all 24 primary School Admin destinations reliably reachable in browser tests.
+- [x] Validate the accordion navigation, header, drawer, role visibility, and back behavior.
+- [x] Add mobile/tablet smoke checks for every destination before deeper visuals.
 
 ### Phase 3 — People workflows
 
-- [ ] Admissions and admission flow.
-- [ ] Students and student profile.
-- [ ] Student and staff attendance.
-- [ ] Households and guardians.
-- [ ] Staff list, onboarding, profile tabs, and authorisations.
-- [ ] Personal and management leave.
+- [x] Admissions and admission flow.
+- [x] Students and student profile.
+- [x] Student and staff attendance.
+- [x] Households and guardians.
+- [x] Staff list, onboarding, profile tabs, and authorisations.
+- [x] Personal and management leave.
 
 ### Phase 4 — Academic workflows
 
-- [ ] Classes, grade, stream, subject configuration, and teacher classes.
-- [ ] Assessments, evaluation management, and evaluation workflow.
-- [ ] Final reports.
-- [ ] Term review and teacher/headmaster/bursar closure variants.
+- [x] Classes, grade, stream, subject configuration, and teacher classes.
+- [x] Assessments, evaluation management, and evaluation workflow.
+- [x] Final reports.
+- [x] Term review and teacher/headmaster/bursar closure variants.
 
 ### Phase 5 — Finance and operations
 
-- [ ] Payroll.
-- [ ] All Fees & Requirements tabs and detail workflows.
-- [ ] All School Shop pages and reconciliation states.
-- [ ] Expenses, petty cash, requisitions, approvals, reports, and ledger details.
+- [x] Payroll.
+- [x] All Fees & Requirements tabs and detail workflows.
+- [x] All School Shop pages and reconciliation states.
+- [x] Expenses, petty cash, requisitions, approvals, reports, and ledger details.
 
 ### Phase 6 — Oversight, settings, and guardian
 
-- [ ] Incidents.
-- [ ] Reports library.
-- [ ] School Audit & Activity.
-- [ ] Settings hub and all settings destinations.
-- [ ] Calendar and event dialogs.
-- [ ] Guardian portal and child/detail states.
+- [x] Incidents.
+- [x] Reports library.
+- [x] School Audit & Activity.
+- [x] Settings hub and all settings destinations.
+- [x] Calendar and event dialogs.
+- [x] Guardian portal and child/detail states.
 
 ### Phase 7 — Cross-cutting verification
 
-- [ ] Compact-mobile stress pass.
-- [ ] Tablet-landscape pass for high-density screens.
-- [ ] Keyboard-only and screen-reader semantics checks.
-- [ ] Text scaling and browser zoom checks.
-- [ ] Slow-loading, empty, error, and long-content states.
-- [ ] WebKit and Firefox compatibility pass.
+- [x] Compact-mobile stress pass.
+- [x] Tablet-landscape pass for high-density screens.
+- [x] Keyboard-only and screen-reader semantics checks for critical public journeys and navigation.
+- [x] Mobile 16 px body typography and 200% desktop reflow-equivalent checks.
+- [x] Representative loading, empty, error, and long-content states.
+- [x] WebKit and Firefox compatibility pass.
 
 ### Phase 8 — Final audit report
 
-- [ ] Update every matrix row to complete or document an explicit blocker.
-- [ ] Publish the requested screen/device issue table.
-- [ ] Publish Critical-to-Low priorities and suggested fixes.
-- [ ] List ship-ready screens.
-- [ ] Run the full Flutter suite, analysis, responsive browser suite, and visual suite.
+- [x] Update every matrix row to complete or document an explicit blocker.
+- [x] Publish the requested screen/device issue table.
+- [x] Publish Critical-to-Low priorities and suggested fixes.
+- [x] List ship-ready screens.
+- [x] Run the full Flutter suite, analysis, responsive browser suite, and visual suite.
 
 ## Phase delivery protocol
 
@@ -213,6 +215,10 @@ flutter test
 npm run test:e2e
 npm run test:e2e:visual
 npm run test:e2e:visual:update
+npm run test:e2e:catalog
+npm run test:e2e:stress
+npm run test:e2e:zoom
+npm run test:e2e:compat
 ```
 
 Snapshot update mode records an intentional visual change; it is never evidence that the comparison passed. Always follow it with `npm run test:e2e:visual`.

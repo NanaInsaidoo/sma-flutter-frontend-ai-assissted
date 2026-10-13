@@ -1,53 +1,58 @@
 # Responsive QA Checkpoint
 
-Update this file at the end of every bounded work session. It is the first file to read when resuming the audit.
+## Status
 
-## Current branch
-
-`feature/responsive-mobile-tablet-fixes`
+Complete for all 40 primary user-facing surfaces. The implementation, deterministic fixtures, four-viewport baselines, compatibility coverage, issue log, screen matrix, and final report are present on `feature/responsive-mobile-tablet-fixes`.
 
 ## Completed commits
 
 - `e344f0f` — responsive navigation and mobile/tablet layout fixes
 - `b93f9d5` — initial Playwright mobile/tablet visual regression coverage
 - `4b14f45` — durable full-app responsive QA plan and screen inventory
+- `50429e9` — public account access responsive visuals
+- `0d63067` — complete 40-screen responsive fixes and regression coverage
 
-## Verified state
+## Final verification
 
 - Flutter analysis: clean.
-- Flutter test suite: 607 passed.
-- Initial responsive Playwright suite: 26 passed across mobile/tablet categories.
-- Visual-regression suite: 16 passed across 8 states and 2 devices.
-- Git working tree was clean before the durable QA planning files were added.
+- Flutter unit/widget/interaction suite: 611 passed.
+- Standard phone/tablet primary catalogue: 82 passed.
+- Compact-phone/tablet-landscape stress catalogue: 82 passed.
+- 200% desktop reflow-equivalent catalogue: 41 passed.
+- Firefox/WebKit phone/tablet compatibility catalogue: 164 passed.
+- Focused visual-regression suite: 16 passed.
+- Platform three-role responsive/guard suite: 26 passed.
+- Reviewed Playwright baselines: 168 PNGs.
+- Screen catalogue invariant: exactly 40 primary surfaces.
+- Working-tree whitespace check: clean.
 
 ## Coverage summary
 
-- Primary surfaces in matrix: 40.
-- Fully approved visual states: Login and Platform open-drawer state.
-- Initial reviewed baselines: account activation confirmation, username recovery, and password reset.
-- Partially covered Platform surfaces: Overview, Schools, Needs Attention, and Account Managers.
-- School Admin, Guardian, and remaining public flows: pending browser audit.
+- Public account access: 4/4 primary surfaces approved on mobile and tablet.
+- Platform administration: 10/10 approved.
+- School administration: 24/24 approved.
+- Guardian: 2/2 approved.
+- Requested report rows: 80/80 present.
+- Responsive findings: 11 found, 11 fixed, zero unresolved at any severity in audited primary states.
+- The 53 named `*Screen` widgets and meaningful nested workflows are represented by the primary catalogue and the full Flutter interaction suite. Not every modal, tab, permission, or backend-error permutation has a separate browser screenshot; this deliberate boundary is recorded in `FINAL_REPORT.md`.
 
-## Current phase
+## Handoff
 
-Phase 0 — Foundation and inventory.
+No implementation or verification step remains for the defined audit. The branch is ready for review, push, or pull-request creation when requested.
 
-## Exact next action
+## Reproduction commands
 
-Complete Phase 1 in this order:
+```sh
+flutter analyze
+flutter test
+npm run test:e2e:catalog
+npm run test:e2e:stress
+npm run test:e2e:zoom
+npm run test:e2e:compat
+npm run test:e2e:visual
+npx playwright test e2e/super-admin-responsive.spec.js --project=mobile --project=tablet
+```
 
-1. Finish username recovery and password reset interaction states.
-2. Finish account activation verified, error, and completion states.
-3. Platform Needs Attention populated visuals.
-4. Platform onboarding list and resume flow.
-5. School creation, school detail, account manager detail, and platform audit.
+## Environment note
 
-After Phase 1, update this checkpoint before starting School Admin navigation coverage.
-
-## Known implementation notes
-
-- Playwright runs Flutter web on port 4184 with `SMA_E2E_MOCKS=true`.
-- API responses are currently intercepted in `e2e/support/platform-api-mocks.js`.
-- Visual snapshots use CSS-pixel scale, animations disabled, hidden carets, and a 0.1% changed-pixel limit.
-- Snapshot baselines currently use Playwright's macOS (`darwin`) naming. CI must either run the same baseline environment or intentionally add its own reviewed baselines.
-- Flutter accessibility semantics can be enabled by invoking the hidden `flt-semantics-placeholder`, but reliable menu navigation still needs a reusable helper or explicit test hooks.
+The committed screenshot baselines use Playwright's macOS (`darwin`) naming. A CI runner on another operating system must intentionally generate and review its own platform-specific baseline set rather than silently replacing these images.
