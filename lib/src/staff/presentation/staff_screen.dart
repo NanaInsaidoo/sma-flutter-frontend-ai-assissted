@@ -3,6 +3,7 @@ import 'package:file_picker/file_picker.dart';
 
 import '../data/staff_api_client.dart';
 import '../../common/display_formatters.dart';
+import '../../common/responsive_section_navigation.dart';
 import '../../platform/presentation/document_opener.dart';
 import '../../theme/app_theme.dart';
 import '../../leave/data/leave_api_client.dart';
@@ -2935,23 +2936,38 @@ class _StaffProfileTabs extends StatelessWidget {
       (_StaffProfileTab.leave, 'Leave', Icons.event_available_outlined),
       (_StaffProfileTab.activity, 'Account history', Icons.history_rounded),
     ];
-    return Container(
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: AppColors.border)),
-      ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: tabs
-              .map(
-                (tab) => _ProfileTabButton(
-                  label: tab.$2,
-                  icon: tab.$3,
-                  selected: selected == tab.$1,
-                  onTap: () => onChanged(tab.$1),
-                ),
-              )
-              .toList(),
+    return ResponsiveSectionNavigation<_StaffProfileTab>(
+      selected: selected,
+      label: 'Staff section',
+      selectorKey: const ValueKey('staff-profile-section-selector'),
+      items: tabs
+          .map(
+            (tab) => ResponsiveSectionNavigationItem(
+              value: tab.$1,
+              label: tab.$2,
+              icon: tab.$3,
+            ),
+          )
+          .toList(growable: false),
+      onChanged: onChanged,
+      wideNavigation: Container(
+        decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: AppColors.border)),
+        ),
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: tabs
+                .map(
+                  (tab) => _ProfileTabButton(
+                    label: tab.$2,
+                    icon: tab.$3,
+                    selected: selected == tab.$1,
+                    onTap: () => onChanged(tab.$1),
+                  ),
+                )
+                .toList(),
+          ),
         ),
       ),
     );

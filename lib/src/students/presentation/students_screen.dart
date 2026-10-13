@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../common/display_formatters.dart';
+import '../../common/responsive_section_navigation.dart';
 import '../../theme/app_theme.dart';
 import '../domain/student_models.dart';
 import '../../fees/domain/fee_models.dart';
@@ -2213,44 +2214,56 @@ class _ProfileTabs extends StatelessWidget {
       _StudentProfileTab.requirements: 'Items & Supplies',
       _StudentProfileTab.documents: 'Documents',
     };
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: labels.entries
-            .where(
-              (entry) =>
-                  !teacherView ||
-                  entry.key == _StudentProfileTab.overview ||
-                  entry.key == _StudentProfileTab.attendance,
-            )
-            .map((entry) {
-              final active = selected == entry.key;
-              return Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: OutlinedButton(
-                  key: Key('student-tab-${entry.key.name}'),
-                  onPressed: () => onSelected(entry.key),
-                  style: OutlinedButton.styleFrom(
-                    backgroundColor: active
-                        ? AppColors.greenSoft
-                        : Colors.white,
-                    foregroundColor: active ? AppColors.green : AppColors.muted,
-                    side: BorderSide(
-                      color: active ? AppColors.green : AppColors.border,
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 18,
-                      vertical: 15,
-                    ),
+    final visibleLabels = labels.entries
+        .where(
+          (entry) =>
+              !teacherView ||
+              entry.key == _StudentProfileTab.overview ||
+              entry.key == _StudentProfileTab.attendance,
+        )
+        .toList(growable: false);
+    return ResponsiveSectionNavigation<_StudentProfileTab>(
+      selected: selected,
+      label: 'Student section',
+      selectorKey: const ValueKey('student-profile-section-selector'),
+      items: visibleLabels
+          .map(
+            (entry) => ResponsiveSectionNavigationItem(
+              value: entry.key,
+              label: entry.value,
+            ),
+          )
+          .toList(growable: false),
+      onChanged: onSelected,
+      wideNavigation: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: visibleLabels.map((entry) {
+            final active = selected == entry.key;
+            return Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: OutlinedButton(
+                key: Key('student-tab-${entry.key.name}'),
+                onPressed: () => onSelected(entry.key),
+                style: OutlinedButton.styleFrom(
+                  backgroundColor: active ? AppColors.greenSoft : Colors.white,
+                  foregroundColor: active ? AppColors.green : AppColors.muted,
+                  side: BorderSide(
+                    color: active ? AppColors.green : AppColors.border,
                   ),
-                  child: Text(
-                    entry.value,
-                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 15,
                   ),
                 ),
-              );
-            })
-            .toList(),
+                child: Text(
+                  entry.value,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
       ),
     );
   }

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../common/responsive_section_navigation.dart';
 import '../../theme/app_theme.dart';
 import '../data/platform_api_client.dart';
 import '../data/platform_repository.dart';
@@ -3932,28 +3933,39 @@ class _Tabs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: List.generate(labels.length, (index) {
-          final active = selected == index;
-          return Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: ChoiceChip(
-              selected: active,
-              onSelected: (_) => onSelected(index),
-              label: Text(labels[index]),
-              selectedColor: AppColors.greenSoft,
-              side: BorderSide(
-                color: active ? AppColors.green : AppColors.border,
+    return ResponsiveSectionNavigation<int>(
+      selected: selected,
+      label: 'School section',
+      selectorKey: const ValueKey('school-detail-section-selector'),
+      items: List.generate(
+        labels.length,
+        (index) =>
+            ResponsiveSectionNavigationItem(value: index, label: labels[index]),
+      ),
+      onChanged: onSelected,
+      wideNavigation: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: List.generate(labels.length, (index) {
+            final active = selected == index;
+            return Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                selected: active,
+                onSelected: (_) => onSelected(index),
+                label: Text(labels[index]),
+                selectedColor: AppColors.greenSoft,
+                side: BorderSide(
+                  color: active ? AppColors.green : AppColors.border,
+                ),
+                labelStyle: TextStyle(
+                  color: active ? AppColors.green : AppColors.muted,
+                  fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+                ),
               ),
-              labelStyle: TextStyle(
-                color: active ? AppColors.green : AppColors.muted,
-                fontWeight: active ? FontWeight.w800 : FontWeight.w600,
-              ),
-            ),
-          );
-        }),
+            );
+          }),
+        ),
       ),
     );
   }

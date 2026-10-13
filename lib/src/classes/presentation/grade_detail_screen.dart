@@ -6,6 +6,7 @@ import '../../attendance/data/attendance_api_client.dart';
 import '../../attendance/domain/attendance_models.dart';
 import '../../attendance/presentation/attendance_screen.dart';
 import '../../common/display_formatters.dart';
+import '../../common/responsive_section_navigation.dart';
 import '../../theme/app_theme.dart';
 
 class GradeDetailScreen extends StatefulWidget {
@@ -1779,42 +1780,78 @@ class _StreamDetailTabs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            _tab(
-              _StreamDetailTab.overview,
-              'Overview',
-              Icons.dashboard_outlined,
+    const items = [
+      ResponsiveSectionNavigationItem(
+        value: _StreamDetailTab.overview,
+        label: 'Overview',
+        icon: Icons.dashboard_outlined,
+      ),
+      ResponsiveSectionNavigationItem(
+        value: _StreamDetailTab.students,
+        label: 'Students',
+        icon: Icons.people_outline_rounded,
+      ),
+      ResponsiveSectionNavigationItem(
+        value: _StreamDetailTab.subjects,
+        label: 'Subjects',
+        icon: Icons.menu_book_outlined,
+      ),
+      ResponsiveSectionNavigationItem(
+        value: _StreamDetailTab.attendance,
+        label: 'Attendance',
+        icon: Icons.fact_check_outlined,
+      ),
+    ];
+    return ResponsiveSectionNavigation<_StreamDetailTab>(
+      selected: selected,
+      items: items,
+      onChanged: onChanged,
+      label: 'Class section',
+      selectorKey: const ValueKey('class-section-selector'),
+      mobileFooter: onOpenEvaluations == null
+          ? null
+          : OutlinedButton.icon(
+              onPressed: onOpenEvaluations,
+              icon: const Icon(Icons.star_outline_rounded),
+              label: const Text('Open evaluations'),
             ),
-            _tab(
-              _StreamDetailTab.students,
-              'Students',
-              Icons.people_outline_rounded,
-            ),
-            _tab(
-              _StreamDetailTab.subjects,
-              'Subjects',
-              Icons.menu_book_outlined,
-            ),
-            _tab(
-              _StreamDetailTab.attendance,
-              'Attendance',
-              Icons.fact_check_outlined,
-              badge: pendingAttendance,
-            ),
-            if (onOpenEvaluations != null)
-              _action(
-                'Evaluations',
-                Icons.star_outline_rounded,
-                onOpenEvaluations!,
+      wideNavigation: Card(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _tab(
+                _StreamDetailTab.overview,
+                'Overview',
+                Icons.dashboard_outlined,
               ),
-          ],
+              _tab(
+                _StreamDetailTab.students,
+                'Students',
+                Icons.people_outline_rounded,
+              ),
+              _tab(
+                _StreamDetailTab.subjects,
+                'Subjects',
+                Icons.menu_book_outlined,
+              ),
+              _tab(
+                _StreamDetailTab.attendance,
+                'Attendance',
+                Icons.fact_check_outlined,
+                badge: pendingAttendance,
+              ),
+              if (onOpenEvaluations != null)
+                _action(
+                  'Evaluations',
+                  Icons.star_outline_rounded,
+                  onOpenEvaluations!,
+                ),
+            ],
+          ),
         ),
       ),
     );

@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../common/display_formatters.dart';
+import '../../common/responsive_section_navigation.dart';
 import '../../theme/app_theme.dart';
 import '../data/api_class_requirements_repository.dart';
 import '../data/fee_api_client.dart';
@@ -242,7 +243,9 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
       onRefresh: _reloadFees,
       child: SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.all(24),
+        padding: EdgeInsets.all(
+          MediaQuery.sizeOf(context).width < 600 ? 16 : 24,
+        ),
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 1280),
@@ -1413,38 +1416,53 @@ class _FeeTabs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Wrap(
-        spacing: 4,
-        runSpacing: 4,
-        children: _items.map((item) {
-          final active = item.$1 == selected;
-          return InkWell(
-            borderRadius: BorderRadius.circular(8),
-            onTap: () => onChanged(item.$1),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 160),
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-              decoration: BoxDecoration(
-                color: active ? AppColors.green : Colors.transparent,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                item.$2,
-                style: TextStyle(
-                  color: active ? Colors.white : AppColors.muted,
-                  fontWeight: FontWeight.w800,
+    return ResponsiveSectionNavigation<_FeeTab>(
+      selected: selected,
+      label: 'Fees section',
+      selectorKey: const ValueKey('fee-section-selector'),
+      items: _items
+          .map(
+            (item) =>
+                ResponsiveSectionNavigationItem(value: item.$1, label: item.$2),
+          )
+          .toList(growable: false),
+      onChanged: onChanged,
+      wideNavigation: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Wrap(
+          spacing: 4,
+          runSpacing: 4,
+          children: _items.map((item) {
+            final active = item.$1 == selected;
+            return InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => onChanged(item.$1),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: active ? AppColors.green : Colors.transparent,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  item.$2,
+                  style: TextStyle(
+                    color: active ? Colors.white : AppColors.muted,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
-            ),
-          );
-        }).toList(),
+            );
+          }).toList(),
+        ),
       ),
     );
   }

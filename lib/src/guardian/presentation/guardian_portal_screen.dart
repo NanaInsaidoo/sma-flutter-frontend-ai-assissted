@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../platform/presentation/document_opener.dart';
 import '../../auth/data/auth_api_client.dart';
+import '../../common/responsive_section_navigation.dart';
 import '../data/guardian_portal_api_client.dart';
 import '../domain/guardian_portal_models.dart';
 
@@ -2305,23 +2306,39 @@ class _ChildWorkspaceTabs extends StatelessWidget {
   ];
 
   @override
-  Widget build(BuildContext context) => SingleChildScrollView(
-    scrollDirection: Axis.horizontal,
-    child: Row(
-      children: [
-        for (var index = 0; index < tabs.length; index++) ...[
-          ChoiceChip(
-            key: Key('child-tab-$index'),
-            selected: selected == index,
-            onSelected: (_) => onSelected(index),
-            avatar: Icon(tabs[index].$2, size: 17),
-            label: Text(tabs[index].$1),
+  Widget build(BuildContext context) {
+    return ResponsiveSectionNavigation<int>(
+      selected: selected,
+      label: 'Child section',
+      selectorKey: const ValueKey('child-workspace-section-selector'),
+      items: [
+        for (var index = 0; index < tabs.length; index++)
+          ResponsiveSectionNavigationItem(
+            value: index,
+            label: tabs[index].$1,
+            icon: tabs[index].$2,
           ),
-          if (index != tabs.length - 1) const SizedBox(width: 8),
-        ],
       ],
-    ),
-  );
+      onChanged: onSelected,
+      wideNavigation: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            for (var index = 0; index < tabs.length; index++) ...[
+              ChoiceChip(
+                key: Key('child-tab-$index'),
+                selected: selected == index,
+                onSelected: (_) => onSelected(index),
+                avatar: Icon(tabs[index].$2, size: 17),
+                label: Text(tabs[index].$1),
+              ),
+              if (index != tabs.length - 1) const SizedBox(width: 8),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _ChildWorkspaceOverview extends StatelessWidget {

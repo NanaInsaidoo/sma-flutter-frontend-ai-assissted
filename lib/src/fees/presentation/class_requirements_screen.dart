@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../common/display_formatters.dart';
+import '../../common/responsive_section_navigation.dart';
 import '../../theme/app_theme.dart';
 import '../data/class_requirements_repository.dart';
 import '../domain/class_requirement_models.dart';
@@ -1010,42 +1011,51 @@ class _RequirementViewTabs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(5),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: AppColors.border),
-        borderRadius: BorderRadius.circular(14),
+    final tabs = [
+      _RequirementTabButton(
+        label: 'Class requirements',
+        icon: Icons.groups_2_outlined,
+        count: classActionCount,
+        selected: selected == _RequirementsView.classes,
+        onTap: () => onChanged(_RequirementsView.classes),
       ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final compact = constraints.maxWidth < 650;
-          final tabs = [
-            _RequirementTabButton(
-              label: 'Class requirements',
-              icon: Icons.groups_2_outlined,
-              count: classActionCount,
-              selected: selected == _RequirementsView.classes,
-              onTap: () => onChanged(_RequirementsView.classes),
-            ),
-            _RequirementTabButton(
-              label: 'Student-specific requirements',
-              icon: Icons.person_outline_rounded,
-              count: studentActionCount,
-              selected: selected == _RequirementsView.students,
-              onTap: () => onChanged(_RequirementsView.students),
-            ),
-          ];
-          if (compact) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: tabs,
-            );
-          }
-          return Row(
-            children: tabs.map((tab) => Expanded(child: tab)).toList(),
-          );
-        },
+      _RequirementTabButton(
+        label: 'Student-specific requirements',
+        icon: Icons.person_outline_rounded,
+        count: studentActionCount,
+        selected: selected == _RequirementsView.students,
+        onTap: () => onChanged(_RequirementsView.students),
+      ),
+    ];
+    return ResponsiveSectionNavigation<_RequirementsView>(
+      selected: selected,
+      label: 'Requirements view',
+      selectorKey: const ValueKey('requirements-view-selector'),
+      items: [
+        ResponsiveSectionNavigationItem(
+          value: _RequirementsView.classes,
+          label: classActionCount == 0
+              ? 'Class requirements'
+              : 'Class requirements ($classActionCount unpublished)',
+          icon: Icons.groups_2_outlined,
+        ),
+        ResponsiveSectionNavigationItem(
+          value: _RequirementsView.students,
+          label: studentActionCount == 0
+              ? 'Student-specific requirements'
+              : 'Student-specific ($studentActionCount unpublished)',
+          icon: Icons.person_outline_rounded,
+        ),
+      ],
+      onChanged: onChanged,
+      wideNavigation: Container(
+        padding: const EdgeInsets.all(5),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: AppColors.border),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(children: tabs.map((tab) => Expanded(child: tab)).toList()),
       ),
     );
   }
