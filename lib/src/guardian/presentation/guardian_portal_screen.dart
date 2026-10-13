@@ -13,11 +13,13 @@ class GuardianPortalScreen extends StatefulWidget {
     required this.api,
     required this.onLogout,
     this.schoolMemberships = const [],
+    this.initialChildId,
   });
 
   final GuardianPortalApiClient api;
   final VoidCallback onLogout;
   final List<AuthSchoolMembership> schoolMemberships;
+  final String? initialChildId;
 
   @override
   State<GuardianPortalScreen> createState() => _GuardianPortalScreenState();
@@ -33,6 +35,7 @@ class _GuardianPortalScreenState extends State<GuardianPortalScreen> {
   @override
   void initState() {
     super.initState();
+    _selectedChildId = widget.initialChildId;
     final guardianMemberships = widget.schoolMemberships
         .where((membership) => membership.membershipType == 'GUARDIAN')
         .toList(growable: false);

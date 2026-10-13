@@ -1967,8 +1967,14 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       );
     }
     final activeReconciliation = _activeReconciliation;
+    final compact = MediaQuery.sizeOf(context).width < 700;
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(24, 28, 24, 48),
+      padding: EdgeInsets.fromLTRB(
+        compact ? 16 : 24,
+        compact ? 20 : 28,
+        compact ? 16 : 24,
+        48,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2032,50 +2038,69 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   Widget _buildHeader() {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: Column(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 760;
+        final heading = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _canViewAllFinance
+                  ? 'Expenses & Petty Cash'
+                  : 'My Requisitions & Expenses',
+              style: TextStyle(
+                fontSize: compact ? 28 : 30,
+                fontWeight: FontWeight.w800,
+                color: _text,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _canViewAllFinance
+                  ? 'Requisitions, petty cash, approvals, refunds, and audit-ready spending for ${widget.customSchoolId}.'
+                  : 'Request school spending and follow your own approved expenses.',
+              style: const TextStyle(fontSize: 15, color: _muted),
+            ),
+          ],
+        );
+        final actions = <Widget>[
+          if (_financeLedgerPage != _FinanceLedgerPage.refunds &&
+              _canViewAllFinance)
+            OutlinedButton.icon(
+              onPressed: _openReconciliationRequestDialog,
+              icon: const Icon(Icons.fact_check_outlined),
+              label: const Text('Request reconciliation'),
+            ),
+          if (_financeLedgerPage != _FinanceLedgerPage.refunds)
+            FilledButton.icon(
+              onPressed: _openCreateRequisitionDialog,
+              icon: const Icon(Icons.playlist_add_rounded),
+              label: const Text('New requisition'),
+              style: _primaryButtonStyle(),
+            ),
+        ];
+        if (compact) {
+          return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                _canViewAllFinance
-                    ? 'Expenses & Petty Cash'
-                    : 'My Requisitions & Expenses',
-                style: const TextStyle(
-                  fontSize: 30,
-                  fontWeight: FontWeight.w800,
-                  color: _text,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                _canViewAllFinance
-                    ? 'Requisitions, petty cash, approvals, refunds, and audit-ready spending for ${widget.customSchoolId}.'
-                    : 'Request school spending and follow your own approved expenses.',
-                style: const TextStyle(fontSize: 15, color: _muted),
-              ),
+              heading,
+              if (actions.isNotEmpty) const SizedBox(height: 16),
+              for (var index = 0; index < actions.length; index++) ...[
+                SizedBox(width: double.infinity, child: actions[index]),
+                if (index != actions.length - 1) const SizedBox(height: 10),
+              ],
             ],
-          ),
-        ),
-        if (_financeLedgerPage != _FinanceLedgerPage.refunds &&
-            _canViewAllFinance) ...[
-          OutlinedButton.icon(
-            onPressed: _openReconciliationRequestDialog,
-            icon: const Icon(Icons.fact_check_outlined),
-            label: const Text('Request reconciliation'),
-          ),
-          const SizedBox(width: 10),
-        ],
-        if (_financeLedgerPage != _FinanceLedgerPage.refunds)
-          FilledButton.icon(
-            onPressed: _openCreateRequisitionDialog,
-            icon: const Icon(Icons.playlist_add_rounded),
-            label: const Text('New requisition'),
-            style: _primaryButtonStyle(),
-          ),
-      ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: heading),
+            if (actions.isNotEmpty) const SizedBox(width: 20),
+            Wrap(spacing: 10, runSpacing: 10, children: actions),
+          ],
+        );
+      },
     );
   }
 

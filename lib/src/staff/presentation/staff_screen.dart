@@ -146,8 +146,9 @@ class _StaffScreenState extends State<StaffScreen> {
     final establishedStaff = _staff
         .where((staff) => !_isStaffOnboarding(staff))
         .toList();
+    final compact = MediaQuery.sizeOf(context).width < 700;
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(28),
+      padding: EdgeInsets.all(compact ? 16 : 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1193,38 +1194,55 @@ class _StaffHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Staff Management',
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontSize: 30,
-                  fontWeight: FontWeight.w800,
-                ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 600;
+        final heading = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Staff Management',
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                fontSize: compact ? 28 : 30,
+                fontWeight: FontWeight.w800,
               ),
-              const SizedBox(height: 6),
-              const Text(
-                'Manage staff records, onboarding drafts, and EduHire imports.',
-                style: TextStyle(color: AppColors.muted, fontSize: 15),
-              ),
-            ],
-          ),
-        ),
-        FilledButton.icon(
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Manage staff records, onboarding drafts, and EduHire imports.',
+              style: TextStyle(color: AppColors.muted, fontSize: 15),
+            ),
+          ],
+        );
+        final addButton = FilledButton.icon(
           onPressed: onAddStaff,
           icon: const Icon(Icons.add_rounded),
           label: const Text('Add staff'),
           style: FilledButton.styleFrom(
             backgroundColor: AppColors.green,
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            minimumSize: compact ? const Size.fromHeight(48) : null,
           ),
-        ),
-      ],
+        );
+        if (compact) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              heading,
+              const SizedBox(height: 16),
+              SizedBox(width: double.infinity, child: addButton),
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: heading),
+            const SizedBox(width: 20),
+            addButton,
+          ],
+        );
+      },
     );
   }
 }
@@ -1273,7 +1291,11 @@ class _StaffMetricRow extends StatelessWidget {
     ];
     return LayoutBuilder(
       builder: (context, constraints) {
-        final columns = constraints.maxWidth >= 960 ? 4 : 2;
+        final columns = constraints.maxWidth >= 960
+            ? 4
+            : constraints.maxWidth >= 600
+            ? 2
+            : 1;
         const gap = 14.0;
         final width = (constraints.maxWidth - (columns - 1) * gap) / columns;
         return Wrap(
@@ -1621,26 +1643,35 @@ class _StaffLoadingPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Card(
+    return Card(
       child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: 24, vertical: 42),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            SizedBox(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 42),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            const indicator = SizedBox(
               width: 22,
               height: 22,
               child: CircularProgressIndicator(strokeWidth: 2.4),
-            ),
-            SizedBox(width: 14),
-            Text(
+            );
+            const message = Text(
               'Loading staff from the school platform...',
+              textAlign: TextAlign.center,
               style: TextStyle(
                 color: AppColors.muted,
                 fontWeight: FontWeight.w700,
               ),
-            ),
-          ],
+            );
+            if (constraints.maxWidth < 380) {
+              return const Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [indicator, SizedBox(height: 14), message],
+              );
+            }
+            return const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [indicator, SizedBox(width: 14), message],
+            );
+          },
         ),
       ),
     );

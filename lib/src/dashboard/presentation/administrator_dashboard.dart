@@ -83,6 +83,36 @@ enum _SchoolAdminPage {
   settings,
 }
 
+_SchoolAdminPage _schoolAdminPageFromName(String? value) {
+  final normalized = value?.trim().toLowerCase();
+  return switch (normalized) {
+    'approvals' => _SchoolAdminPage.approvals,
+    'calendar' => _SchoolAdminPage.calendar,
+    'my-leave' => _SchoolAdminPage.myLeave,
+    'admissions' => _SchoolAdminPage.admissions,
+    'students' => _SchoolAdminPage.students,
+    'student-attendance' => _SchoolAdminPage.attendance,
+    'staff-attendance' => _SchoolAdminPage.staffAttendance,
+    'households' => _SchoolAdminPage.households,
+    'staff' => _SchoolAdminPage.staff,
+    'leave-management' => _SchoolAdminPage.leave,
+    'classes' => _SchoolAdminPage.classes,
+    'assessments' => _SchoolAdminPage.assessments,
+    'evaluations' => _SchoolAdminPage.evaluations,
+    'final-reports' => _SchoolAdminPage.finalReports,
+    'term-closure' => _SchoolAdminPage.termReview,
+    'payroll' => _SchoolAdminPage.payroll,
+    'fees' => _SchoolAdminPage.fees,
+    'shop' => _SchoolAdminPage.shop,
+    'expenses' => _SchoolAdminPage.expenses,
+    'audit' => _SchoolAdminPage.auditActivity,
+    'incidents' => _SchoolAdminPage.incidents,
+    'reports' => _SchoolAdminPage.reports,
+    'settings' => _SchoolAdminPage.settings,
+    _ => _SchoolAdminPage.dashboard,
+  };
+}
+
 class AdministratorDashboard extends StatefulWidget {
   const AdministratorDashboard({
     super.key,
@@ -99,6 +129,7 @@ class AdministratorDashboard extends StatefulWidget {
     this.readinessRepository,
     this.teacherDashboardLoader,
     this.approvalInboxLoader,
+    this.initialPage,
   });
 
   final DashboardRepository repository;
@@ -114,6 +145,7 @@ class AdministratorDashboard extends StatefulWidget {
   final SchoolReadinessRepository? readinessRepository;
   final Future<TeacherDashboardSummary> Function()? teacherDashboardLoader;
   final Future<ApprovalInbox?> Function()? approvalInboxLoader;
+  final String? initialPage;
 
   @override
   State<AdministratorDashboard> createState() => _AdministratorDashboardState();
@@ -129,7 +161,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   late Future<bool> _payrollAccess;
   Future<TeacherWorkspaceSnapshot>? _teacherWorkspace;
   bool _sidebarCollapsed = false;
-  _SchoolAdminPage _selectedPage = _SchoolAdminPage.dashboard;
+  late _SchoolAdminPage _selectedPage;
   int _pageReloadRevision = 0;
   bool _openStartAdmissionOnNextAdmissions = false;
   bool _focusStudentSearchOnNextStudents = false;
@@ -150,6 +182,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   @override
   void initState() {
     super.initState();
+    _selectedPage = _schoolAdminPageFromName(widget.initialPage);
     _activeRole = _initialRole();
     _dashboard = _loadDashboard();
     _readiness = widget.readinessRepository == null
@@ -166,6 +199,9 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   @override
   void didUpdateWidget(covariant AdministratorDashboard oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.initialPage != oldWidget.initialPage) {
+      _selectedPage = _schoolAdminPageFromName(widget.initialPage);
+    }
     if (!_availableRoles.contains(_activeRole)) {
       _activeRole = _initialRole();
       _selectedPage = _SchoolAdminPage.dashboard;
@@ -4454,7 +4490,7 @@ class _CalendarGrid extends StatelessWidget {
       (index) => calendarStart.add(Duration(days: index)),
     );
 
-    return Card(
+    final calendar = Card(
       clipBehavior: Clip.antiAlias,
       child: Column(
         children: [
@@ -4506,6 +4542,17 @@ class _CalendarGrid extends StatelessWidget {
           ),
         ],
       ),
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth >= 700) return calendar;
+        return Scrollbar(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(width: 700, child: calendar),
+          ),
+        );
+      },
     );
   }
 }
@@ -4839,7 +4886,7 @@ class _CalendarEventList extends StatelessWidget {
                   style: const TextStyle(color: AppColors.muted, fontSize: 12),
                 ),
                 const Spacer(),
-                if (!isSearching)
+                if (!isSearching && MediaQuery.sizeOf(context).width >= 380)
                   OutlinedButton(
                     onPressed: () {},
                     child: const Text('Term Only'),

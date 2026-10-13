@@ -33,12 +33,14 @@ class _PlatformRouteConfig {
     this.createSchool = false,
     this.resumeOnboarding = false,
     this.schoolCode,
+    this.managerName,
   });
 
   final PlatformPage page;
   final bool createSchool;
   final bool resumeOnboarding;
   final String? schoolCode;
+  final String? managerName;
 }
 
 class _SchoolManagementAppState extends State<SchoolManagementApp>
@@ -172,11 +174,17 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
         ),
         GoRoute(
           path: '/school-admin',
-          builder: (context, state) => _selectable(_schoolStaffDashboard()),
+          builder: (context, state) => _selectable(
+            _schoolStaffDashboard(
+              initialPage: state.uri.queryParameters['page'],
+            ),
+          ),
         ),
         GoRoute(
           path: '/guardian',
-          builder: (context, state) => _selectable(_guardianPortal()),
+          builder: (context, state) => _selectable(
+            _guardianPortal(initialChildId: state.uri.queryParameters['child']),
+          ),
         ),
         ShellRoute(
           builder: (context, state, child) {
@@ -187,6 +195,7 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
                 createSchool: route.createSchool,
                 resumeOnboarding: route.resumeOnboarding,
                 schoolCode: route.schoolCode,
+                managerName: route.managerName,
               ),
             );
           },
@@ -274,6 +283,12 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
         GoRoute(
           path: 'account-managers',
           builder: (context, state) => const SizedBox.shrink(),
+          routes: [
+            GoRoute(
+              path: ':managerName',
+              builder: (context, state) => const SizedBox.shrink(),
+            ),
+          ],
         ),
         GoRoute(
           path: 'audit-activity',
@@ -342,7 +357,10 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
       return const _PlatformRouteConfig(page: PlatformPage.attention);
     }
     if (segments.length >= 2 && segments[1] == 'account-managers') {
-      return const _PlatformRouteConfig(page: PlatformPage.accountManagers);
+      return _PlatformRouteConfig(
+        page: PlatformPage.accountManagers,
+        managerName: segments.length >= 3 ? segments[2] : null,
+      );
     }
     if (segments.length >= 2 && segments[1] == 'audit-activity') {
       return const _PlatformRouteConfig(page: PlatformPage.auditActivity);
@@ -355,6 +373,7 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
     bool createSchool = false,
     bool resumeOnboarding = false,
     String? schoolCode,
+    String? managerName,
   }) {
     if (_showSchoolAdministrator) {
       return _schoolStaffDashboard();
@@ -378,6 +397,9 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
       createSchool: createSchool,
       resumeOnboarding: resumeOnboarding,
       schoolCode: schoolCode,
+      initialManagerName: managerName == null
+          ? null
+          : Uri.decodeComponent(managerName),
       onNavigatePath: _router.go,
       onLogout: _logout,
       onOpenSchoolAdministrator: () {
@@ -387,7 +409,7 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
     );
   }
 
-  Widget _schoolStaffDashboard() {
+  Widget _schoolStaffDashboard({String? initialPage}) {
     final session = _session;
     return AdministratorDashboard(
       repository: ApiDashboardRepository(
@@ -409,10 +431,11 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
         accessToken: session?.accessToken,
         onRefreshAccessToken: _refreshAccessToken,
       ),
+      initialPage: initialPage,
     );
   }
 
-  Widget _guardianPortal() {
+  Widget _guardianPortal({String? initialChildId}) {
     final session = _session;
     return GuardianPortalScreen(
       api: GuardianPortalApiClient(
@@ -420,6 +443,7 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
         onRefreshAccessToken: _refreshAccessToken,
       ),
       schoolMemberships: session?.schoolMemberships ?? const [],
+      initialChildId: initialChildId,
       onLogout: _logout,
     );
   }

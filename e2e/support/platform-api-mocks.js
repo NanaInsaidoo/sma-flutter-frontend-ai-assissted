@@ -277,6 +277,88 @@ function responseFor(url) {
         : attentionItems,
     );
   }
+  if (pathname.endsWith('/api/grade-levels/default')) {
+    return {
+      data: [
+        { gradeLevelId: 6, gradeName: 'Grade 6' },
+        { gradeLevelId: 7, gradeName: 'Grade 7' },
+      ],
+    };
+  }
+  if (pathname.endsWith('/api/schools/SMA-1001') || pathname.endsWith('/api/schools/SMA-1003')) {
+    const school = schools.find((item) => pathname.endsWith(item.customSchoolId));
+    return {
+      data: {
+        ...school,
+        currentStep: school.customSchoolId === 'SMA-1003' ? 'ACADEMIC_SETUP' : 'REVIEW',
+        completedSteps: school.customSchoolId === 'SMA-1003'
+          ? ['BASIC_INFO', 'REGISTRATION_DETAILS', 'ADDRESS']
+          : ['BASIC_INFO', 'REGISTRATION_DETAILS', 'ADDRESS', 'COMPLIANCE', 'ACADEMIC_SETUP', 'ADMINISTRATOR', 'DOCUMENTS'],
+        administratorName: 'Grace Addo',
+        administratorPhone: '+233 24 555 0144',
+        administratorEmail: 'grace.addo@sma.test',
+        address: {
+          region: school.region,
+          district: school.district,
+          city: school.town,
+          town: school.town,
+        },
+      },
+    };
+  }
+  if (pathname.endsWith('/api/schools/SMA-1001/documents') || pathname.endsWith('/api/schools/SMA-1003/documents')) {
+    return { data: [] };
+  }
+  if (pathname.endsWith('/api/grade-levels/school/SMA-1001') || pathname.endsWith('/api/grade-levels/school/SMA-1003')) {
+    return {
+      data: [
+        { gradeLevelId: 6, gradeName: 'Grade 6', numberOfStreams: 2, status: 'ACTIVE' },
+        { gradeLevelId: 7, gradeName: 'Grade 7', numberOfStreams: 2, status: 'ACTIVE' },
+      ],
+    };
+  }
+  if (pathname.endsWith('/api/audit-logs/statistics')) {
+    return {
+      totalLogs: 128,
+      createCount: 31,
+      editCount: 54,
+      accessChangeCount: 18,
+      failedLoginCount: 3,
+    };
+  }
+  if (pathname.endsWith('/api/audit-logs/scopes')) {
+    return [
+      { value: 'PLATFORM', label: 'Platform administration', type: 'PLATFORM' },
+      { value: 'SMA-1001', label: 'Accra Horizon Academy', type: 'SCHOOL' },
+    ];
+  }
+  if (pathname.endsWith('/api/audit-logs')) {
+    return {
+      logs: [
+        {
+          id: 'audit-1',
+          actionType: 'SCHOOL_UPDATED',
+          description: 'School registration details were reviewed and updated.',
+          timestamp: '2026-10-12T14:20:00Z',
+          customSchoolId: 'SMA-1001',
+          subjectUserId: '',
+          subjectUsername: '',
+          subjectDisplayName: 'Accra Horizon Academy',
+          subjectRole: 'SCHOOL',
+          performedByUserId: '1',
+          performedByUsername: 'admin@sma.test',
+          performedByDisplayName: 'System Administrator',
+          ipAddress: '192.0.2.10',
+          userAgent: 'SMA QA Browser',
+          metadata: '{"field":"registrationStatus"}',
+        },
+      ],
+      totalElements: 1,
+      totalPages: 1,
+      currentPage: 0,
+      pageSize: 20,
+    };
+  }
   if (pathname.includes('/api/lookup/')) {
     return lookupResponse(pathname);
   }

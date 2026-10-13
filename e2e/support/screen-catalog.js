@@ -37,7 +37,7 @@ const platformScreens = [
   {
     id: 'PLAT-009',
     name: 'Account manager detail',
-    navigation: 'Account Managers → first manager',
+    path: '/super-admin/account-managers/Ama%20Mensah',
   },
   {
     id: 'PLAT-010',
@@ -47,129 +47,154 @@ const platformScreens = [
 ];
 
 const schoolAdminScreens = [
-  { id: 'ADM-001', name: 'Dashboard', label: 'Dashboard' },
+  {
+    id: 'ADM-001',
+    name: 'Dashboard',
+    label: 'Dashboard',
+    path: '/school-admin?page=dashboard',
+  },
   {
     id: 'ADM-002',
     name: 'Requests & Approvals',
     label: 'Requests & Approvals',
+    path: '/school-admin?page=approvals',
   },
-  { id: 'ADM-003', name: 'School Calendar', label: 'School Calendar' },
-  { id: 'ADM-004', name: 'My Leave', label: 'My Leave' },
+  { id: 'ADM-003', name: 'School Calendar', label: 'School Calendar', path: '/school-admin?page=calendar' },
+  { id: 'ADM-004', name: 'My Leave', label: 'My Leave', path: '/school-admin?page=my-leave' },
   {
     id: 'ADM-005',
     name: 'Admissions',
     section: 'People',
     label: 'Admissions',
+    path: '/school-admin?page=admissions',
   },
   {
     id: 'ADM-006',
     name: 'Students',
     section: 'People',
     label: 'Students',
+    path: '/school-admin?page=students',
   },
   {
     id: 'ADM-007',
     name: 'Student Attendance',
     section: 'People',
     label: 'Student Attendance',
+    path: '/school-admin?page=student-attendance',
   },
   {
     id: 'ADM-008',
     name: 'Staff Attendance',
     section: 'People',
     label: 'Staff Attendance',
+    path: '/school-admin?page=staff-attendance',
   },
   {
     id: 'ADM-009',
     name: 'Households',
     section: 'People',
     label: 'Households',
+    path: '/school-admin?page=households',
   },
   {
     id: 'ADM-010',
     name: 'Staff Management',
     section: 'People',
     label: 'Staff Management',
+    path: '/school-admin?page=staff',
   },
   {
     id: 'ADM-011',
     name: 'Leave Management',
     section: 'People',
     label: 'Leave Management',
+    path: '/school-admin?page=leave-management',
   },
   {
     id: 'ADM-012',
     name: 'Classes & Sections',
     section: 'Academics',
     label: 'Classes & Sections',
+    path: '/school-admin?page=classes',
   },
   {
     id: 'ADM-013',
     name: 'Assessments',
     section: 'Academics',
     label: 'Assessments',
+    path: '/school-admin?page=assessments',
   },
   {
     id: 'ADM-014',
     name: 'Evaluations & Comments',
     section: 'Academics',
     label: 'Evaluations & Comments',
+    path: '/school-admin?page=evaluations',
   },
   {
     id: 'ADM-015',
     name: 'Final Reports',
     section: 'Academics',
     label: 'Final Reports',
+    path: '/school-admin?page=final-reports',
   },
   {
     id: 'ADM-016',
     name: 'Term Closure',
     section: 'Academics',
     label: 'Term Closure',
+    path: '/school-admin?page=term-closure',
   },
   {
     id: 'ADM-017',
     name: 'Payroll',
     section: 'Finance & Operations',
     label: 'Payroll',
+    path: '/school-admin?page=payroll',
   },
   {
     id: 'ADM-018',
     name: 'Fees & Requirements',
     section: 'Finance & Operations',
     label: 'Fees & Requirements',
+    path: '/school-admin?page=fees',
   },
   {
     id: 'ADM-019',
     name: 'School Shop',
     section: 'Finance & Operations',
     label: 'School Shop',
+    path: '/school-admin?page=shop',
   },
   {
     id: 'ADM-020',
     name: 'Expenses & Petty Cash',
     section: 'Finance & Operations',
     label: 'Expenses & Petty Cash',
+    path: '/school-admin?page=expenses',
   },
   {
     id: 'ADM-021',
     name: 'Audit & Activity',
     section: 'Insights & Oversight',
     label: 'Audit & Activity',
+    path: '/school-admin?page=audit',
   },
   {
     id: 'ADM-022',
     name: 'Incident Management',
     section: 'Insights & Oversight',
     label: 'Incident Management',
+    path: '/school-admin?page=incidents',
   },
   {
     id: 'ADM-023',
     name: 'Reports',
     section: 'Insights & Oversight',
     label: 'Reports',
+    path: '/school-admin?page=reports',
   },
-  { id: 'ADM-024', name: 'Settings', label: 'Settings' },
+  { id: 'ADM-024', name: 'Settings', label: 'Settings', path: '/school-admin?page=settings' },
 ];
 
 const guardianScreens = [
@@ -177,7 +202,7 @@ const guardianScreens = [
   {
     id: 'GUA-002',
     name: 'Guardian child detail',
-    navigation: 'Guardian portal → first child',
+    path: '/guardian?child=STU-QA-001',
   },
 ];
 

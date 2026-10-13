@@ -38,6 +38,15 @@ module.exports = defineConfig({
   },
   projects: [
     {
+      name: 'compact-mobile',
+      use: {
+        ...devices['Pixel 7'],
+        browserName: 'chromium',
+        viewport: { width: 360, height: 800 },
+        deviceScaleFactor: 2.75,
+      },
+    },
+    {
       name: 'mobile',
       use: {
         ...devices['Pixel 7'],
@@ -64,6 +73,14 @@ module.exports = defineConfig({
       },
     },
     {
+      name: 'tablet-landscape',
+      use: {
+        ...devices['iPad Pro 11 landscape'],
+        browserName: 'chromium',
+        viewport: { width: 1194, height: 834 },
+      },
+    },
+    {
       name: 'desktop',
       use: {
         viewport: { width: 1440, height: 960 },
@@ -75,6 +92,13 @@ module.exports = defineConfig({
       use: {
         viewport: { width: 1280, height: 720 },
         deviceScaleFactor: 1.25,
+      },
+    },
+    {
+      name: 'desktop-200-percent-reflow',
+      use: {
+        viewport: { width: 720, height: 640 },
+        deviceScaleFactor: 1,
       },
     },
   ],

@@ -7,7 +7,12 @@
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:update": "playwright test --update-snapshots",
     "test:e2e:visual": "playwright test e2e/visual-regression.spec.js --project=mobile --project=tablet",
-    "test:e2e:visual:update": "playwright test e2e/visual-regression.spec.js --project=mobile --project=tablet --update-snapshots"
+    "test:e2e:visual:update": "playwright test e2e/visual-regression.spec.js --project=mobile --project=tablet --update-snapshots",
+    "test:e2e:catalog": "playwright test e2e/public-responsive.spec.js e2e/school-admin-responsive.spec.js e2e/platform-catalog-responsive.spec.js e2e/guardian-responsive.spec.js --project=mobile --project=tablet",
+    "test:e2e:catalog:update": "npm run test:e2e:catalog -- --update-snapshots",
+    "test:e2e:stress": "playwright test e2e/public-responsive.spec.js e2e/school-admin-responsive.spec.js e2e/platform-catalog-responsive.spec.js e2e/guardian-responsive.spec.js --project=compact-mobile --project=tablet-landscape",
+    "test:e2e:zoom": "SMA_E2E_LAYOUT_ONLY=true playwright test e2e/public-responsive.spec.js e2e/school-admin-responsive.spec.js e2e/platform-catalog-responsive.spec.js e2e/guardian-responsive.spec.js --project=desktop-200-percent-reflow",
+    "test:e2e:compat": "SMA_E2E_LAYOUT_ONLY=true playwright test --config=playwright.compat.config.js e2e/public-responsive.spec.js e2e/school-admin-responsive.spec.js e2e/platform-catalog-responsive.spec.js e2e/guardian-responsive.spec.js"
   },
   "devDependencies": {
     "@playwright/test": "^1.57.0",

@@ -1971,66 +1971,89 @@ class _WizardFooter extends StatelessWidget {
   final bool saving;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 13),
-    decoration: const BoxDecoration(
-      color: Colors.white,
-      border: Border(top: BorderSide(color: AppColors.border)),
-    ),
-    child: Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: _wizardContentWidth),
-        child: Row(
-          children: [
-            if (primaryLabel == null)
-              Text(
-                'Step ${index + 1} of $total',
-                style: const TextStyle(
-                  color: AppColors.muted,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                ),
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final compact = constraints.maxWidth < 420;
+      final step = primaryLabel == null
+          ? Text(
+              'Step ${index + 1} of $total',
+              style: const TextStyle(
+                color: AppColors.muted,
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
               ),
-            if (onBack != null) ...[
-              const SizedBox(width: 10),
-              TextButton.icon(
-                onPressed: onBack,
-                icon: const Icon(Icons.arrow_back_rounded, size: 16),
-                label: const Text('Back'),
-              ),
-            ],
-            const Spacer(),
-            TextButton(onPressed: onCancel, child: const Text('Cancel')),
-            const SizedBox(width: 8),
-            FilledButton(
-              onPressed: canSubmit && !saving ? onContinue : null,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (saving) ...[
-                    const SizedBox(
-                      width: 15,
-                      height: 15,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                  ],
-                  Text(
-                    saving
-                        ? 'Saving...'
-                        : primaryLabel ??
-                              (index == total - 1 ? 'Submit' : 'Continue  →'),
-                  ),
-                ],
-              ),
+            )
+          : null;
+      final buttons = Row(
+        children: [
+          if (onBack != null)
+            TextButton.icon(
+              onPressed: onBack,
+              icon: const Icon(Icons.arrow_back_rounded, size: 16),
+              label: const Text('Back'),
             ),
-          ],
+          const Spacer(),
+          TextButton(onPressed: onCancel, child: const Text('Cancel')),
+          const SizedBox(width: 8),
+          FilledButton(
+            onPressed: canSubmit && !saving ? onContinue : null,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (saving) ...[
+                  const SizedBox(
+                    width: 15,
+                    height: 15,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+                Text(
+                  saving
+                      ? 'Saving...'
+                      : primaryLabel ??
+                            (index == total - 1 ? 'Submit' : 'Continue  →'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+      return Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 14 : 22,
+          vertical: 13,
         ),
-      ),
-    ),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: AppColors.border)),
+        ),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: _wizardContentWidth),
+            child: compact
+                ? Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (step != null) ...[step, const SizedBox(height: 4)],
+                      buttons,
+                    ],
+                  )
+                : Row(
+                    children: [
+                      if (step != null) step,
+                      if (onBack != null) const SizedBox(width: 10),
+                      Expanded(child: buttons),
+                    ],
+                  ),
+          ),
+        ),
+      );
+    },
   );
 }
 

@@ -585,7 +585,7 @@ class _ApprovalTable extends StatelessWidget {
         ),
         child: Column(
           children: [
-            if (constraints.maxWidth < 700) ...[
+            if (constraints.maxWidth < 1080) ...[
               _ApprovalMobileSortBar(
                 sortField: sortField,
                 sortAscending: sortAscending,

@@ -439,47 +439,60 @@ class _TermEvaluationWorkflowScreenState
                         style: const TextStyle(color: Colors.blueGrey),
                       )
                     else
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Column(
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final compact = constraints.maxWidth < 720;
+                          final heading = Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                managerWorkspace
+                                    ? 'Leadership approval'
+                                    : focusedStream
+                                    ? 'Ratings & comments progress — $_focusedStreamName'
+                                    : 'My evaluation responsibilities',
+                                style: const TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              Text(
+                                '${widget.setup.termName} · ${widget.setup.academicYearName}',
+                                style: const TextStyle(color: Colors.blueGrey),
+                              ),
+                            ],
+                          );
+                          final controls = managerWorkspace
+                              ? Wrap(
+                                  spacing: 10,
+                                  runSpacing: 8,
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  children: [
+                                    _managerWorkspaceMenu(),
+                                    _evaluationWindowControls(),
+                                  ],
+                                )
+                              : _manager
+                              ? _evaluationWindowControls()
+                              : _evaluationWindowStatusBadge();
+                          if (compact) {
+                            return Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  managerWorkspace
-                                      ? 'Leadership approval'
-                                      : focusedStream
-                                      ? 'Ratings & comments progress — $_focusedStreamName'
-                                      : 'My evaluation responsibilities',
-                                  style: const TextStyle(
-                                    fontSize: 24,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                                Text(
-                                  '${widget.setup.termName} · ${widget.setup.academicYearName}',
-                                  style: const TextStyle(
-                                    color: Colors.blueGrey,
-                                  ),
-                                ),
+                                heading,
+                                const SizedBox(height: 14),
+                                controls,
                               ],
-                            ),
-                          ),
-                          if (managerWorkspace)
-                            Wrap(
-                              spacing: 10,
-                              runSpacing: 8,
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              children: [
-                                _managerWorkspaceMenu(),
-                                _evaluationWindowControls(),
-                              ],
-                            )
-                          else if (_manager)
-                            _evaluationWindowControls()
-                          else
-                            _evaluationWindowStatusBadge(),
-                        ],
+                            );
+                          }
+                          return Row(
+                            children: [
+                              Expanded(child: heading),
+                              const SizedBox(width: 16),
+                              Flexible(child: controls),
+                            ],
+                          );
+                        },
                       ),
                     if (managerWorkspace &&
                         _managerView == 'Approval' &&

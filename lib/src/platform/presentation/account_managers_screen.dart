@@ -167,45 +167,46 @@ class _AccountManagersScreenState extends State<AccountManagersScreen> {
             : page.currentPage * page.pageSize + 1;
         final pageEnd = (page.currentPage * page.pageSize + managers.length)
             .clamp(0, page.totalElements);
+        final compact = MediaQuery.sizeOf(context).width < 600;
+        final heading = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Account Managers',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 5),
+            Text(
+              page.totalElements == 0
+                  ? 'No account managers found'
+                  : 'Showing $pageStart-$pageEnd of ${page.totalElements} account managers',
+              style: const TextStyle(color: AppColors.muted, fontSize: 12.5),
+            ),
+          ],
+        );
+        final createButton = FilledButton.icon(
+          onPressed: _openCreateDialog,
+          icon: const Icon(Icons.add_rounded),
+          label: const Text('New Account Manager'),
+        );
         return SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(compact ? 16 : 24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Account Managers',
-                          style: TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        const SizedBox(height: 5),
-                        Text(
-                          page.totalElements == 0
-                              ? 'No account managers found'
-                              : 'Showing $pageStart-$pageEnd of ${page.totalElements} account managers',
-                          style: const TextStyle(
-                            color: AppColors.muted,
-                            fontSize: 12.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  FilledButton.icon(
-                    onPressed: _openCreateDialog,
-                    icon: const Icon(Icons.add_rounded),
-                    label: const Text('New Account Manager'),
-                  ),
-                ],
-              ),
+              if (compact)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [heading, const SizedBox(height: 14), createButton],
+                )
+              else
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: heading),
+                    createButton,
+                  ],
+                ),
               const SizedBox(height: 20),
               _StatusTabs(selected: _filter, onSelected: _selectFilter),
               const SizedBox(height: 18),

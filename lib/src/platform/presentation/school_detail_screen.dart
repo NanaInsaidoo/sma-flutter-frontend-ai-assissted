@@ -3205,52 +3205,60 @@ class _HeroCard extends StatelessWidget {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(20),
-        child: Wrap(
-          spacing: 16,
-          runSpacing: 16,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          alignment: WrapAlignment.spaceBetween,
-          children: [
-            Row(
-              mainAxisSize: MainAxisSize.min,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final identityWidth = constraints.maxWidth > 600
+                ? 600.0
+                : constraints.maxWidth;
+            return Wrap(
+              spacing: 16,
+              runSpacing: 16,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              alignment: WrapAlignment.spaceBetween,
               children: [
-                _Avatar(label: avatar, size: 58),
-                const SizedBox(width: 14),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 520),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                SizedBox(
+                  width: identityWidth,
+                  child: Row(
                     children: [
-                      Text(
-                        title,
-                        style: const TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 5),
-                      Text(
-                        subtitle,
-                        style: const TextStyle(
-                          color: AppColors.muted,
-                          fontSize: 12,
+                      _Avatar(label: avatar, size: 58),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title,
+                              style: const TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 5),
+                            Text(
+                              subtitle,
+                              style: const TextStyle(
+                                color: AppColors.muted,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
                   ),
                 ),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    _StatusPill(label: statusLabel, color: statusColor),
+                    ...actions,
+                  ],
+                ),
               ],
-            ),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                _StatusPill(label: statusLabel, color: statusColor),
-                ...actions,
-              ],
-            ),
-          ],
+            );
+          },
         ),
       ),
     );

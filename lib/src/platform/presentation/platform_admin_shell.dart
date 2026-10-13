@@ -37,6 +37,7 @@ class PlatformAdminShell extends StatefulWidget {
     required this.createSchool,
     required this.resumeOnboarding,
     required this.schoolCode,
+    this.initialManagerName,
     required this.onNavigatePath,
     required this.onOpenSchoolAdministrator,
     required this.onLogout,
@@ -55,6 +56,7 @@ class PlatformAdminShell extends StatefulWidget {
   final bool createSchool;
   final bool resumeOnboarding;
   final String? schoolCode;
+  final String? initialManagerName;
   final ValueChanged<String> onNavigatePath;
   final VoidCallback onOpenSchoolAdministrator;
   final VoidCallback onLogout;
@@ -69,6 +71,8 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
   Future<SchoolCreationLookups>? _schoolLookupFuture;
   SchoolCreationLookups? _schoolLookupCache;
   String? _selectedAttentionCategory;
+  bool _initialManagerOpening = false;
+  bool _initialManagerResolved = false;
 
   Future<SchoolCreationLookups> _loadSchoolLookups() {
     final cached = _schoolLookupCache;
@@ -206,6 +210,23 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
     if (manager != null) _openManager(manager);
   }
 
+  Future<void> _openInitialManager() async {
+    final name = widget.initialManagerName;
+    if (name == null ||
+        name.isEmpty ||
+        _initialManagerOpening ||
+        _initialManagerResolved) {
+      return;
+    }
+    _initialManagerOpening = true;
+    await _openManagerByName(name);
+    if (!mounted) return;
+    setState(() {
+      _initialManagerOpening = false;
+      _initialManagerResolved = true;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<AccountManagerSnapshot>(
@@ -232,6 +253,11 @@ class _PlatformAdminShellState extends State<PlatformAdminShell> {
             onOpenSchoolAdministrator: widget.onOpenSchoolAdministrator,
             onLogout: widget.onLogout,
           );
+        }
+        if (widget.initialManagerName != null && !_initialManagerResolved) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _openInitialManager();
+          });
         }
         if (_schoolLookupCache == null && _schoolLookupFuture == null) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -667,14 +693,22 @@ class _DashboardSkeletonContent extends StatelessWidget {
         children: [
           LayoutBuilder(
             builder: (context, constraints) {
-              final columns = constraints.maxWidth >= 980 ? 4 : 2;
+              final columns = constraints.maxWidth >= 980
+                  ? 4
+                  : constraints.maxWidth >= 600
+                  ? 2
+                  : 1;
               return GridView.count(
                 crossAxisCount: columns,
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 crossAxisSpacing: 14,
                 mainAxisSpacing: 14,
-                childAspectRatio: columns == 4 ? 2.8 : 2.4,
+                childAspectRatio: columns == 4
+                    ? 2.8
+                    : columns == 2
+                    ? 2.4
+                    : 3.2,
                 children: List.generate(
                   4,
                   (_) => const _SkeletonCard(
