@@ -14,9 +14,9 @@ The matrix tracks primary user-facing surfaces. Nested states discovered during 
 | ID | Surface | Entry | Mobile | Tablet | Visual | Interaction | Notes |
 |---|---|---|---:|---:|---:|---:|---|
 | PUB-001 | Login | `/login` | ✅ | ✅ | ✅ | ◐ | Baselines exist; full validation/error matrix remains. |
-| PUB-002 | Account activation | `/activate/:token` | — | — | — | — | Cover invalid, valid, expired, and completed states. |
-| PUB-003 | Username recovery | `/recover-username` | — | — | — | — | Form, validation, success, and error states. |
-| PUB-004 | Password reset | `/reset-password` | — | — | — | — | Form, validation, success, and error states. |
+| PUB-002 | Account activation | `/activate/:token` | ◐ | ◐ | ◐ | — | Initial populated confirmation baseline; invalid, expired, verified, and completed states remain. |
+| PUB-003 | Username recovery | `/recover-username` | ◐ | ◐ | ◐ | — | Initial form baseline; validation, verification, success, and error states remain. |
+| PUB-004 | Password reset | `/reset-password` | ◐ | ◐ | ◐ | — | Initial form baseline; validation, verification, success, and error states remain. |
 
 ## Platform administration
 

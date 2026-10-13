@@ -89,6 +89,33 @@ test.describe('mobile and tablet visual regression', () => {
     await expect(page).toHaveScreenshot('login.png', screenshotOptions);
   });
 
+  test('username recovery screen', async ({ page }) => {
+    await page.goto(routeUrl('/recover-username'));
+    await waitForFlutter(page);
+    await expect(page).toHaveScreenshot(
+      'username-recovery.png',
+      screenshotOptions,
+    );
+  });
+
+  test('password reset screen', async ({ page }) => {
+    await page.goto(routeUrl('/reset-password'));
+    await waitForFlutter(page);
+    await expect(page).toHaveScreenshot(
+      'password-reset.png',
+      screenshotOptions,
+    );
+  });
+
+  test('account activation confirmation screen', async ({ page }) => {
+    await page.goto(routeUrl('/activate/e2e-token'));
+    await waitForFlutter(page);
+    await expect(page).toHaveScreenshot(
+      'account-activation-confirmation.png',
+      screenshotOptions,
+    );
+  });
+
   test('populated super admin dashboard', async ({ page }) => {
     await openPlatformRoute(page, '/super-admin');
     await expect(page).toHaveScreenshot(

@@ -127,9 +127,9 @@ Playwright detects change; it does not decide whether a design looks good. A bas
 
 - [x] Login visual baseline.
 - [x] Platform overview, Schools, Account Managers, and open drawer baselines.
-- [ ] Account activation.
-- [ ] Username recovery.
-- [ ] Password reset.
+- [x] Account activation initial confirmation state.
+- [x] Username recovery initial state.
+- [x] Password reset initial state.
 - [ ] Platform onboarding list and resume flow.
 - [ ] Needs Attention visual states.
 - [ ] School creation and school detail.

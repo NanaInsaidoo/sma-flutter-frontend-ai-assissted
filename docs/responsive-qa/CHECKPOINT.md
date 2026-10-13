@@ -10,19 +10,21 @@ Update this file at the end of every bounded work session. It is the first file 
 
 - `e344f0f` — responsive navigation and mobile/tablet layout fixes
 - `b93f9d5` — initial Playwright mobile/tablet visual regression coverage
+- `4b14f45` — durable full-app responsive QA plan and screen inventory
 
 ## Verified state
 
 - Flutter analysis: clean.
 - Flutter test suite: 607 passed.
 - Initial responsive Playwright suite: 26 passed across mobile/tablet categories.
-- Initial visual-regression suite: 10 passed across 5 states and 2 devices.
+- Visual-regression suite: 16 passed across 8 states and 2 devices.
 - Git working tree was clean before the durable QA planning files were added.
 
 ## Coverage summary
 
 - Primary surfaces in matrix: 40.
 - Fully approved visual states: Login and Platform open-drawer state.
+- Initial reviewed baselines: account activation confirmation, username recovery, and password reset.
 - Partially covered Platform surfaces: Overview, Schools, Needs Attention, and Account Managers.
 - School Admin, Guardian, and remaining public flows: pending browser audit.
 
@@ -34,8 +36,8 @@ Phase 0 — Foundation and inventory.
 
 Complete Phase 1 in this order:
 
-1. Username recovery and password reset.
-2. Account activation states.
+1. Finish username recovery and password reset interaction states.
+2. Finish account activation verified, error, and completion states.
 3. Platform Needs Attention populated visuals.
 4. Platform onboarding list and resume flow.
 5. School creation, school detail, account manager detail, and platform audit.

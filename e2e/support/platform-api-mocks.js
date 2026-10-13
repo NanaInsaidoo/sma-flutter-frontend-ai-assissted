@@ -239,6 +239,20 @@ function lookupResponse(pathname) {
 function responseFor(url) {
   const { pathname, searchParams } = new URL(url);
 
+  if (pathname.endsWith('/api/account-access/invitations/e2e-token')) {
+    return {
+      token: 'e2e-token',
+      schoolName: 'Accra Horizon Academy',
+      accountType: 'STAFF',
+      dateOfBirthRequired: true,
+      emailRequired: false,
+      deliveryChannel: 'SMS',
+      maskedDestination: '+233 24 *** 0101',
+      status: 'PENDING',
+      message: 'Confirm the invitation to continue.',
+      testingCode: '482913',
+    };
+  }
   if (pathname.endsWith('/api/super-admin/dashboard/schools')) {
     return pageResponse(schools);
   }
