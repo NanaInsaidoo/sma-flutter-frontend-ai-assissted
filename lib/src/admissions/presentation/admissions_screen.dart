@@ -9382,8 +9382,8 @@ class _StudentBasicInfoFormState extends State<_StudentBasicInfoForm> {
                     : null,
                 isExpanded: true,
                 decoration: InputDecoration(
-                  labelText: 'How did you first hear about our school? *',
-                  hintText: 'Select one primary source',
+                  labelText: 'How did the family hear about the school? *',
+                  hintText: 'Select one source',
                   errorText: widget.errors['admissionSource'],
                 ),
                 items: _admissionSourceOptions.entries
@@ -9410,11 +9410,6 @@ class _StudentBasicInfoFormState extends State<_StudentBasicInfoForm> {
                   errorText: widget.errors['admissionSourceOther'],
                 ),
               ],
-              const SizedBox(height: 8),
-              const Text(
-                'Choose the first source the family remembers. This is used for admissions reporting.',
-                style: TextStyle(color: AppColors.muted, fontSize: 12),
-              ),
             ],
           ),
         ),

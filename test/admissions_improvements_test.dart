@@ -270,6 +270,16 @@ void main() {
     final source = find.byKey(const Key('admission-source'));
     expect(source, findsOneWidget);
     expect(
+      find.text('How did the family hear about the school? *'),
+      findsOneWidget,
+    );
+    expect(
+      find.text(
+        'Choose the first source the family remembers. This is used for admissions reporting.',
+      ),
+      findsNothing,
+    );
+    expect(
       tester.widget<DropdownButtonFormField<String>>(source).initialValue,
       'PARENT_GUARDIAN_REFERRAL',
     );
