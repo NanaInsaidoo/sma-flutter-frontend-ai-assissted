@@ -35,6 +35,21 @@ enum _InspectionTab { checklist, flags, report }
 
 enum _Condition { good, fair, poor, notApplicable }
 
+const _findingStatusOptions = <String, String>{
+  'OPEN': 'Open',
+  'IN_PROGRESS': 'In progress',
+  'RESOLVED': 'Resolved',
+};
+
+String _normaliseFindingStatus(Object? value) {
+  final status = '${value ?? ''}'.trim().toUpperCase().replaceAll(' ', '_');
+  return switch (status) {
+    'IN_PROGRESS' => 'IN_PROGRESS',
+    'RESOLVED' || 'CLOSED' || 'COMPLETE' || 'COMPLETED' => 'RESOLVED',
+    _ => 'OPEN',
+  };
+}
+
 class _FacilityInspectionPrototypeState
     extends State<FacilityInspectionPrototype> {
   _InspectionTab _tab = _InspectionTab.checklist;
@@ -51,7 +66,6 @@ class _FacilityInspectionPrototypeState
   DateTime? _closingDate;
   final _headteacher = TextEditingController(text: 'Nana Boateng');
   final _assistantHead = TextEditingController(text: 'Adwoa Mensah');
-  final _communityChair = TextEditingController(text: 'Ama Nyarko');
 
   @override
   void initState() {
@@ -63,7 +77,6 @@ class _FacilityInspectionPrototypeState
   void dispose() {
     _headteacher.dispose();
     _assistantHead.dispose();
-    _communityChair.dispose();
     super.dispose();
   }
 
@@ -101,7 +114,6 @@ class _FacilityInspectionPrototypeState
         if (signoff is Map) {
           _headteacher.text = '${signoff['headteacher'] ?? ''}';
           _assistantHead.text = '${signoff['assistantHead'] ?? ''}';
-          _communityChair.text = '${signoff['communityChair'] ?? ''}';
         }
         _loading = false;
       });
@@ -615,7 +627,7 @@ class _FacilityInspectionPrototypeState
               finding: '',
               assignedTo: '',
               due: '',
-              status: 'Open',
+              status: 'OPEN',
             ),
           );
           _openDetails.add(item.id);
@@ -730,6 +742,34 @@ class _FacilityInspectionPrototypeState
                     decoration: const InputDecoration(labelText: 'Fix by'),
                   ),
                 ),
+                SizedBox(
+                  width: 190,
+                  child: DropdownButtonFormField<String>(
+                    key: ValueKey('${item.id}:${flag.status}'),
+                    value: flag.status,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Finding status',
+                    ),
+                    items: _findingStatusOptions.entries
+                        .map(
+                          (entry) => DropdownMenuItem<String>(
+                            value: entry.key,
+                            child: Text(entry.value),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(
+                        () => _updateFlag(
+                          item,
+                          (current) => current.copyWith(status: value),
+                        ),
+                      );
+                    },
+                  ),
+                ),
               ],
               OutlinedButton.icon(
                 onPressed: () => _pickEvidencePhotos(item),
@@ -794,7 +834,10 @@ class _FacilityInspectionPrototypeState
                           label: _sectionForItem(entry.key).name,
                           color: AppColors.muted,
                         ),
-                        _SmallTag(label: flag.status, color: AppColors.blue),
+                        _SmallTag(
+                          label: flag.statusLabel,
+                          color: AppColors.blue,
+                        ),
                       ],
                     ),
                     const SizedBox(height: 12),
@@ -868,7 +911,7 @@ class _FacilityInspectionPrototypeState
     children: [
       _sectionHeading(
         'Inspection report',
-        'A closure-ready summary for school leadership and the SMC/PTA.',
+        'A closure-ready summary for school leadership.',
         trailing: OutlinedButton.icon(
           onPressed: () => _showMessage(
             'The final closure report includes this submitted inspection.',
@@ -1108,15 +1151,6 @@ class _FacilityInspectionPrototypeState
                       controller: _assistantHead,
                       decoration: const InputDecoration(
                         labelText: 'Assistant head',
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 260,
-                    child: TextField(
-                      controller: _communityChair,
-                      decoration: const InputDecoration(
-                        labelText: 'SMC / PTA chair',
                       ),
                     ),
                   ),
@@ -1457,7 +1491,7 @@ class _FacilityInspectionPrototypeState
           finding: '',
           assignedTo: '',
           due: '',
-          status: 'Open',
+          status: 'OPEN',
         );
     _flagDetails[item.id] = update(current);
     _submitted = false;
@@ -1523,7 +1557,6 @@ class _FacilityInspectionPrototypeState
       'signoff': {
         'headteacher': _headteacher.text.trim(),
         'assistantHead': _assistantHead.text.trim(),
-        'communityChair': _communityChair.text.trim(),
       },
     };
     try {
@@ -1830,8 +1863,10 @@ class _FlagDetail {
     finding: '${map['finding'] ?? ''}',
     assignedTo: '${map['assignedTo'] ?? ''}',
     due: '${map['due'] ?? ''}',
-    status: '${map['status'] ?? 'Open'}',
+    status: _normaliseFindingStatus(map['status']),
   );
+
+  String get statusLabel => _findingStatusOptions[status] ?? 'Open';
 
   _FlagDetail copyWith({
     String? severity,
@@ -2156,7 +2191,7 @@ const _sections = <_InspectionSection>[
       ),
       _InspectionItem(
         'records.shared',
-        'Report is shared with SMC/PTA and the Circuit Supervisor',
+        'Report is shared with school management and the Circuit Supervisor',
       ),
       _InspectionItem(
         'records.reinspection',

@@ -235,8 +235,6 @@ Future<Uint8List> buildFacilityChecklistTemplatePdf({
             _signature('Headteacher', navy, muted),
             pw.SizedBox(width: 12),
             _signature('Assistant head', navy, muted),
-            pw.SizedBox(width: 12),
-            _signature('SMC / PTA chair', navy, muted),
           ],
         ),
       ],

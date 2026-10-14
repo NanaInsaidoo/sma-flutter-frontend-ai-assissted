@@ -39,6 +39,7 @@ void main() {
       find.text('Two roofing sheets are loose above the Class 5 block.'),
       findsOneWidget,
     );
+    expect(find.text('Acknowledged'), findsNothing);
     expect(find.text('Evidence required'), findsWidgets);
 
     await tester.tap(find.text('Report & sign-off'));
@@ -47,10 +48,60 @@ void main() {
       find.text('2 urgent safety issues require acknowledgement'),
       findsOneWidget,
     );
+    expect(find.text('SMC / PTA chair'), findsNothing);
+  });
+
+  testWidgets('updates finding status with structured values', (tester) async {
+    tester.view.physicalSize = const Size(1440, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final repository = _Repository();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: FacilityInspectionPrototype(
+            onBack: () {},
+            schoolId: 'SMA-DEMO-001',
+            termName: 'First Term',
+            repository: repository,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Management flags').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Update follow-up').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Finding status'), findsOneWidget);
+    final status = find.byType(DropdownButtonFormField<String>);
+    await tester.ensureVisible(status);
+    await tester.pumpAndSettle();
+    await tester.tap(status);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Resolved').last);
+    await tester.pumpAndSettle();
+    final saveDraft = find.text('Save draft').first;
+    await tester.ensureVisible(saveDraft);
+    await tester.pumpAndSettle();
+    await tester.tap(saveDraft);
+    await tester.pumpAndSettle();
+
+    final facilities = repository.savedInput!.facilities;
+    final findings = Map<String, dynamic>.from(facilities['findings'] as Map);
+    final roof = Map<String, dynamic>.from(findings['classrooms.roof'] as Map);
+    final signoff = Map<String, dynamic>.from(facilities['signoff'] as Map);
+    expect(roof['status'], 'RESOLVED');
+    expect(signoff, isNot(contains('communityChair')));
   });
 }
 
 class _Repository implements HeadmasterTermClosureRepository {
+  HeadmasterTermClosureInput? savedInput;
   final ratings = {
     'classrooms.roof': 'POOR',
     'classrooms.ceiling': 'FAIR',
@@ -122,7 +173,10 @@ class _Repository implements HeadmasterTermClosureRepository {
   Future<HeadmasterTermClosure> saveDraft(
     String schoolId,
     HeadmasterTermClosureInput input,
-  ) async => _closure();
+  ) async {
+    savedInput = input;
+    return _closure();
+  }
 
   @override
   Future<HeadmasterTermClosure> close(
