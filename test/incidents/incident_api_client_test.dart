@@ -136,7 +136,12 @@ void main() {
       'incidentDate': '2026-08-29',
       'location': 'Classroom',
       'incidentStatus': 'CLOSED_RESOLVED',
-      'notifiedParties': ['PARENT_GUARDIAN', 'POLICE', 'OTHER'],
+      'notifiedParties': [
+        'PARENT_GUARDIAN',
+        'POLICE',
+        'HOSPITAL_CLINIC',
+        'OTHER',
+      ],
       'otherNotifiedDetails': 'District social welfare officer',
       'edited': true,
       'lastEditedBy': 'Adjoa Mensah',
@@ -151,7 +156,10 @@ void main() {
     });
 
     expect(incident.status, 'CLOSED_RESOLVED');
-    expect(incident.notifiedParties, containsAll(['POLICE', 'OTHER']));
+    expect(
+      incident.notifiedParties,
+      containsAll(['POLICE', 'HOSPITAL_CLINIC', 'OTHER']),
+    );
     expect(incident.otherNotifiedDetails, 'District social welfare officer');
     expect(incident.lastEditedBy, 'Adjoa Mensah');
     expect(incident.lastEditedAt, DateTime(2026, 8, 29, 14, 30));

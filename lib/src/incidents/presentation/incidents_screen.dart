@@ -12,6 +12,7 @@ import '../../assessments/presentation/report_pdf_download_stub.dart'
 const _notificationOptions = [
   ('PARENT_GUARDIAN', 'Parent / guardian'),
   ('POLICE', 'Police'),
+  ('HOSPITAL_CLINIC', 'Hospital / clinic'),
   ('GES', 'GES'),
   ('OTHER', 'Other'),
 ];
