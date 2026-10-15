@@ -3,10 +3,14 @@ import 'package:flutter/material.dart';
 import '../../assessments/presentation/report_pdf_download.dart';
 import '../../theme/app_theme.dart';
 import '../data/management_report_api_client.dart';
+import '../domain/data_export_models.dart';
 import '../domain/management_report_models.dart';
 import '../domain/report_access_policy.dart';
+import 'data_exports_panel.dart';
 
 enum _ReportCategory { all, term, academic, finance, operations }
+
+enum _ReportsView { reports, dataExports }
 
 class ReportsLibraryScreen extends StatefulWidget {
   const ReportsLibraryScreen({
@@ -19,6 +23,7 @@ class ReportsLibraryScreen extends StatefulWidget {
     this.accessToken,
     this.onRefreshAccessToken,
     this.repository,
+    this.dataExportRepository,
   });
 
   final String schoolName;
@@ -29,6 +34,7 @@ class ReportsLibraryScreen extends StatefulWidget {
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
   final ManagementReportRepository? repository;
+  final DataExportRepository? dataExportRepository;
 
   @override
   State<ReportsLibraryScreen> createState() => _ReportsLibraryScreenState();
@@ -41,6 +47,8 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
   String _term = 'All terms';
   final Set<String> _downloading = {};
   late final ManagementReportRepository _repository;
+  late final DataExportRepository _dataExportRepository;
+  _ReportsView _view = _ReportsView.reports;
   List<_ReportItem> _reports = [];
   bool _loading = true;
   String? _loadError;
@@ -48,12 +56,12 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
   @override
   void initState() {
     super.initState();
-    _repository =
-        widget.repository ??
-        ManagementReportApiClient(
-          accessToken: widget.accessToken,
-          onRefreshAccessToken: widget.onRefreshAccessToken,
-        );
+    final api = ManagementReportApiClient(
+      accessToken: widget.accessToken,
+      onRefreshAccessToken: widget.onRefreshAccessToken,
+    );
+    _repository = widget.repository ?? api;
+    _dataExportRepository = widget.dataExportRepository ?? api;
     _load();
   }
 
@@ -136,28 +144,37 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
                   children: [
                     _buildHeader(compact),
                     const SizedBox(height: 16),
-                    _buildAccessNotice(),
+                    _buildViewSwitcher(),
                     const SizedBox(height: 20),
-                    _buildPreviewNotice(),
-                    const SizedBox(height: 20),
-                    if (_loading) ...[
-                      const LinearProgressIndicator(),
+                    if (_view == _ReportsView.dataExports)
+                      DataExportsPanel(
+                        schoolId: widget.schoolId,
+                        repository: _dataExportRepository,
+                      )
+                    else ...[
+                      _buildAccessNotice(),
                       const SizedBox(height: 20),
-                    ],
-                    if (_loadError != null) ...[
-                      _buildLoadError(),
+                      _buildPreviewNotice(),
                       const SizedBox(height: 20),
+                      if (_loading) ...[
+                        const LinearProgressIndicator(),
+                        const SizedBox(height: 20),
+                      ],
+                      if (_loadError != null) ...[
+                        _buildLoadError(),
+                        const SizedBox(height: 20),
+                      ],
+                      _buildSummary(contentWidth),
+                      const SizedBox(height: 28),
+                      _sectionHeading(
+                        'All reports',
+                        'Find current and historical reports by school year, term or area.',
+                      ),
+                      const SizedBox(height: 14),
+                      _buildFilters(compact),
+                      const SizedBox(height: 16),
+                      _buildReportList(),
                     ],
-                    _buildSummary(contentWidth),
-                    const SizedBox(height: 28),
-                    _sectionHeading(
-                      'All reports',
-                      'Find current and historical reports by school year, term or area.',
-                    ),
-                    const SizedBox(height: 14),
-                    _buildFilters(compact),
-                    const SizedBox(height: 16),
-                    _buildReportList(),
                   ],
                 ),
               ),
@@ -173,7 +190,7 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Management reports',
+          'Reports and data',
           style: TextStyle(
             color: AppColors.text,
             fontSize: 32,
@@ -183,7 +200,9 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
         ),
         const SizedBox(height: 8),
         Text(
-          'View the current and historical reports available to your workspace.',
+          ReportAccessPolicy.canExportRawData(widget.viewerRole)
+              ? 'Use management reports or export recorded data for further analysis.'
+              : 'View the management reports available to your workspace role.',
           style: TextStyle(
             color: AppColors.muted,
             fontSize: compact ? 15 : 17,
@@ -214,6 +233,37 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
         Expanded(child: title),
         help,
       ],
+    );
+  }
+
+  Widget _buildViewSwitcher() {
+    if (!ReportAccessPolicy.canExportRawData(widget.viewerRole)) {
+      return const SizedBox.shrink();
+    }
+    return SegmentedButton<_ReportsView>(
+      key: const ValueKey('reports-view-switcher'),
+      segments: const [
+        ButtonSegment(
+          value: _ReportsView.reports,
+          icon: Icon(Icons.description_outlined),
+          label: Text('Management reports'),
+        ),
+        ButtonSegment(
+          value: _ReportsView.dataExports,
+          icon: Icon(Icons.dataset_outlined),
+          label: Text('Data exports'),
+        ),
+      ],
+      selected: {_view},
+      onSelectionChanged: (selection) =>
+          setState(() => _view = selection.first),
+      style: ButtonStyle(
+        foregroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? AppColors.green
+              : AppColors.text,
+        ),
+      ),
     );
   }
 
@@ -570,6 +620,9 @@ class _ReportsLibraryScreenState extends State<ReportsLibraryScreen> {
       _category = _ReportCategory.all;
       _year = 'All years';
       _term = 'All terms';
+      if (!ReportAccessPolicy.canExportRawData(widget.viewerRole)) {
+        _view = _ReportsView.reports;
+      }
     });
   }
 

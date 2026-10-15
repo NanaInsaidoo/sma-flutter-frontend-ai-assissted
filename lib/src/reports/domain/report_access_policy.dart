@@ -31,6 +31,15 @@ abstract final class ReportAccessPolicy {
     'BURSAR',
     'SECRETARY',
   };
+  static const rawDataExportRoles = <String>{
+    'OWNER',
+    'ADMINISTRATOR',
+    'HEADMASTER',
+    'HEAD_TEACHER',
+    'ASSISTANT_HEAD_TEACHER',
+    'BURSAR',
+    'SECRETARY',
+  };
 
   static String normalizeRole(String? value) {
     final role = value?.trim().toUpperCase().replaceAll('-', '_') ?? '';
@@ -43,6 +52,9 @@ abstract final class ReportAccessPolicy {
 
   static bool canOpenLibrary(String? role) =>
       schoolRoles.contains(normalizeRole(role));
+
+  static bool canExportRawData(String? role) =>
+      rawDataExportRoles.contains(normalizeRole(role));
 
   static bool canViewReport({
     required String? role,

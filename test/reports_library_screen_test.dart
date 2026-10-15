@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:school_management_app/src/reports/domain/data_export_models.dart';
 import 'package:school_management_app/src/reports/domain/management_report_models.dart';
+import 'package:school_management_app/src/reports/presentation/data_exports_panel.dart';
 import 'package:school_management_app/src/reports/presentation/reports_library_screen.dart';
 import 'package:school_management_app/src/theme/app_theme.dart';
 
-class _FakeReports implements ManagementReportRepository {
+class _FakeReports implements ManagementReportRepository, DataExportRepository {
   final downloads = <String>[];
+  final dataExportRequests = <DataExportRequest>[];
+  final dataExportDownloads = <int>[];
+  List<DataExportHistoryItem> exports = [];
   @override
   Future<List<int>> downloadPdf(
     String schoolId,
@@ -96,6 +101,103 @@ class _FakeReports implements ManagementReportRepository {
       notes: const [],
     ),
   ];
+
+  @override
+  Future<DataExportOptions> dataExportOptions(String schoolId) async =>
+      DataExportOptions(
+        datasets: const [
+          DataExportDataset(
+            code: 'FEES_PAYMENTS',
+            label: 'Fees and payments',
+            description: 'Obligations, receipts and allocations',
+          ),
+          DataExportDataset(
+            code: 'STUDENT_ATTENDANCE',
+            label: 'Student attendance',
+            description: 'One row per recorded mark',
+          ),
+        ],
+        terms: [
+          DataExportTerm(
+            id: 2,
+            academicYear: '2026-2027',
+            term: 'Second Term',
+            status: 'ACTIVE',
+            current: true,
+            startDate: DateTime(2026, 12, 12),
+            endDate: DateTime(2027, 4, 30),
+          ),
+          DataExportTerm(
+            id: 1,
+            academicYear: '2026-2027',
+            term: 'First Term',
+            status: 'CLOSED',
+            current: false,
+            startDate: DateTime(2026, 8, 25),
+            endDate: DateTime(2026, 12, 11),
+          ),
+        ],
+        classes: const [DataExportOptionItem(id: 7, name: 'JHS 2 - Section 1')],
+        paymentMethods: const [
+          DataExportOptionItem(id: 3, name: 'Mobile Money'),
+        ],
+        statusOptions: const ['COMPLETED', 'PENDING'],
+        canIncludeIdentities: true,
+        maximumRows: 250000,
+      );
+
+  @override
+  Future<List<DataExportHistoryItem>> dataExportHistory(
+    String schoolId,
+  ) async => exports;
+
+  @override
+  Future<DataExportPreview> previewDataExport(
+    String schoolId,
+    DataExportRequest request,
+  ) async {
+    dataExportRequests.add(request);
+    return const DataExportPreview(
+      totalRecords: 42,
+      files: {'fee-payments.csv': 30, 'payment-allocations.csv': 12},
+      overLimit: false,
+      period: '2026-12-12 to 2027-04-30',
+    );
+  }
+
+  @override
+  Future<DataExportDownload> createDataExport(
+    String schoolId,
+    DataExportRequest request,
+  ) async {
+    dataExportRequests.add(request);
+    exports = [
+      DataExportHistoryItem(
+        id: 9,
+        fileName: 'school-analysis-data.zip',
+        datasets: request.datasets,
+        rowCount: 42,
+        anonymized: request.anonymized,
+        generatedBy: 'Nana Boateng',
+        generatedAt: DateTime(2026, 10, 15),
+      ),
+    ];
+    return const DataExportDownload(
+      fileName: 'school-analysis-data.zip',
+      bytes: [80, 75, 3, 4],
+    );
+  }
+
+  @override
+  Future<DataExportDownload> downloadDataExport(
+    String schoolId,
+    int exportId,
+    String fileName,
+  ) async {
+    dataExportDownloads.add(exportId);
+    return DataExportDownload(fileName: fileName, bytes: const [80, 75, 3, 4]);
+  }
+
   static ManagementReport _report(
     String type,
     String title, {
@@ -133,6 +235,7 @@ void main() {
           currentTerm: 'Second Term',
           viewerRole: role,
           repository: reports,
+          dataExportRepository: reports,
         ),
       ),
     );
@@ -194,6 +297,109 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(reports.downloads, contains('SMA-001:1:HEADMASTER'));
+  });
+
+  testWidgets('builds, reviews and generates a filtered raw data export', (
+    tester,
+  ) async {
+    size(tester);
+    await tester.pumpWidget(buildScreen());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Data exports'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('data-exports-panel')), findsOneWidget);
+    expect(find.text('Raw data for further analysis'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('create-data-export')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('data-export-dataset-FEES_PAYMENTS')),
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('data-export-dataset-FEES_PAYMENTS')),
+    );
+    await tester.tap(find.byKey(const ValueKey('data-export-more-filters')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('JHS 2 - Section 1'));
+    await tester.tap(find.text('JHS 2 - Section 1'));
+    await tester.tap(find.text('Mobile Money'));
+    await tester.tap(find.text('Completed'));
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('review-data-export')),
+    );
+    await tester.tap(find.byKey(const ValueKey('review-data-export')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('42 estimated records'), findsOneWidget);
+    expect(reports.dataExportRequests.single.termIds, [2]);
+    expect(reports.dataExportRequests.single.classIds, [7]);
+    expect(reports.dataExportRequests.single.paymentMethodIds, [3]);
+    expect(reports.dataExportRequests.single.statuses, ['COMPLETED']);
+
+    await tester.tap(find.byKey(const ValueKey('generate-data-export')));
+    await tester.pumpAndSettle();
+    expect(reports.dataExportRequests, hasLength(2));
+    expect(find.text('school-analysis-data.zip'), findsOneWidget);
+    expect(find.textContaining('42 records'), findsOneWidget);
+  });
+
+  testWidgets('requires at least one raw data area before review', (
+    tester,
+  ) async {
+    size(tester);
+    await tester.pumpWidget(buildScreen());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Data exports'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('create-data-export')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('review-data-export')),
+    );
+    await tester.tap(find.byKey(const ValueKey('review-data-export')));
+    await tester.pump();
+    expect(find.text('Select at least one data area.'), findsOneWidget);
+    expect(reports.dataExportRequests, isEmpty);
+  });
+
+  testWidgets('teachers do not see the school-wide raw data export workspace', (
+    tester,
+  ) async {
+    size(tester);
+    await tester.pumpWidget(buildScreen(role: 'CLASS_TEACHER'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Data exports'), findsNothing);
+    expect(find.byKey(const ValueKey('data-exports-panel')), findsNothing);
+  });
+
+  testWidgets('raw data export builder remains usable on a phone', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    reports = _FakeReports();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: DataExportsPanel(schoolId: 'SMA-001', repository: reports),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('create-data-export')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('data-export-builder')), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   final roleCases =
