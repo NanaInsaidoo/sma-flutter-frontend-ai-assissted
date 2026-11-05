@@ -1379,11 +1379,17 @@ class LivePlatformRepository implements PlatformRepository {
       if (draft.gesRegistrationTypeId != null)
         'registrationType': {'id': draft.gesRegistrationTypeId},
       'gesRegistrationDate': draft.gesRegistrationDate,
+      'registrationTypeOther': draft.gesRegistrationTypeId == 5
+          ? draft.gesRegistrationTypeOther.trim()
+          : null,
       'businessRegistrationNumber': draft.businessRegistrationNumber,
       'businessRegistrationTypeId': draft.businessRegistrationTypeId,
       if (draft.businessRegistrationTypeId != null)
         'businessRegistrationType': {'id': draft.businessRegistrationTypeId},
       'businessRegistrationDate': draft.businessRegistrationDate,
+      'businessRegistrationTypeOther': draft.businessRegistrationTypeId == 9
+          ? draft.businessRegistrationTypeOther.trim()
+          : null,
       'gemisCode': draft.gemisCode,
       'taxIdNumber': draft.taxIdNumber,
     },
