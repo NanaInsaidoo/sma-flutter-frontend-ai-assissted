@@ -143,6 +143,7 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
 
   int _completedSteps = 0;
   String _schoolCategory = '';
+  final Set<String> _schoolCategories = {};
   String _educationLevel = '';
   String _gesRegistrationType = '';
   String _businessRegistrationType = '';
@@ -723,6 +724,12 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
       administratorPhone: _administratorPhone,
       administratorEmail: _administratorEmail,
       educationLevel: _educationLevel,
+      schoolCategories: _schoolCategories,
+      onSchoolCategoriesChanged: (values) {
+        _schoolCategories
+          ..clear()
+          ..addAll(values);
+      },
       gesRegistrationType: _gesRegistrationType,
       businessRegistrationType: _businessRegistrationType,
       socialWelfareStatus: _socialWelfareStatus,
@@ -1090,6 +1097,16 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
     _yearFounded.text = _text(data, ['yearFounded']) ?? _yearFounded.text;
     _motto.text = _text(data, ['motto']) ?? _motto.text;
     _schoolCategory = _nameOf(data['category']) ?? _schoolCategory;
+    final savedCategories = data['categories'];
+    _schoolCategories.clear();
+    if (savedCategories is List) {
+      _schoolCategories.addAll(
+        savedCategories.map(_nameOf).whereType<String>(),
+      );
+    }
+    if (_schoolCategories.isEmpty && _schoolCategory.isNotEmpty) {
+      _schoolCategories.add(_schoolCategory);
+    }
     _educationLevel =
         _nameOf(data['educationLevel']) ??
         _text(data, ['educationLevelName']) ??
@@ -1608,19 +1625,33 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
   }
 
   SchoolOnboardingDraft _onboardingDraft() {
-    final schoolCategory = _legacyCategoryForEducationLevel(
-      _educationLevel,
-      fallback: _schoolCategory,
+    final selectedCategories = _schoolCategories.isEmpty
+        ? [
+            _legacyCategoryForEducationLevel(
+              _educationLevel,
+              fallback: _schoolCategory,
+            ),
+          ]
+        : _schoolCategories.toList();
+    selectedCategories.sort(
+      (a, b) => (_lookups.schoolCategoryIds[a] ?? 0).compareTo(
+        _lookups.schoolCategoryIds[b] ?? 0,
+      ),
     );
+    final schoolCategory = selectedCategories.first;
     return SchoolOnboardingDraft(
       customSchoolId: _customSchoolId,
       schoolName: _schoolName.text.trim().isEmpty
           ? 'New School'
           : _schoolName.text.trim(),
-      // The backend still requires this legacy reference. Education level is
-      // the only value selected by the user and determines it automatically.
+      // Keep a primary category for older clients, alongside all selected categories.
       schoolType: schoolCategory,
       schoolTypeId: _lookups.schoolCategoryIds[schoolCategory],
+      schoolCategories: selectedCategories,
+      schoolCategoryIds: selectedCategories
+          .map((value) => _lookups.schoolCategoryIds[value])
+          .whereType<int>()
+          .toList(),
       educationLevel: _educationLevel,
       educationLevelId: _lookups.educationLevelIds[_educationLevel],
       yearFounded: int.tryParse(_yearFounded.text.trim()) ?? 0,
@@ -2116,6 +2147,8 @@ class _StepFormDialog extends StatefulWidget {
     required this.loadingCities,
     required this.levels,
     required this.onEducationLevelChanged,
+    required this.schoolCategories,
+    required this.onSchoolCategoriesChanged,
     required this.onGesRegistrationTypeChanged,
     required this.onBusinessRegistrationTypeChanged,
     required this.onSocialWelfareStatusChanged,
@@ -2205,6 +2238,8 @@ class _StepFormDialog extends StatefulWidget {
   final bool loadingCities;
   final Set<String> levels;
   final ValueChanged<String> onEducationLevelChanged;
+  final Set<String> schoolCategories;
+  final ValueChanged<Set<String>> onSchoolCategoriesChanged;
   final ValueChanged<String> onGesRegistrationTypeChanged;
   final ValueChanged<String> onBusinessRegistrationTypeChanged;
   final ValueChanged<String> onSocialWelfareStatusChanged;
@@ -2247,6 +2282,7 @@ class _StepFormDialog extends StatefulWidget {
 class _StepFormDialogState extends State<_StepFormDialog> {
   final _formKey = GlobalKey<FormState>();
   late String _educationLevel = widget.educationLevel;
+  late final Set<String> _schoolCategories = {...widget.schoolCategories};
   late String _gesRegistrationType = widget.gesRegistrationType;
   late String _businessRegistrationType = widget.businessRegistrationType;
   late String _socialWelfareStatus = widget.socialWelfareStatus;
@@ -2332,6 +2368,14 @@ class _StepFormDialogState extends State<_StepFormDialog> {
         _validationMessage =
             'Check the highlighted required fields before continuing.';
       });
+      return;
+    }
+    if (widget.index == 0 &&
+        widget.lookups.schoolCategories.isNotEmpty &&
+        _schoolCategories.isEmpty) {
+      setState(
+        () => _validationMessage = 'Select at least one school category.',
+      );
       return;
     }
     if (widget.index == 6 && widget.lookups.gradeLevels.isEmpty) {
@@ -2422,6 +2466,7 @@ class _StepFormDialogState extends State<_StepFormDialog> {
     setState(() => _saving = true);
     try {
       widget.onEducationLevelChanged(_educationLevel);
+      widget.onSchoolCategoriesChanged(_schoolCategories);
       widget.onGesRegistrationTypeChanged(_gesRegistrationType);
       widget.onBusinessRegistrationTypeChanged(_businessRegistrationType);
       widget.onSocialWelfareStatusChanged(_socialWelfareStatus);
@@ -2477,6 +2522,7 @@ class _StepFormDialogState extends State<_StepFormDialog> {
       0 => [
         widget.schoolName.text.trim(),
         _educationLevel,
+        _schoolCategories.toList()..sort(),
         widget.yearFounded.text.trim(),
         widget.motto.text.trim(),
       ],
@@ -2871,6 +2917,35 @@ class _StepFormDialogState extends State<_StepFormDialog> {
           values: widget.lookups.educationLevels,
           onChanged: (value) => setState(() => _educationLevel = value),
         ),
+        if (widget.lookups.schoolCategories.isNotEmpty)
+          InputDecorator(
+            decoration: const InputDecoration(
+              labelText: 'School categories',
+              helperText: 'Select all categories your school offers.',
+              helperMaxLines: 2,
+              border: OutlineInputBorder(),
+            ),
+            child: Column(
+              children: [
+                for (final category in widget.lookups.schoolCategories)
+                  CheckboxListTile(
+                    key: ValueKey('school-category-$category'),
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: Text(category),
+                    value: _schoolCategories.contains(category),
+                    onChanged: (checked) => setState(() {
+                      if (checked == true) {
+                        _schoolCategories.add(category);
+                      } else {
+                        _schoolCategories.remove(category);
+                      }
+                    }),
+                  ),
+              ],
+            ),
+          ),
         _pair(
           _requiredField(
             'Year founded',

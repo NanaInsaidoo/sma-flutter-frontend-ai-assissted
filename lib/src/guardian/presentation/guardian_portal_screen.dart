@@ -3204,7 +3204,7 @@ class _ChildDetailsContent extends StatelessWidget {
               ('City of birth', display(details.cityOfBirth)),
               ('Religion', display(details.religion)),
               ('Languages', listDisplay(details.languages)),
-              ('Skills and interests', display(details.skillsAndInterests)),
+              ('Interests and talents', display(details.skillsAndInterests)),
             ],
           ),
           right: _MedicalDetailsGroup(medical: medical),

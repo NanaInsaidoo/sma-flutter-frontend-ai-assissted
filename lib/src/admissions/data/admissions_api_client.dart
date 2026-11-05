@@ -505,8 +505,15 @@ class AdmissionsApiClient {
     },
   );
 
-  Future<List<AdmissionLookupOption>> getSkills() =>
-      _cachedLookup('skills', () => _loadLookup('/api/v1/skills'));
+  Future<List<AdmissionLookupOption>> getSkills({String? audience}) =>
+      _cachedLookup(
+        'skills:${audience ?? 'all'}',
+        () => _loadLookup(
+          _withQuery('/api/v1/skills', {
+            if (audience != null) 'audience': audience,
+          }),
+        ),
+      );
 
   Future<List<AdmissionLookupOption>> _cachedLookup(
     String key,

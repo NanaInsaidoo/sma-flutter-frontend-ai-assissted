@@ -1341,6 +1341,10 @@ class LivePlatformRepository implements PlatformRepository {
     'yearFounded': draft.yearFounded,
     'motto': draft.motto,
     'category': {'id': draft.schoolTypeId, 'name': draft.schoolType},
+    if (draft.schoolCategoryIds.isNotEmpty)
+      'categories': [
+        for (final id in draft.schoolCategoryIds) {'id': id},
+      ],
     'educationLevel': {
       'id': draft.educationLevelId,
       'name': draft.educationLevel,
@@ -1354,6 +1358,10 @@ class LivePlatformRepository implements PlatformRepository {
     'yearFounded': draft.yearFounded,
     'motto': draft.motto,
     'category': {'id': draft.schoolTypeId, 'name': draft.schoolType},
+    if (draft.schoolCategoryIds.isNotEmpty)
+      'categories': [
+        for (final id in draft.schoolCategoryIds) {'id': id},
+      ],
     'educationLevel': {
       'id': draft.educationLevelId,
       'name': draft.educationLevel,
@@ -2055,6 +2063,7 @@ class LivePlatformRepository implements PlatformRepository {
 
   ManagedSchool _schoolFromJson(dynamic json, {SchoolDraft? draft}) {
     final map = json is Map<String, dynamic> ? json : <String, dynamic>{};
+    final address = _asMap(map['address']);
     final name = _string(map, [
       'schoolName',
       'name',
@@ -2073,14 +2082,24 @@ class LivePlatformRepository implements PlatformRepository {
         'code',
         'id',
       ], fallback: 'PENDING'),
-      region: _nestedString(map, [
-        'region',
-      ], fallback: draft?.region ?? 'Not provided'),
-      district: _nestedString(map, ['district'], fallback: ''),
-      town: _nestedString(map, [
-        'town',
-        'city',
-      ], fallback: draft?.town ?? 'Not provided'),
+      region: _nestedString(
+        map,
+        ['region'],
+        fallback: _nestedString(address, [
+          'region',
+        ], fallback: draft?.region ?? 'Not provided'),
+      ),
+      district: _nestedString(map, [
+        'district',
+      ], fallback: _nestedString(address, ['district'])),
+      town: _nestedString(
+        map,
+        ['town', 'city'],
+        fallback: _nestedString(address, [
+          'city',
+          'town',
+        ], fallback: draft?.town ?? 'Not provided'),
+      ),
       students: _int(map, [
         'students',
         'studentCount',
