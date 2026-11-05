@@ -294,61 +294,69 @@ void main() {
     },
   );
 
-  testWidgets('education level replaces the redundant school category', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(1400, 1000));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final repository = _BasicInfoRepository();
+  testWidgets(
+    'school categories allow multiple selections alongside education level',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final repository = _BasicInfoRepository();
 
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SchoolCreationScreen(
-            accessToken: 'preview',
-            onRefreshAccessToken: () async => null,
-            repository: repository,
-            existingSchool: _school,
-            initialStep: 0,
-            singleStepEdit: true,
-            initialLookups: _basicInfoLookups,
-            lookupLoader: () async => _basicInfoLookups,
-            initialRecord: _basicInfoRecord,
-            onBack: () {},
-            onCreated: () {},
-            onStepUpdated: () async {},
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SchoolCreationScreen(
+              accessToken: 'preview',
+              onRefreshAccessToken: () async => null,
+              repository: repository,
+              existingSchool: _school,
+              initialStep: 0,
+              singleStepEdit: true,
+              initialLookups: _basicInfoLookups,
+              lookupLoader: () async => _basicInfoLookups,
+              initialRecord: _basicInfoRecord,
+              onBack: () {},
+              onCreated: () {},
+              onStepUpdated: () async {},
+            ),
           ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
+      );
+      await tester.pumpAndSettle();
 
-    expect(find.text('School category'), findsNothing);
-    expect(find.text('Education level'), findsOneWidget);
-    expect(find.text('Junior High'), findsOneWidget);
-    final mottoField = tester.widget<TextField>(
-      find.descendant(
-        of: find.byKey(const ValueKey('school-motto')),
-        matching: find.byType(TextField),
-      ),
-    );
-    expect(mottoField.minLines, 2);
-    expect(mottoField.maxLines, 4);
-    expect(mottoField.maxLength, 160);
+      expect(find.text('School categories'), findsOneWidget);
+      expect(find.text('Education level'), findsOneWidget);
+      expect(find.text('Junior High'), findsOneWidget);
+      final mottoField = tester.widget<TextField>(
+        find.descendant(
+          of: find.byKey(const ValueKey('school-motto')),
+          matching: find.byType(TextField),
+        ),
+      );
+      expect(mottoField.minLines, 2);
+      expect(mottoField.maxLines, 4);
+      expect(mottoField.maxLength, 160);
 
-    await tester.tap(find.text('Junior High'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Primary').last);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Save Changes'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.text('Junior High'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Primary').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('school-category-Primary')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save Changes'));
+      await tester.pumpAndSettle();
 
-    expect(repository.savedDraft, isNotNull);
-    expect(repository.savedDraft!.educationLevel, 'Primary');
-    expect(repository.savedDraft!.educationLevelId, 2);
-    expect(repository.savedDraft!.schoolType, 'Primary');
-    expect(repository.savedDraft!.schoolTypeId, 2);
-  });
+      expect(repository.savedDraft, isNotNull);
+      expect(repository.savedDraft!.educationLevel, 'Primary');
+      expect(repository.savedDraft!.educationLevelId, 2);
+      expect(repository.savedDraft!.schoolType, 'Primary');
+      expect(repository.savedDraft!.schoolTypeId, 2);
+      expect(repository.savedDraft!.schoolCategories, [
+        'Primary',
+        'Junior High School',
+      ]);
+      expect(repository.savedDraft!.schoolCategoryIds, [2, 3]);
+    },
+  );
 
   testWidgets('social welfare step can be saved without any details', (
     tester,

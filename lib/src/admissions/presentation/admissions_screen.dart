@@ -5427,7 +5427,6 @@ class _GuardianAdmissionDraft {
   String relationship = 'Parent';
   final selectedLanguages = <AdmissionLookupOption>[];
   final selectedOccupations = <AdmissionLookupOption>[];
-  final selectedSkills = <AdmissionLookupOption>[];
 
   void hydrate(AdmissionGuardian guardian) {
     final json = guardian.rawJson;
@@ -5588,13 +5587,6 @@ class _GuardianAdmissionDraft {
           json['occupation'],
         ).map(_lookupOptionFromValue).where((option) => option.name.isNotEmpty),
       );
-    selectedSkills
-      ..clear()
-      ..addAll(
-        _admissionList(
-          json['skills'],
-        ).map(_lookupOptionFromValue).where((option) => option.name.isNotEmpty),
-      );
   }
 
   void applySaved(AdmissionSavedPerson saved) {
@@ -5727,15 +5719,6 @@ class _GuardianAdmissionDraft {
       'occupations': selectedOccupations
           .map((occupation) => occupation.name.trim())
           .where((occupation) => occupation.isNotEmpty)
-          .toList(),
-    };
-  }
-
-  Map<String, dynamic> skillsPayload() {
-    return {
-      'skills': selectedSkills
-          .map((skill) => skill.name.trim())
-          .where((skill) => skill.isNotEmpty)
           .toList(),
     };
   }
@@ -6366,7 +6349,7 @@ class _AdmissionSideDrawerState extends State<_AdmissionSideDrawer> {
       _AdmissionFormStep('Guardian contact', 'Phone and email'),
       _AdmissionFormStep('Guardian address', 'Household location'),
       _AdmissionFormStep('Guardian ID', 'Proof of ID'),
-      _AdmissionFormStep('Occupation & skills', 'Work and skills'),
+      _AdmissionFormStep('Occupation', 'Work information'),
     ],
     _AdmissionFlowKind.student => const [
       _AdmissionFormStep('Basic Info', 'Student and class details'),
@@ -6649,7 +6632,7 @@ class _AdmissionSideDrawerState extends State<_AdmissionSideDrawer> {
               g.proofLocationDraft.cityId,
               g.proofLocationDraft.cityName,
             ],
-            4 => [options(g.selectedOccupations), options(g.selectedSkills)],
+            4 => [options(g.selectedOccupations)],
             _ => const [],
           };
     return jsonEncode(state);
@@ -6936,12 +6919,6 @@ class _AdmissionSideDrawerState extends State<_AdmissionSideDrawer> {
           customGuardianId: guardianId,
           step: 'occupation',
           body: _guardianDraft.occupationPayload(),
-        );
-        await widget.api.updateGuardianStep(
-          customSchoolId: widget.customSchoolId,
-          customGuardianId: guardianId,
-          step: 'skills',
-          body: _guardianDraft.skillsPayload(),
         );
         await widget.api.completeGuardianReview(
           customSchoolId: widget.customSchoolId,
@@ -7247,7 +7224,7 @@ class _AdmissionSideDrawerState extends State<_AdmissionSideDrawer> {
         draft: _guardianDraft,
         errors: _fieldErrors,
       ),
-      'Occupation & skills' => _GuardianWorkSkillsForm(
+      'Occupation' => _GuardianOccupationForm(
         api: widget.api,
         draft: _guardianDraft,
         errors: _fieldErrors,
@@ -7812,7 +7789,7 @@ class _AdmissionFlowScreenState extends State<_AdmissionFlowScreen> {
       _AdmissionFormStep('Guardian contact', 'Phone, email, and socials'),
       _AdmissionFormStep('Guardian address', 'Household location'),
       _AdmissionFormStep('Guardian ID', 'Proof of identification'),
-      _AdmissionFormStep('Occupation & skills', 'Work and useful skills'),
+      _AdmissionFormStep('Occupation', 'Work information'),
       _AdmissionFormStep('Review', 'Confirm guardian details'),
     ],
     _AdmissionFlowKind.student => const [
@@ -7963,7 +7940,7 @@ class _AdmissionFlowScreenState extends State<_AdmissionFlowScreen> {
         api: widget.api,
         draft: _guardianDraft,
       ),
-      'Occupation & skills' => _GuardianWorkSkillsForm(
+      'Occupation' => _GuardianOccupationForm(
         api: widget.api,
         draft: _guardianDraft,
       ),
@@ -9150,8 +9127,8 @@ class _GuardianProofOfIdForm extends StatelessWidget {
   }
 }
 
-class _GuardianWorkSkillsForm extends StatefulWidget {
-  const _GuardianWorkSkillsForm({
+class _GuardianOccupationForm extends StatefulWidget {
+  const _GuardianOccupationForm({
     required this.api,
     required this.draft,
     this.errors = const {},
@@ -9162,19 +9139,17 @@ class _GuardianWorkSkillsForm extends StatefulWidget {
   final Map<String, String> errors;
 
   @override
-  State<_GuardianWorkSkillsForm> createState() =>
-      _GuardianWorkSkillsFormState();
+  State<_GuardianOccupationForm> createState() =>
+      _GuardianOccupationFormState();
 }
 
-class _GuardianWorkSkillsFormState extends State<_GuardianWorkSkillsForm> {
+class _GuardianOccupationFormState extends State<_GuardianOccupationForm> {
   late final Future<List<AdmissionLookupOption>> _occupationsFuture;
-  late final Future<List<AdmissionLookupOption>> _skillsFuture;
 
   @override
   void initState() {
     super.initState();
     _occupationsFuture = widget.api.getOccupations();
-    _skillsFuture = widget.api.getSkills();
   }
 
   @override
@@ -9195,22 +9170,6 @@ class _GuardianWorkSkillsFormState extends State<_GuardianWorkSkillsForm> {
                 ..addAll(value);
             }),
             emptyMessage: 'No occupations are configured in the backend.',
-          ),
-        ),
-        SizedBox(height: 12),
-        _DrawerFormSection(
-          title: 'Useful skills',
-          child: _LookupTagSelectionGrid(
-            future: _skillsFuture,
-            selected: widget.draft.selectedSkills,
-            maxSelections: 5,
-            customHint: 'Add other skill',
-            onChanged: (value) => setState(() {
-              widget.draft.selectedSkills
-                ..clear()
-                ..addAll(value);
-            }),
-            emptyMessage: 'No skills are configured in the backend.',
           ),
         ),
       ],
@@ -11123,7 +11082,7 @@ class _PreviousSchoolFormState extends State<_PreviousSchoolForm> {
   void initState() {
     super.initState();
     _gradeLevelsFuture = widget.api.getSchoolGradeLevels(widget.customSchoolId);
-    _skillsFuture = widget.api.getSkills();
+    _skillsFuture = widget.api.getSkills(audience: 'STUDENT');
   }
 
   void _setFirstTimeStudent(bool value) {
@@ -11235,7 +11194,7 @@ class _PreviousSchoolFormState extends State<_PreviousSchoolForm> {
         ],
         const SizedBox(height: 12),
         _DrawerFormSection(
-          title: 'Skills and interests',
+          title: 'Interests and talents',
           child: _LookupTagSelectionGrid(
             future: _skillsFuture,
             selected: draft.selectedSkillsAndInterests,
@@ -11244,8 +11203,8 @@ class _PreviousSchoolFormState extends State<_PreviousSchoolForm> {
                 ..clear()
                 ..addAll(values);
             }),
-            emptyMessage: 'No suggested skills are configured.',
-            customHint: 'Add another skill or interest',
+            emptyMessage: 'No suggested interests or talents are available.',
+            customHint: 'Add another interest or talent',
           ),
         ),
       ],
@@ -13059,7 +13018,10 @@ class _ApplicantVaccinationContent extends StatelessWidget {
         final status = _admissionText(record?['status']).toUpperCase();
         final vaccinated =
             status == 'YES' || status == 'VACCINATED' || status == 'RECEIVED';
-        final pending = status == 'PENDING';
+        final pending =
+            status == 'PENDING' ||
+            status == 'NOT_ANSWERED' ||
+            status == 'NO_ANSWER';
         final label = vaccinated
             ? 'Vaccinated'
             : pending
@@ -13180,7 +13142,7 @@ class _ApplicantSchoolHistory extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         _AllergyGroup(
-          title: 'Student skills & interests',
+          title: 'Interests and talents',
           values: skills,
           color: AppColors.green,
         ),

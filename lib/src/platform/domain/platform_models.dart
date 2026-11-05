@@ -699,6 +699,8 @@ class SchoolDraft {
     required this.schoolName,
     required this.schoolType,
     required this.schoolTypeId,
+    this.schoolCategories = const [],
+    this.schoolCategoryIds = const [],
     required this.educationLevel,
     required this.educationLevelId,
     required this.yearFounded,
@@ -716,6 +718,8 @@ class SchoolDraft {
   final String schoolName;
   final String schoolType;
   final int? schoolTypeId;
+  final List<String> schoolCategories;
+  final List<int> schoolCategoryIds;
   final String educationLevel;
   final int? educationLevelId;
   final int yearFounded;
@@ -750,6 +754,8 @@ class SchoolOnboardingDraft {
     required this.schoolName,
     required this.schoolType,
     required this.schoolTypeId,
+    this.schoolCategories = const [],
+    this.schoolCategoryIds = const [],
     required this.educationLevel,
     required this.educationLevelId,
     required this.yearFounded,
@@ -817,6 +823,8 @@ class SchoolOnboardingDraft {
   final String schoolName;
   final String schoolType;
   final int? schoolTypeId;
+  final List<String> schoolCategories;
+  final List<int> schoolCategoryIds;
   final String educationLevel;
   final int? educationLevelId;
   final int yearFounded;
@@ -883,6 +891,8 @@ class SchoolOnboardingDraft {
     schoolName: schoolName.isEmpty ? 'New School' : schoolName,
     schoolType: schoolType,
     schoolTypeId: schoolTypeId,
+    schoolCategories: schoolCategories,
+    schoolCategoryIds: schoolCategoryIds,
     educationLevel: educationLevel,
     educationLevelId: educationLevelId,
     yearFounded: yearFounded,
