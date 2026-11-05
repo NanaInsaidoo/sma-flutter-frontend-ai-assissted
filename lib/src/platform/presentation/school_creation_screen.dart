@@ -114,8 +114,10 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
   final _yearFounded = TextEditingController();
   final _gesCode = TextEditingController();
   final _gesRegistrationDate = TextEditingController();
+  final _gesRegistrationTypeOther = TextEditingController();
   final _registrationNumber = TextEditingController();
   final _businessRegistrationDate = TextEditingController();
+  final _businessRegistrationTypeOther = TextEditingController();
   final _gemisCode = TextEditingController();
   final _taxIdNumber = TextEditingController();
   final _socialWelfareNumber = TextEditingController();
@@ -589,8 +591,10 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
       _yearFounded,
       _gesCode,
       _gesRegistrationDate,
+      _gesRegistrationTypeOther,
       _registrationNumber,
       _businessRegistrationDate,
+      _businessRegistrationTypeOther,
       _gemisCode,
       _taxIdNumber,
       _socialWelfareNumber,
@@ -691,8 +695,10 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
       yearFounded: _yearFounded,
       gesCode: _gesCode,
       gesRegistrationDate: _gesRegistrationDate,
+      gesRegistrationTypeOther: _gesRegistrationTypeOther,
       registrationNumber: _registrationNumber,
       businessRegistrationDate: _businessRegistrationDate,
+      businessRegistrationTypeOther: _businessRegistrationTypeOther,
       gemisCode: _gemisCode,
       taxIdNumber: _taxIdNumber,
       socialWelfareNumber: _socialWelfareNumber,
@@ -1140,6 +1146,14 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
     _businessRegistrationType =
         _nameOf(registration['businessRegistrationType']) ??
         _businessRegistrationType;
+    _gesRegistrationTypeOther.text =
+        _text(registration, [
+          'registrationTypeOther',
+          'gesRegistrationTypeOther',
+        ]) ??
+        '';
+    _businessRegistrationTypeOther.text =
+        _text(registration, ['businessRegistrationTypeOther']) ?? '';
     _gesRegistrationDate.text = _dateText(
       registration['gesRegistrationDate'],
       fallback: _gesRegistrationDate.text,
@@ -1661,11 +1675,27 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
       gesRegistrationTypeId:
           _lookups.gesRegistrationTypeIds[_gesRegistrationType],
       gesRegistrationDate: _gesRegistrationDate.text.trim(),
+      gesRegistrationTypeOther:
+          _isOtherRegistrationType(
+            _gesRegistrationType,
+            _lookups.gesRegistrationTypeIds,
+            5,
+          )
+          ? _gesRegistrationTypeOther.text.trim()
+          : '',
       businessRegistrationNumber: _registrationNumber.text.trim(),
       businessRegistrationType: _businessRegistrationType,
       businessRegistrationTypeId:
           _lookups.businessRegistrationTypeIds[_businessRegistrationType],
       businessRegistrationDate: _businessRegistrationDate.text.trim(),
+      businessRegistrationTypeOther:
+          _isOtherRegistrationType(
+            _businessRegistrationType,
+            _lookups.businessRegistrationTypeIds,
+            9,
+          )
+          ? _businessRegistrationTypeOther.text.trim()
+          : '',
       gemisCode: _gemisCode.text.trim(),
       taxIdNumber: _taxIdNumber.text.trim(),
       socialWelfareNumber: _socialWelfareNumber.text.trim(),
@@ -2104,8 +2134,10 @@ class _StepFormDialog extends StatefulWidget {
     required this.yearFounded,
     required this.gesCode,
     required this.gesRegistrationDate,
+    required this.gesRegistrationTypeOther,
     required this.registrationNumber,
     required this.businessRegistrationDate,
+    required this.businessRegistrationTypeOther,
     required this.gemisCode,
     required this.taxIdNumber,
     required this.socialWelfareNumber,
@@ -2195,8 +2227,10 @@ class _StepFormDialog extends StatefulWidget {
   final TextEditingController yearFounded;
   final TextEditingController gesCode;
   final TextEditingController gesRegistrationDate;
+  final TextEditingController gesRegistrationTypeOther;
   final TextEditingController registrationNumber;
   final TextEditingController businessRegistrationDate;
+  final TextEditingController businessRegistrationTypeOther;
   final TextEditingController gemisCode;
   final TextEditingController taxIdNumber;
   final TextEditingController socialWelfareNumber;
@@ -2530,9 +2564,21 @@ class _StepFormDialogState extends State<_StepFormDialog> {
         widget.gesCode.text.trim(),
         _gesRegistrationType,
         widget.gesRegistrationDate.text.trim(),
+        if (_isOtherRegistrationType(
+          _gesRegistrationType,
+          widget.lookups.gesRegistrationTypeIds,
+          5,
+        ))
+          widget.gesRegistrationTypeOther.text.trim(),
         widget.registrationNumber.text.trim(),
         _businessRegistrationType,
         widget.businessRegistrationDate.text.trim(),
+        if (_isOtherRegistrationType(
+          _businessRegistrationType,
+          widget.lookups.businessRegistrationTypeIds,
+          9,
+        ))
+          widget.businessRegistrationTypeOther.text.trim(),
         widget.gemisCode.text.trim(),
         widget.taxIdNumber.text.trim(),
       ],
@@ -2970,6 +3016,15 @@ class _StepFormDialogState extends State<_StepFormDialog> {
             onChanged: (value) => setState(() => _gesRegistrationType = value),
           ),
         ),
+        if (_isOtherRegistrationType(
+          _gesRegistrationType,
+          widget.lookups.gesRegistrationTypeIds,
+          5,
+        ))
+          _registrationOtherField(
+            'Specify GES registration type',
+            widget.gesRegistrationTypeOther,
+          ),
         _requiredDateField('GES registration date', widget.gesRegistrationDate),
         _pair(
           _requiredField(
@@ -2985,6 +3040,15 @@ class _StepFormDialogState extends State<_StepFormDialog> {
                 setState(() => _businessRegistrationType = value),
           ),
         ),
+        if (_isOtherRegistrationType(
+          _businessRegistrationType,
+          widget.lookups.businessRegistrationTypeIds,
+          9,
+        ))
+          _registrationOtherField(
+            'Specify business registration type',
+            widget.businessRegistrationTypeOther,
+          ),
         _requiredDateField(
           'Business registration date',
           widget.businessRegistrationDate,
@@ -3216,9 +3280,25 @@ class _StepFormDialogState extends State<_StepFormDialog> {
         gesCode: widget.gesCode.text,
         gesRegistrationType: _gesRegistrationType,
         gesRegistrationDate: widget.gesRegistrationDate.text,
+        gesRegistrationTypeOther:
+            _isOtherRegistrationType(
+              _gesRegistrationType,
+              widget.lookups.gesRegistrationTypeIds,
+              5,
+            )
+            ? widget.gesRegistrationTypeOther.text.trim()
+            : '',
         registrationNumber: widget.registrationNumber.text,
         businessRegistrationType: _businessRegistrationType,
         businessRegistrationDate: widget.businessRegistrationDate.text,
+        businessRegistrationTypeOther:
+            _isOtherRegistrationType(
+              _businessRegistrationType,
+              widget.lookups.businessRegistrationTypeIds,
+              9,
+            )
+            ? widget.businessRegistrationTypeOther.text.trim()
+            : '',
         gemisCode: widget.gemisCode.text,
         taxIdNumber: widget.taxIdNumber.text,
         socialWelfareNumber: widget.socialWelfareNumber.text,
@@ -3477,6 +3557,30 @@ class _StepFormDialogState extends State<_StepFormDialog> {
       ),
     );
   }
+
+  Widget _registrationOtherField(
+    String label,
+    TextEditingController controller,
+  ) => TextFormField(
+    key: ValueKey(label),
+    controller: controller,
+    maxLength: 200,
+    minLines: 1,
+    maxLines: 2,
+    validator: (value) {
+      final text = value?.trim() ?? '';
+      if (text.isEmpty) return 'Specify the type when selecting Other.';
+      if (text.length > 200) return 'Use 200 characters or fewer.';
+      return null;
+    },
+    decoration: InputDecoration(
+      labelText: label,
+      hintText: 'Enter the type shown on the registration document',
+      helperText: 'Required when Other is selected.',
+      helperMaxLines: 2,
+      border: const OutlineInputBorder(),
+    ),
+  );
 
   Widget _requiredField(
     String label,
@@ -5316,9 +5420,11 @@ class _ReviewSetup extends StatelessWidget {
     required this.gesCode,
     required this.gesRegistrationType,
     required this.gesRegistrationDate,
+    required this.gesRegistrationTypeOther,
     required this.registrationNumber,
     required this.businessRegistrationType,
     required this.businessRegistrationDate,
+    required this.businessRegistrationTypeOther,
     required this.gemisCode,
     required this.taxIdNumber,
     required this.socialWelfareNumber,
@@ -5361,9 +5467,11 @@ class _ReviewSetup extends StatelessWidget {
       gesCode,
       gesRegistrationType,
       gesRegistrationDate,
+      gesRegistrationTypeOther,
       registrationNumber,
       businessRegistrationType,
       businessRegistrationDate,
+      businessRegistrationTypeOther,
       gemisCode,
       taxIdNumber,
       socialWelfareNumber,
@@ -5504,9 +5612,13 @@ class _ReviewSetup extends StatelessWidget {
         rows: [
           ('GES Registration Number', gesCode),
           ('GES Registration Type', gesRegistrationType),
+          if (gesRegistrationTypeOther.isNotEmpty)
+            ('Specified GES Type', gesRegistrationTypeOther),
           ('GES Registration Date', gesRegistrationDate),
           ('Business Registration Number', registrationNumber),
           ('Business Registration Type', businessRegistrationType),
+          if (businessRegistrationTypeOther.isNotEmpty)
+            ('Specified Business Type', businessRegistrationTypeOther),
           ('Business Registration Date', businessRegistrationDate),
           ('GEMIS Code', gemisCode),
           ('Tax ID Number', taxIdNumber),
@@ -6230,3 +6342,9 @@ class _SetupStep {
   final String description;
   final IconData icon;
 }
+
+bool _isOtherRegistrationType(
+  String label,
+  Map<String, int> ids,
+  int otherId,
+) => ids[label] == otherId || label.trim().toLowerCase() == 'other';

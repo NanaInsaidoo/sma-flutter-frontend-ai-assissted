@@ -764,10 +764,12 @@ class SchoolOnboardingDraft {
     required this.gesRegistrationType,
     required this.gesRegistrationTypeId,
     required this.gesRegistrationDate,
+    this.gesRegistrationTypeOther = '',
     required this.businessRegistrationNumber,
     required this.businessRegistrationType,
     required this.businessRegistrationTypeId,
     required this.businessRegistrationDate,
+    this.businessRegistrationTypeOther = '',
     required this.gemisCode,
     required this.taxIdNumber,
     required this.socialWelfareNumber,
@@ -833,10 +835,12 @@ class SchoolOnboardingDraft {
   final String gesRegistrationType;
   final int? gesRegistrationTypeId;
   final String gesRegistrationDate;
+  final String gesRegistrationTypeOther;
   final String businessRegistrationNumber;
   final String businessRegistrationType;
   final int? businessRegistrationTypeId;
   final String businessRegistrationDate;
+  final String businessRegistrationTypeOther;
   final String gemisCode;
   final String taxIdNumber;
   final String socialWelfareNumber;
