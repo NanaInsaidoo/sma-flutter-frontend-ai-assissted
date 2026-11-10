@@ -100,7 +100,7 @@ void main() {
             );
           }
           return http.Response(
-            '{"academicYear":{"id":2,"name":"2026-2027"},"academicTerm":{"id":4,"name":"Second Term","closed":false}}',
+            '{"academicYear":{"id":2,"name":"2026-2027"},"academicTerm":{"id":4,"name":"Second Term","closed":false,"teachingStartDate":"2026-05-07"}}',
             200,
           );
         }),
@@ -117,6 +117,7 @@ void main() {
       expect(setup.academicYearId, 2);
       expect(setup.termSequence, 2);
       expect(setup.termClosed, isFalse);
+      expect(setup.teachingStartDate, DateTime(2026, 5, 7));
     });
 
     test('posts the assessment payload to the school endpoint', () async {

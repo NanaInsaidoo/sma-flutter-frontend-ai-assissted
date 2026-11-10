@@ -12,6 +12,7 @@ import 'assessment_csv_export.dart';
 import 'report_pdf_download.dart';
 import 'report_dashboard_rules.dart';
 import 'report_print_package_dialog.dart';
+import 'kg_observation_screen.dart';
 import 'term_evaluation_workflow_screen.dart';
 
 enum _Route {
@@ -998,8 +999,9 @@ class _CompleteAssessmentWorkflowState
         _gradingRequirementCheckRow(
           complete: snapshot.assessmentComponentsComplete,
           title: 'Required assessments',
-          detail:
-              'All subjects have CAT 1, CAT 2, CAT 3, CAT 4 and Examination.',
+          detail: _selectedIsKg
+              ? 'Each learning area has a Gold, Silver or Bronze observation.'
+              : 'All subjects have CAT 1, CAT 2, CAT 3, CAT 4 and Examination.',
         ),
         const Divider(height: 1),
         _gradingRequirementCheckRow(
@@ -1133,8 +1135,16 @@ class _CompleteAssessmentWorkflowState
     ),
   );
 
+  bool get _selectedIsKg =>
+      (_loadedSetup?.streams ?? const <AssessmentStreamOption>[]).any(
+        (stream) =>
+            stream.label == _selectedClass &&
+            (stream.gradeLevelId == 1 || stream.gradeLevelId == 2),
+      );
+
   String _readinessAssessmentTypeLabel(String value) =>
       switch (value.toUpperCase()) {
+        'KG_OBSERVATION' => 'KG learning observation',
         'CAT1' => 'CAT 1',
         'CAT2' => 'CAT 2',
         'CAT3' => 'CAT 3',
@@ -1956,6 +1966,19 @@ class _CompleteAssessmentWorkflowState
           : '$_displayTerm - $_displayAcademicYear',
       showBack: false,
       actions: [
+        if (_teacherViewer || _evaluationManager)
+          OutlinedButton.icon(
+            icon: const Icon(Icons.child_care),
+            label: const Text('KG learning observations'),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => KgObservationScreen(
+                  api: _assessmentApi,
+                  schoolId: widget.customSchoolId,
+                ),
+              ),
+            ),
+          ),
         if (_teacherViewer && assignedClassCount > 1)
           _outlineButton(
             'Change class',
@@ -2246,7 +2269,9 @@ class _CompleteAssessmentWorkflowState
                     ),
                     const SizedBox(height: 5),
                     Text(
-                      'Required CAT 1–4 and Examination complete · All assessments fully graded',
+                      _selectedIsKg
+                          ? 'Learning observations are complete for all students.'
+                          : 'Required CAT 1–4 and Examination complete · All assessments fully graded',
                       style: const TextStyle(
                         color: AppColors.muted,
                         fontWeight: FontWeight.w600,
@@ -3961,6 +3986,10 @@ class _CompleteAssessmentWorkflowState
 
   int _gradingGradeLevelId(_AssessmentRecord assessment) {
     final gradeName = assessment.gradeName.trim().toLowerCase();
+    if (RegExp(r'\bkg\s*[12]?\b').hasMatch(gradeName) ||
+        gradeName.contains('kindergarten')) {
+      return gradeName.contains('2') ? 2 : 1;
+    }
     final isPreBasic =
         gradeName.contains('creche') ||
         gradeName.contains('nursery') ||
@@ -7893,6 +7922,16 @@ class _CompleteAssessmentWorkflowState
     final generatedAcademicRows = reportSubjects is List
         ? reportSubjects.whereType<Map>().map((rawSubject) {
             final subject = Map<String, dynamic>.from(rawSubject);
+            if (subject['pending'] == true) {
+              return <String>[
+                subject['subjectName']?.toString() ?? 'Subject',
+                'Results pending',
+                'Results pending',
+                'Results pending',
+                '—',
+                'Results pending',
+              ];
+            }
             String score(dynamic value) =>
                 _jsonNumber(value).toStringAsFixed(1);
             return [
@@ -7904,6 +7943,32 @@ class _CompleteAssessmentWorkflowState
               subject['remarks']?.toString() ?? '—',
             ];
           }).toList()
+        : <List<String>>[];
+    final projectRows = reportSubjects is List
+        ? reportSubjects
+              .whereType<Map>()
+              .where((subject) => subject['projectScore'] != null)
+              .map(
+                (subject) => <String>[
+                  subject['subjectName']?.toString() ?? 'Subject',
+                  '${subject['projectScore']} / 100',
+                  subject['projectFeedback']?.toString() ?? '—',
+                ],
+              )
+              .toList()
+        : <List<String>>[];
+    final kgRows = reportSubjects is List
+        ? reportSubjects
+              .whereType<Map>()
+              .where((subject) => subject['qualitative'] == true)
+              .map(
+                (subject) => <String>[
+                  subject['subjectName']?.toString() ?? 'Learning area',
+                  subject['remarks']?.toString() ?? 'Pending',
+                  subject['observation']?.toString() ?? '—',
+                ],
+              )
+              .toList()
         : <List<String>>[];
     final generatedSubjectNames = generatedAcademicRows
         .map((row) => row.first)
@@ -8013,21 +8078,40 @@ class _CompleteAssessmentWorkflowState
         _reportReadinessSection(student),
         const SizedBox(height: 16),
         _section(
-          title: 'Academic Performance',
-          child: _tableCard(
-            embedded: true,
-            columns: const [
-              'SUBJECT',
-              'CLASS SCORE',
-              'EXAM',
-              'TOTAL',
-              'GRADE',
-              'REMARK',
-            ],
-            rows: academicRows,
-          ),
+          title: kgRows.isEmpty
+              ? 'Academic Performance'
+              : 'KG Learning Progress',
+          child: kgRows.isNotEmpty
+              ? _tableCard(
+                  embedded: true,
+                  columns: const ['LEARNING AREA', 'RATING', 'OBSERVATION'],
+                  rows: kgRows,
+                )
+              : _tableCard(
+                  embedded: true,
+                  columns: const [
+                    'SUBJECT',
+                    'CLASS SCORE',
+                    'EXAM',
+                    'TOTAL',
+                    'GRADE',
+                    'REMARK',
+                  ],
+                  rows: academicRows,
+                ),
         ),
         const SizedBox(height: 16),
+        if (projectRows.isNotEmpty) ...[
+          _section(
+            title: 'Project results reported separately',
+            child: _tableCard(
+              embedded: true,
+              columns: const ['SUBJECT', 'PROJECT /100', 'PROJECT FEEDBACK'],
+              rows: projectRows,
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
         _studentReportEvaluation(
           student,
           evaluation,
@@ -12779,9 +12863,20 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
           'The grading scale could not be resolved for this class.',
         );
       }
-      final gradingScale = await widget.api.getActiveGradingScale(
-        gradeLevelId: widget.gradingGradeLevelId,
-      );
+      final isKg =
+          widget.gradingGradeLevelId == 1 || widget.gradingGradeLevelId == 2;
+      final gradingScale = isKg
+          ? AssessmentGradingScale(
+              gradeLevelId: widget.gradingGradeLevelId,
+              gradeLevelName:
+                  'KG learning ratings are recorded through KG learning observations',
+              items: const [],
+            )
+          : widget.assessment.type == 'CAT 4'
+          ? await widget.api.getProjectGradingScale()
+          : await widget.api.getActiveGradingScale(
+              gradeLevelId: widget.gradingGradeLevelId,
+            );
       final sheet = await widget.api.getScoreSheet(
         customSchoolId: widget.customSchoolId,
         assessmentId: widget.assessment.id,
@@ -12844,7 +12939,7 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
                   child: Row(
                     children: [
                       SizedBox(
-                        width: 36,
+                        width: widget.assessment.type == 'CAT 4' ? 125 : 36,
                         child: Text(
                           item.grade,
                           style: const TextStyle(
@@ -13154,7 +13249,13 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
                                   ),
                                 ),
                                 const DataColumn(label: Text('VISUAL')),
-                                const DataColumn(label: Text('GRADE')),
+                                DataColumn(
+                                  label: Text(
+                                    widget.assessment.type == 'CAT 4'
+                                        ? 'PROJECT FEEDBACK'
+                                        : 'GRADE',
+                                  ),
+                                ),
                                 const DataColumn(label: Text('PASS/FAIL')),
                                 const DataColumn(label: Text('ACTION')),
                               ],
@@ -13230,7 +13331,9 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
 
   String _gradeFor(double? score) {
     if (score == null) return '—';
-    final percent = score / widget.assessment.maxScore * 100;
+    final percent = double.parse(
+      (score / widget.assessment.maxScore * 100).toStringAsFixed(2),
+    );
     for (final item in _gradingScale!.items) {
       if (percent >= item.minPercentage && percent <= item.maxPercentage) {
         return item.grade;
@@ -13892,7 +13995,7 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
 
   String _buildCsv() {
     final rows = <String>[
-      'Student ID,Student Name,Score,Maximum Score,Grade,Result',
+      'Student ID,Student Name,Score,Maximum Score,${widget.assessment.type == 'CAT 4' ? 'Project Feedback' : 'Grade'},Result',
       for (final student in _students)
         [
           student.studentId,
