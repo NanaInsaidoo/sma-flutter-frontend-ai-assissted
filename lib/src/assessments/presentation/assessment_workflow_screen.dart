@@ -7944,19 +7944,6 @@ class _CompleteAssessmentWorkflowState
             ];
           }).toList()
         : <List<String>>[];
-    final projectRows = reportSubjects is List
-        ? reportSubjects
-              .whereType<Map>()
-              .where((subject) => subject['projectScore'] != null)
-              .map(
-                (subject) => <String>[
-                  subject['subjectName']?.toString() ?? 'Subject',
-                  '${subject['projectScore']} / 100',
-                  subject['projectFeedback']?.toString() ?? '—',
-                ],
-              )
-              .toList()
-        : <List<String>>[];
     final kgRows = reportSubjects is List
         ? reportSubjects
               .whereType<Map>()
@@ -8101,17 +8088,6 @@ class _CompleteAssessmentWorkflowState
                 ),
         ),
         const SizedBox(height: 16),
-        if (projectRows.isNotEmpty) ...[
-          _section(
-            title: 'Project results reported separately',
-            child: _tableCard(
-              embedded: true,
-              columns: const ['SUBJECT', 'PROJECT /100', 'PROJECT FEEDBACK'],
-              rows: projectRows,
-            ),
-          ),
-          const SizedBox(height: 16),
-        ],
         _studentReportEvaluation(
           student,
           evaluation,
