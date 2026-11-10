@@ -186,95 +186,6 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
     }).toList();
   }
 
-  Future<void> _toggleGrade(_GradeLevel level, bool active) async {
-    if (active) {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text('Activate ${level.name}?'),
-          content: Text(
-            level.streams.isEmpty
-                ? '${level.name} does not have a section yet. Section 1 will be created because every active class must have at least one section.'
-                : '${level.name} and its sections will become available for admissions, teacher assignments, attendance, and assessments.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: Text(
-                level.streams.isEmpty
-                    ? 'Create section and activate'
-                    : 'Activate class',
-              ),
-            ),
-          ],
-        ),
-      );
-      if (confirmed != true) return;
-    }
-    if (!mounted) return;
-    final enrolled = level.streams.fold<int>(
-      0,
-      (total, stream) => total + stream.enrolled,
-    );
-    if (!active && enrolled > 0) {
-      await showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text('Cannot make ${level.name} inactive'),
-          content: Text(
-            '${level.name} has $enrolled actively enrolled student${enrolled == 1 ? '' : 's'}. Transfer, promote, withdraw, or graduate them before making this class inactive.',
-          ),
-          actions: [
-            FilledButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
-          ],
-        ),
-      );
-      return;
-    }
-    if (!active) {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text('Make ${level.name} inactive?'),
-          content: Text(
-            '${level.name} and its sections will no longer be available for new admissions, teacher assignments, attendance, or assessments. Existing records will remain available.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Keep active'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Make inactive'),
-            ),
-          ],
-        ),
-      );
-      if (confirmed != true) return;
-    }
-    try {
-      await _repository.setGradeLevelActive(
-        customSchoolId: widget.customSchoolId,
-        gradeLevelId: level.gradeLevelId,
-        active: active,
-      );
-      await _loadGradeStreams(showLoading: false);
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not update ${level.name}. $error')),
-      );
-    }
-  }
-
   Future<void> _addCustomClass() async {
     final name = TextEditingController();
     var sections = 1;
@@ -383,7 +294,7 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
     return ColoredBox(
       color: const Color(0xFFF6F8F7),
       child: SingleChildScrollView(
-        key: const ValueKey('classes-page-scroll'),
+        key: const PageStorageKey('classes-page-scroll'),
         controller: _scrollController,
         child: Column(
           children: [
@@ -406,7 +317,6 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
               onRetry: _loadGradeStreams,
               onOpenGrade: (level) =>
                   setState(() => _selectedGradeId = level.id),
-              onGradeActiveChanged: _toggleGrade,
             ),
           ],
         ),
@@ -453,7 +363,7 @@ class _Header extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   const Text(
-                    'Activate classes here. Open a class to manage its sections and subjects.',
+                    'Open a class to change its status or manage its sections.',
                     style: TextStyle(color: AppColors.muted, fontSize: 13),
                   ),
                   const SizedBox(height: 16),
@@ -642,7 +552,6 @@ class _GradeStreamsBody extends StatelessWidget {
     required this.visibleLevels,
     required this.onRetry,
     required this.onOpenGrade,
-    required this.onGradeActiveChanged,
   });
 
   final bool loading;
@@ -650,7 +559,6 @@ class _GradeStreamsBody extends StatelessWidget {
   final List<_GradeLevel> visibleLevels;
   final VoidCallback onRetry;
   final ValueChanged<_GradeLevel> onOpenGrade;
-  final void Function(_GradeLevel level, bool active) onGradeActiveChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -678,7 +586,6 @@ class _GradeStreamsBody extends StatelessWidget {
                       icon: Icons.auto_awesome_outlined,
                       levels: customLevels,
                       onOpenGrade: onOpenGrade,
-                      onGradeActiveChanged: onGradeActiveChanged,
                     ),
                   if (customLevels.isNotEmpty && gesLevels.isNotEmpty)
                     const SizedBox(height: 18),
@@ -689,7 +596,6 @@ class _GradeStreamsBody extends StatelessWidget {
                       icon: Icons.school_outlined,
                       levels: gesLevels,
                       onOpenGrade: onOpenGrade,
-                      onGradeActiveChanged: onGradeActiveChanged,
                     ),
                 ],
               );
@@ -708,7 +614,6 @@ class _ClassGroupPanel extends StatelessWidget {
     required this.icon,
     required this.levels,
     required this.onOpenGrade,
-    required this.onGradeActiveChanged,
   });
 
   final String title;
@@ -716,7 +621,6 @@ class _ClassGroupPanel extends StatelessWidget {
   final IconData icon;
   final List<_GradeLevel> levels;
   final ValueChanged<_GradeLevel> onOpenGrade;
-  final void Function(_GradeLevel level, bool active) onGradeActiveChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -792,8 +696,6 @@ class _ClassGroupPanel extends StatelessWidget {
             _ClassOverviewRow(
               level: levels[index],
               onOpen: () => onOpenGrade(levels[index]),
-              onActiveChanged: (active) =>
-                  onGradeActiveChanged(levels[index], active),
             ),
             if (index != levels.length - 1)
               const Divider(height: 1, indent: 72),
@@ -805,15 +707,10 @@ class _ClassGroupPanel extends StatelessWidget {
 }
 
 class _ClassOverviewRow extends StatelessWidget {
-  const _ClassOverviewRow({
-    required this.level,
-    required this.onOpen,
-    required this.onActiveChanged,
-  });
+  const _ClassOverviewRow({required this.level, required this.onOpen});
 
   final _GradeLevel level;
   final VoidCallback onOpen;
-  final ValueChanged<bool> onActiveChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -891,16 +788,6 @@ class _ClassOverviewRow extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 10),
-              Semantics(
-                label:
-                    '${level.name} is ${level.active ? 'active' : 'inactive'}',
-                child: Switch(
-                  key: ValueKey('grade-active-${level.id}'),
-                  value: level.active,
-                  onChanged: onActiveChanged,
-                ),
-              ),
-              const SizedBox(width: 6),
               const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
             ],
           ),
@@ -1063,7 +950,6 @@ enum _ClassSort {
 class _GradeLevel {
   const _GradeLevel({
     required this.id,
-    required this.gradeLevelId,
     required this.name,
     required this.custom,
     required this.active,
@@ -1074,7 +960,6 @@ class _GradeLevel {
   factory _GradeLevel.fromApi(ClassGradeLevel level) {
     return _GradeLevel(
       id: level.id,
-      gradeLevelId: level.gradeLevelId,
       name: level.name,
       custom: level.custom,
       active: level.active,
@@ -1092,7 +977,6 @@ class _GradeLevel {
   }
 
   final int id;
-  final int gradeLevelId;
   final String name;
   final bool custom;
   final bool active;

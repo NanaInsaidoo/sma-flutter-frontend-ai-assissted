@@ -118,8 +118,7 @@ void main() {
     expect(find.textContaining('Progresses to'), findsNothing);
     expect(find.text('Subjects'), findsNothing);
     expect(find.text('SHS 1'), findsNothing);
-    expect(find.byKey(const ValueKey('grade-active-10')), findsOneWidget);
-    expect(find.byKey(const ValueKey('grade-active-11')), findsOneWidget);
+    expect(find.byType(Switch), findsNothing);
     expect(find.text('Inactive'), findsOneWidget);
   });
 
@@ -144,6 +143,12 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-grade-11')));
+    await tester.pumpAndSettle();
+
+    final addSection = find.byKey(const ValueKey('workspace-add-section-11'));
+    expect(tester.widget<FilledButton>(addSection).onPressed, isNull);
+    expect(find.text('Activate JHS 1 to add new sections.'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('grade-active-11')));
     await tester.pumpAndSettle();
 
@@ -173,6 +178,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-grade-10')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('grade-active-10')));
     await tester.pumpAndSettle();
 
@@ -188,6 +195,18 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(repository.calls, equals(['deactivate:3']));
+    expect(find.text('Basic 1 - Section 1'), findsOneWidget);
+    expect(find.text('Activate Basic 1 to add new sections.'), findsOneWidget);
+    final addSection = find.byKey(const ValueKey('workspace-add-section-10'));
+    expect(tester.widget<FilledButton>(addSection).onPressed, isNull);
+
+    await tester.tap(find.byKey(const ValueKey('grade-active-10')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Activate class'));
+    await tester.pumpAndSettle();
+
+    expect(repository.calls, equals(['deactivate:3', 'activate:3']));
+    expect(tester.widget<FilledButton>(addSection).onPressed, isNotNull);
   });
 
   testWidgets('a class with enrolled students cannot be made inactive', (
@@ -209,6 +228,8 @@ void main() {
         ),
       ),
     );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-grade-10')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('grade-active-10')));
     await tester.pumpAndSettle();
@@ -242,8 +263,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final inactiveSwitch = find.byKey(const ValueKey('grade-active-11'));
-    await tester.ensureVisible(inactiveSwitch);
+    final inactiveClass = find.byKey(const ValueKey('open-grade-11'));
+    await tester.ensureVisible(inactiveClass);
     await tester.pumpAndSettle();
     final scrollableFinder = find
         .descendant(
@@ -259,12 +280,19 @@ void main() {
     final before = scrollable.position.pixels;
     expect(before, greaterThan(0));
 
-    await tester.tap(inactiveSwitch);
+    await tester.tap(inactiveClass);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('grade-active-11')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Create section and activate'));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('All classes'));
+    await tester.pumpAndSettle();
 
-    expect(scrollable.position.pixels, closeTo(before, 1));
+    expect(
+      tester.state<ScrollableState>(scrollableFinder).position.pixels,
+      closeTo(before, 1),
+    );
     expect(find.byType(CircularProgressIndicator), findsNothing);
   });
 
@@ -293,8 +321,7 @@ void main() {
     expect(find.text('GES grade levels'), findsOneWidget);
     expect(find.text('Add custom class'), findsOneWidget);
     expect(find.text('Manage classes'), findsNothing);
-    expect(find.byKey(const ValueKey('grade-active-10')), findsOneWidget);
-    expect(find.byKey(const ValueKey('grade-active-11')), findsOneWidget);
+    expect(find.byType(Switch), findsNothing);
   });
 
   testWidgets(
@@ -317,7 +344,10 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const ValueKey('classes-page-scroll')), findsOneWidget);
+      expect(
+        find.byKey(const PageStorageKey('classes-page-scroll')),
+        findsOneWidget,
+      );
       expect(find.text('2 active'), findsOneWidget);
       expect(find.text('1 inactive'), findsOneWidget);
       expect(
@@ -743,6 +773,7 @@ class _FakeClassesRepository extends Fake implements ClassesRepository {
   final bool withSubjects;
   final List<SubjectTeacherAssignment> subjectTeacherAssignments;
   final List<String> calls = [];
+  final Map<int, bool> _gradeStatuses = {};
 
   static const _customGrade = ClassGradeLevel(
     id: 9,
@@ -813,11 +844,26 @@ class _FakeClassesRepository extends Fake implements ClassesRepository {
   @override
   Future<List<ClassGradeLevel>> getAllGradeLevels(
     String customSchoolId,
-  ) async => const [
-    _grade,
-    _customGrade,
-    _activeGradeWithoutStreams,
-    _unsupportedSeniorGrade,
+  ) async => [
+    for (final grade in const [
+      _grade,
+      _customGrade,
+      _activeGradeWithoutStreams,
+      _unsupportedSeniorGrade,
+    ])
+      if (_gradeStatuses.containsKey(grade.gradeLevelId))
+        ClassGradeLevel(
+          id: grade.id,
+          gradeLevelId: grade.gradeLevelId,
+          name: grade.name,
+          status: _gradeStatuses[grade.gradeLevelId]! ? 'ACTIVE' : 'INACTIVE',
+          streams: grade.streams,
+          custom: grade.custom,
+          studentCount: grade.studentCount,
+          displayOrder: grade.displayOrder,
+        )
+      else
+        grade,
   ];
 
   @override
@@ -845,6 +891,7 @@ class _FakeClassesRepository extends Fake implements ClassesRepository {
     required bool active,
   }) async {
     calls.add('${active ? 'activate' : 'deactivate'}:$gradeLevelId');
+    _gradeStatuses[gradeLevelId] = active;
   }
 
   @override

@@ -59,6 +59,7 @@ class _ClassSubjectConfigurationScreenState
   int? _selectedGradeId;
   int? _selectedStreamId;
   bool _loading = true;
+  bool _updatingStatus = false;
   String? _error;
 
   ClassGradeLevel? get _selectedGrade {
@@ -108,6 +109,7 @@ class _ClassSubjectConfigurationScreenState
   }
 
   Future<void> _toggle(ClassGradeLevel grade, bool active) async {
+    if (_updatingStatus) return;
     if (active) {
       final confirmed = await showDialog<bool>(
         context: context,
@@ -177,6 +179,8 @@ class _ClassSubjectConfigurationScreenState
       );
       if (confirmed != true) return;
     }
+    if (!mounted) return;
+    setState(() => _updatingStatus = true);
     try {
       await _repository.setGradeLevelActive(
         customSchoolId: widget.customSchoolId,
@@ -190,6 +194,8 @@ class _ClassSubjectConfigurationScreenState
           context,
         ).showSnackBar(SnackBar(content: Text('$error')));
       }
+    } finally {
+      if (mounted) setState(() => _updatingStatus = false);
     }
   }
 
@@ -271,6 +277,7 @@ class _ClassSubjectConfigurationScreenState
   }
 
   Future<void> _addSection(ClassGradeLevel grade) async {
+    if (!grade.active || _updatingStatus) return;
     final name = TextEditingController();
     final submitted = await showDialog<bool>(
       context: context,
@@ -311,7 +318,7 @@ class _ClassSubjectConfigurationScreenState
         ],
       ),
     );
-    if (submitted != true) return;
+    if (submitted != true || !mounted) return;
     final sectionName = '${grade.name} - ${name.text.trim()}';
     try {
       await _repository.createStream(
@@ -625,8 +632,12 @@ class _ClassSubjectConfigurationScreenState
       return _ClassWorkspace(
         grade: selectedGrade,
         onBack: widget.onBack ?? () => setState(() => _selectedGradeId = null),
-        onActiveChanged: (value) => _toggle(selectedGrade, value),
-        onAddSection: () => _addSection(selectedGrade),
+        onActiveChanged: _updatingStatus
+            ? null
+            : (value) => _toggle(selectedGrade, value),
+        onAddSection: selectedGrade.active && !_updatingStatus
+            ? () => _addSection(selectedGrade)
+            : null,
         onOpenSection: (stream) =>
             setState(() => _selectedStreamId = stream.id),
         onRenameSection: (stream) => _renameSection(selectedGrade, stream),
@@ -669,7 +680,7 @@ class _ClassSubjectConfigurationScreenState
                         ),
                         SizedBox(height: 6),
                         Text(
-                          'View every class, manage its status, and open it to manage sections.',
+                          'Open a class to change its status or manage its sections.',
                           style: TextStyle(color: AppColors.muted),
                         ),
                       ],
@@ -696,7 +707,6 @@ class _ClassSubjectConfigurationScreenState
                 ...custom.map(
                   (grade) => _GradeCard(
                     grade: grade,
-                    onActiveChanged: (value) => _toggle(grade, value),
                     onOpen: () => setState(() => _selectedGradeId = grade.id),
                   ),
                 ),
@@ -711,7 +721,6 @@ class _ClassSubjectConfigurationScreenState
               ...ges.map(
                 (grade) => _GradeCard(
                   grade: grade,
-                  onActiveChanged: (value) => _toggle(grade, value),
                   onOpen: () => setState(() => _selectedGradeId = grade.id),
                 ),
               ),
@@ -753,13 +762,8 @@ class _SectionTitle extends StatelessWidget {
 }
 
 class _GradeCard extends StatelessWidget {
-  const _GradeCard({
-    required this.grade,
-    required this.onActiveChanged,
-    required this.onOpen,
-  });
+  const _GradeCard({required this.grade, required this.onOpen});
   final ClassGradeLevel grade;
-  final ValueChanged<bool> onActiveChanged;
   final VoidCallback onOpen;
   @override
   Widget build(BuildContext context) {
@@ -867,12 +871,6 @@ class _GradeCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              Semantics(
-                label:
-                    '${grade.name} is ${grade.active ? 'active' : 'inactive'}',
-                child: Switch(value: grade.active, onChanged: onActiveChanged),
-              ),
-              const SizedBox(width: 4),
               const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
             ],
           ),
@@ -896,8 +894,8 @@ class _ClassWorkspace extends StatelessWidget {
 
   final ClassGradeLevel grade;
   final VoidCallback onBack;
-  final ValueChanged<bool> onActiveChanged;
-  final VoidCallback onAddSection;
+  final ValueChanged<bool>? onActiveChanged;
+  final VoidCallback? onAddSection;
   final ValueChanged<ClassStreamSummary> onOpenSection;
   final ValueChanged<ClassStreamSummary> onRenameSection;
   final ValueChanged<ClassStreamSummary> onDeleteSection;
@@ -979,6 +977,7 @@ class _ClassWorkspace extends StatelessWidget {
                       label:
                           '${grade.name} is ${grade.active ? 'active' : 'inactive'}',
                       child: Switch(
+                        key: ValueKey('grade-active-${grade.id}'),
                         value: grade.active,
                         onChanged: onActiveChanged,
                       ),
@@ -990,8 +989,9 @@ class _ClassWorkspace extends StatelessWidget {
               _WorkspaceSection(
                 icon: Icons.meeting_room_outlined,
                 title: 'Sections',
-                subtitle:
-                    'Create and review the sections that belong to ${grade.name}.',
+                subtitle: grade.active
+                    ? 'Create and review the sections that belong to ${grade.name}.'
+                    : 'Activate ${grade.name} to add new sections.',
                 action: FilledButton.icon(
                   key: ValueKey('workspace-add-section-${grade.id}'),
                   onPressed: onAddSection,
@@ -999,10 +999,12 @@ class _ClassWorkspace extends StatelessWidget {
                   label: const Text('Add section'),
                 ),
                 child: grade.streams.isEmpty
-                    ? const _EmptyWorkspaceState(
+                    ? _EmptyWorkspaceState(
                         icon: Icons.meeting_room_outlined,
                         title: 'No sections yet',
-                        message: 'Add the first section for this class.',
+                        message: grade.active
+                            ? 'Add the first section for this class.'
+                            : 'The first section will be created when you activate this class.',
                       )
                     : Column(
                         children: grade.streams
