@@ -16,6 +16,76 @@ class AssessmentApiClient {
   final Future<String?> Function()? onRefreshAccessToken;
   final http.Client _client;
 
+  Future<Map<String, dynamic>> getHandbookReference() async =>
+      _map(_decodeBody(await _send('/api/grades/handbook')));
+
+  Future<AssessmentGradingScale> getProjectGradingScale() async {
+    final reference = await getHandbookReference();
+    return AssessmentGradingScale(
+      gradeLevelId: 0,
+      gradeLevelName: 'Project feedback',
+      items: _list(reference['projectBands'])
+          .map(_map)
+          .map(
+            (item) => AssessmentGradingScaleItem(
+              grade: _string(item['grade']),
+              descriptor: _string(item['descriptor']),
+              minPercentage: _double(item['minPercentage']) ?? 0,
+              maxPercentage: _double(item['maxPercentage']) ?? 0,
+              displayOrder: _int(item['displayOrder']) ?? 0,
+            ),
+          )
+          .toList(),
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getKgObservations({
+    required String schoolId,
+    required int streamId,
+    required int subjectId,
+    required int term,
+    required int academicYearId,
+  }) async {
+    final query = Uri(
+      queryParameters: {
+        'streamId': '$streamId',
+        'subjectId': '$subjectId',
+        'term': '$term',
+        'academicYearId': '$academicYearId',
+      },
+    ).query;
+    return _list(
+      _decodeBody(
+        await _send(
+          '/api/grades/schools/${Uri.encodeComponent(schoolId)}/kg-observations?$query',
+        ),
+      ),
+    ).map(_map).toList();
+  }
+
+  Future<void> saveKgObservations({
+    required String schoolId,
+    required int streamId,
+    required int subjectId,
+    required int term,
+    required int academicYearId,
+    required List<Map<String, dynamic>> entries,
+    String? vacationOverrideReason,
+  }) async {
+    await _send(
+      '/api/grades/schools/${Uri.encodeComponent(schoolId)}/kg-observations',
+      method: 'PUT',
+      body: {
+        'streamId': streamId,
+        'subjectId': subjectId,
+        'term': term,
+        'academicYearId': academicYearId,
+        'entries': entries,
+        'vacationOverrideReason': vacationOverrideReason,
+      },
+    );
+  }
+
   Future<AssessmentFormSetup> getFormSetup(String customSchoolId) async {
     final schoolPath = Uri.encodeComponent(customSchoolId);
     final responses = await Future.wait([
@@ -164,6 +234,7 @@ class AssessmentApiClient {
           _termSequenceFromName(termName) ??
           (termId >= 1 && termId <= 3 ? termId : 0),
       termClosed: term['closed'] == true,
+      teachingStartDate: DateTime.tryParse(_string(term['teachingStartDate'])),
     );
   }
 
@@ -1593,6 +1664,7 @@ class AssessmentFormSetup {
     required this.termName,
     required this.termSequence,
     required this.termClosed,
+    this.teachingStartDate,
   });
 
   final List<AssessmentStreamOption> streams;
@@ -1604,6 +1676,7 @@ class AssessmentFormSetup {
   final String termName;
   final int termSequence;
   final bool termClosed;
+  final DateTime? teachingStartDate;
 }
 
 class AssessmentGradeLevelOption {
