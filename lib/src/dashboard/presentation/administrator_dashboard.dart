@@ -7236,8 +7236,19 @@ class _SidebarSection extends StatelessWidget {
           child: Tooltip(
             message: collapsed ? label : '',
             child: Material(
-              color: active ? const Color(0xFF24483F) : const Color(0xFF182536),
-              borderRadius: BorderRadius.circular(10),
+              color: expanded
+                  ? const Color(0xFF203E43)
+                  : active
+                  ? const Color(0xFF24483F)
+                  : const Color(0xFF182536),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+                side: BorderSide(
+                  color: expanded
+                      ? const Color(0xFF63C9BC)
+                      : Colors.transparent,
+                ),
+              ),
               child: InkWell(
                 onTap: onTap,
                 borderRadius: BorderRadius.circular(10),
@@ -7254,7 +7265,9 @@ class _SidebarSection extends StatelessWidget {
                       Icon(
                         icon,
                         size: 20,
-                        color: active ? AppColors.green : Colors.white,
+                        color: active || expanded
+                            ? const Color(0xFF83DED2)
+                            : Colors.white,
                       ),
                       if (!collapsed) ...[
                         const SizedBox(width: 12),
@@ -7273,10 +7286,12 @@ class _SidebarSection extends StatelessWidget {
                         AnimatedRotation(
                           turns: expanded ? 0.25 : 0,
                           duration: const Duration(milliseconds: 180),
-                          child: const Icon(
+                          child: Icon(
                             Icons.chevron_right_rounded,
-                            color: Color(0xFF9DA8B8),
-                            size: 18,
+                            color: expanded
+                                ? Colors.white
+                                : const Color(0xFFB9C6D5),
+                            size: 22,
                           ),
                         ),
                       ],
@@ -7290,16 +7305,38 @@ class _SidebarSection extends StatelessWidget {
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 160),
           child: expanded
-              ? Padding(
+              ? Container(
                   key: ValueKey('$label-expanded'),
-                  padding: EdgeInsets.only(left: collapsed ? 0 : 10),
-                  child: Column(children: children),
+                  margin: EdgeInsets.only(left: collapsed ? 0 : 18, bottom: 8),
+                  padding: EdgeInsets.only(left: collapsed ? 0 : 12),
+                  decoration: collapsed
+                      ? null
+                      : const BoxDecoration(
+                          border: Border(
+                            left: BorderSide(
+                              color: Color(0xFF587180),
+                              width: 2,
+                            ),
+                          ),
+                        ),
+                  child: _SidebarSubmenu(child: Column(children: children)),
                 )
               : const SizedBox.shrink(),
         ),
       ],
     );
   }
+}
+
+// Includes asynchronously loaded navigation items in the same submenu styling.
+class _SidebarSubmenu extends InheritedWidget {
+  const _SidebarSubmenu({required super.child});
+
+  static bool contains(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_SidebarSubmenu>() != null;
+
+  @override
+  bool updateShouldNotify(_SidebarSubmenu oldWidget) => false;
 }
 
 class _SidebarButton extends StatelessWidget {
@@ -7320,20 +7357,33 @@ class _SidebarButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isSubmenu = !collapsed && _SidebarSubmenu.contains(context);
+    final foreground = active || !isSubmenu
+        ? Colors.white
+        : const Color(0xFFD2DCE6);
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: EdgeInsets.only(bottom: isSubmenu ? 4 : 8),
       child: Tooltip(
         message: collapsed ? label : '',
         child: Material(
-          color: active ? AppColors.green : const Color(0xFF202B3D),
+          color: active
+              ? const Color(0xFF225A53)
+              : isSubmenu
+              ? Colors.transparent
+              : const Color(0xFF202B3D),
           borderRadius: BorderRadius.circular(10),
           child: InkWell(
             onTap: onTap,
             borderRadius: BorderRadius.circular(10),
+            hoverColor: const Color(0xFF30495A),
             child: Padding(
               padding: EdgeInsets.symmetric(
-                horizontal: collapsed ? 16 : 14,
-                vertical: 13,
+                horizontal: collapsed
+                    ? 16
+                    : isSubmenu
+                    ? 10
+                    : 14,
+                vertical: isSubmenu ? 12 : 13,
               ),
               child: Row(
                 mainAxisAlignment: collapsed
@@ -7352,18 +7402,20 @@ class _SidebarButton extends StatelessWidget {
                       child: Icon(icon, size: 20, color: Colors.white),
                     )
                   else
-                    Icon(icon, size: 20, color: Colors.white),
+                    Icon(icon, size: isSubmenu ? 18 : 20, color: foreground),
                   if (!collapsed) ...[
-                    const SizedBox(width: 12),
+                    SizedBox(width: isSubmenu ? 10 : 12),
                     Expanded(
                       child: Text(
                         label,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
+                        style: TextStyle(
+                          color: foreground,
+                          fontSize: isSubmenu ? 12.5 : 13,
+                          fontWeight: isSubmenu && !active
+                              ? FontWeight.w500
+                              : FontWeight.w600,
                           height: 1.25,
                         ),
                       ),
@@ -7383,7 +7435,16 @@ class _SidebarButton extends StatelessWidget {
                         ),
                       ),
                     ],
-                    if (label != 'Dashboard' &&
+                    if (isSubmenu && active) ...[
+                      const SizedBox(width: 6),
+                      const Icon(
+                        Icons.check_circle_rounded,
+                        color: Color(0xFF83DED2),
+                        size: 16,
+                      ),
+                    ],
+                    if (!isSubmenu &&
+                        label != 'Dashboard' &&
                         label != 'Log out' &&
                         label != 'Collapse')
                       const Icon(
