@@ -44,7 +44,7 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
   List<_GradeLevel> _levels = const [];
   _ClassSort _sort = _ClassSort.progression;
   String _search = '';
-  int? _selectedGradeId;
+  int? _selectedGradeLevelId;
   final ScrollController _scrollController = ScrollController();
   bool _loading = true;
   String? _error;
@@ -265,10 +265,10 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final selectedGradeId = _selectedGradeId;
-    if (selectedGradeId != null) {
+    final selectedGradeLevelId = _selectedGradeLevelId;
+    if (selectedGradeLevelId != null) {
       return ClassSubjectConfigurationScreen(
-        key: ValueKey('class-workspace-$selectedGradeId'),
+        key: ValueKey('class-workspace-$selectedGradeLevelId'),
         customSchoolId: widget.customSchoolId,
         accessToken: widget.accessToken,
         onRefreshAccessToken: widget.onRefreshAccessToken,
@@ -278,9 +278,9 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
         onOpenIncidents: widget.onOpenIncidents,
         onOpenCalendar: widget.onOpenCalendar,
         attendanceRepository: widget.attendanceRepository,
-        initialGradeId: selectedGradeId,
+        initialGradeLevelId: selectedGradeLevelId,
         onBack: () async {
-          setState(() => _selectedGradeId = null);
+          setState(() => _selectedGradeLevelId = null);
           await _loadGradeStreams(showLoading: false);
         },
       );
@@ -316,7 +316,7 @@ class _GradeStreamsScreenState extends State<GradeStreamsScreen> {
               visibleLevels: _visibleLevels,
               onRetry: _loadGradeStreams,
               onOpenGrade: (level) =>
-                  setState(() => _selectedGradeId = level.id),
+                  setState(() => _selectedGradeLevelId = level.gradeLevelId),
             ),
           ],
         ),
@@ -723,7 +723,7 @@ class _ClassOverviewRow extends StatelessWidget {
     return ColoredBox(
       color: level.active ? Colors.white : const Color(0xFFFAFBFC),
       child: InkWell(
-        key: ValueKey('open-grade-${level.id}'),
+        key: ValueKey('open-grade-${level.gradeLevelId}'),
         onTap: onOpen,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
@@ -949,7 +949,7 @@ enum _ClassSort {
 
 class _GradeLevel {
   const _GradeLevel({
-    required this.id,
+    required this.gradeLevelId,
     required this.name,
     required this.custom,
     required this.active,
@@ -959,7 +959,7 @@ class _GradeLevel {
 
   factory _GradeLevel.fromApi(ClassGradeLevel level) {
     return _GradeLevel(
-      id: level.id,
+      gradeLevelId: level.gradeLevelId,
       name: level.name,
       custom: level.custom,
       active: level.active,
@@ -976,7 +976,7 @@ class _GradeLevel {
     );
   }
 
-  final int id;
+  final int gradeLevelId;
   final String name;
   final bool custom;
   final bool active;

@@ -19,7 +19,7 @@ class ClassSubjectConfigurationScreen extends StatefulWidget {
     required this.customSchoolId,
     this.accessToken,
     this.onRefreshAccessToken,
-    this.initialGradeId,
+    this.initialGradeLevelId,
     this.onBack,
     this.onOpenAttendance,
     this.onOpenAssessments,
@@ -32,7 +32,7 @@ class ClassSubjectConfigurationScreen extends StatefulWidget {
   final String customSchoolId;
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
-  final int? initialGradeId;
+  final int? initialGradeLevelId;
   final VoidCallback? onBack;
   final VoidCallback? onOpenAttendance;
   final ValueChanged<int>? onOpenAssessments;
@@ -56,17 +56,17 @@ class _ClassSubjectConfigurationScreenState
       );
   List<ClassGradeLevel> _grades = const [];
   final ScrollController _scrollController = ScrollController();
-  int? _selectedGradeId;
+  int? _selectedGradeLevelId;
   int? _selectedStreamId;
   bool _loading = true;
   bool _updatingStatus = false;
   String? _error;
 
   ClassGradeLevel? get _selectedGrade {
-    final selectedId = _selectedGradeId;
+    final selectedId = _selectedGradeLevelId;
     if (selectedId == null) return null;
     for (final grade in _grades) {
-      if (grade.id == selectedId) return grade;
+      if (grade.gradeLevelId == selectedId) return grade;
     }
     return null;
   }
@@ -74,7 +74,7 @@ class _ClassSubjectConfigurationScreenState
   @override
   void initState() {
     super.initState();
-    _selectedGradeId = widget.initialGradeId;
+    _selectedGradeLevelId = widget.initialGradeLevelId;
     _load();
   }
 
@@ -631,7 +631,8 @@ class _ClassSubjectConfigurationScreenState
     if (selectedGrade != null) {
       return _ClassWorkspace(
         grade: selectedGrade,
-        onBack: widget.onBack ?? () => setState(() => _selectedGradeId = null),
+        onBack:
+            widget.onBack ?? () => setState(() => _selectedGradeLevelId = null),
         onActiveChanged: _updatingStatus
             ? null
             : (value) => _toggle(selectedGrade, value),
@@ -707,7 +708,9 @@ class _ClassSubjectConfigurationScreenState
                 ...custom.map(
                   (grade) => _GradeCard(
                     grade: grade,
-                    onOpen: () => setState(() => _selectedGradeId = grade.id),
+                    onOpen: () => setState(
+                      () => _selectedGradeLevelId = grade.gradeLevelId,
+                    ),
                   ),
                 ),
               const SizedBox(height: 28),
@@ -721,7 +724,9 @@ class _ClassSubjectConfigurationScreenState
               ...ges.map(
                 (grade) => _GradeCard(
                   grade: grade,
-                  onOpen: () => setState(() => _selectedGradeId = grade.id),
+                  onOpen: () => setState(
+                    () => _selectedGradeLevelId = grade.gradeLevelId,
+                  ),
                 ),
               ),
             ],
@@ -977,7 +982,7 @@ class _ClassWorkspace extends StatelessWidget {
                       label:
                           '${grade.name} is ${grade.active ? 'active' : 'inactive'}',
                       child: Switch(
-                        key: ValueKey('grade-active-${grade.id}'),
+                        key: ValueKey('grade-active-${grade.gradeLevelId}'),
                         value: grade.active,
                         onChanged: onActiveChanged,
                       ),
@@ -993,7 +998,7 @@ class _ClassWorkspace extends StatelessWidget {
                     ? 'Create and review the sections that belong to ${grade.name}.'
                     : 'Activate ${grade.name} to add new sections.',
                 action: FilledButton.icon(
-                  key: ValueKey('workspace-add-section-${grade.id}'),
+                  key: ValueKey('workspace-add-section-${grade.gradeLevelId}'),
                   onPressed: onAddSection,
                   icon: const Icon(Icons.add_rounded, size: 18),
                   label: const Text('Add section'),
