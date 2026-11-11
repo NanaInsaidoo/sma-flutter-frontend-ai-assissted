@@ -168,7 +168,10 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final repository = _FakeClassesRepository();
+    final repository = _FakeClassesRepository(
+      secondSectionActive: false,
+      historicalStudentCount: 1,
+    );
 
     await tester.pumpWidget(
       MaterialApp(
@@ -199,6 +202,7 @@ void main() {
 
     expect(repository.calls, equals(['deactivate:3']));
     expect(find.text('Basic 1 - Section 1'), findsOneWidget);
+    expect(find.text('Unavailable'), findsNWidgets(2));
     expect(find.text('Activate Basic 1 to add new sections.'), findsOneWidget);
     final addSection = find.byKey(const ValueKey('workspace-add-section-3'));
     expect(tester.widget<FilledButton>(addSection).onPressed, isNull);
@@ -210,6 +214,14 @@ void main() {
 
     expect(repository.calls, equals(['deactivate:3', 'activate:3']));
     expect(tester.widget<FilledButton>(addSection).onPressed, isNotNull);
+    expect(find.text('Unavailable'), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('open-stream-2')),
+        matching: find.text('Inactive'),
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('a class with enrolled students cannot be made inactive', (
@@ -770,10 +782,14 @@ class _EnrolledClassesRepository extends _FakeClassesRepository {
 class _FakeClassesRepository extends Fake implements ClassesRepository {
   _FakeClassesRepository({
     this.withSubjects = false,
+    this.secondSectionActive = true,
+    this.historicalStudentCount = 0,
     this.subjectTeacherAssignments = const [],
   });
 
   final bool withSubjects;
+  final bool secondSectionActive;
+  final int historicalStudentCount;
   final List<SubjectTeacherAssignment> subjectTeacherAssignments;
   final List<String> calls = [];
   final Map<int, bool> _gradeStatuses = {};
@@ -798,11 +814,13 @@ class _FakeClassesRepository extends Fake implements ClassesRepository {
     ],
   );
 
-  static const _grade = ClassGradeLevel(
+  ClassGradeLevel get _grade => ClassGradeLevel(
     id: 10,
     gradeLevelId: 3,
     name: 'Basic 1',
     status: 'ACTIVE',
+    studentCount: historicalStudentCount,
+    activeStudentCount: 0,
     displayOrder: 1300,
     streams: [
       ClassStreamSummary(
@@ -821,7 +839,7 @@ class _FakeClassesRepository extends Fake implements ClassesRepository {
         teacherName: 'Akosua Owusu',
         enrolled: 0,
         capacity: 35,
-        active: true,
+        active: secondSectionActive,
       ),
     ],
   );
@@ -850,7 +868,7 @@ class _FakeClassesRepository extends Fake implements ClassesRepository {
   Future<List<ClassGradeLevel>> getAllGradeLevels(
     String customSchoolId,
   ) async => [
-    for (final grade in const [
+    for (final grade in [
       _grade,
       _customGrade,
       _activeGradeWithoutStreams,
@@ -865,6 +883,7 @@ class _FakeClassesRepository extends Fake implements ClassesRepository {
           streams: grade.streams,
           custom: grade.custom,
           studentCount: grade.studentCount,
+          activeStudentCount: grade.activeStudentCount,
           displayOrder: grade.displayOrder,
         )
       else
@@ -873,7 +892,7 @@ class _FakeClassesRepository extends Fake implements ClassesRepository {
 
   @override
   Future<List<ClassGradeLevel>> getGradeStreams(String customSchoolId) async =>
-      const [
+      [
         _grade,
         _customGrade,
         _activeGradeWithoutStreams,
@@ -881,13 +900,12 @@ class _FakeClassesRepository extends Fake implements ClassesRepository {
       ];
 
   @override
-  Future<List<ClassGradeLevel>> getAllStreams(String customSchoolId) async =>
-      const [
-        _grade,
-        _customGrade,
-        _activeGradeWithoutStreams,
-        _unsupportedSeniorGrade,
-      ];
+  Future<List<ClassGradeLevel>> getAllStreams(String customSchoolId) async => [
+    _grade,
+    _customGrade,
+    _activeGradeWithoutStreams,
+    _unsupportedSeniorGrade,
+  ];
 
   @override
   Future<void> setGradeLevelActive({

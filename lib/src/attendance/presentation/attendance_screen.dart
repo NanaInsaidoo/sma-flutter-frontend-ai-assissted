@@ -21,6 +21,7 @@ class AttendanceScreen extends StatefulWidget {
     this.onBack,
     this.onOpenCalendar,
     this.showClassSelectors = true,
+    this.readOnly = false,
   });
 
   final String customSchoolId;
@@ -35,6 +36,7 @@ class AttendanceScreen extends StatefulWidget {
   final VoidCallback? onBack;
   final VoidCallback? onOpenCalendar;
   final bool showClassSelectors;
+  final bool readOnly;
 
   @override
   State<AttendanceScreen> createState() => _AttendanceScreenState();
@@ -1008,7 +1010,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   Widget _submitBar() {
     final complete = _unmarkedCount() == 0;
     final readOnly = _hasExistingAttendance && !_editingSubmitted;
-    final blockedMessage = _entryContext == null
+    final blockedMessage = widget.readOnly
+        ? 'This section is inactive. Attendance is read-only.'
+        : _entryContext == null
         ? 'Checking attendance rules...'
         : _entryContext!.futureDate
         ? 'Attendance cannot be taken for a future date.'
@@ -1039,7 +1043,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  'This register will be saved for ${_friendlyDate(_selectedDate)}.',
+                  widget.readOnly
+                      ? 'Attendance for ${_friendlyDate(_selectedDate)}.'
+                      : 'This register will be saved for ${_friendlyDate(_selectedDate)}.',
                   style: const TextStyle(
                     color: AppColors.text,
                     fontSize: 12,
@@ -1564,7 +1570,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
   bool get _canEditAttendance {
     final entryContext = _entryContext;
-    return entryContext != null &&
+    return !widget.readOnly &&
+        entryContext != null &&
         !entryContext.futureDate &&
         entryContext.schoolDay &&
         (!_hasExistingAttendance || _editingSubmitted);
@@ -1572,7 +1579,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
   bool get _canOpenSubmittedForEditing {
     final entryContext = _entryContext;
-    return entryContext != null &&
+    return !widget.readOnly &&
+        entryContext != null &&
         !entryContext.futureDate &&
         entryContext.schoolDay &&
         !_saving;

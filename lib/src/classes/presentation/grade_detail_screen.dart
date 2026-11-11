@@ -21,6 +21,7 @@ class GradeDetailScreen extends StatefulWidget {
     required this.enrolled,
     required this.capacity,
     required this.active,
+    this.classInactive = false,
     this.classTeacherName,
     this.accessToken,
     this.onRefreshAccessToken,
@@ -47,6 +48,7 @@ class GradeDetailScreen extends StatefulWidget {
   final int enrolled;
   final int? capacity;
   final bool active;
+  final bool classInactive;
   final String? classTeacherName;
   final String? accessToken;
   final Future<String?> Function()? onRefreshAccessToken;
@@ -567,6 +569,7 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
         initialStreamId: widget.streamId,
         initialDate: _attendanceRegisterDate,
         showClassSelectors: false,
+        readOnly: !widget.active,
         onBack: () {
           setState(() {
             _attendanceRegisterOpen = false;
@@ -590,7 +593,9 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
               gradeName: widget.gradeName,
               streamName: widget.streamName,
               onBack: widget.onBack,
-              onOpenAssessments: widget.onOpenAssessments,
+              onOpenAssessments: widget.active
+                  ? widget.onOpenAssessments
+                  : null,
               onRenameSection: widget.onRenameSection,
               onDeleteSection: widget.onDeleteSection,
             ),
@@ -606,11 +611,25 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
                         _StreamDetailTabs(
                           selected: _selectedTab,
                           pendingAttendance: 0,
-                          onOpenEvaluations: widget.onOpenEvaluations,
+                          onOpenEvaluations: widget.active
+                              ? widget.onOpenEvaluations
+                              : null,
                           onChanged: (tab) =>
                               setState(() => _selectedTab = tab),
                         ),
                         const SizedBox(height: 18),
+                        if (!widget.active) ...[
+                          Text(
+                            widget.classInactive
+                                ? 'Section unavailable because the class is inactive.'
+                                : 'This section is inactive.',
+                            style: const TextStyle(
+                              color: AppColors.muted,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                        ],
                         switch (_selectedTab) {
                           _StreamDetailTab.overview => Column(
                             children: [
@@ -620,7 +639,9 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
                                   () => _selectedTab =
                                       _StreamDetailTab.attendance,
                                 ),
-                                onOpenAssessments: widget.onOpenAssessments,
+                                onOpenAssessments: widget.active
+                                    ? widget.onOpenAssessments
+                                    : null,
                                 onOpenStudents: null,
                               ),
                               const SizedBox(height: 18),
@@ -636,7 +657,7 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
                                   onSetPrimary: _setPrimaryClassTeacher,
                                   onToggleActive: _toggleClassTeacher,
                                   onRemove: _removeClassTeacher,
-                                  editable: true,
+                                  editable: widget.active,
                                 ),
                                 const SizedBox(height: 18),
                               ],
@@ -677,8 +698,9 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
                                         () => _selectedTab =
                                             _StreamDetailTab.attendance,
                                       ),
-                                      onOpenAssessments:
-                                          widget.onOpenAssessments,
+                                      onOpenAssessments: widget.active
+                                          ? widget.onOpenAssessments
+                                          : null,
                                       onOpenIncidents: widget.onOpenIncidents,
                                       onOpenCalendar: widget.onOpenCalendar,
                                       primaryLinksInTabs: true,
@@ -721,18 +743,20 @@ class _GradeDetailScreenState extends State<GradeDetailScreen> {
                             onAddSubject: _addSubjectToStream,
                             onAvailabilityChanged: _setSubjectAvailableInStream,
                             onManage: _manageSubjectTeachers,
-                            editable: !widget.teacherView,
+                            editable: widget.active && !widget.teacherView,
                           ),
                           _StreamDetailTab.attendance => _StreamAttendanceTab(
                             streamName: widget.streamName,
                             enrolled: widget.enrolled,
                             rosterFuture: _rosterFuture,
                             historyFuture: _attendanceHistoryFuture,
-                            onTakeAttendance: () =>
-                                _openAttendanceRegister(DateTime.now()),
+                            onTakeAttendance: widget.active
+                                ? () => _openAttendanceRegister(DateTime.now())
+                                : null,
                             onOpenDay: _openAttendanceRegister,
                             onResolveDay: _resolveNonSchoolDay,
-                            canResolveNonSchoolDay: !widget.teacherView,
+                            canResolveNonSchoolDay:
+                                widget.active && !widget.teacherView,
                             onRetry: () => setState(
                               () => _attendanceHistoryFuture =
                                   _loadAttendanceHistory(),
@@ -1964,7 +1988,7 @@ class _StreamAttendanceTab extends StatefulWidget {
   final int enrolled;
   final Future<AttendanceRoster> rosterFuture;
   final Future<AttendanceTermHistory> historyFuture;
-  final VoidCallback onTakeAttendance;
+  final VoidCallback? onTakeAttendance;
   final ValueChanged<DateTime> onOpenDay;
   final void Function(AttendanceDaySummary day, int termId) onResolveDay;
   final VoidCallback onRetry;
@@ -2220,16 +2244,25 @@ class _StreamAttendanceTabState extends State<_StreamAttendanceTab> {
                               ? '${day.eventName}${day.eventDescription.isEmpty ? '' : ' · ${day.eventDescription}'}'
                               : 'No register submitted for ${day.expectedStudents} students',
                           action: completed
-                              ? 'View / Correct'
+                              ? (widget.onTakeAttendance != null
+                                    ? 'View / Correct'
+                                    : 'View')
                               : nonSchool
                               ? 'View'
-                              : 'Resolve',
+                              : widget.onTakeAttendance != null
+                              ? 'Resolve'
+                              : 'Unavailable',
                           warning: !completed && !nonSchool,
-                          onPressed: () => nonSchool
-                              ? _showNonSchoolDay(day)
-                              : completed
-                              ? widget.onOpenDay(day.date)
-                              : _showMissingActions(day, history.termId),
+                          onPressed:
+                              !completed &&
+                                  !nonSchool &&
+                                  widget.onTakeAttendance == null
+                              ? null
+                              : () => nonSchool
+                                    ? _showNonSchoolDay(day)
+                                    : completed
+                                    ? widget.onOpenDay(day.date)
+                                    : _showMissingActions(day, history.termId),
                         );
                       }),
                       if (pages > 1)
@@ -2404,7 +2437,7 @@ class _AttendanceRecordRow extends StatelessWidget {
   final String status;
   final String summary;
   final String action;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
   final bool warning;
 
   @override
