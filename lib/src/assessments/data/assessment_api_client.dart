@@ -101,6 +101,7 @@ class AssessmentApiClient {
         : _list(streamsBody);
     final rawStreams = streamValues
         .map(_map)
+        .where((item) => item['isActive'] != false)
         .map(
           (item) => AssessmentStreamOption(
             id: _int(item['id']) ?? 0,

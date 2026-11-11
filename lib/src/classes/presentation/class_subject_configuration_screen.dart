@@ -118,7 +118,7 @@ class _ClassSubjectConfigurationScreenState
           content: Text(
             grade.streams.isEmpty
                 ? '${grade.name} does not have a section yet. Section 1 will be created because every active class must have at least one section.'
-                : '${grade.name} and its sections will become available for admissions, teacher assignments, attendance, and assessments.',
+                : 'Previously active sections will become available again. Individually inactive sections will stay inactive. If no sections can be restored, a new section will be created.',
           ),
           actions: [
             TextButton(
@@ -139,13 +139,14 @@ class _ClassSubjectConfigurationScreenState
       if (confirmed != true) return;
     }
     if (!mounted) return;
-    if (!active && grade.studentCount > 0) {
+    final activeStudents = grade.activeStudentCount ?? grade.studentCount;
+    if (!active && activeStudents > 0) {
       await showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
           title: Text('Cannot make ${grade.name} inactive'),
           content: Text(
-            '${grade.name} has ${grade.studentCount} actively enrolled student${grade.studentCount == 1 ? '' : 's'}. Transfer, promote, withdraw, or graduate them before making this class inactive.',
+            '${grade.name} has $activeStudents actively enrolled student${activeStudents == 1 ? '' : 's'}. Transfer, promote, withdraw, or graduate them before making this class inactive.',
           ),
           actions: [
             FilledButton(
@@ -163,7 +164,7 @@ class _ClassSubjectConfigurationScreenState
         builder: (context) => AlertDialog(
           title: Text('Make ${grade.name} inactive?'),
           content: Text(
-            '${grade.name} and its sections will no longer be available for new admissions, teacher assignments, attendance, or assessments. Existing records will remain available.',
+            'All sections in ${grade.name} will become unavailable for new admissions, teacher assignments, attendance, and assessments. Existing records will remain available.',
           ),
           actions: [
             TextButton(
@@ -609,7 +610,8 @@ class _ClassSubjectConfigurationScreenState
           streamName: selectedStream.name,
           enrolled: selectedStream.enrolled,
           capacity: selectedStream.capacity,
-          active: selectedStream.active,
+          active: selectedGrade.active && selectedStream.active,
+          classInactive: !selectedGrade.active,
           classTeacherName: selectedStream.teacherName,
           accessToken: widget.accessToken,
           onRefreshAccessToken: widget.onRefreshAccessToken,
@@ -1016,6 +1018,7 @@ class _ClassWorkspace extends StatelessWidget {
                             .map(
                               (stream) => _WorkspaceSectionRow(
                                 stream: stream,
+                                classActive: grade.active,
                                 onOpen: () => onOpenSection(stream),
                                 onRename: () => onRenameSection(stream),
                                 onDelete: () => onDeleteSection(stream),
@@ -1033,8 +1036,9 @@ class _ClassWorkspace extends StatelessWidget {
 }
 
 class _ClassStatusPill extends StatelessWidget {
-  const _ClassStatusPill({required this.active});
+  const _ClassStatusPill({required this.active, this.label});
   final bool active;
+  final String? label;
 
   @override
   Widget build(BuildContext context) {
@@ -1057,7 +1061,7 @@ class _ClassStatusPill extends StatelessWidget {
           ),
           const SizedBox(width: 5),
           Text(
-            active ? 'Active' : 'Inactive',
+            label ?? (active ? 'Active' : 'Inactive'),
             style: TextStyle(
               color: color,
               fontSize: 12,
@@ -1146,18 +1150,21 @@ class _WorkspaceSection extends StatelessWidget {
 class _WorkspaceSectionRow extends StatelessWidget {
   const _WorkspaceSectionRow({
     required this.stream,
+    required this.classActive,
     required this.onOpen,
     required this.onRename,
     required this.onDelete,
   });
   final ClassStreamSummary stream;
+  final bool classActive;
   final VoidCallback onOpen;
   final VoidCallback onRename;
   final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
-    final statusColor = stream.active ? AppColors.green : AppColors.muted;
+    final available = classActive && stream.active;
+    final statusColor = available ? AppColors.green : AppColors.muted;
     final capacity = stream.capacity == null
         ? 'No capacity set'
         : '${stream.capacity} capacity';
@@ -1205,7 +1212,10 @@ class _WorkspaceSectionRow extends StatelessWidget {
                   style: const TextStyle(color: AppColors.muted, fontSize: 12),
                 ),
                 const SizedBox(width: 16),
-                _ClassStatusPill(active: stream.active),
+                _ClassStatusPill(
+                  active: available,
+                  label: classActive ? null : 'Unavailable',
+                ),
                 const SizedBox(width: 4),
                 const Icon(Icons.chevron_right_rounded, color: AppColors.muted),
                 const SizedBox(width: 4),

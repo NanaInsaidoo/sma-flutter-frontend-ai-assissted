@@ -165,6 +165,7 @@ class ClassGradeLevel {
     required this.streams,
     this.custom = false,
     this.studentCount = 0,
+    this.activeStudentCount,
     this.displayOrder = 0,
     this.nextGradeLevelId,
     this.nextGradeLevelName,
@@ -177,6 +178,7 @@ class ClassGradeLevel {
   final List<ClassStreamSummary> streams;
   final bool custom;
   final int studentCount;
+  final int? activeStudentCount;
   final int displayOrder;
   final int? nextGradeLevelId;
   final String? nextGradeLevelName;

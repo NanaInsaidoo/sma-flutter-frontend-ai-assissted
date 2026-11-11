@@ -83,7 +83,7 @@ void main() {
         client: MockClient((request) async {
           if (request.url.path.endsWith('/all-streams')) {
             return http.Response(
-              '{"success":true,"data":[{"id":7,"name":"A","gradeLevelId":5,"gradeLevelName":"Grade 5","studentCount":31}]}',
+              '{"success":true,"data":[{"id":7,"name":"A","gradeLevelId":5,"gradeLevelName":"Grade 5","studentCount":31},{"id":8,"name":"B","gradeLevelId":5,"gradeLevelName":"Grade 5","isActive":false}]}',
               200,
             );
           }

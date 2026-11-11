@@ -687,6 +687,9 @@ class ClassesApiClient implements ClassesRepository {
       streams: streams,
       custom: custom,
       studentCount: _integer(json['gradeLevelStudentCount']),
+      activeStudentCount: json['activeStudentCount'] == null
+          ? null
+          : _integer(json['activeStudentCount']),
       displayOrder: custom
           ? rawDisplayOrder > 0 && rawDisplayOrder < 1000
                 ? rawDisplayOrder
