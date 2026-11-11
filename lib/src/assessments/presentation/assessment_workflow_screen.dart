@@ -331,7 +331,10 @@ class _CompleteAssessmentWorkflowState
           final refreshed = _assessments.where(
             (assessment) => assessment.id == selectedId,
           );
-          if (refreshed.isNotEmpty) _selectedAssessment = refreshed.first;
+          if (refreshed.isNotEmpty &&
+              _selectedAssessment?.editDeleteBlockedReason == null) {
+            _selectedAssessment = refreshed.first;
+          }
         }
         _loadingAssessments = false;
       });
@@ -355,6 +358,9 @@ class _CompleteAssessmentWorkflowState
     final stream = setup.streams.where((option) => option.id == streamId);
     final classOption = stream.isEmpty ? null : stream.first;
     final type = _assessmentTypeLabel(item['type']?.toString() ?? '');
+    final maximum = _jsonNumber(item['maxScore']);
+    final term = _jsonInt(item['term']);
+    final academicYearId = _jsonInt(item['academicYearId']);
     final entered = _jsonInt(item['scoresEntered']);
     final total = _jsonInt(item['totalStudents']);
     final statusValue = item['status']?.toString() ?? 'NOT_STARTED';
@@ -370,7 +376,7 @@ class _CompleteAssessmentWorkflowState
       type: type,
       subject: item['subjectName']?.toString() ?? '',
       date: _displayApiDate(item['date']),
-      maxScore: _jsonNumber(item['maxScore']).round(),
+      maxScore: maximum == maximum.roundToDouble() ? maximum.toInt() : maximum,
       entered: entered,
       totalStudents: total,
       average: _jsonNumber(item['averageScore']),
@@ -383,7 +389,14 @@ class _CompleteAssessmentWorkflowState
           : total > 0 && entered >= total
           ? 'Fully graded'
           : 'In progress ($entered of $total)',
-      term: setup.termName,
+      term: term == 0 || term == setup.termSequence
+          ? setup.termName
+          : switch (term) {
+              1 => 'First Term',
+              2 => 'Second Term',
+              3 => 'Third Term',
+              _ => 'Term $term',
+            },
       academicYear: item['academicYear']?.toString() ?? setup.academicYearName,
       curriculumIndicators: indicators
           .whereType<Map<String, dynamic>>()
@@ -411,8 +424,11 @@ class _CompleteAssessmentWorkflowState
       gradeName: item['gradeName']?.toString() ?? classOption?.gradeName ?? '',
       streamName:
           item['streamName']?.toString() ?? classOption?.streamName ?? '',
-      academicYearId: setup.academicYearId,
-      termSequence: setup.termSequence,
+      academicYearId: academicYearId == 0
+          ? setup.academicYearId
+          : academicYearId,
+      termSequence: term == 0 ? setup.termSequence : term,
+      editDeleteBlockedReason: item['editDeleteBlockedReason']?.toString(),
       createdBy: item['createdBy']?.toString() ?? '',
       updatedBy: item['updatedBy']?.toString() ?? '',
       createdAt: _displayApiDateTime(item['createdAt']),
@@ -641,7 +657,7 @@ class _CompleteAssessmentWorkflowState
       );
       if (!mounted) return;
       setState(() {
-        _assessments.remove(assessment);
+        _assessments.removeWhere((item) => item.id == assessment.id);
         _assessmentScores.remove(assessment.id);
         _selectedAssessment = null;
       });
@@ -3245,6 +3261,7 @@ class _CompleteAssessmentWorkflowState
         ? (a.entered == 0 ? '—' : a.lowestScore.toStringAsFixed(1))
         : savedScores.reduce((x, y) => x < y ? x : y).toStringAsFixed(1);
     final progress = a.totalStudents == 0 ? 0.0 : a.entered / a.totalStudents;
+    final canChange = a.editDeleteBlockedReason == null;
     void edit() {
       _editingAssessment = true;
       _open(_Route.assessmentForm);
@@ -3262,7 +3279,7 @@ class _CompleteAssessmentWorkflowState
             children: [
               LayoutBuilder(
                 builder: (context, constraints) {
-                  final compact = constraints.maxWidth < 760;
+                  final compact = constraints.maxWidth < 960;
                   final heading = Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -3305,19 +3322,26 @@ class _CompleteAssessmentWorkflowState
                       ),
                     ],
                   );
-                  final actions = Row(
-                    mainAxisSize: MainAxisSize.min,
+                  final actions = Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
                     children: [
                       OutlinedButton.icon(
                         onPressed: scores,
                         icon: const Icon(Icons.link, size: 16),
                         label: const Text('View Score Sheet'),
                       ),
-                      const SizedBox(width: 8),
                       FilledButton.icon(
-                        onPressed: edit,
+                        onPressed: canChange ? edit : null,
                         icon: const Icon(Icons.edit_outlined, size: 16),
                         label: const Text('Edit Assessment'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: canChange
+                            ? () => _deleteAssessment(a)
+                            : null,
+                        icon: const Icon(Icons.delete_outline, size: 16),
+                        label: const Text('Delete Assessment'),
                       ),
                     ],
                   );
@@ -3339,6 +3363,10 @@ class _CompleteAssessmentWorkflowState
                         );
                 },
               ),
+              if (!canChange) ...[
+                const SizedBox(height: 12),
+                Text(a.editDeleteBlockedReason!),
+              ],
               const SizedBox(height: 16),
               LayoutBuilder(
                 builder: (context, constraints) {
@@ -3578,7 +3606,7 @@ class _CompleteAssessmentWorkflowState
                         ),
                       ),
                       const SizedBox(height: 16),
-                      _oldActionsCard(a, scores, edit),
+                      _oldActionsCard(a, scores, canChange ? edit : null),
                     ],
                   );
                   if (narrow) {
@@ -3826,7 +3854,7 @@ class _CompleteAssessmentWorkflowState
   Widget _oldActionsCard(
     _AssessmentRecord assessment,
     VoidCallback scores,
-    VoidCallback edit,
+    VoidCallback? edit,
   ) {
     return Container(
       width: double.infinity,
@@ -3865,30 +3893,10 @@ class _CompleteAssessmentWorkflowState
             ),
           ),
           const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: TextButton.icon(
-                  onPressed: () => _duplicateAssessment(assessment),
-                  icon: const Icon(Icons.copy_outlined, size: 16),
-                  label: const Text('Duplicate'),
-                ),
-              ),
-              Expanded(
-                child: TextButton.icon(
-                  onPressed: () => _deleteAssessment(assessment),
-                  icon: const Icon(
-                    Icons.delete_outline,
-                    size: 16,
-                    color: Colors.red,
-                  ),
-                  label: const Text(
-                    'Delete',
-                    style: TextStyle(color: Colors.red),
-                  ),
-                ),
-              ),
-            ],
+          TextButton.icon(
+            onPressed: () => _duplicateAssessment(assessment),
+            icon: const Icon(Icons.copy_outlined, size: 16),
+            label: const Text('Duplicate'),
           ),
         ],
       ),
@@ -3926,7 +3934,8 @@ class _CompleteAssessmentWorkflowState
           customSchoolId: widget.customSchoolId,
           onBack: _back,
           onCurriculum: _showCurriculumDrawer,
-          onSave: (record) {
+          onSave: (response) {
+            final record = _assessmentFromApi(response, snapshot.data!);
             setState(() {
               if (_editingAssessment && _selectedAssessment != null) {
                 final index = _assessments.indexWhere(
@@ -11231,7 +11240,7 @@ class _AssessmentFormPage extends StatefulWidget {
     String,
   )
   onCurriculum;
-  final ValueChanged<_AssessmentRecord> onSave;
+  final ValueChanged<Map<String, dynamic>> onSave;
 
   @override
   State<_AssessmentFormPage> createState() => _AssessmentFormPageState();
@@ -11566,8 +11575,11 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
                                     : null,
                               ),
                               validator: (value) {
-                                final score = int.tryParse(value ?? '');
-                                return score == null || score <= 0
+                                final score = num.tryParse(value ?? '');
+                                return score == null ||
+                                        !score.isFinite ||
+                                        score < .01 ||
+                                        score > 100
                                     ? 'Enter a valid score'
                                     : null;
                               },
@@ -11588,10 +11600,17 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
                               label: 'Term',
                               hint: 'Select term',
                               value: _term,
-                              values: [widget.setup.termName],
-                              onChanged: _hasEnteredScores
-                                  ? null
-                                  : (value) => setState(() => _term = value),
+                              values: [widget.source!.term],
+                              onChanged: null,
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          TextFormField(
+                            controller: _description,
+                            maxLength: 500,
+                            maxLines: 3,
+                            decoration: const InputDecoration(
+                              labelText: 'Description (optional)',
                             ),
                           ),
                         ],
@@ -11621,6 +11640,11 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
                             ),
                           ),
                           const SizedBox(height: 14),
+                          if (_indicatorError != null)
+                            Text(
+                              _indicatorError!,
+                              style: const TextStyle(color: AppColors.red),
+                            ),
                           if (_selectedIndicators.isEmpty)
                             Container(
                               width: double.infinity,
@@ -12490,7 +12514,10 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
     String? changeReason,
   }) async {
     final detailsAreValid = _key.currentState!.validate();
-    final indicatorsAreValid = _selectedIndicators.isNotEmpty;
+    final source = widget.source;
+    final subjectUnchanged = source != null && _subject == source.subject;
+    final indicatorsAreValid =
+        subjectUnchanged || _selectedIndicators.isNotEmpty;
     setState(() {
       _indicatorError = indicatorsAreValid
           ? null
@@ -12506,7 +12533,7 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
       );
       return;
     }
-    final max = int.parse(_maxScore.text);
+    final max = num.parse(_maxScore.text.trim());
     final date = _dateGiven!;
     final body = <String, dynamic>{
       if (widget.source == null) 'streamId': stream.id,
@@ -12516,13 +12543,14 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
       'date':
           '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}',
       'maxScore': max,
-      'term': widget.setup.termSequence,
+      'term': source?.termSequence ?? widget.setup.termSequence,
       if (widget.source == null) 'academicYearId': widget.setup.academicYearId,
       'description': _description.text.trim(),
       'isOfficialSBA': _schoolBasedAssessmentTypes.contains(_type),
-      'curriculumIndicatorCodes': _selectedIndicators
-          .map((indicator) => indicator.code)
-          .toList(),
+      if (!subjectUnchanged || !_sameIndicators(source.curriculumIndicators))
+        'curriculumIndicatorCodes': _selectedIndicators
+            .map((indicator) => indicator.code)
+            .toList(),
       if (vacationOverrideReason?.trim().isNotEmpty == true)
         'vacationOverrideReason': vacationOverrideReason!.trim(),
       if (changeReason?.trim().isNotEmpty == true)
@@ -12548,40 +12576,7 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
       final assessment = response['assessment'] is Map<String, dynamic>
           ? response['assessment'] as Map<String, dynamic>
           : response;
-      final assessmentId =
-          assessment['assessmentId']?.toString() ??
-          response['assessmentId']?.toString() ??
-          widget.source?.id;
-      widget.onSave(
-        _AssessmentRecord(
-          id: assessmentId!,
-          title: _title.text.trim(),
-          type: _type!,
-          subject: _subject!,
-          streamId: stream.id,
-          gradeLevelId: stream.gradeLevelId,
-          schoolSubjectId: subject.id,
-          className: stream.label,
-          gradeName: stream.gradeName,
-          streamName: stream.streamName,
-          academicYearId: widget.setup.academicYearId,
-          termSequence: widget.setup.termSequence,
-          date:
-              '${date.day.toString().padLeft(2, '0')} ${_monthName(date.month)} ${date.year}',
-          maxScore: max,
-          entered: widget.source?.entered ?? 0,
-          totalStudents: widget.source?.totalStudents ?? 47,
-          average: widget.source?.average ?? 0,
-          passRate: widget.source?.passRate ?? 0,
-          status: _status ?? 'Open',
-          grading: widget.source?.grading ?? 'Not started',
-          description: _description.text.trim(),
-          term: _term!,
-          academicYear: _academicYear!,
-          officialSba: _schoolBasedAssessmentTypes.contains(_type),
-          curriculumIndicators: List.of(_selectedIndicators),
-        ),
-      );
+      widget.onSave(assessment);
     } on AssessmentApiException catch (error) {
       if (!mounted) return;
       if (vacationOverrideReason == null &&
@@ -12597,6 +12592,13 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  bool _sameIndicators(List<_CurriculumIndicator> previous) {
+    final previousCodes = previous.map((item) => item.code).toSet();
+    final currentCodes = _selectedIndicators.map((item) => item.code).toSet();
+    return currentCodes.length == previousCodes.length &&
+        currentCodes.containsAll(previousCodes);
   }
 
   Future<String?> _requestAssessmentChangeReason({
@@ -12758,24 +12760,6 @@ class _AssessmentFormPageState extends State<_AssessmentFormPage> {
     final year = int.tryParse(parts[2]);
     if (day == null || month == 0 || year == null) return null;
     return DateTime(year, month, day);
-  }
-
-  String _monthName(int month) {
-    const months = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ];
-    return months[month - 1];
   }
 }
 
@@ -15005,6 +14989,7 @@ class _AssessmentRecord {
     this.updatedBy = '',
     this.createdAt = '',
     this.updatedAt = '',
+    this.editDeleteBlockedReason,
   });
 
   final String id;
@@ -15012,7 +14997,7 @@ class _AssessmentRecord {
   final String type;
   final String subject;
   final String date;
-  final int maxScore;
+  final num maxScore;
   int entered;
   final int totalStudents;
   double average;
@@ -15038,6 +15023,7 @@ class _AssessmentRecord {
   final String updatedBy;
   final String createdAt;
   final String updatedAt;
+  final String? editDeleteBlockedReason;
 }
 
 class _AssessmentSetupError extends StatelessWidget {
