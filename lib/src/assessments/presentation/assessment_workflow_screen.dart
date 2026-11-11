@@ -12789,6 +12789,8 @@ class _ScoreSheetPage extends StatefulWidget {
 }
 
 class _ScoreSheetPageState extends State<_ScoreSheetPage> {
+  static final _scoreInputPattern = RegExp(r'^-?\d*\.?\d{0,2}$');
+
   final _searchController = TextEditingController();
   String _query = '';
   List<AssessmentStudentScore> _students = const [];
@@ -12962,10 +12964,10 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
           student.name.toLowerCase().contains(query) ||
           student.studentId.toLowerCase().contains(query);
     }).toList();
-    final values = _controllers.values
-        .map((controller) => double.tryParse(controller.text.trim()))
+    final hasInvalidScores = _students.any(_hasInvalidScore);
+    final values = _students
+        .map(_validScoreForDisplay)
         .whereType<double>()
-        .where((score) => score >= 0 && score <= widget.assessment.maxScore)
         .toList();
     final average = values.isEmpty
         ? null
@@ -13050,7 +13052,10 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
                         label: const Text('Export CSV'),
                       ),
                       FilledButton.icon(
-                        onPressed: _saving || allReportsLocked ? null : _save,
+                        onPressed:
+                            _saving || allReportsLocked || hasInvalidScores
+                            ? null
+                            : _save,
                         icon: _saving
                             ? const SizedBox.square(
                                 dimension: 16,
@@ -13088,6 +13093,18 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
                 },
               ),
               const SizedBox(height: 16),
+              if (hasInvalidScores) ...[
+                Semantics(
+                  liveRegion: true,
+                  child: Text(
+                    _scoreRangeError,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
               if (_students.any((student) => student.reportGenerated)) ...[
                 _scoreSheetLockNotice(),
                 const SizedBox(height: 12),
@@ -13191,6 +13208,7 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
                           return SingleChildScrollView(
                             scrollDirection: Axis.horizontal,
                             child: DataTable(
+                              dataRowMaxHeight: double.infinity,
                               headingRowColor: WidgetStateProperty.all(
                                 const Color(0xFFF9FAFB),
                               ),
@@ -13278,16 +13296,26 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
     );
   }
 
+  String get _scoreRangeError =>
+      'Enter a score from 0 to ${widget.assessment.maxScore}.';
+
+  String _scoreText(AssessmentStudentScore student) =>
+      _controllers[student.studentId]!.text.trim();
+
   double? _scoreFor(AssessmentStudentScore student) =>
-      double.tryParse(_controllers[student.studentId]!.text.trim());
+      double.tryParse(_scoreText(student));
 
   double? _validScoreForDisplay(AssessmentStudentScore student) {
     final score = _scoreFor(student);
-    if (score == null || score < 0 || score > widget.assessment.maxScore) {
-      return null;
-    }
-    return score;
+    return score != null && score >= 0 && score <= widget.assessment.maxScore
+        ? score
+        : null;
   }
+
+  bool _hasInvalidScore(AssessmentStudentScore student) =>
+      !student.reportGenerated &&
+      _scoreText(student).isNotEmpty &&
+      _validScoreForDisplay(student) == null;
 
   String _gradeFor(double? score) {
     if (score == null) return '—';
@@ -13303,9 +13331,6 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
   }
 
   Widget _oldScoreInput(AssessmentStudentScore student) {
-    final score = _scoreFor(student);
-    final invalid =
-        score != null && (score < 0 || score > widget.assessment.maxScore);
     return SizedBox(
       width: 92,
       child: TextField(
@@ -13313,14 +13338,25 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
         readOnly: student.reportGenerated,
         onChanged: (_) => setState(() {}),
         textAlign: TextAlign.center,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        keyboardType: const TextInputType.numberWithOptions(
+          decimal: true,
+          signed: true,
+        ),
         inputFormatters: [
-          FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
+          TextInputFormatter.withFunction(
+            (previous, next) =>
+                _scoreInputPattern.hasMatch(next.text) ? next : previous,
+          ),
         ],
         decoration: InputDecoration(
           hintText: '—',
           isDense: true,
-          errorText: invalid ? 'Out of range' : null,
+          error: _hasInvalidScore(student)
+              ? Text(
+                  '0–${widget.assessment.maxScore}',
+                  semanticsLabel: _scoreRangeError,
+                )
+              : null,
           contentPadding: const EdgeInsets.symmetric(
             horizontal: 8,
             vertical: 10,
@@ -13409,7 +13445,12 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
           ),
         ),
         DataCell(Text(student.studentId)),
-        DataCell(_oldScoreInput(student)),
+        DataCell(
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: _oldScoreInput(student),
+          ),
+        ),
         DataCell(_oldScoreVisual(score)),
         DataCell(_scoreGrade(student, score)),
         DataCell(_scorePassOutcome(student, score)),
@@ -13886,30 +13927,22 @@ class _ScoreSheetPageState extends State<_ScoreSheetPage> {
   }
 
   Future<void> _save() async {
+    if (_students.any(_hasInvalidScore)) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_scoreRangeError)));
+      return;
+    }
     final scores = <Map<String, dynamic>>[];
-    for (final entry in _controllers.entries) {
-      final student = _students.firstWhere(
-        (candidate) => candidate.studentId == entry.key,
-      );
+    for (final student in _students) {
       if (student.reportGenerated) continue;
-      final value = entry.value.text.trim();
-      final score = value.isEmpty ? null : double.tryParse(value);
-      if (score != null && (score < 0 || score > widget.assessment.maxScore)) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Scores must be between 0 and ${widget.assessment.maxScore}.',
-            ),
-          ),
-        );
-        return;
-      }
+      final score = _validScoreForDisplay(student);
       final scoreChanged =
           score != null &&
           (student.score == null || (score - student.score!).abs() > .0001);
       if (score != null && scoreChanged) {
         scores.add({
-          'studentId': entry.key,
+          'studentId': student.studentId,
           'score': score,
           'maxScore': widget.assessment.maxScore,
           'remarks': student.remarks,
