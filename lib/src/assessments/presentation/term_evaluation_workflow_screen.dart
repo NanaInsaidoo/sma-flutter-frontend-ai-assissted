@@ -6528,6 +6528,32 @@ class _AssignmentEntryState extends State<_AssignmentEntry> {
   );
 }
 
+Future<bool> _confirmClassCommentSubmission(
+  BuildContext context,
+  int studentCount,
+) async =>
+    await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Submit class evaluation for approval?'),
+        content: Text(
+          'Send the saved ratings and comments for this class ($studentCount ${studentCount == 1 ? 'student' : 'students'}) to leadership for approval.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.send_outlined),
+            label: const Text('Submit for approval'),
+          ),
+        ],
+      ),
+    ) ==
+    true;
+
 class _ConsolidatedReview extends StatefulWidget {
   const _ConsolidatedReview({
     required this.api,
@@ -6566,12 +6592,14 @@ class _ConsolidatedReviewState extends State<_ConsolidatedReview> {
   final _reviewStatuses = <String, String>{};
   final _reviews = <String, Map<String, dynamic>>{};
   final _selectedStudents = <String>{};
+  late final Future<void> _initialReviewStatuses;
   bool _busy = false;
+  bool _openingStudent = false;
 
   @override
   void initState() {
     super.initState();
-    _loadReviewStatuses();
+    _initialReviewStatuses = _loadReviewStatuses();
   }
 
   @override
@@ -6585,11 +6613,7 @@ class _ConsolidatedReviewState extends State<_ConsolidatedReview> {
       widget.students.map((student) async {
         final studentId = student['id'].toString();
         try {
-          final review = await widget.api.getTermEvaluationReview(
-            studentId: studentId,
-            schoolId: widget.schoolId,
-            termId: widget.termId,
-          );
+          final review = await _fetchStudentReview(studentId);
           return MapEntry(studentId, review);
         } on AssessmentApiException {
           return MapEntry<String, Map<String, dynamic>>(studentId, const {
@@ -6600,54 +6624,135 @@ class _ConsolidatedReviewState extends State<_ConsolidatedReview> {
     );
     if (!mounted) return;
     setState(() {
-      _reviews
-        ..clear()
-        ..addEntries(loaded);
-      _reviewStatuses
-        ..clear()
-        ..addEntries(
-          loaded.map(
-            (entry) => MapEntry(
-              entry.key,
-              entry.value['status']?.toString().toUpperCase() ?? 'PENDING',
-            ),
-          ),
-        );
+      _reviews.clear();
+      _reviewStatuses.clear();
+      for (final entry in loaded) {
+        _recordReview(entry.key, entry.value);
+      }
       _selectedStudents.removeWhere(
         (id) => !_leadershipEligible(_reviewStatuses[id]),
       );
     });
   }
 
+  Future<Map<String, dynamic>> _fetchStudentReview(String id) =>
+      widget.api.getTermEvaluationReview(
+        studentId: id,
+        schoolId: widget.schoolId,
+        termId: widget.termId,
+      );
+
+  void _recordReview(String id, Map<String, dynamic> review) {
+    _reviews[id] = review;
+    _reviewStatuses[id] =
+        review['status']?.toString().toUpperCase() ?? 'PENDING';
+  }
+
   Future<void> _openStudent(Map<String, dynamic> student) async {
+    if (_openingStudent) return;
+    final studentId = student['id'].toString();
     var index = widget.students.indexWhere(
-      (value) => value['id']?.toString() == student['id']?.toString(),
+      (value) => value['id'].toString() == studentId,
     );
     if (index < 0) return;
-    final navigator = Navigator.of(context);
-    while (mounted && index < widget.students.length) {
-      final moveNext = await navigator.push<bool>(
-        MaterialPageRoute(
-          builder: (_) => _StudentFinalReview(
-            api: widget.api,
-            schoolId: widget.schoolId,
-            termId: widget.termId,
-            staffId: widget.staffId,
-            canReviewLeadership: widget.canReviewLeadership,
-            canEditFinalWordings: widget.canEditFinalWordings,
-            canRequestCorrections: widget.canRequestCorrections,
-            hasNextStudent:
-                !widget.canReviewLeadership &&
-                index < widget.students.length - 1,
-            student: widget.students[index],
-          ),
-        ),
-      );
-      if (!mounted) return;
-      await _loadReviewStatuses();
-      if (moveNext != true || widget.canReviewLeadership) return;
-      index++;
+    _openingStudent = true;
+    Map<String, dynamic> initialReview;
+    try {
+      await _initialReviewStatuses;
+      initialReview = await _fetchStudentReview(studentId);
+    } on AssessmentApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+      return;
+    } finally {
+      _openingStudent = false;
     }
+    if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
+    setState(() => _recordReview(studentId, initialReview));
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => StatefulBuilder(
+          builder: (reviewContext, setReviewState) {
+            final current = widget.students[index];
+            final id = current['id'].toString();
+            final total = widget.students.length;
+            final saved = _commentsCompleted;
+            final editingComments =
+                !widget.canReviewLeadership && !widget.canRequestCorrections;
+            final hasNext = editingComments && index + 1 < total;
+            final othersSaved = saved - (_commentComplete(id) ? 1 : 0);
+            bool editorIsOpen() =>
+                mounted &&
+                reviewContext.mounted &&
+                ModalRoute.of(reviewContext)?.isCurrent == true;
+            return _StudentFinalReview(
+              key: ValueKey(id),
+              api: widget.api,
+              schoolId: widget.schoolId,
+              termId: widget.termId,
+              staffId: widget.staffId,
+              canReviewLeadership: widget.canReviewLeadership,
+              canEditFinalWordings: widget.canEditFinalWordings,
+              canRequestCorrections: widget.canRequestCorrections,
+              hasNextStudent: hasNext,
+              student: current,
+              initialReview: initialReview,
+              commentProgress: editingComments
+                  ? (current: index + 1, total: total, saved: saved)
+                  : null,
+              canSubmitClass:
+                  editingComments &&
+                  _pendingTeacherEvaluations == 0 &&
+                  othersSaved == total - 1 &&
+                  _commentsSent < total,
+              onCommentSaved: (comment, status, submit) async {
+                if (!editorIsOpen()) return;
+                final navigator = Navigator.of(reviewContext);
+                final messenger = ScaffoldMessenger.of(reviewContext);
+                setState(() {
+                  _recordReview(id, {
+                    ...?_reviews[id],
+                    'comment': comment,
+                    'status': status,
+                  });
+                });
+                setReviewState(() {});
+                if (submit) {
+                  await _sendClassComments();
+                  if (!editorIsOpen()) return;
+                  messenger.showSnackBar(
+                    const SnackBar(
+                      content: Text('Class evaluation submitted for approval.'),
+                    ),
+                  );
+                } else if (hasNext) {
+                  try {
+                    final nextId = widget.students[index + 1]['id'].toString();
+                    final data = await _fetchStudentReview(nextId);
+                    if (!editorIsOpen()) return;
+                    setState(() => _recordReview(nextId, data));
+                    setReviewState(() {
+                      initialReview = data;
+                      index++;
+                    });
+                  } on AssessmentApiException catch (error) {
+                    throw AssessmentApiException(
+                      'Comment saved. Could not open the next student. ${error.message}',
+                    );
+                  }
+                  return;
+                }
+                if (editorIsOpen()) navigator.pop();
+              },
+            );
+          },
+        ),
+      ),
+    );
+    if (mounted) await _loadReviewStatuses();
   }
 
   bool _leadershipEligible(String? status) => const {
@@ -6656,12 +6761,15 @@ class _ConsolidatedReviewState extends State<_ConsolidatedReview> {
     'UNDER_REVIEW',
   }.contains(status?.toUpperCase());
 
-  int get _commentsCompleted => widget.students.where((student) {
-    final id = student['id'].toString();
+  bool _commentComplete(String id) {
     final comment = _reviews[id]?['comment']?.toString().trim();
     return comment?.isNotEmpty == true &&
         _reviewStatuses[id] != 'CHANGES_REQUESTED';
-  }).length;
+  }
+
+  int get _commentsCompleted => widget.students
+      .where((student) => _commentComplete(student['id'].toString()))
+      .length;
 
   int get _commentsSent => _reviewStatuses.values.where((status) {
     return const {
@@ -6681,35 +6789,30 @@ class _ConsolidatedReviewState extends State<_ConsolidatedReview> {
     return pending;
   }
 
-  Future<void> _submitClassEvaluation() async {
-    if (_busy || _commentsCompleted != widget.students.length) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Submit class evaluation for approval?'),
-        content: Text(
-          'All ${widget.students.length} student ratings and comments will be submitted to leadership for approval.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton.icon(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            icon: const Icon(Icons.send_outlined),
-            label: const Text('Submit for approval'),
-          ),
-        ],
-      ),
+  bool get _classCommentsReady =>
+      !widget.canReviewLeadership &&
+      !widget.canRequestCorrections &&
+      _pendingTeacherEvaluations == 0 &&
+      _commentsCompleted == widget.students.length &&
+      _commentsSent < widget.students.length;
+
+  Future<void> _sendClassComments() async {
+    await widget.api.submitTermEvaluationClassComments(
+      assignmentId: widget.assignmentId,
+      schoolId: widget.schoolId,
     );
-    if (confirmed != true || !mounted) return;
+  }
+
+  Future<void> _submitClassEvaluation() async {
+    if (_busy || !_classCommentsReady) return;
+    final confirmed = await _confirmClassCommentSubmission(
+      context,
+      widget.students.length,
+    );
+    if (!confirmed || !mounted) return;
     setState(() => _busy = true);
     try {
-      await widget.api.submitTermEvaluationClassComments(
-        assignmentId: widget.assignmentId,
-        schoolId: widget.schoolId,
-      );
+      await _sendClassComments();
       await _loadReviewStatuses();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -6972,14 +7075,7 @@ class _ConsolidatedReviewState extends State<_ConsolidatedReview> {
     if (_commentsSent < widget.students.length) {
       return _actionBanner(
         title: 'Student comments complete',
-        detail:
-            'Every student has final ratings and a class-teacher comment. Submit the class evaluation for approval when ready.',
-        action: FilledButton.icon(
-          key: const ValueKey('submit-class-evaluation'),
-          onPressed: _busy ? null : _submitClassEvaluation,
-          icon: const Icon(Icons.send_outlined),
-          label: const Text('Submit for approval'),
-        ),
+        detail: 'Every student has final ratings and a class-teacher comment.',
       );
     }
     return _actionBanner(
@@ -7306,6 +7402,18 @@ class _ConsolidatedReviewState extends State<_ConsolidatedReview> {
                       ],
                     ),
                   ),
+                  if (_classCommentsReady) ...[
+                    const SizedBox(height: 16),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: FilledButton.icon(
+                        key: const ValueKey('submit-class-evaluation'),
+                        onPressed: _busy ? null : _submitClassEvaluation,
+                        icon: const Icon(Icons.send_outlined),
+                        label: const Text('Submit for approval'),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -7462,6 +7570,7 @@ class _ConsolidatedReviewState extends State<_ConsolidatedReview> {
 
 class _StudentFinalReview extends StatefulWidget {
   const _StudentFinalReview({
+    super.key,
     required this.api,
     required this.schoolId,
     required this.termId,
@@ -7471,6 +7580,10 @@ class _StudentFinalReview extends StatefulWidget {
     required this.canRequestCorrections,
     required this.hasNextStudent,
     required this.student,
+    required this.initialReview,
+    required this.commentProgress,
+    required this.canSubmitClass,
+    required this.onCommentSaved,
   });
 
   final AssessmentApiClient api;
@@ -7482,6 +7595,11 @@ class _StudentFinalReview extends StatefulWidget {
   final bool canRequestCorrections;
   final bool hasNextStudent;
   final Map<String, dynamic> student;
+  final Map<String, dynamic>? initialReview;
+  final ({int current, int total, int saved})? commentProgress;
+  final bool canSubmitClass;
+  final Future<void> Function(String comment, String status, bool submit)
+  onCommentSaved;
 
   @override
   State<_StudentFinalReview> createState() => _StudentFinalReviewState();
@@ -7522,7 +7640,7 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
   @override
   void initState() {
     super.initState();
-    _load();
+    _load(widget.initialReview);
   }
 
   @override
@@ -7531,13 +7649,15 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _load([Map<String, dynamic>? initialReview]) async {
     try {
-      final data = await widget.api.getTermEvaluationReview(
-        studentId: widget.student['id'],
-        schoolId: widget.schoolId,
-        termId: widget.termId,
-      );
+      final data =
+          initialReview ??
+          await widget.api.getTermEvaluationReview(
+            studentId: widget.student['id'],
+            schoolId: widget.schoolId,
+            termId: widget.termId,
+          );
       Map<String, dynamic>? activeCorrection;
       String? correctionLoadError;
       if (data['reportSourceLocked'] == true) {
@@ -7666,19 +7786,33 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
     });
   }
 
-  Future<void> _saveCommentAndContinue() async {
+  Future<void> _saveCommentAndContinue({bool submit = false}) async {
     final comment = _comment.text.trim();
     if (comment.isEmpty || _busy) return;
     setState(() => _busy = true);
     try {
-      await widget.api.saveTermEvaluationComment(
-        studentId: widget.student['id'].toString(),
-        schoolId: widget.schoolId,
-        termId: widget.termId,
-        comment: comment,
-      );
+      if (submit) {
+        final confirmed = await _confirmClassCommentSubmission(
+          context,
+          widget.commentProgress!.total,
+        );
+        if (!confirmed || !mounted) return;
+      }
+      if (comment != _originalComment || _status == 'CHANGES_REQUESTED') {
+        await widget.api.saveTermEvaluationComment(
+          studentId: widget.student['id'].toString(),
+          schoolId: widget.schoolId,
+          termId: widget.termId,
+          comment: comment,
+        );
+        if (!mounted) return;
+        setState(() {
+          _originalComment = comment;
+          if (_status != 'SUBMITTED') _status = 'COMMENTS_IN_PROGRESS';
+        });
+      }
       if (!mounted) return;
-      Navigator.pop(context, widget.hasNextStudent);
+      await widget.onCommentSaved(comment, _status, submit);
     } on AssessmentApiException catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -8488,6 +8622,87 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
     return [actor, date].where((value) => value.isNotEmpty).join(' · ');
   }
 
+  Widget _commentFooter({required bool canSave}) {
+    final progress = widget.commentProgress!;
+    return Material(
+      elevation: 4,
+      color: Theme.of(context).colorScheme.surface,
+      child: SafeArea(
+        top: false,
+        child: Align(
+          alignment: Alignment.center,
+          heightFactor: 1,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1100),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              child: Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 16,
+                runSpacing: 10,
+                children: [
+                  SizedBox(
+                    width: 225,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Student ${progress.current} of ${progress.total}',
+                        ),
+                        const SizedBox(height: 4),
+                        LinearProgressIndicator(
+                          value: progress.saved / progress.total,
+                          semanticsLabel: 'Class comments saved',
+                          semanticsValue:
+                              '${progress.saved} of ${progress.total}',
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${progress.saved} of ${progress.total} comments saved',
+                        ),
+                      ],
+                    ),
+                  ),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        key: const ValueKey('save-student-comment'),
+                        onPressed: canSave ? _saveCommentAndContinue : null,
+                        icon: Icon(
+                          widget.hasNextStudent
+                              ? Icons.arrow_forward
+                              : Icons.save_outlined,
+                        ),
+                        label: Text(
+                          widget.hasNextStudent
+                              ? 'Save and next student'
+                              : 'Save comment',
+                        ),
+                      ),
+                      if (widget.canSubmitClass)
+                        FilledButton.icon(
+                          key: const ValueKey('submit-from-student-comment'),
+                          onPressed: canSave
+                              ? () => _saveCommentAndContinue(submit: true)
+                              : null,
+                          icon: const Icon(Icons.send_outlined),
+                          label: const Text('Submit for approval'),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -8549,6 +8764,14 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
           };
     return Scaffold(
       appBar: AppBar(title: Text(widget.student['name'].toString())),
+      bottomNavigationBar:
+          widget.commentProgress != null &&
+              !lockedForReview &&
+              !_reportSourceLocked
+          ? _commentFooter(
+              canSave: complete && !_busy && _comment.text.trim().isNotEmpty,
+            )
+          : null,
       body: Align(
         alignment: Alignment.topCenter,
         child: ConstrainedBox(
@@ -8914,27 +9137,6 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
                           ),
                         ],
                       ],
-                    ),
-                  ),
-                )
-              else if (!widget.canReviewLeadership)
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: FilledButton.icon(
-                    key: const ValueKey('save-student-comment'),
-                    onPressed:
-                        complete && !_busy && _comment.text.trim().isNotEmpty
-                        ? _saveCommentAndContinue
-                        : null,
-                    icon: Icon(
-                      widget.hasNextStudent
-                          ? Icons.arrow_forward
-                          : Icons.save_outlined,
-                    ),
-                    label: Text(
-                      widget.hasNextStudent
-                          ? 'Save and next student'
-                          : 'Save comment',
                     ),
                   ),
                 ),
