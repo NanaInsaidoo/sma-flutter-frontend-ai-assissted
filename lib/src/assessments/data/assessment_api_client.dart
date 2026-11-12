@@ -916,6 +916,27 @@ class AssessmentApiClient {
     ).map(_map).toList();
   }
 
+  Future<Map<String, dynamic>> saveReportProgression({
+    required String customSchoolId,
+    required String studentId,
+    required int termId,
+    required String decision,
+  }) async {
+    final studentPath = Uri.encodeComponent(studentId);
+    final query = Uri(
+      queryParameters: {'customSchoolId': customSchoolId, 'termId': '$termId'},
+    ).query;
+    return _map(
+      _decodeBody(
+        await _send(
+          '/api/report-card-remarks/student/$studentPath/progression?$query',
+          method: 'PUT',
+          body: {'promotedTo': decision},
+        ),
+      ),
+    );
+  }
+
   Future<Map<String, dynamic>> saveReportCardRemarks({
     required String submittedBy,
     required Map<String, dynamic> body,

@@ -85,6 +85,27 @@ void main() {
   });
 
   group('report readiness summary', () {
+    test(
+      'publishing waits for the whole class and shows saved progression',
+      () {
+        expect(reportProgressionDecision(' Basic 5 '), 'Basic 5');
+        expect(reportProgressionDecision('Pending review'), isNull);
+        expect(reportProgressionDecision(' '), isNull);
+        expect(
+          classPublicationBlocker(missingProgression: 3, missingResults: 2),
+          'Set progression for 3 students before publishing.',
+        );
+        expect(
+          classPublicationBlocker(missingProgression: 0, missingResults: 1),
+          'Generate results for 1 student before publishing.',
+        );
+        expect(
+          classPublicationBlocker(missingProgression: 0, missingResults: 0),
+          isNull,
+        );
+      },
+    );
+
     test('shows ready when no requirements are pending', () {
       expect(summarizeReportReadiness(const []), 'Ready');
     });
