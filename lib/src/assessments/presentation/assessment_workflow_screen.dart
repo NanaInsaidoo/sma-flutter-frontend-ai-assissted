@@ -6110,6 +6110,30 @@ class _CompleteAssessmentWorkflowState
     final selectedStudents = _reportCardStudents
         .where((student) => _selectedReportStudents.contains(student.id))
         .toList();
+    final progressionCandidates = selectedStudents.isEmpty
+        ? _reportCardStudents
+        : selectedStudents;
+    final progressionTargets = progressionCandidates
+        .where(_canSetProgression)
+        .toList();
+    final publishedProgressionTargets = progressionCandidates
+        .where(
+          (student) => reportHasPublishedVersion(_reportStatusFor(student)),
+        )
+        .toList();
+    final editProgression = progressionTargets.isEmpty
+        ? publishedProgressionTargets.isNotEmpty
+        : progressionTargets.every(
+            (student) => _savedProgressionFor(student) != null,
+          );
+    final canUseProgression =
+        !_savingProgression &&
+        (selectedStudents.isEmpty
+            ? progressionTargets.isNotEmpty ||
+                  publishedProgressionTargets.isNotEmpty
+            : progressionTargets.length == selectedStudents.length ||
+                  publishedProgressionTargets.length ==
+                      selectedStudents.length);
     final generationCandidates = selectedStudents.isEmpty
         ? students
         : selectedStudents;
@@ -6236,22 +6260,21 @@ class _CompleteAssessmentWorkflowState
                     ),
                     if (_evaluationManager)
                       OutlinedButton.icon(
-                        onPressed:
-                            !_savingProgression &&
-                                (selectedStudents.isEmpty
-                                    ? _reportCardStudents.any(
-                                        _canSetProgression,
-                                      )
-                                    : selectedStudents.every(
-                                        _canSetProgression,
-                                      ))
-                            ? _openBulkPromotion
+                        onPressed: canUseProgression
+                            ? () => progressionTargets.isEmpty
+                                  ? _editPublishedProgression(
+                                      publishedProgressionTargets,
+                                    )
+                                  : _openBulkPromotion(
+                                      progressionTargets,
+                                      edit: editProgression,
+                                    )
                             : null,
                         icon: const Icon(Icons.trending_up, size: 14),
                         label: Text(
-                          _selectedReportStudents.isEmpty
-                              ? 'Set Progression'
-                              : 'Set Progression (${_selectedReportStudents.length})',
+                          editProgression
+                              ? 'Edit Progression'
+                              : 'Set Progression',
                         ),
                       ),
                     OutlinedButton.icon(
@@ -6941,28 +6964,43 @@ class _CompleteAssessmentWorkflowState
     return values;
   }
 
-  Future<void> _openBulkPromotion() async {
-    String? grade;
-    var replaceExisting = false;
-    final gradeOptions = _promotionGradeOptions();
-    if (gradeOptions.isEmpty) {
-      _notice('No active grade levels are configured for this school.');
-      return;
-    }
-    final targets = _reportCardStudents
-        .where(
-          (student) =>
-              _canSetProgression(student) &&
-              (_selectedReportStudents.isEmpty ||
-                  _selectedReportStudents.contains(student.id)),
-        )
-        .toList();
+  Future<void> _editPublishedProgression(List<_StudentRecord> students) async {
+    final student = students.length == 1
+        ? students.single
+        : await showDialog<_StudentRecord>(
+            context: context,
+            builder: (dialogContext) => SimpleDialog(
+              title: const Text('Choose a student'),
+              children: [
+                for (final student in students)
+                  SimpleDialogOption(
+                    onPressed: () => Navigator.pop(dialogContext, student),
+                    child: Text(student.name),
+                  ),
+              ],
+            ),
+          );
+    if (!mounted || student == null) return;
+    await _requestProgressionCorrection(
+      student,
+      _reportRemarks[student.id] ?? _ReportRemarksDraft.empty(),
+    );
+  }
+
+  Future<void> _openBulkPromotion(
+    List<_StudentRecord> targets, {
+    required bool edit,
+  }) async {
     if (targets.isEmpty) return;
+    final existing = targets.map(_savedProgressionFor).nonNulls.toSet();
+    String? grade = edit ? existing.singleOrNull : null;
+    var replaceExisting = edit;
+    final gradeOptions = _promotionGradeOptions(grade);
     final applied = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Set progression decision'),
+          title: Text(edit ? 'Edit progression' : 'Set progression'),
           content: SizedBox(
             width: 440,
             child: Column(
@@ -6970,9 +7008,9 @@ class _CompleteAssessmentWorkflowState
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _selectedReportStudents.isEmpty
-                      ? 'Apply a progression decision to ${targets.length} students with generated results.'
-                      : 'Apply a progression decision to ${targets.length} selected student(s).',
+                  targets.length == 1
+                      ? 'Progression for ${targets.single.name}'
+                      : 'Apply a progression decision to ${targets.length} students.',
                   style: const TextStyle(color: Color(0xFF64748B)),
                 ),
                 const SizedBox(height: 18),
@@ -6985,14 +7023,15 @@ class _CompleteAssessmentWorkflowState
                   }).toList(),
                   onChanged: (value) => setDialogState(() => grade = value),
                 ),
-                CheckboxListTile(
-                  value: replaceExisting,
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  title: const Text('Replace existing decisions'),
-                  onChanged: (value) =>
-                      setDialogState(() => replaceExisting = value ?? false),
-                ),
+                if (!edit && existing.isNotEmpty)
+                  CheckboxListTile(
+                    value: replaceExisting,
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: const Text('Replace existing decisions'),
+                    onChanged: (value) =>
+                        setDialogState(() => replaceExisting = value ?? false),
+                  ),
               ],
             ),
           ),
@@ -7005,7 +7044,7 @@ class _CompleteAssessmentWorkflowState
               onPressed: grade == null
                   ? null
                   : () => Navigator.pop(dialogContext, true),
-              child: const Text('Apply decision'),
+              child: Text(edit ? 'Save changes' : 'Apply decision'),
             ),
           ],
         ),
@@ -8702,7 +8741,7 @@ class _CompleteAssessmentWorkflowState
                 size: 14,
               ),
               label: Text(
-                hasActiveCorrection ? 'View correction' : 'Request correction',
+                hasActiveCorrection ? 'View correction' : 'Edit Progression',
               ),
             )
           : null,
