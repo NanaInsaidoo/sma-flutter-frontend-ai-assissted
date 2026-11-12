@@ -129,7 +129,9 @@ class _State extends State<HeadmasterTermClosureScreen> {
     final blockers = x.items
         .where((item) => item.severity == 'BLOCKER' && !item.ready)
         .toList();
-    final warnings = x.items.where((item) => item.warning).toList();
+    final pendingWarnings = x.items
+        .where((item) => item.warning && !_isReviewedWarning(item))
+        .length;
     final scheduled = blockers.where(_isScheduleItem).length;
     final actionableBlockers = blockers.length - scheduled;
     return Column(
@@ -151,7 +153,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
           'Review the transition, preserve the closing snapshot and begin the next operational term.',
         ),
         const SizedBox(height: 12),
-        _closurePanel(x, actionableBlockers, warnings.length, scheduled),
+        _closurePanel(x, actionableBlockers, pendingWarnings),
       ],
     );
   }
@@ -568,7 +570,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
   }
 
   bool _isReviewedWarning(TermClosureItem item) =>
-      item.warning && (acknowledgements[item.key]?.trim().isNotEmpty ?? false);
+      item.warning && (acknowledgements[item.key]?.trim().length ?? 0) >= 5;
 
   Color _actionStatusColor(String status) => switch (status) {
     'Complete' || 'Reviewed' => AppColors.green,
@@ -608,10 +610,10 @@ class _State extends State<HeadmasterTermClosureScreen> {
   }
 
   VoidCallback? _actionFor(TermClosureItem item) {
+    if (item.warning) return () => _openWarning(item);
     if (item.key.toUpperCase().contains('FACILIT')) {
       return widget.onOpenFacilities ?? _openFacilitiesDialog;
     }
-    if (item.warning) return () => _openWarning(item);
     final key = item.key.toUpperCase();
     if ((key.contains('CLOSING_DATE') || key.contains('NEXT_TERM')) &&
         widget.onOpenTermDates != null) {
@@ -622,9 +624,6 @@ class _State extends State<HeadmasterTermClosureScreen> {
 
   String _actionLabel(TermClosureItem item) {
     final key = item.key.toUpperCase();
-    if (key.contains('FACILIT')) {
-      return item.ready ? 'View' : 'Record inspection';
-    }
     if (item.warning) return 'Review warning';
     if (item.ready) return 'View';
     if (key.contains('TEACHER')) return 'Review teachers';
@@ -650,7 +649,9 @@ class _State extends State<HeadmasterTermClosureScreen> {
       () => TextEditingController(text: acknowledgements[item.key] ?? ''),
     );
     final locked = data?.termClosed == true;
-    final areaAction = widget.workstreamActions[item.key];
+    final areaAction = item.key.toUpperCase().contains('FACILIT')
+        ? widget.onOpenFacilities ?? _openFacilitiesDialog
+        : widget.workstreamActions[item.key];
     final result = await showDialog<String>(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -820,7 +821,6 @@ class _State extends State<HeadmasterTermClosureScreen> {
     HeadmasterTermClosure x,
     int blockerCount,
     int warningCount,
-    int scheduledCount,
   ) => _card(
     Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -855,9 +855,9 @@ class _State extends State<HeadmasterTermClosureScreen> {
                       ? 'All checks have passed. The term can now be closed.'
                       : blockerCount > 0
                       ? '$blockerCount required ${blockerCount == 1 ? 'action remains' : 'actions remain'}. Complete the work and review any warnings before closing.'
-                      : scheduledCount > 0
-                      ? 'All required work is complete. Term closure will become available on the scheduled closing date.'
-                      : '$warningCount ${warningCount == 1 ? 'warning requires' : 'warnings require'} a saved acknowledgement before closing.',
+                      : warningCount > 0
+                      ? '$warningCount ${warningCount == 1 ? 'warning requires' : 'warnings require'} a saved acknowledgement before closing.'
+                      : 'All required work is complete. Term closure will become available on the scheduled closing date.',
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
               ),
@@ -1092,8 +1092,14 @@ class _State extends State<HeadmasterTermClosureScreen> {
             onPressed: () => Navigator.pop(x, false),
             child: const Text('Cancel'),
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(x, c.text.trim() == 'CLOSE TERM'),
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: c,
+            builder: (context, value, child) => FilledButton(
+              onPressed: value.text.trim() == 'CLOSE TERM'
+                  ? () => Navigator.pop(x, true)
+                  : null,
+              child: child,
+            ),
             child: const Text('Close term and begin next term'),
           ),
         ],

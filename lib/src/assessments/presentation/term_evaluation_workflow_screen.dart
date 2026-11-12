@@ -568,14 +568,14 @@ class _TermEvaluationWorkflowScreenState
     return grouped.values.map((group) {
       final sorted = [...group]
         ..sort((left, right) {
-          final role = _assignmentRolePriority(
-            right,
-          ).compareTo(_assignmentRolePriority(left));
-          if (role != 0) return role;
           final status = _assignmentStatusPriority(
             right,
           ).compareTo(_assignmentStatusPriority(left));
           if (status != 0) return status;
+          final role = _assignmentRolePriority(
+            right,
+          ).compareTo(_assignmentRolePriority(left));
+          if (role != 0) return role;
           return _intValue(
             right['completionPercent'],
           ).compareTo(_intValue(left['completionPercent']));
@@ -638,6 +638,7 @@ class _TermEvaluationWorkflowScreenState
     final role = switch (assignment['assignmentType']?.toString()) {
       'CLASS_TEACHER' => 'Class teacher',
       'SUPPORTING_CLASS_TEACHER' => 'Supporting class teacher',
+      'PREVIOUS_TEACHER' => 'Previous teacher',
       _ => 'Subject teacher',
     };
     return subjects.isEmpty ? role : '$role · ${subjects.join(', ')}';
@@ -2838,6 +2839,7 @@ class _TermEvaluationWorkflowScreenState
       switch (assignment['assignmentType']?.toString()) {
         'CLASS_TEACHER' => 'Class teacher',
         'SUPPORTING_CLASS_TEACHER' => 'Supporting class teacher',
+        'PREVIOUS_TEACHER' => 'Previous teacher',
         _ => 'Subject teacher',
       };
 
@@ -2848,6 +2850,10 @@ class _TermEvaluationWorkflowScreenState
   }
 
   String? _teacherResponsibilityDetail(Map<String, dynamic> assignment) {
+    final source = assignment['ratingsSourceName']?.toString();
+    if (source != null && source.isNotEmpty) {
+      return 'Ratings submitted by $source';
+    }
     final subjects = _teacherResponsibilitySubjects(assignment);
     if (subjects.isEmpty) return null;
     return assignment['assignmentType']?.toString() == 'SUBJECT_TEACHER'
@@ -3290,6 +3296,14 @@ class _TermEvaluationWorkflowScreenState
       );
     }
     if (!own) return const SizedBox.shrink();
+    if (assignment['ratingsReadOnly'] == true) {
+      return OutlinedButton.icon(
+        style: _responsibilityActionStyle(),
+        onPressed: () => _viewAssignment(assignment),
+        icon: const Icon(Icons.visibility_outlined, size: 17),
+        label: const Text('View ratings'),
+      );
+    }
     if (!submitted) {
       if (!_teacherEntryOpen) {
         return const Text(
@@ -3387,6 +3401,9 @@ class _TermEvaluationWorkflowScreenState
       );
     }
     if (!classTeacher) {
+      if (assignment['ratingsReadOnly'] == true) {
+        return _personalRatingActions(assignment);
+      }
       return OutlinedButton.icon(
         style: _responsibilityActionStyle(),
         onPressed: _teacherEntryOpen ? () => _openAssignment(assignment) : null,
@@ -3446,7 +3463,9 @@ class _TermEvaluationWorkflowScreenState
             ),
             label: Text(primaryLabel),
           ),
-        if (showRatingShortcut && !leadershipLocked && _teacherEntryOpen) ...[
+        if (showRatingShortcut && assignment['ratingsReadOnly'] == true)
+          _personalRatingActions(assignment)
+        else if (showRatingShortcut && !leadershipLocked && _teacherEntryOpen)
           PopupMenuButton<String>(
             key: ValueKey('responsibility-more-${assignment['id']}'),
             tooltip: 'More actions',
@@ -3466,7 +3485,6 @@ class _TermEvaluationWorkflowScreenState
               ),
             ],
           ),
-        ],
       ],
     );
   }
@@ -3561,7 +3579,11 @@ class _TermEvaluationWorkflowScreenState
               if (own && submitted && !pendingGeneration && _teacherEntryOpen)
                 TextButton(
                   onPressed: () => _openAssignment(assignment),
-                  child: const Text('Edit ratings'),
+                  child: Text(
+                    assignment['ratingsReadOnly'] == true
+                        ? 'View ratings'
+                        : 'Edit ratings',
+                  ),
                 ),
               if (own && submitted && classTeacher)
                 FilledButton.tonal(
@@ -3668,7 +3690,11 @@ class _TermEvaluationWorkflowScreenState
               if (own && submitted && !pendingGeneration && _teacherEntryOpen)
                 TextButton(
                   onPressed: () => _openAssignment(assignment),
-                  child: const Text('Edit ratings'),
+                  child: Text(
+                    assignment['ratingsReadOnly'] == true
+                        ? 'View ratings'
+                        : 'Edit ratings',
+                  ),
                 ),
               if (own && submitted && classTeacher)
                 FilledButton.tonal(
@@ -4285,6 +4311,15 @@ class _TermEvaluationWorkflowScreenState
         schoolId: widget.schoolId,
       );
       if (!mounted) return;
+      if (assignment['ratingsReadOnly'] == true) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => _AssignmentReadOnlyView(assignment: assignment),
+          ),
+        );
+        return;
+      }
       final next = await Navigator.push<String>(
         context,
         MaterialPageRoute(
@@ -5458,6 +5493,7 @@ class _AssignmentReadOnlyViewState extends State<_AssignmentReadOnlyView> {
         widget.assignment['subjectName']?.toString() ?? 'Evaluation';
     final className =
         widget.assignment['streamName']?.toString() ?? 'Unassigned class';
+    final source = widget.assignment['ratingsSourceName']?.toString();
 
     return Scaffold(
       appBar: AppBar(title: const Text('Teacher evaluation')),
@@ -5492,6 +5528,11 @@ class _AssignmentReadOnlyViewState extends State<_AssignmentReadOnlyView> {
                           '$className · ${students.length} students',
                           style: const TextStyle(color: Colors.blueGrey),
                         ),
+                        if (source != null && source.isNotEmpty)
+                          Text(
+                            'Ratings submitted by $source',
+                            style: const TextStyle(color: Colors.blueGrey),
+                          ),
                       ],
                     ),
                   ),
@@ -6268,6 +6309,10 @@ class _AssignmentEntryState extends State<_AssignmentEntry> {
             final student = visible[index];
             final id = student['id'].toString();
             final selected = _values[id]![criterion];
+            final authors = widget.assignment['ratingAuthors'] as Map?;
+            final author = (authors?[id] as Map?)?[criterion]?.toString();
+            final saved = widget.assignment['ratings'] as Map?;
+            final unchanged = selected == (saved?[id] as Map?)?[criterion];
             return Card(
               child: Padding(
                 padding: const EdgeInsets.all(14),
@@ -6297,6 +6342,14 @@ class _AssignmentEntryState extends State<_AssignmentEntry> {
                               fontSize: 12,
                             ),
                           ),
+                          if (author != null && unchanged)
+                            Text(
+                              'Recorded by $author',
+                              style: const TextStyle(
+                                color: Colors.blueGrey,
+                                fontSize: 12,
+                              ),
+                            ),
                         ],
                       ),
                     ),

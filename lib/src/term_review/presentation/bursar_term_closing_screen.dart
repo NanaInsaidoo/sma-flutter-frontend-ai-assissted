@@ -220,12 +220,20 @@ class _State extends State<BursarTermClosingScreen> {
                 null,
               ),
               _check(
-                'The final petty-cash cycle is closed and balanced.',
+                'I verified the final petty-cash reconciliation.',
                 petty,
                 (v) => petty = v,
-                locked,
+                locked || x.pettyCashBlocker != null,
                 widget.onOpenExpenses,
               ),
+              if (x.pettyCashBlocker case final reason?)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Text(
+                    reason,
+                    style: const TextStyle(color: AppColors.red),
+                  ),
+                ),
               _check(
                 'Teacher recommendations were reviewed and consolidated.',
                 recommendations,
@@ -325,7 +333,9 @@ class _State extends State<BursarTermClosingScreen> {
               ),
               const SizedBox(width: 12),
               FilledButton(
-                onPressed: saving || hasPending ? null : () => save(true),
+                onPressed: saving || hasPending || x.pettyCashBlocker != null
+                    ? null
+                    : () => save(true),
                 child: const Text('Submit for approval'),
               ),
             ],
@@ -635,7 +645,9 @@ class _State extends State<BursarTermClosingScreen> {
                 spacing: 12,
                 children: [
                   FilledButton.icon(
-                    onPressed: saving ? null : approve,
+                    onPressed: saving || x.pettyCashBlocker != null
+                        ? null
+                        : approve,
                     icon: const Icon(Icons.check),
                     label: const Text('Approve finance closure'),
                   ),
@@ -652,6 +664,8 @@ class _State extends State<BursarTermClosingScreen> {
                 icon: const Icon(Icons.lock_open),
                 label: const Text('Reopen approved closure'),
               ),
+            if (x.pettyCashBlocker case final reason?)
+              Text(reason, style: const TextStyle(color: AppColors.red)),
             if (x.reviewReason.isNotEmpty) ...[
               const SizedBox(height: 12),
               Text('Latest review note: ${x.reviewReason}'),

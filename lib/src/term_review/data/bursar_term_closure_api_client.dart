@@ -118,6 +118,7 @@ class BursarTermClosureApiClient implements BursarTermClosureRepository {
       feesReviewed: j['feesReviewed'] == true,
       paymentsReconciled: j['paymentsReconciled'] == true,
       pettyCashClosed: j['pettyCashClosed'] == true,
+      pettyCashBlocker: j['pettyCashBlocker']?.toString(),
       recommendationsReviewed: j['recommendationsReviewed'] == true,
       cashTotal: d(j['cashTotal']),
       bankTotal: d(j['bankTotal']),
