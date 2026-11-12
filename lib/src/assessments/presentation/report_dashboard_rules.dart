@@ -73,6 +73,16 @@ bool reportStatusCanBePublished(
           !regenerationRequired);
 }
 
+bool reportCorrectionCanRegenerate(String? status) => const {
+  'APPROVED_REGENERATION_REQUIRED',
+  'REGENERATION_FAILED',
+}.contains(status);
+
+bool reportCorrectionCanRepublish(String? status) => const {
+  'REGENERATED_AWAITING_PUBLICATION',
+  'PUBLICATION_FAILED',
+}.contains(status);
+
 String bulkPublishLabel({
   required int selectedCount,
   required int eligibleCount,

@@ -82,6 +82,32 @@ void main() {
         'Publish eligible (2)',
       );
     });
+
+    test(
+      'bulk correction actions follow the approval and regeneration stages',
+      () {
+        expect(reportCorrectionCanRegenerate('PENDING'), isFalse);
+        expect(
+          reportCorrectionCanRegenerate('APPROVED_REGENERATION_REQUIRED'),
+          isTrue,
+        );
+        expect(reportCorrectionCanRegenerate('REGENERATION_FAILED'), isTrue);
+        expect(
+          reportCorrectionCanRegenerate('REGENERATED_AWAITING_PUBLICATION'),
+          isFalse,
+        );
+        expect(reportCorrectionCanRepublish('PENDING'), isFalse);
+        expect(
+          reportCorrectionCanRepublish('APPROVED_REGENERATION_REQUIRED'),
+          isFalse,
+        );
+        expect(
+          reportCorrectionCanRepublish('REGENERATED_AWAITING_PUBLICATION'),
+          isTrue,
+        );
+        expect(reportCorrectionCanRepublish('PUBLICATION_FAILED'), isTrue);
+      },
+    );
   });
 
   group('report readiness summary', () {
