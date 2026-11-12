@@ -172,6 +172,8 @@ class _CompleteAssessmentWorkflowState
   final Set<String> _selectedReportStudents = {};
   final Set<String> _processingReportStudents = {};
   final Set<String> _publishingReportStudents = {};
+  final Set<int> _assignedReportCorrections = {};
+  bool _regeneratingReportBatch = false;
   bool _savingProgression = false;
   final Set<String> _reportPdfActions = {};
   final Set<String> _reopenedReportStudents = {};
@@ -1628,6 +1630,28 @@ class _CompleteAssessmentWorkflowState
         }
         activeCorrections.putIfAbsent(studentId, () => item);
       }
+      final assignedCorrections = <int>{};
+      if (_evaluationManager &&
+          activeCorrections.values.any((item) {
+            final status = item['status']?.toString().toUpperCase();
+            return reportCorrectionCanRegenerate(status) ||
+                reportCorrectionCanRepublish(status);
+          })) {
+        try {
+          final inbox = await ApprovalApiClient(
+            accessToken: widget.accessToken,
+            onRefreshAccessToken: widget.onRefreshAccessToken,
+          ).getInbox(widget.customSchoolId);
+          for (final item in inbox.myApprovals) {
+            if (item.type == 'REPORT_CORRECTION' ||
+                item.type == 'REPORT_SCORE_CORRECTION') {
+              assignedCorrections.add(item.entityId);
+            }
+          }
+        } on ApprovalApiException {
+          // Individual correction details can still be opened from the list.
+        }
+      }
       final gradesByStudent = <String, List<Map<String, dynamic>>>{};
       for (final grade in gradeRows) {
         final studentId = grade['customStudentId']?.toString() ?? '';
@@ -1745,6 +1769,9 @@ class _CompleteAssessmentWorkflowState
         _activeReportCorrections
           ..clear()
           ..addAll(activeCorrections);
+        _assignedReportCorrections
+          ..clear()
+          ..addAll(assignedCorrections);
         _liveReportStudents = students;
         if (_selectedReportStudent != null) {
           final selectedId = _selectedReportStudent!.id;
@@ -5277,13 +5304,31 @@ class _CompleteAssessmentWorkflowState
 
   bool _canSetProgression(_StudentRecord student) =>
       reportHasGeneratedVersion(_reportStatusFor(student)) &&
-      !reportHasPublishedVersion(_reportStatusFor(student));
+      _activeCorrectionFor(student) == null;
 
-  bool _canGenerateOrRegenerate(_StudentRecord student) {
-    final status = _reportStatusFor(student);
-    return _generationReady(student) &&
-        (status == 'Not Generated' || student.reportRegenerationRequired);
+  int? _assignedCorrectionFor(_StudentRecord student) {
+    final correction = _activeCorrectionFor(student);
+    final id = (correction?['id'] as num?)?.toInt();
+    return id != null && _assignedReportCorrections.contains(id) ? id : null;
   }
+
+  bool _canGenerateResult(_StudentRecord student) =>
+      _activeCorrectionFor(student) == null &&
+      _reportStatusFor(student) == 'Not Generated' &&
+      _generationReady(student);
+
+  bool _canRegenerateResult(_StudentRecord student) {
+    if (!_generationReady(student)) return false;
+    if (_activeCorrectionFor(student) != null) {
+      return _assignedCorrectionFor(student) != null &&
+          reportCorrectionCanRegenerate(_activeCorrectionStatus(student));
+    }
+    return student.reportRegenerationRequired &&
+        reportNeedsUpdate(_reportStatusFor(student));
+  }
+
+  bool _canGenerateOrRegenerate(_StudentRecord student) =>
+      _canGenerateResult(student) || _canRegenerateResult(student);
 
   String _reportReadinessSummary(_StudentRecord student) {
     return summarizeReportReadiness(_reportReadinessBlockers(student));
@@ -5309,12 +5354,22 @@ class _CompleteAssessmentWorkflowState
   bool _readyToPublish(_StudentRecord student) =>
       !_savingProgression &&
       _classPublicationBlocker == null &&
+      _activeCorrectionFor(student) == null &&
       reportStatusCanBePublished(
         _reportStatusFor(student),
         republishRequired: student.reportRepublishRequired,
         regenerationRequired: student.reportRegenerationRequired,
       ) &&
       _generationReady(student);
+
+  bool _canRepublishResult(_StudentRecord student) {
+    if (!reportHasPublishedVersion(_reportStatusFor(student))) return false;
+    if (_activeCorrectionFor(student) == null) return _readyToPublish(student);
+    return !_savingProgression &&
+        _classPublicationBlocker == null &&
+        _assignedCorrectionFor(student) != null &&
+        reportCorrectionCanRepublish(_activeCorrectionStatus(student));
+  }
 
   _ReportAudit _auditFor(_StudentRecord student) {
     return _reportAudit.putIfAbsent(
@@ -5587,13 +5642,16 @@ class _CompleteAssessmentWorkflowState
   }
 
   Future<void> _confirmAndPublishStudentReports(
-    Iterable<_StudentRecord> students,
-  ) async {
+    Iterable<_StudentRecord> students, {
+    bool republish = false,
+  }) async {
     if (_classPublicationBlocker case final blocker?) {
       _notice(blocker);
       return;
     }
-    final publishable = students.where(_readyToPublish).toList();
+    final publishable = students
+        .where(republish ? _canRepublishResult : _readyToPublish)
+        .toList();
     if (publishable.isEmpty) {
       _notice(
         'No selected report meets all publication-readiness requirements.',
@@ -5601,11 +5659,12 @@ class _CompleteAssessmentWorkflowState
       return;
     }
     final count = publishable.length;
+    final action = republish ? 'Republish' : 'Publish';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         key: const ValueKey('bulk-publish-confirmation'),
-        title: Text('Publish $count report${count == 1 ? '' : 's'}?'),
+        title: Text('$action $count report${count == 1 ? '' : 's'}?'),
         content: Text(
           'The $count eligible report${count == 1 ? '' : 's'} will become '
           'the official published version for $_selectedClass.',
@@ -5619,69 +5678,100 @@ class _CompleteAssessmentWorkflowState
             key: const ValueKey('confirm-bulk-publish'),
             onPressed: () => Navigator.of(context).pop(true),
             icon: const Icon(Icons.publish_outlined, size: 16),
-            label: const Text('Publish now'),
+            label: Text('$action now'),
           ),
         ],
       ),
     );
     if (confirmed == true && mounted) {
-      await _publishStudentReports(publishable);
+      await _publishStudentReports(publishable, republish: republish);
     }
   }
 
-  Future<void> _publishStudentReports(Iterable<_StudentRecord> students) async {
+  Future<void> _publishStudentReports(
+    Iterable<_StudentRecord> students, {
+    bool republish = false,
+  }) async {
     if (_classPublicationBlocker case final blocker?) {
       _notice(blocker);
       return;
     }
-    final generated = students.where(_readyToPublish).toList();
+    final generated = students
+        .where(republish ? _canRepublishResult : _readyToPublish)
+        .toList();
     if (generated.isEmpty) {
       _notice(
         'No selected report meets all publication-readiness requirements.',
       );
       return;
     }
+    final correctionIds = {
+      if (republish)
+        for (final student in generated)
+          if (_assignedCorrectionFor(student) case final id?) student.id: id,
+    };
     setState(() {
       _publishingReportStudents.addAll(generated.map((student) => student.id));
     });
     if (widget.customSchoolId.trim().isNotEmpty) {
+      final className = _selectedClass;
+      final published = <_StudentRecord>[];
+      final failures = <String>[];
       try {
         final setup = await _assessmentFormSetup;
-        await Future.wait(
-          generated.map(
-            (student) => _assessmentApi.publishStudentReportCard(
-              customSchoolId: widget.customSchoolId,
-              customStudentId: student.id,
-              termId: setup.termId,
-              term: setup.termSequence,
-              academicYearId: setup.academicYearId,
-              publishedBy: widget.viewerName,
-            ),
-          ),
-        );
+        for (final student in generated) {
+          try {
+            final correctionId = correctionIds[student.id];
+            if (correctionId != null) {
+              await _assessmentApi.publishReportCorrection(
+                customSchoolId: widget.customSchoolId,
+                requestId: correctionId,
+              );
+            } else {
+              await _assessmentApi.publishStudentReportCard(
+                customSchoolId: widget.customSchoolId,
+                customStudentId: student.id,
+                termId: setup.termId,
+                term: setup.termSequence,
+                academicYearId: setup.academicYearId,
+                publishedBy: widget.viewerName,
+              );
+            }
+            published.add(student);
+          } on AssessmentApiException catch (error) {
+            failures.add('${student.name}: ${error.message}');
+          }
+        }
+        if (mounted && className == _selectedClass) {
+          await _loadLiveReportReadiness(setup, className);
+        }
         if (!mounted) return;
         setState(() {
-          for (final student in generated) {
+          for (final student in published) {
             _reportStatuses[student.id] = 'Published';
-            _publishingReportStudents.remove(student.id);
             _touchReportAudit(student);
           }
           _selectedReportStudents.removeAll(
-            generated.map((student) => student.id),
+            published.map((student) => student.id),
           );
         });
-        _notice('${generated.length} report card(s) published.');
-        return;
-      } on AssessmentApiException catch (error) {
-        if (!mounted) return;
-        setState(
-          () => _publishingReportStudents.removeAll(
-            generated.map((student) => student.id),
-          ),
+        final action = republish ? 'republished' : 'published';
+        _notice(
+          '${published.length} report(s) $action.'
+          '${failures.isEmpty ? '' : ' ${failures.length} failed. ${failures.first}'}',
         );
-        _notice(error.message);
-        return;
+      } on AssessmentApiException catch (error) {
+        if (mounted) _notice(error.message);
+      } finally {
+        if (mounted) {
+          setState(
+            () => _publishingReportStudents.removeAll(
+              generated.map((student) => student.id),
+            ),
+          );
+        }
       }
+      return;
     }
     await Future<void>.delayed(const Duration(milliseconds: 750));
     if (!mounted) return;
@@ -5698,6 +5788,49 @@ class _CompleteAssessmentWorkflowState
 
   void _regenerateStudentReport(_StudentRecord student) {
     _generateReports([student]);
+  }
+
+  Future<void> _regenerateSelectedReports(List<_StudentRecord> targets) async {
+    if (_regeneratingReportBatch || _isGeneratingReports) return;
+    final eligible = targets.where(_canRegenerateResult).toList();
+    if (eligible.isEmpty) return;
+    final direct = eligible
+        .where((student) => _activeCorrectionFor(student) == null)
+        .toList();
+    final corrections = {
+      for (final student in eligible)
+        if (_assignedCorrectionFor(student) case final id?) student: id,
+    };
+    final className = _selectedClass;
+    setState(() => _regeneratingReportBatch = true);
+    try {
+      if (corrections.isNotEmpty) {
+        final setup = await _assessmentFormSetup;
+        final failures = <String>[];
+        for (final entry in corrections.entries) {
+          try {
+            await _assessmentApi.regenerateReportCorrection(
+              customSchoolId: widget.customSchoolId,
+              requestId: entry.value,
+            );
+          } on AssessmentApiException catch (error) {
+            failures.add('${entry.key.name}: ${error.message}');
+          }
+        }
+        if (!mounted || className != _selectedClass) return;
+        await _loadLiveReportReadiness(setup, className);
+        if (!mounted) return;
+        _notice(
+          '${corrections.length - failures.length} corrected report(s) regenerated.'
+          '${failures.isEmpty ? '' : ' ${failures.length} failed. ${failures.first}'}',
+        );
+      }
+      if (mounted && direct.isNotEmpty) await _generateReports(direct);
+    } on AssessmentApiException catch (error) {
+      if (mounted) _notice(error.message);
+    } finally {
+      if (mounted) setState(() => _regeneratingReportBatch = false);
+    }
   }
 
   Future<void> _refreshReportCards() async {
@@ -6110,45 +6243,32 @@ class _CompleteAssessmentWorkflowState
     final selectedStudents = _reportCardStudents
         .where((student) => _selectedReportStudents.contains(student.id))
         .toList();
-    final progressionCandidates = selectedStudents.isEmpty
-        ? _reportCardStudents
-        : selectedStudents;
-    final progressionTargets = progressionCandidates
-        .where(_canSetProgression)
+    final actionScope = selectedStudents.isEmpty ? students : selectedStudents;
+    final progressionTargets = actionScope.where(_canSetProgression).toList();
+    final editProgression =
+        progressionTargets.isNotEmpty &&
+        progressionTargets.every(
+          (student) => _savedProgressionFor(student) != null,
+        );
+    final generationTargets = actionScope.where(_canGenerateResult).toList();
+    final regenerationTargets = actionScope
+        .where(_canRegenerateResult)
         .toList();
-    final publishedProgressionTargets = progressionCandidates
+    final publicationTargets = actionScope
         .where(
-          (student) => reportHasPublishedVersion(_reportStatusFor(student)),
+          (student) =>
+              _readyToPublish(student) &&
+              !reportHasPublishedVersion(_reportStatusFor(student)),
         )
         .toList();
-    final editProgression = progressionTargets.isEmpty
-        ? publishedProgressionTargets.isNotEmpty
-        : progressionTargets.every(
-            (student) => _savedProgressionFor(student) != null,
-          );
-    final canUseProgression =
-        !_savingProgression &&
-        (selectedStudents.isEmpty
-            ? progressionTargets.isNotEmpty ||
-                  publishedProgressionTargets.isNotEmpty
-            : progressionTargets.length == selectedStudents.length ||
-                  publishedProgressionTargets.length ==
-                      selectedStudents.length);
-    final generationCandidates = selectedStudents.isEmpty
-        ? students
-        : selectedStudents;
-    final generationTargets = generationCandidates
-        .where(_canGenerateOrRegenerate)
+    final republicationTargets = actionScope
+        .where(_canRepublishResult)
         .toList();
-    final selectionContainsBlocked =
-        selectedStudents.isNotEmpty &&
-        generationTargets.length != selectedStudents.length;
-    final publicationCandidates = selectedStudents.isEmpty
-        ? students
-        : selectedStudents;
-    final publicationTargets = publicationCandidates
-        .where(_readyToPublish)
-        .toList();
+    final batchBusy =
+        _isGeneratingReports ||
+        _regeneratingReportBatch ||
+        _publishingReportStudents.isNotEmpty ||
+        _savingProgression;
     final allVisibleSelected =
         students.isNotEmpty &&
         students.every(
@@ -6218,10 +6338,7 @@ class _CompleteAssessmentWorkflowState
                               disabledBackgroundColor: const Color(0xFFE6F4F1),
                             )
                           : null,
-                      onPressed:
-                          _isGeneratingReports ||
-                              generationTargets.isEmpty ||
-                              selectionContainsBlocked
+                      onPressed: batchBusy || generationTargets.isEmpty
                           ? null
                           : () => _generateReports(generationTargets),
                       icon: _isGeneratingReports
@@ -6238,14 +6355,27 @@ class _CompleteAssessmentWorkflowState
                             ? 'Generating ${_processingReportStudents.length}…'
                             : selectedStudents.isEmpty
                             ? 'Generate Results (${generationTargets.length})'
-                            : 'Generate Selected (${selectedStudents.length})',
+                            : 'Generate Selected (${generationTargets.length})',
                       ),
                     ),
+                    if (_evaluationManager &&
+                        _reportCardStudents.any(_canRegenerateResult))
+                      OutlinedButton.icon(
+                        onPressed: batchBusy || regenerationTargets.isEmpty
+                            ? null
+                            : () => _regenerateSelectedReports(
+                                regenerationTargets,
+                              ),
+                        icon: const Icon(Icons.refresh, size: 14),
+                        label: Text(
+                          selectedStudents.isEmpty
+                              ? '${_reportCardFilter == 'All Students' ? 'Regenerate All' : 'Regenerate Shown'} (${regenerationTargets.length})'
+                              : 'Regenerate Selected (${regenerationTargets.length})',
+                        ),
+                      ),
                     FilledButton.icon(
                       key: const ValueKey('bulk-publish-reports'),
-                      onPressed:
-                          publicationTargets.isEmpty ||
-                              _publishingReportStudents.isNotEmpty
+                      onPressed: batchBusy || publicationTargets.isEmpty
                           ? null
                           : () => _confirmAndPublishStudentReports(
                               publicationTargets,
@@ -6258,27 +6388,38 @@ class _CompleteAssessmentWorkflowState
                         ),
                       ),
                     ),
+                    if (_evaluationManager &&
+                        _reportCardStudents.any(_canRepublishResult))
+                      FilledButton.tonalIcon(
+                        onPressed: batchBusy || republicationTargets.isEmpty
+                            ? null
+                            : () => _confirmAndPublishStudentReports(
+                                republicationTargets,
+                                republish: true,
+                              ),
+                        icon: const Icon(Icons.publish_outlined, size: 14),
+                        label: Text(
+                          selectedStudents.isEmpty
+                              ? '${_reportCardFilter == 'All Students' ? 'Republish All' : 'Republish Shown'} (${republicationTargets.length})'
+                              : 'Republish Selected (${republicationTargets.length})',
+                        ),
+                      ),
                     if (_evaluationManager)
                       OutlinedButton.icon(
-                        onPressed: canUseProgression
-                            ? () => progressionTargets.isEmpty
-                                  ? _editPublishedProgression(
-                                      publishedProgressionTargets,
-                                    )
-                                  : _openBulkPromotion(
-                                      progressionTargets,
-                                      edit: editProgression,
-                                    )
+                        onPressed: !batchBusy && progressionTargets.isNotEmpty
+                            ? () => _openBulkPromotion(
+                                progressionTargets,
+                                edit: editProgression,
+                              )
                             : null,
                         icon: const Icon(Icons.trending_up, size: 14),
                         label: Text(
-                          editProgression
-                              ? 'Edit Progression'
-                              : 'Set Progression',
+                          '${editProgression ? 'Edit Progression' : 'Set Progression'}'
+                          '${selectedStudents.isEmpty ? '' : ' (${progressionTargets.length})'}',
                         ),
                       ),
                     OutlinedButton.icon(
-                      onPressed: _refreshingReportCards
+                      onPressed: _refreshingReportCards || batchBusy
                           ? null
                           : _refreshReportCards,
                       style: OutlinedButton.styleFrom(
@@ -6301,6 +6442,54 @@ class _CompleteAssessmentWorkflowState
               ],
             ),
           ),
+          if (students.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Checkbox(
+                    key: const ValueKey('select-all-visible-report-students'),
+                    tristate: true,
+                    value: allVisibleSelected
+                        ? true
+                        : someVisibleSelected
+                        ? null
+                        : false,
+                    onChanged: batchBusy
+                        ? null
+                        : (_) => setState(() {
+                            final visibleIds = students.map(
+                              (student) => student.id,
+                            );
+                            if (allVisibleSelected) {
+                              _selectedReportStudents.removeAll(visibleIds);
+                            } else {
+                              _selectedReportStudents.addAll(visibleIds);
+                            }
+                          }),
+                    semanticLabel: _reportCardFilter == 'All Students'
+                        ? 'Select all students'
+                        : 'Select all shown',
+                  ),
+                  Text(
+                    _reportCardFilter == 'All Students'
+                        ? 'Select all students'
+                        : 'Select all shown',
+                  ),
+                  if (selectedStudents.isNotEmpty) ...[
+                    const SizedBox(width: 12),
+                    Text('${selectedStudents.length} selected'),
+                    TextButton(
+                      onPressed: batchBusy
+                          ? null
+                          : () => setState(_selectedReportStudents.clear),
+                      child: const Text('Clear'),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           if (_classPublicationBlocker case final blocker?)
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
@@ -6332,31 +6521,7 @@ class _CompleteAssessmentWorkflowState
                       padding: const EdgeInsets.symmetric(vertical: 10),
                       child: Row(
                         children: [
-                          SizedBox(
-                            width: 46,
-                            child: Checkbox(
-                              key: const ValueKey(
-                                'select-all-visible-report-students',
-                              ),
-                              tristate: true,
-                              value: allVisibleSelected
-                                  ? true
-                                  : someVisibleSelected
-                                  ? null
-                                  : false,
-                              onChanged: (_) => setState(() {
-                                if (allVisibleSelected) {
-                                  _selectedReportStudents.removeAll(
-                                    students.map((student) => student.id),
-                                  );
-                                } else {
-                                  _selectedReportStudents.addAll(
-                                    students.map((student) => student.id),
-                                  );
-                                }
-                              }),
-                            ),
-                          ),
+                          const SizedBox(width: 46),
                           const SizedBox(
                             width: 30,
                             child: _FinalReportHeader('#', centered: true),
@@ -6964,29 +7129,6 @@ class _CompleteAssessmentWorkflowState
     return values;
   }
 
-  Future<void> _editPublishedProgression(List<_StudentRecord> students) async {
-    final student = students.length == 1
-        ? students.single
-        : await showDialog<_StudentRecord>(
-            context: context,
-            builder: (dialogContext) => SimpleDialog(
-              title: const Text('Choose a student'),
-              children: [
-                for (final student in students)
-                  SimpleDialogOption(
-                    onPressed: () => Navigator.pop(dialogContext, student),
-                    child: Text(student.name),
-                  ),
-              ],
-            ),
-          );
-    if (!mounted || student == null) return;
-    await _requestProgressionCorrection(
-      student,
-      _reportRemarks[student.id] ?? _ReportRemarksDraft.empty(),
-    );
-  }
-
   Future<void> _openBulkPromotion(
     List<_StudentRecord> targets, {
     required bool edit,
@@ -6995,97 +7137,205 @@ class _CompleteAssessmentWorkflowState
     final existing = targets.map(_savedProgressionFor).nonNulls.toSet();
     String? grade = edit ? existing.singleOrNull : null;
     var replaceExisting = edit;
-    final gradeOptions = _promotionGradeOptions(grade);
-    final applied = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: Text(edit ? 'Edit progression' : 'Set progression'),
-          content: SizedBox(
-            width: 440,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  targets.length == 1
-                      ? 'Progression for ${targets.single.name}'
-                      : 'Apply a progression decision to ${targets.length} students.',
-                  style: const TextStyle(color: Color(0xFF64748B)),
-                ),
-                const SizedBox(height: 18),
-                DropdownButtonFormField<String>(
-                  value: grade,
-                  decoration: const InputDecoration(labelText: 'Decision'),
-                  hint: const Text('Promote, repeat, review or graduate'),
-                  items: gradeOptions.map((item) {
-                    return DropdownMenuItem(value: item, child: Text(item));
-                  }).toList(),
-                  onChanged: (value) => setDialogState(() => grade = value),
-                ),
-                if (!edit && existing.isNotEmpty)
-                  CheckboxListTile(
-                    value: replaceExisting,
-                    contentPadding: EdgeInsets.zero,
-                    controlAffinity: ListTileControlAffinity.leading,
-                    title: const Text('Replace existing decisions'),
-                    onChanged: (value) =>
-                        setDialogState(() => replaceExisting = value ?? false),
-                  ),
-              ],
-            ),
+    final publishedIds = targets
+        .where(
+          (student) => reportHasPublishedVersion(_reportStatusFor(student)),
+        )
+        .map((student) => student.id)
+        .toSet();
+    var approvers = <DropdownMenuItem<String>>[];
+    if (publishedIds.isNotEmpty) {
+      try {
+        approvers = _correctionApproverItems(
+          await _assessmentApi.getReportCorrectionApprovers(
+            customSchoolId: widget.customSchoolId,
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: grade == null
-                  ? null
-                  : () => Navigator.pop(dialogContext, true),
-              child: Text(edit ? 'Save changes' : 'Apply decision'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (applied != true || !mounted) return;
-    final changedTargets = targets
+        );
+      } on AssessmentApiException catch (error) {
+        if (mounted) _notice(error.message);
+        return;
+      }
+    }
+    if (!mounted) return;
+    String? approver;
+    var reason = '';
+    final gradeOptions = _promotionGradeOptions(grade);
+    List<_StudentRecord> changedTargets() => targets
         .where(
           (student) =>
               _savedProgressionFor(student) != grade &&
               (replaceExisting || _savedProgressionFor(student) == null),
         )
         .toList();
-    if (changedTargets.isEmpty) {
-      _notice('No progression decisions were changed.');
-      return;
-    }
-    await _saveProgression(changedTargets, grade!);
+    final applied = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final changes = grade == null
+              ? const <_StudentRecord>[]
+              : changedTargets();
+          final approvalCount = changes
+              .where((student) => publishedIds.contains(student.id))
+              .length;
+          final requiresApproval = approvalCount > 0;
+          return AlertDialog(
+            title: Text(edit ? 'Edit progression' : 'Set progression'),
+            content: SizedBox(
+              width: 440,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      targets.length == 1
+                          ? 'Progression for ${targets.single.name}'
+                          : 'Apply a progression decision to ${targets.length} students.',
+                      style: const TextStyle(color: Color(0xFF64748B)),
+                    ),
+                    const SizedBox(height: 18),
+                    DropdownButtonFormField<String>(
+                      value: grade,
+                      decoration: const InputDecoration(labelText: 'Decision'),
+                      hint: const Text('Promote, repeat, review or graduate'),
+                      items: gradeOptions.map((item) {
+                        return DropdownMenuItem(value: item, child: Text(item));
+                      }).toList(),
+                      onChanged: (value) => setDialogState(() => grade = value),
+                    ),
+                    if (!edit && existing.isNotEmpty)
+                      CheckboxListTile(
+                        value: replaceExisting,
+                        contentPadding: EdgeInsets.zero,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        title: const Text('Replace existing decisions'),
+                        onChanged: (value) => setDialogState(
+                          () => replaceExisting = value ?? false,
+                        ),
+                      ),
+                    if (requiresApproval) ...[
+                      const SizedBox(height: 14),
+                      Text(
+                        '$approvalCount published report(s) will need a progression correction approved.',
+                      ),
+                      const SizedBox(height: 10),
+                      DropdownButtonFormField<String>(
+                        value: approver,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Approver',
+                        ),
+                        items: approvers,
+                        onChanged: (value) =>
+                            setDialogState(() => approver = value),
+                      ),
+                      if (approvers.isEmpty)
+                        const Text(
+                          'No other approver is available for this school.',
+                        ),
+                      const SizedBox(height: 10),
+                      TextFormField(
+                        initialValue: reason,
+                        decoration: const InputDecoration(
+                          labelText: 'Reason for correction',
+                        ),
+                        maxLines: 2,
+                        onChanged: (value) =>
+                            setDialogState(() => reason = value),
+                      ),
+                      if (reportProgressionDecision(grade) == null)
+                        const Text(
+                          'Choose a progression decision for the published reports.',
+                        ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed:
+                    changes.isEmpty ||
+                        (requiresApproval &&
+                            (approver == null ||
+                                reason.trim().length < 5 ||
+                                reportProgressionDecision(grade) == null))
+                    ? null
+                    : () => Navigator.pop(dialogContext, true),
+                child: Text(
+                  requiresApproval
+                      ? 'Submit changes'
+                      : edit
+                      ? 'Save changes'
+                      : 'Apply decision',
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (applied != true || !mounted) return;
+    await _saveProgression(
+      changedTargets(),
+      grade!,
+      publishedIds: publishedIds,
+      approver: approver,
+      reason: reason.trim(),
+    );
   }
 
   Future<void> _saveProgression(
     List<_StudentRecord> students,
-    String decision,
-  ) async {
+    String decision, {
+    Set<String> publishedIds = const {},
+    String? approver,
+    String reason = '',
+  }) async {
     if (_savingProgression || students.isEmpty) return;
     final className = _selectedClass;
+    var saved = 0;
+    var requested = 0;
+    final failures = <String>[];
     setState(() => _savingProgression = true);
     try {
       if (widget.customSchoolId.trim().isNotEmpty) {
         final setup = await _assessmentFormSetup;
         try {
-          await Future.wait(
-            students.map(
-              (student) => _assessmentApi.saveReportProgression(
-                customSchoolId: widget.customSchoolId,
-                studentId: student.id,
-                termId: setup.termId,
-                decision: decision,
-              ),
-            ),
-          );
+          for (final student in students) {
+            try {
+              if (publishedIds.contains(student.id)) {
+                if (approver == null) {
+                  failures.add('${student.name}: Choose an approver.');
+                  continue;
+                }
+                await _assessmentApi.requestReportSourceCorrection(
+                  customSchoolId: widget.customSchoolId,
+                  studentId: student.id,
+                  termId: setup.termId,
+                  correctionType: 'PROGRESSION',
+                  proposedValue: decision,
+                  reason: reason,
+                  assignedApprover: approver,
+                );
+                requested++;
+              } else {
+                await _assessmentApi.saveReportProgression(
+                  customSchoolId: widget.customSchoolId,
+                  studentId: student.id,
+                  termId: setup.termId,
+                  decision: decision,
+                );
+                saved++;
+              }
+            } on AssessmentApiException catch (error) {
+              failures.add('${student.name}: ${error.message}');
+            }
+          }
         } finally {
           if (mounted && className == _selectedClass) {
             await _loadLiveReportReadiness(setup, className);
@@ -7102,9 +7352,18 @@ class _CompleteAssessmentWorkflowState
             );
           }
         });
+        saved = students.length;
       }
       if (mounted) {
-        _notice('Progression saved for ${students.length} student(s).');
+        _notice(
+          [
+            if (saved > 0) 'Progression saved for $saved student(s).',
+            if (requested > 0)
+              '$requested correction request(s) sent for approval.',
+            if (failures.isNotEmpty)
+              '${failures.length} failed. ${failures.first}',
+          ].join(' '),
+        );
       }
     } on AssessmentApiException catch (error) {
       if (mounted) _notice(error.message);
@@ -8188,11 +8447,13 @@ class _CompleteAssessmentWorkflowState
           child: kgRows.isNotEmpty
               ? _tableCard(
                   embedded: true,
+                  fillWidth: true,
                   columns: const ['LEARNING AREA', 'RATING', 'OBSERVATION'],
                   rows: kgRows,
                 )
               : _tableCard(
                   embedded: true,
+                  fillWidth: true,
                   columns: const [
                     'SUBJECT',
                     'CLASS SCORE',
@@ -8760,7 +9021,10 @@ class _CompleteAssessmentWorkflowState
               return DropdownMenuItem(value: grade, child: Text(grade));
             }).toList(),
             onChanged:
-                canEdit && !_savingProgression && _canSetProgression(student)
+                canEdit &&
+                    !canRequestCorrection &&
+                    !_savingProgression &&
+                    _canSetProgression(student)
                 ? (value) {
                     if (value != null) _saveProgression([student], value);
                   }
@@ -11269,46 +11533,56 @@ class _CompleteAssessmentWorkflowState
     required List<List<String>> rows,
     ValueChanged<int>? onRowTap,
     bool embedded = false,
+    bool fillWidth = false,
   }) {
-    final table = SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: DataTable(
-        showCheckboxColumn: false,
-        headingRowColor: WidgetStateProperty.all(const Color(0xFFF7F9F9)),
-        columns: columns
-            .map(
-              (column) => DataColumn(
-                label: Text(
-                  column,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: AppColors.muted,
-                    fontWeight: FontWeight.w700,
-                  ),
+    final dataTable = DataTable(
+      showCheckboxColumn: false,
+      headingRowColor: WidgetStateProperty.all(const Color(0xFFF7F9F9)),
+      columns: columns
+          .map(
+            (column) => DataColumn(
+              label: Text(
+                column,
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: AppColors.muted,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
-            )
-            .toList(),
-        rows: rows
-            .asMap()
-            .entries
-            .map(
-              (entry) => DataRow(
-                onSelectChanged: onRowTap == null
-                    ? null
-                    : (_) => onRowTap(entry.key),
-                cells: entry.value
-                    .map(
-                      (value) => DataCell(
-                        Text(value, style: const TextStyle(fontSize: 13)),
-                      ),
-                    )
-                    .toList(),
-              ),
-            )
-            .toList(),
-      ),
+            ),
+          )
+          .toList(),
+      rows: rows
+          .asMap()
+          .entries
+          .map(
+            (entry) => DataRow(
+              onSelectChanged: onRowTap == null
+                  ? null
+                  : (_) => onRowTap(entry.key),
+              cells: entry.value
+                  .map(
+                    (value) => DataCell(
+                      Text(value, style: const TextStyle(fontSize: 13)),
+                    ),
+                  )
+                  .toList(),
+            ),
+          )
+          .toList(),
     );
+    Widget scrollTable(Widget child) =>
+        SingleChildScrollView(scrollDirection: Axis.horizontal, child: child);
+    final table = fillWidth
+        ? LayoutBuilder(
+            builder: (_, constraints) => scrollTable(
+              ConstrainedBox(
+                constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                child: dataTable,
+              ),
+            ),
+          )
+        : scrollTable(dataTable);
     return embedded ? table : _card(table);
   }
 
