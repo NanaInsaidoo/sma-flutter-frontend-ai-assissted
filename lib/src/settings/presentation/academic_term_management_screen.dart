@@ -429,21 +429,55 @@ class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
     super.dispose();
   }
 
-  Future<void> _pick(String field) async {
+  (int, int)? _academicYearRange(List<_LookupOption> years) {
+    final name = years
+        .where((year) => year.id == _academicYearId)
+        .firstOrNull
+        ?.name;
+    final match = RegExp(
+      r'^(\d{4})\s*[-–—]\s*(\d{4})$',
+    ).firstMatch(name?.trim() ?? '');
+    return match == null ? null : (int.parse(match[1]!), int.parse(match[2]!));
+  }
+
+  Future<void> _pick(String field, List<_LookupOption> years) async {
+    if (_saving) return;
     final fallback = switch (field) {
       'operational' => _operationalStart,
       'teachingStart' => _teachingStart ?? _operationalStart,
       'teachingEnd' => _teachingEnd ?? _teachingStart,
       _ => _closingDate ?? _teachingEnd,
     };
+    final range = _academicYearRange(years);
+    final yearStart = DateTime(range?.$1 ?? 2020);
+    final yearEnd = DateTime(range?.$2 ?? 2040, 12, 31);
+    final (previous, next) = switch (field) {
+      'operational' => (null, _teachingStart),
+      'teachingStart' => (_operationalStart, _teachingEnd),
+      'teachingEnd' => (_teachingStart, _closingDate),
+      _ => (_teachingEnd, null),
+    };
+    final earliest = previous != null && previous.isAfter(yearStart)
+        ? previous
+        : yearStart;
+    final latest = next != null && next.isBefore(yearEnd) ? next : yearEnd;
+    final hasValidRange = !earliest.isAfter(latest);
+    final firstDate = hasValidRange ? earliest : yearStart;
+    final lastDate = hasValidRange ? latest : yearEnd;
+    final initial = fallback ?? DateTime.now();
     final picked = await showDatePicker(
       context: context,
-      initialDate: fallback ?? DateTime.now(),
-      firstDate: DateTime(2020),
-      lastDate: DateTime(2040),
+      initialDate: initial.isBefore(firstDate)
+          ? firstDate
+          : initial.isAfter(lastDate)
+          ? lastDate
+          : initial,
+      firstDate: firstDate,
+      lastDate: lastDate,
     );
-    if (picked == null) return;
+    if (picked == null || !mounted) return;
     setState(() {
+      _error = null;
       switch (field) {
         case 'operational':
           _operationalStart = picked;
@@ -483,10 +517,25 @@ class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
       _error = null;
     });
     try {
+      final years = (await _lookups).first;
+      final yearRange = _academicYearRange(years);
+      if (yearRange != null &&
+          (_operationalStart!.year < yearRange.$1 ||
+              _closingDate!.year > yearRange.$2)) {
+        final name = years
+            .firstWhere((year) => year.id == _academicYearId)
+            .name;
+        if (mounted) {
+          setState(
+            () => _error = 'Term dates must fall within academic year $name.',
+          );
+        }
+        return;
+      }
       final terms = await widget.api.terms(widget.schoolId);
-      final duplicate = terms.any(
+      final otherTerms = terms.where((term) => term.id != widget.existing?.id);
+      final duplicate = otherTerms.any(
         (term) =>
-            term.id != widget.existing?.id &&
             term.academicYearId == _academicYearId &&
             term.termTypeId == _termTypeId,
       );
@@ -496,6 +545,30 @@ class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
             _error =
                 'This academic year and term already exist. Choose a different term.';
           });
+        }
+        return;
+      }
+      if (otherTerms.any(
+        (term) =>
+            term.isCurrent && !_operationalStart!.isAfter(term.closingDate),
+      )) {
+        if (mounted) {
+          setState(
+            () => _error =
+                'The next term must open after the current term closes.',
+          );
+        }
+        return;
+      }
+      if (otherTerms.any(
+        (term) =>
+            !_operationalStart!.isAfter(term.closingDate) &&
+            !_closingDate!.isBefore(term.operationalStart),
+      )) {
+        if (mounted) {
+          setState(
+            () => _error = 'These dates overlap another term for this school.',
+          );
         }
         return;
       }
@@ -637,8 +710,12 @@ class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
                                 ),
                               )
                               .toList(),
-                          onChanged: (value) =>
-                              setState(() => _academicYearId = value),
+                          onChanged: _saving
+                              ? null
+                              : (value) => setState(() {
+                                  _academicYearId = value;
+                                  _error = null;
+                                }),
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -654,51 +731,53 @@ class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
                                 ),
                               )
                               .toList(),
-                          onChanged: (value) =>
-                              setState(() => _termTypeId = value),
+                          onChanged: _saving
+                              ? null
+                              : (value) => setState(() {
+                                  _termTypeId = value;
+                                  _error = null;
+                                }),
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: _DialogDate(
+                      label: 'Office opens / vacation begins',
+                      value: _operationalStart,
+                      onTap: () => _pick('operational', years),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
                   Row(
                     children: [
-                      Expanded(
-                        child: _DialogDate(
-                          label: 'Office opens / vacation begins',
-                          value: _operationalStart,
-                          onTap: () => _pick('operational'),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
                       Expanded(
                         child: _DialogDate(
                           label: 'Teaching starts',
                           value: _teachingStart,
-                          onTap: () => _pick('teachingStart'),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _DialogDate(
-                          label: 'Teaching ends',
-                          value: _teachingEnd,
-                          onTap: () => _pick('teachingEnd'),
+                          onTap: () => _pick('teachingStart', years),
                         ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: _DialogDate(
-                          label: 'Term closes',
-                          value: _closingDate,
-                          onTap: () => _pick('closing'),
+                          label: 'Teaching ends',
+                          value: _teachingEnd,
+                          onTap: () => _pick('teachingEnd', years),
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: _DialogDate(
+                      label: 'Term closes',
+                      value: _closingDate,
+                      onTap: () => _pick('closing', years),
+                    ),
                   ),
                   const SizedBox(height: 14),
                   TextField(
