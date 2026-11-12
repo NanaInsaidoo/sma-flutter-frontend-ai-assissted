@@ -5775,12 +5775,19 @@ class _AssignmentEntryState extends State<_AssignmentEntry> {
           .whereType<Map<String, dynamic>>()
           .toList();
 
-  bool get _complete =>
-      _values.isNotEmpty &&
-      _values.values.every(
-        (student) =>
-            _criteria.keys.every((criterion) => student[criterion] != null),
-      );
+  int get _lastAvailableStep {
+    if (_values.isEmpty) return 0;
+    var step = 0;
+    for (final criterion in _criteria.keys) {
+      if (_values.values.any((student) => student[criterion] == null)) {
+        return step;
+      }
+      step++;
+    }
+    return step;
+  }
+
+  bool get _complete => _lastAvailableStep == _criteria.length;
 
   @override
   void initState() {
@@ -5794,7 +5801,9 @@ class _AssignmentEntryState extends State<_AssignmentEntry> {
       final ratings = saved[id] is Map ? saved[id] as Map : const {};
       _values[id] = {
         for (final criterion in _criteria.keys)
-          criterion: ratings[criterion]?.toString(),
+          criterion: _ratings.contains(ratings[criterion])
+              ? ratings[criterion] as String
+              : null,
       };
     }
     if (saved.isNotEmpty) _saveState = 'Saved draft loaded';
@@ -6014,6 +6023,8 @@ class _AssignmentEntryState extends State<_AssignmentEntry> {
   Widget build(BuildContext context) {
     final review = _step == _criteria.length;
     final criterion = review ? null : _criteria.entries.elementAt(_step);
+    final lastAvailableStep = _lastAvailableStep;
+    final canAdvance = _step < lastAvailableStep;
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.assignment['subjectName'].toString()),
@@ -6053,7 +6064,7 @@ class _AssignmentEntryState extends State<_AssignmentEntry> {
       ),
       body: Column(
         children: [
-          _progressHeader(review, criterion),
+          _progressHeader(review, criterion, lastAvailableStep),
           if (!review) _toolbar(criterion!.key),
           Expanded(
             child: review
@@ -6062,13 +6073,14 @@ class _AssignmentEntryState extends State<_AssignmentEntry> {
           ),
         ],
       ),
-      bottomNavigationBar: _navigation(review),
+      bottomNavigationBar: _navigation(review, canAdvance: canAdvance),
     );
   }
 
   Widget _progressHeader(
     bool review,
     MapEntry<String, String>? criterion,
+    int lastAvailableStep,
   ) => Container(
     width: double.infinity,
     color: const Color(0xFFF4FAF8),
@@ -6103,13 +6115,19 @@ class _AssignmentEntryState extends State<_AssignmentEntry> {
                   fontWeight: FontWeight.w900,
                 ),
               ),
+              if (!review && _step == lastAvailableStep) ...[
+                const SizedBox(height: 6),
+                const Text(
+                  'Choose a response for every student. Select Not observed when needed.',
+                ),
+              ],
               const SizedBox(height: 10),
               LinearProgressIndicator(
                 value: (_step + 1) / (_criteria.length + 1),
                 minHeight: 6,
               ),
               const SizedBox(height: 12),
-              _stepNavigator(),
+              _stepNavigator(lastAvailableStep),
             ],
           ),
         ),
@@ -6117,7 +6135,7 @@ class _AssignmentEntryState extends State<_AssignmentEntry> {
     ),
   );
 
-  Widget _stepNavigator() {
+  Widget _stepNavigator(int lastAvailableStep) {
     final steps = <String>[
       for (var index = 0; index < _criteria.length; index++) '${index + 1}',
       'Review',
@@ -6127,6 +6145,7 @@ class _AssignmentEntryState extends State<_AssignmentEntry> {
       child: Row(
         children: List.generate(steps.length, (index) {
           final selected = _step == index;
+          final available = index <= lastAvailableStep;
           final tooltip = index < _criteria.length
               ? 'Question ${index + 1}: ${_criteria.values.elementAt(index)}'
               : 'Final review';
@@ -6137,7 +6156,7 @@ class _AssignmentEntryState extends State<_AssignmentEntry> {
               child: InkWell(
                 key: ValueKey('evaluation-step-$index'),
                 borderRadius: BorderRadius.circular(18),
-                onTap: () => setState(() => _step = index),
+                onTap: available ? () => setState(() => _step = index) : null,
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 150),
                   height: 34,
@@ -6147,7 +6166,11 @@ class _AssignmentEntryState extends State<_AssignmentEntry> {
                   padding: const EdgeInsets.symmetric(horizontal: 10),
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    color: selected ? const Color(0xFF087B69) : Colors.white,
+                    color: selected
+                        ? const Color(0xFF087B69)
+                        : available
+                        ? Colors.white
+                        : const Color(0xFFEAF0EE),
                     borderRadius: BorderRadius.circular(18),
                     border: Border.all(
                       color: selected
@@ -6158,7 +6181,11 @@ class _AssignmentEntryState extends State<_AssignmentEntry> {
                   child: Text(
                     steps[index],
                     style: TextStyle(
-                      color: selected ? Colors.white : const Color(0xFF47625D),
+                      color: selected
+                          ? Colors.white
+                          : available
+                          ? const Color(0xFF47625D)
+                          : const Color(0xFF64748B),
                       fontSize: 12,
                       fontWeight: FontWeight.w800,
                     ),
@@ -6374,7 +6401,7 @@ class _AssignmentEntryState extends State<_AssignmentEntry> {
     ),
   );
 
-  Widget _navigation(bool review) => SafeArea(
+  Widget _navigation(bool review, {required bool canAdvance}) => SafeArea(
     top: false,
     child: Material(
       color: Colors.white,
@@ -6397,13 +6424,11 @@ class _AssignmentEntryState extends State<_AssignmentEntry> {
                 final updateIcon = _submitted
                     ? Icons.save_outlined
                     : Icons.refresh_rounded;
-                final VoidCallback? updateAction = _busy
+                final VoidCallback? updateAction = _busy || !_complete
                     ? null
                     : _submitted
                     ? _finishSubmittedUpdate
-                    : _complete
-                    ? () => _submit(isUpdate: true)
-                    : null;
+                    : () => _submit(isUpdate: true);
                 final primary = FilledButton.icon(
                   key: review
                       ? const ValueKey('submit-term-evaluations')
@@ -6412,7 +6437,9 @@ class _AssignmentEntryState extends State<_AssignmentEntry> {
                       ? (editingExisting
                             ? updateAction
                             : (_complete && !_busy ? () => _submit() : null))
-                      : () => setState(() => _step++),
+                      : canAdvance
+                      ? () => setState(() => _step++)
+                      : null,
                   style: FilledButton.styleFrom(
                     minimumSize: const Size(0, 44),
                     padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -6458,7 +6485,7 @@ class _AssignmentEntryState extends State<_AssignmentEntry> {
                     ),
                     const SizedBox(width: 8),
                     TextButton.icon(
-                      onPressed: _busy
+                      onPressed: _busy || (_submitted && !_complete)
                           ? null
                           : () => _saveDraft(announce: true),
                       icon: const Icon(Icons.save_outlined, size: 18),

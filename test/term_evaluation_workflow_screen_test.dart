@@ -38,7 +38,7 @@ void main() {
   }
 
   testWidgets(
-    'teacher answers one visible criterion per student and draft auto-saves',
+    'teacher must answer every criterion for every student before submitting',
     (tester) async {
       await useWideScreen(tester);
       final requests = <http.Request>[];
@@ -47,6 +47,9 @@ void main() {
         client: MockClient((request) async {
           requests.add(request);
           if (request.method == 'PUT') return http.Response('', 204);
+          if (request.url.path.endsWith('/assignments/14/submit')) {
+            return http.Response('', 204);
+          }
           if (request.url.path.endsWith('/assignments/14')) {
             return http.Response(
               jsonEncode({
@@ -116,6 +119,10 @@ void main() {
       );
       expect(find.text('Ama Mensah'), findsOneWidget);
       expect(find.text('Kojo Mensah'), findsOneWidget);
+      expect(
+        find.textContaining('Select Not observed when needed'),
+        findsOneWidget,
+      );
       expect(find.textContaining('Apply to'), findsNothing);
       final toolbar = find.byKey(const ValueKey('evaluation-entry-toolbar'));
       final studentList = find.byKey(
@@ -139,6 +146,19 @@ void main() {
         findsOneWidget,
       );
 
+      Finder filledButton(String label) => find.ancestor(
+        of: find.text(label),
+        matching: find.byWidgetPredicate((widget) => widget is FilledButton),
+      );
+
+      final next = filledButton('Next criterion');
+      final reviewStep = find.byKey(const ValueKey('evaluation-step-6'));
+      expect(tester.widget<FilledButton>(next).onPressed, isNull);
+      expect(tester.widget<InkWell>(reviewStep).onTap, isNull);
+
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Not observed').last);
+      await tester.pumpAndSettle();
+      expect(tester.widget<FilledButton>(next).onPressed, isNotNull);
       await tester.tap(find.text('Next criterion'));
       await tester.pumpAndSettle();
       expect(
@@ -146,6 +166,40 @@ void main() {
           'How consistently does each student pay attention during lessons?',
         ),
         findsOneWidget,
+      );
+
+      for (var step = 1; step < 6; step++) {
+        final advance = filledButton(step == 5 ? 'Review' : 'Next criterion');
+        expect(tester.widget<FilledButton>(advance).onPressed, isNull);
+        await tester.tap(find.widgetWithText(ChoiceChip, 'Good').first);
+        await tester.tap(find.widgetWithText(ChoiceChip, 'Not observed').last);
+        await tester.pumpAndSettle();
+        await tester.tap(advance);
+        await tester.pumpAndSettle();
+      }
+      expect(find.text('All criteria completed'), findsNWidgets(2));
+      await tester.tap(find.byKey(const ValueKey('submit-term-evaluations')));
+      await tester.pumpAndSettle();
+      await tester.tap(filledButton('Submit for review').hitTestable());
+      await tester.pumpAndSettle();
+
+      final finalSave = requests.lastWhere(
+        (request) => request.method == 'PUT',
+      );
+      final students = jsonDecode(finalSave.body)['students'] as List;
+      expect(students.map((student) => (student['ratings'] as List).length), [
+        6,
+        6,
+      ]);
+      expect(
+        (students.last['ratings'] as List).map((rating) => rating['rating']),
+        everyElement('Not observed'),
+      );
+      expect(
+        requests.where(
+          (request) => request.url.path.endsWith('/assignments/14/submit'),
+        ),
+        hasLength(1),
       );
     },
   );
