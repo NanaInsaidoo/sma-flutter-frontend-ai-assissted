@@ -99,10 +99,14 @@ void main() {
     );
     await tester.tap(find.text('Close term and begin next term'));
     await tester.pumpAndSettle();
+    final confirm = find
+        .widgetWithText(FilledButton, 'Close term and begin next term')
+        .last;
+    expect(tester.widget<FilledButton>(confirm).onPressed, isNull);
     await tester.enterText(find.byType(TextField).last, 'CLOSE TERM');
-    await tester.tap(
-      find.widgetWithText(FilledButton, 'Close term and begin next term').last,
-    );
+    await tester.pump();
+    expect(tester.widget<FilledButton>(confirm).onPressed, isNotNull);
+    await tester.tap(confirm);
     await tester.pumpAndSettle();
     expect(find.text('Term transition completed'), findsOneWidget);
     await tester.tap(find.widgetWithText(FilledButton, 'Done'));
