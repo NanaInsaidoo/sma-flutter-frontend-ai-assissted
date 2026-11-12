@@ -2851,8 +2851,9 @@ class _TermEvaluationWorkflowScreenState
 
   String? _teacherResponsibilityDetail(Map<String, dynamic> assignment) {
     final source = assignment['ratingsSourceName']?.toString();
-    if (source != null && source.isNotEmpty)
+    if (source != null && source.isNotEmpty) {
       return 'Ratings submitted by $source';
+    }
     final subjects = _teacherResponsibilitySubjects(assignment);
     if (subjects.isEmpty) return null;
     return assignment['assignmentType']?.toString() == 'SUBJECT_TEACHER'
