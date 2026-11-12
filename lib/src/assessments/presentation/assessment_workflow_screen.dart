@@ -172,6 +172,7 @@ class _CompleteAssessmentWorkflowState
   final Set<String> _selectedReportStudents = {};
   final Set<String> _processingReportStudents = {};
   final Set<String> _publishingReportStudents = {};
+  bool _savingProgression = false;
   final Set<String> _reportPdfActions = {};
   final Set<String> _reopenedReportStudents = {};
   List<_StudentRecord>? _liveReportStudents;
@@ -1436,8 +1437,7 @@ class _CompleteAssessmentWorkflowState
               }
 
               final progression = progressionByStudent[studentId] ?? '';
-              if (progression.isNotEmpty &&
-                  progression.toLowerCase() != 'pending review') {
+              if (reportProgressionDecision(progression) != null) {
                 progressionSelected++;
               }
             }
@@ -1488,7 +1488,7 @@ class _CompleteAssessmentWorkflowState
           ..addAll(streams);
         _selectedFinalReportStreams.removeWhere(
           (streamId) => !streams.any(
-            (stream) => stream.id == streamId && stream.pendingPublication > 0,
+            (stream) => stream.id == streamId && stream.publishableCount > 0,
           ),
         );
         _loadingFinalReports = false;
@@ -1772,6 +1772,7 @@ class _CompleteAssessmentWorkflowState
             classTeacherRemarks: row['classTeacherRemarks']?.toString() ?? '',
             headTeacherRemarks: row['headTeacherRemarks']?.toString() ?? '',
             promotedTo: row['promotedTo']?.toString() ?? '',
+            savedProgression: row['promotedTo']?.toString() ?? '',
             ignoreHeadTeacherRemark: row['ignoreHeadTeacherRemarks'] == true,
             reportStatus: row['reportStatus']?.toString() ?? 'DRAFT',
           );
@@ -2517,13 +2518,13 @@ class _CompleteAssessmentWorkflowState
                       ),
                       step(
                         number: '5',
-                        title: 'Review, then publish',
+                        title: 'Review results and set progression',
                         detail:
-                            'Review the generated report, add any required head-teacher remark, and publish the approved report to make it official.',
+                            'Review the generated results and save a progression decision for every student in the class before publishing.',
                         color: const Color(0xFF2563EB),
                       ),
                       const Text(
-                        'If scores, evaluations or remarks change after generation, regenerate the report before publishing the updated version.',
+                        'If scores, evaluations or teacher remarks change after generation, regenerate the results before publishing the updated version.',
                         style: TextStyle(
                           color: AppColors.muted,
                           fontSize: 11.5,
@@ -5228,12 +5229,10 @@ class _CompleteAssessmentWorkflowState
   }
 
   List<String> _reportReadinessBlockers(_StudentRecord student) {
-    final remarks = _reportRemarks[student.id] ?? _ReportRemarksDraft.empty();
     return [
       if (!_gradesComplete(student)) 'Grades incomplete',
       if (!_evaluationComplete(student)) 'Evaluation pending',
       if (!student.classTeacherCommentReady) 'Teacher remark pending',
-      if (remarks.promotedTo.trim().isEmpty) 'Progression decision pending',
     ];
   }
 
@@ -5257,14 +5256,28 @@ class _CompleteAssessmentWorkflowState
     return 'Incomplete';
   }
 
-  String _progressionStatusFor(_StudentRecord student) {
-    final decision = (_reportRemarks[student.id] ?? _ReportRemarksDraft.empty())
-        .promotedTo
-        .trim();
-    return decision.isNotEmpty && decision.toLowerCase() != 'pending review'
-        ? 'Selected'
-        : 'Pending';
-  }
+  String? _savedProgressionFor(_StudentRecord student) =>
+      reportProgressionDecision(_reportRemarks[student.id]?.savedProgression);
+
+  String _progressionStatusFor(_StudentRecord student) =>
+      _savedProgressionFor(student) ?? 'Pending';
+
+  String? get _classPublicationBlocker => classPublicationBlocker(
+    missingProgression: _reportCardStudents
+        .where((student) => _savedProgressionFor(student) == null)
+        .length,
+    missingResults: _reportCardStudents
+        .where(
+          (student) => !reportHasGeneratedVersion(
+            _reportStatuses[student.id] ?? student.reportStatus,
+          ),
+        )
+        .length,
+  );
+
+  bool _canSetProgression(_StudentRecord student) =>
+      reportHasGeneratedVersion(_reportStatusFor(student)) &&
+      !reportHasPublishedVersion(_reportStatusFor(student));
 
   bool _canGenerateOrRegenerate(_StudentRecord student) {
     final status = _reportStatusFor(student);
@@ -5287,10 +5300,15 @@ class _CompleteAssessmentWorkflowState
     if (status != 'Generated' && status != 'Published') {
       return 'Ready to generate';
     }
-    return status == 'Published' ? 'Published' : 'Ready to publish';
+    if (status == 'Published') return 'Published';
+    return _classPublicationBlocker == null
+        ? 'Ready to publish'
+        : 'Publication pending';
   }
 
   bool _readyToPublish(_StudentRecord student) =>
+      !_savingProgression &&
+      _classPublicationBlocker == null &&
       reportStatusCanBePublished(
         _reportStatusFor(student),
         republishRequired: student.reportRepublishRequired,
@@ -5571,6 +5589,10 @@ class _CompleteAssessmentWorkflowState
   Future<void> _confirmAndPublishStudentReports(
     Iterable<_StudentRecord> students,
   ) async {
+    if (_classPublicationBlocker case final blocker?) {
+      _notice(blocker);
+      return;
+    }
     final publishable = students.where(_readyToPublish).toList();
     if (publishable.isEmpty) {
       _notice(
@@ -5608,6 +5630,10 @@ class _CompleteAssessmentWorkflowState
   }
 
   Future<void> _publishStudentReports(Iterable<_StudentRecord> students) async {
+    if (_classPublicationBlocker case final blocker?) {
+      _notice(blocker);
+      return;
+    }
     final generated = students.where(_readyToPublish).toList();
     if (generated.isEmpty) {
       _notice(
@@ -6187,8 +6213,8 @@ class _CompleteAssessmentWorkflowState
                         _isGeneratingReports
                             ? 'Generating ${_processingReportStudents.length}…'
                             : selectedStudents.isEmpty
-                            ? 'Generate all ready (${generationTargets.length})'
-                            : 'Generate selected (${selectedStudents.length})',
+                            ? 'Generate Results (${generationTargets.length})'
+                            : 'Generate Selected (${selectedStudents.length})',
                       ),
                     ),
                     FilledButton.icon(
@@ -6210,7 +6236,17 @@ class _CompleteAssessmentWorkflowState
                     ),
                     if (_evaluationManager)
                       OutlinedButton.icon(
-                        onPressed: _openBulkPromotion,
+                        onPressed:
+                            !_savingProgression &&
+                                (selectedStudents.isEmpty
+                                    ? _reportCardStudents.any(
+                                        _canSetProgression,
+                                      )
+                                    : selectedStudents.every(
+                                        _canSetProgression,
+                                      ))
+                            ? _openBulkPromotion
+                            : null,
                         icon: const Icon(Icons.trending_up, size: 14),
                         label: Text(
                           _selectedReportStudents.isEmpty
@@ -6242,6 +6278,14 @@ class _CompleteAssessmentWorkflowState
               ],
             ),
           ),
+          if (_classPublicationBlocker case final blocker?)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(blocker),
+              ),
+            ),
           const Divider(height: 1),
           if (students.isEmpty)
             const Padding(
@@ -6455,7 +6499,11 @@ class _CompleteAssessmentWorkflowState
           Expanded(
             flex: 2,
             child: Center(
-              child: _studentRequirementBadge(_progressionStatusFor(student)),
+              child: _studentRequirementBadge(
+                _progressionStatusFor(student),
+                complete: _savedProgressionFor(student) != null,
+                maxLines: 2,
+              ),
             ),
           ),
           Expanded(
@@ -6483,8 +6531,12 @@ class _CompleteAssessmentWorkflowState
     );
   }
 
-  Widget _studentRequirementBadge(String label) {
-    final normalized = label.toLowerCase();
+  Widget _studentRequirementBadge(
+    String label, {
+    bool complete = false,
+    int maxLines = 1,
+  }) {
+    final normalized = complete ? 'complete' : label.toLowerCase();
     final (foreground, background, border) = switch (normalized) {
       'complete' || 'selected' || 'approved' => (
         const Color(0xFF047857),
@@ -6521,7 +6573,8 @@ class _CompleteAssessmentWorkflowState
       ),
       child: Text(
         label,
-        maxLines: 1,
+        maxLines: maxLines,
+        textAlign: TextAlign.center,
         overflow: TextOverflow.ellipsis,
         style: TextStyle(
           color: foreground,
@@ -6726,7 +6779,7 @@ class _CompleteAssessmentWorkflowState
             )
           else if (student.reportRepublishRequired)
             FilledButton.icon(
-              onPressed: _generationReady(student)
+              onPressed: _readyToPublish(student)
                   ? () {
                       Navigator.pop(dialogContext);
                       _publishStudentReports([student]);
@@ -6896,11 +6949,15 @@ class _CompleteAssessmentWorkflowState
       _notice('No active grade levels are configured for this school.');
       return;
     }
-    final targets = _selectedReportStudents.isEmpty
-        ? _reportCardStudents
-        : _reportCardStudents
-              .where((student) => _selectedReportStudents.contains(student.id))
-              .toList();
+    final targets = _reportCardStudents
+        .where(
+          (student) =>
+              _canSetProgression(student) &&
+              (_selectedReportStudents.isEmpty ||
+                  _selectedReportStudents.contains(student.id)),
+        )
+        .toList();
+    if (targets.isEmpty) return;
     final applied = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
@@ -6914,7 +6971,7 @@ class _CompleteAssessmentWorkflowState
               children: [
                 Text(
                   _selectedReportStudents.isEmpty
-                      ? 'Apply a progression decision to all ${targets.length} students.'
+                      ? 'Apply a progression decision to ${targets.length} students with generated results.'
                       : 'Apply a progression decision to ${targets.length} selected student(s).',
                   style: const TextStyle(color: Color(0xFF64748B)),
                 ),
@@ -6932,7 +6989,7 @@ class _CompleteAssessmentWorkflowState
                   value: replaceExisting,
                   contentPadding: EdgeInsets.zero,
                   controlAffinity: ListTileControlAffinity.leading,
-                  title: const Text('Replace existing promotions'),
+                  title: const Text('Replace existing decisions'),
                   onChanged: (value) =>
                       setDialogState(() => replaceExisting = value ?? false),
                 ),
@@ -6955,59 +7012,66 @@ class _CompleteAssessmentWorkflowState
       ),
     );
     if (applied != true || !mounted) return;
-    final changedTargets = <_StudentRecord>[];
-    setState(() {
-      for (final student in targets) {
-        final current =
-            _reportRemarks[student.id] ?? _ReportRemarksDraft.empty();
-        if (current.promotedTo.isNotEmpty && !replaceExisting) continue;
-        _reportRemarks[student.id] = _ReportRemarksDraft(
-          classTeacherRemarks: current.classTeacherRemarks,
-          headTeacherRemarks: current.headTeacherRemarks,
-          promotedTo: grade!,
-          ignoreHeadTeacherRemark: current.ignoreHeadTeacherRemark,
-        );
-        changedTargets.add(student);
-        _touchReportAudit(student);
-      }
-    });
+    final changedTargets = targets
+        .where(
+          (student) =>
+              _savedProgressionFor(student) != grade &&
+              (replaceExisting || _savedProgressionFor(student) == null),
+        )
+        .toList();
     if (changedTargets.isEmpty) {
       _notice('No progression decisions were changed.');
       return;
     }
-    if (widget.customSchoolId.trim().isNotEmpty) {
-      try {
+    await _saveProgression(changedTargets, grade!);
+  }
+
+  Future<void> _saveProgression(
+    List<_StudentRecord> students,
+    String decision,
+  ) async {
+    if (_savingProgression || students.isEmpty) return;
+    final className = _selectedClass;
+    setState(() => _savingProgression = true);
+    try {
+      if (widget.customSchoolId.trim().isNotEmpty) {
         final setup = await _assessmentFormSetup;
-        await Future.wait(
-          changedTargets.map((student) {
-            final remarks = _reportRemarks[student.id]!;
-            return _assessmentApi.saveReportCardRemarks(
-              submittedBy: widget.viewerName,
-              body: {
-                'customStudentId': student.id,
-                'customSchoolId': widget.customSchoolId,
-                'termId': setup.termId,
-                'classTeacherRemarks': remarks.classTeacherRemarks,
-                'headTeacherRemarks': remarks.headTeacherRemarks,
-                'ignoreHeadTeacherRemarks': remarks.ignoreHeadTeacherRemark,
-                'classTeacherName': widget.viewerName,
-                'classTeacherId': widget.viewerName,
-                'promotedTo': remarks.promotedTo,
-              },
+        try {
+          await Future.wait(
+            students.map(
+              (student) => _assessmentApi.saveReportProgression(
+                customSchoolId: widget.customSchoolId,
+                studentId: student.id,
+                termId: setup.termId,
+                decision: decision,
+              ),
+            ),
+          );
+        } finally {
+          if (mounted && className == _selectedClass) {
+            await _loadLiveReportReadiness(setup, className);
+          }
+        }
+      } else {
+        setState(() {
+          for (final student in students) {
+            final remarks =
+                _reportRemarks[student.id] ?? _ReportRemarksDraft.empty();
+            _reportRemarks[student.id] = remarks.copyWith(
+              promotedTo: decision,
+              savedProgression: decision,
             );
-          }),
-        );
-        await _loadLiveReportReadiness(setup, _selectedClass);
-      } on AssessmentApiException catch (error) {
-        if (!mounted) return;
-        _notice(error.message);
-        return;
+          }
+        });
       }
+      if (mounted) {
+        _notice('Progression saved for ${students.length} student(s).');
+      }
+    } on AssessmentApiException catch (error) {
+      if (mounted) _notice(error.message);
+    } finally {
+      if (mounted) setState(() => _savingProgression = false);
     }
-    if (!mounted) return;
-    _notice(
-      'Progression decision updated for ${changedTargets.length} student(s).',
-    );
   }
 
   // ignore: unused_element
@@ -7285,6 +7349,7 @@ class _CompleteAssessmentWorkflowState
       classTeacherRemarks: classRemarks.trim(),
       headTeacherRemarks: headRemarks.trim(),
       promotedTo: promotedTo,
+      savedProgression: _reportRemarks[student.id]?.savedProgression ?? '',
       ignoreHeadTeacherRemark: ignoreHeadTeacherRemark,
       reportStatus: _reportRemarks[student.id]?.reportStatus ?? 'DRAFT',
     );
@@ -7873,6 +7938,7 @@ class _CompleteAssessmentWorkflowState
                     _mobileRequirement(
                       'Progression',
                       _progressionStatusFor(student),
+                      complete: _savedProgressionFor(student) != null,
                     ),
                   ],
                 ),
@@ -7889,7 +7955,11 @@ class _CompleteAssessmentWorkflowState
     );
   }
 
-  Widget _mobileRequirement(String label, String status) {
+  Widget _mobileRequirement(
+    String label,
+    String status, {
+    bool complete = false,
+  }) {
     return Container(
       padding: const EdgeInsets.all(9),
       decoration: BoxDecoration(
@@ -7909,7 +7979,7 @@ class _CompleteAssessmentWorkflowState
             ),
           ),
           const SizedBox(height: 5),
-          _studentRequirementBadge(status),
+          _studentRequirementBadge(status, complete: complete),
         ],
       ),
     );
@@ -7925,7 +7995,6 @@ class _CompleteAssessmentWorkflowState
     final generated = reportHasGeneratedVersion(status);
     final published = canDistributeReport(status);
     final academicManager = _evaluationManager;
-    final canEditClass = academicManager && !generated;
     final canEditHead = academicManager && !generated;
     final reportSubjects = _studentReportCards[student.id]?['subjects'];
     final generatedAcademicRows = reportSubjects is List
@@ -8116,8 +8185,9 @@ class _CompleteAssessmentWorkflowState
             final promotionSection = _studentReportPromotionSection(
               student,
               remarks,
-              canEdit: canEditClass,
-              canRequestCorrection: academicManager && generated,
+              canEdit: academicManager,
+              canRequestCorrection:
+                  academicManager && reportHasPublishedVersion(status),
             );
             if (compact) {
               return Column(
@@ -8309,14 +8379,13 @@ class _CompleteAssessmentWorkflowState
   }
 
   Widget _reportReadinessSection(_StudentRecord student) {
-    final remarks = _reportRemarks[student.id] ?? _ReportRemarksDraft.empty();
     final status = _reportStatusFor(student);
     final checks = <(String, bool)>[
       ('All grades entered', _gradesComplete(student)),
       ('Student evaluation', _evaluationComplete(student)),
       ('Report generated', reportHasGeneratedVersion(status)),
       ('Class Teacher remark', student.classTeacherCommentReady),
-      ('Progression selected', remarks.promotedTo.isNotEmpty),
+      ('Progression saved', _savedProgressionFor(student) != null),
     ];
     return _section(
       title: 'Publication Readiness',
@@ -8651,9 +8720,11 @@ class _CompleteAssessmentWorkflowState
             items: _promotionGradeOptions(remarks.promotedTo).map((grade) {
               return DropdownMenuItem(value: grade, child: Text(grade));
             }).toList(),
-            onChanged: canEdit
-                ? (value) =>
-                      _updateReportRemarks(student, promotedTo: value ?? '')
+            onChanged:
+                canEdit && !_savingProgression && _canSetProgression(student)
+                ? (value) {
+                    if (value != null) _saveProgression([student], value);
+                  }
                 : null,
           ),
           const SizedBox(height: 18),
@@ -8993,6 +9064,9 @@ class _CompleteAssessmentWorkflowState
     final setup = await _assessmentFormSetup;
     final loaded = await _loadLiveReportReadiness(setup, stream.name);
     if (!loaded || !mounted) return 0;
+    if (_classPublicationBlocker case final blocker?) {
+      throw AssessmentApiException(blocker);
+    }
     final generated = _reportCardStudents
         .where(
           (student) =>
@@ -9051,6 +9125,10 @@ class _CompleteAssessmentWorkflowState
       0,
       (sum, stream) => sum + stream.pendingPublication,
     );
+    final publishableCount = _finalReportStreams.fold<int>(
+      0,
+      (sum, stream) => sum + stream.publishableCount,
+    );
     final updateRequired = _finalReportStreams.fold<int>(
       0,
       (sum, stream) => sum + stream.updateRequired,
@@ -9083,12 +9161,12 @@ class _CompleteAssessmentWorkflowState
         .where(
           (stream) =>
               _selectedFinalReportStreams.contains(stream.id) &&
-              stream.pendingPublication > 0,
+              stream.publishableCount > 0,
         )
         .toList();
     final selectedPublicationCount = selectedPublishableStreams.fold<int>(
       0,
-      (sum, stream) => sum + stream.pendingPublication,
+      (sum, stream) => sum + stream.publishableCount,
     );
 
     Future<void> publishStreams(
@@ -9101,7 +9179,7 @@ class _CompleteAssessmentWorkflowState
       }
       final reportCount = publishable.fold<int>(
         0,
-        (sum, stream) => sum + stream.pendingPublication,
+        (sum, stream) => sum + stream.publishableCount,
       );
       final confirmed = await showDialog<bool>(
         context: context,
@@ -9167,7 +9245,7 @@ class _CompleteAssessmentWorkflowState
 
     Future<void> publishAll() => publishStreams(
       _finalReportStreams
-          .where((stream) => stream.pendingPublication > 0)
+          .where((stream) => stream.publishableCount > 0)
           .toList(),
       allStreams: true,
     );
@@ -9260,7 +9338,7 @@ class _CompleteAssessmentWorkflowState
                       ),
                       FilledButton.icon(
                         onPressed:
-                            _isPublishingAllReports || pendingPublication == 0
+                            _isPublishingAllReports || publishableCount == 0
                             ? null
                             : publishAll,
                         icon: _isPublishingAllReports
@@ -9276,7 +9354,7 @@ class _CompleteAssessmentWorkflowState
                         label: Text(
                           _isPublishingAllReports
                               ? 'Publishing...'
-                              : 'Publish all generated ($pendingPublication)',
+                              : 'Publish all ready ($publishableCount)',
                         ),
                       ),
                     ],
@@ -9708,7 +9786,7 @@ class _CompleteAssessmentWorkflowState
       );
     }
     final eligibleStreams = streams
-        .where((stream) => stream.pendingPublication > 0 && !stream.publishing)
+        .where((stream) => stream.publishableCount > 0 && !stream.publishing)
         .toList();
     final selectedEligibleCount = eligibleStreams
         .where((stream) => _selectedFinalReportStreams.contains(stream.id))
@@ -9837,7 +9915,7 @@ class _CompleteAssessmentWorkflowState
                 child: Checkbox(
                   value: _selectedFinalReportStreams.contains(stream.id),
                   onChanged:
-                      stream.pendingPublication == 0 ||
+                      stream.publishableCount == 0 ||
                           stream.publishing ||
                           _isPublishingAllReports
                       ? null
@@ -9926,7 +10004,7 @@ class _CompleteAssessmentWorkflowState
                   Checkbox(
                     value: _selectedFinalReportStreams.contains(stream.id),
                     onChanged:
-                        stream.pendingPublication == 0 ||
+                        stream.publishableCount == 0 ||
                             stream.publishing ||
                             _isPublishingAllReports
                         ? null
@@ -14805,6 +14883,14 @@ class _FinalReportStream {
     return ready;
   }
 
+  int get publishableCount =>
+      readinessAvailable &&
+          progressionAvailable &&
+          progressionReady &&
+          pendingGeneration == 0
+      ? pendingPublication
+      : 0;
+
   int get pendingGeneration {
     final value = students - generated;
     return value < 0 ? 0 : value;
@@ -14824,6 +14910,7 @@ class _ReportRemarksDraft {
     required this.classTeacherRemarks,
     required this.headTeacherRemarks,
     required this.promotedTo,
+    this.savedProgression = '',
     this.ignoreHeadTeacherRemark = false,
     this.reportStatus = 'DRAFT',
   });
@@ -14838,6 +14925,7 @@ class _ReportRemarksDraft {
   final String classTeacherRemarks;
   final String headTeacherRemarks;
   final String promotedTo;
+  final String savedProgression;
   final bool ignoreHeadTeacherRemark;
   final String reportStatus;
 
@@ -14845,6 +14933,7 @@ class _ReportRemarksDraft {
     String? classTeacherRemarks,
     String? headTeacherRemarks,
     String? promotedTo,
+    String? savedProgression,
     bool? ignoreHeadTeacherRemark,
     String? reportStatus,
   }) {
@@ -14852,6 +14941,7 @@ class _ReportRemarksDraft {
       classTeacherRemarks: classTeacherRemarks ?? this.classTeacherRemarks,
       headTeacherRemarks: headTeacherRemarks ?? this.headTeacherRemarks,
       promotedTo: promotedTo ?? this.promotedTo,
+      savedProgression: savedProgression ?? this.savedProgression,
       ignoreHeadTeacherRemark:
           ignoreHeadTeacherRemark ?? this.ignoreHeadTeacherRemark,
       reportStatus: reportStatus ?? this.reportStatus,

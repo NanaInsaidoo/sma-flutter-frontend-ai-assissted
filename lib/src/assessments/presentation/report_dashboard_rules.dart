@@ -39,6 +39,28 @@ bool reportNeedsUpdate(String? status) {
       normalized == 'Published · update required';
 }
 
+String? reportProgressionDecision(String? value) {
+  final decision = value?.trim() ?? '';
+  return decision.isEmpty || decision.toLowerCase() == 'pending review'
+      ? null
+      : decision;
+}
+
+String? classPublicationBlocker({
+  required int missingProgression,
+  required int missingResults,
+}) {
+  if (missingProgression > 0) {
+    return 'Set progression for $missingProgression '
+        'student${missingProgression == 1 ? '' : 's'} before publishing.';
+  }
+  if (missingResults > 0) {
+    return 'Generate results for $missingResults '
+        'student${missingResults == 1 ? '' : 's'} before publishing.';
+  }
+  return null;
+}
+
 bool reportStatusCanBePublished(
   String? status, {
   bool republishRequired = false,
@@ -56,7 +78,7 @@ String bulkPublishLabel({
   required int eligibleCount,
 }) {
   if (selectedCount == 0) {
-    return 'Publish all eligible ($eligibleCount)';
+    return 'Publish Results ($eligibleCount)';
   }
   if (selectedCount == eligibleCount) {
     return 'Publish selected ($eligibleCount)';

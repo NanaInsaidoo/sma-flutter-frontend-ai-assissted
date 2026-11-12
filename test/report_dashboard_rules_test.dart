@@ -71,7 +71,7 @@ void main() {
     test('describes all, selected and mixed bulk publication actions', () {
       expect(
         bulkPublishLabel(selectedCount: 0, eligibleCount: 4),
-        'Publish all eligible (4)',
+        'Publish Results (4)',
       );
       expect(
         bulkPublishLabel(selectedCount: 2, eligibleCount: 2),
@@ -85,6 +85,27 @@ void main() {
   });
 
   group('report readiness summary', () {
+    test(
+      'publishing waits for the whole class and shows saved progression',
+      () {
+        expect(reportProgressionDecision(' Basic 5 '), 'Basic 5');
+        expect(reportProgressionDecision('Pending review'), isNull);
+        expect(reportProgressionDecision(' '), isNull);
+        expect(
+          classPublicationBlocker(missingProgression: 3, missingResults: 2),
+          'Set progression for 3 students before publishing.',
+        );
+        expect(
+          classPublicationBlocker(missingProgression: 0, missingResults: 1),
+          'Generate results for 1 student before publishing.',
+        );
+        expect(
+          classPublicationBlocker(missingProgression: 0, missingResults: 0),
+          isNull,
+        );
+      },
+    );
+
     test('shows ready when no requirements are pending', () {
       expect(summarizeReportReadiness(const []), 'Ready');
     });
