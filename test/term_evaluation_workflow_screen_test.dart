@@ -303,14 +303,14 @@ void main() {
     },
   );
 
-  testWidgets('class teacher confirms calculated wording and adds comment', (
+  testWidgets('class comments can advance and resubmit in place', (
     tester,
   ) async {
     await useWideScreen(tester);
     http.Request? saveCommentRequest;
     http.Request? submitClassRequest;
-    var reviewStatus = 'PENDING';
-    var savedComment = '';
+    final statuses = {'STU-1': 'PENDING', 'STU-2': 'PENDING'};
+    final comments = <String, String>{};
     final calculated = {
       'HOMEWORK_HABITS': 'Good',
       'ATTENTIVENESS': 'Good',
@@ -322,6 +322,7 @@ void main() {
     final api = AssessmentApiClient(
       accessToken: 'token',
       client: MockClient((request) async {
+        final studentId = request.url.pathSegments.reversed.skip(1).first;
         if (request.method == 'POST' &&
             request.url.path.endsWith('/comment-suggestion')) {
           final alternate = request.url.queryParameters['variant'] == '1';
@@ -338,19 +339,19 @@ void main() {
         }
         if (request.method == 'PUT' && request.url.path.endsWith('/comment')) {
           saveCommentRequest = request;
-          savedComment =
+          comments[studentId] =
               (jsonDecode(request.body) as Map<String, dynamic>)['comment']
                   ?.toString() ??
               '';
-          reviewStatus = 'COMMENTS_IN_PROGRESS';
+          statuses[studentId] = 'COMMENTS_IN_PROGRESS';
           return http.Response('{"status":"COMMENTS_IN_PROGRESS"}', 200);
         }
         if (request.method == 'POST' &&
             request.url.path.endsWith('/submit-comments')) {
           submitClassRequest = request;
-          reviewStatus = 'SUBMITTED';
+          statuses.updateAll((_, _) => 'SUBMITTED');
           return http.Response(
-            '{"status":"READY_FOR_LEADERSHIP","studentsSubmitted":1}',
+            '{"status":"READY_FOR_LEADERSHIP","studentsSubmitted":2}',
             200,
           );
         }
@@ -359,8 +360,8 @@ void main() {
             jsonEncode({
               'calculated': calculated,
               'finalRatings': calculated,
-              'comment': savedComment,
-              'status': reviewStatus,
+              'comment': comments[studentId],
+              'status': statuses[studentId],
             }),
             200,
           );
@@ -379,10 +380,11 @@ void main() {
                 'subjectName': 'Class-teacher evaluation',
                 'assignmentType': 'CLASS_TEACHER',
                 'status': 'SUBMITTED',
-                'studentCount': 1,
+                'studentCount': 2,
                 'completionPercent': 100,
                 'students': [
                   {'id': 'STU-1', 'name': 'Ama Mensah'},
+                  {'id': 'STU-2', 'name': 'Kojo Mensah'},
                 ],
               },
             ],
@@ -412,10 +414,21 @@ void main() {
     await tester.tap(find.text('Ama Mensah'));
     await tester.pumpAndSettle();
 
+    final firstStudentRoute = ModalRoute.of(
+      tester.element(find.text('Ama Mensah').hitTestable()),
+    );
+    expect(find.text('Student 1 of 2'), findsOneWidget);
+    expect(find.text('0 of 2 comments saved'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('submit-from-student-comment')),
+      findsNothing,
+    );
     expect(find.text('Calculated: Good'), findsNWidgets(6));
     expect(find.byType(DropdownButtonFormField<String>), findsNothing);
     expect(find.textContaining('override'), findsNothing);
     expect(find.text('Suggested class-teacher comment'), findsOneWidget);
+    await tester.drag(find.byType(ListView).last, const Offset(0, -1200));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('use-evaluation-suggestion')));
     await tester.pump();
     TextField commentField() => tester.widget<TextField>(
@@ -445,17 +458,60 @@ void main() {
 
     expect(saveCommentRequest, isNotNull);
     expect(saveCommentRequest!.body, contains('Ama has made steady progress.'));
-    expect(find.text('Student comments complete'), findsOneWidget);
+    expect(find.text('Student 2 of 2'), findsOneWidget);
+    expect(find.text('1 of 2 comments saved'), findsOneWidget);
+    expect(find.text('Ama Mensah').hitTestable(), findsNothing);
     expect(
-      find.byKey(const ValueKey('submit-class-evaluation')),
-      findsOneWidget,
+      ModalRoute.of(tester.element(find.text('Kojo Mensah').hitTestable())),
+      same(firstStudentRoute),
     );
-    await tester.tap(find.byKey(const ValueKey('submit-class-evaluation')));
+    await tester.drag(find.byType(ListView).last, const Offset(0, -1200));
+    await tester.pumpAndSettle();
+    expect(commentField().controller!.text, isEmpty);
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('evaluation-final-comment')),
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('evaluation-final-comment')),
+      'Kojo contributes well in class.',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('save-student-comment')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Student comments complete'), findsOneWidget);
+    final classSubmit = find.byKey(const ValueKey('submit-class-evaluation'));
+    expect(classSubmit, findsOneWidget);
+    expect(
+      tester.getTopLeft(classSubmit).dy,
+      greaterThan(tester.getBottomLeft(find.text('Kojo Mensah')).dy),
+    );
+    await tester.ensureVisible(classSubmit);
+    await tester.tap(classSubmit);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Submit for approval').hitTestable());
     await tester.pumpAndSettle();
     expect(submitClassRequest, isNotNull);
     expect(find.text('Awaiting approval'), findsWidgets);
+
+    statuses['STU-1'] = 'CHANGES_REQUESTED';
+    submitClassRequest = null;
+    await tester.ensureVisible(find.text('Ama Mensah'));
+    await tester.tap(find.text('Ama Mensah'));
+    await tester.pumpAndSettle();
+    final comment = find.byKey(const ValueKey('evaluation-final-comment'));
+    await tester.drag(find.byType(ListView).last, const Offset(0, -1200));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(comment);
+    await tester.enterText(comment, 'Ama checks her work carefully.');
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('submit-from-student-comment')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Submit for approval').hitTestable().last);
+    await tester.pumpAndSettle();
+    expect(comments['STU-1'], 'Ama checks her work carefully.');
+    expect(comments['STU-2'], 'Kojo contributes well in class.');
+    expect(submitClassRequest, isNotNull);
   });
 
   testWidgets('headmaster alone can correct finalized wording with a reason', (
