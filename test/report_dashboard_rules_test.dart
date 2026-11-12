@@ -71,7 +71,7 @@ void main() {
     test('describes all, selected and mixed bulk publication actions', () {
       expect(
         bulkPublishLabel(selectedCount: 0, eligibleCount: 4),
-        'Publish all eligible (4)',
+        'Publish Results (4)',
       );
       expect(
         bulkPublishLabel(selectedCount: 2, eligibleCount: 2),

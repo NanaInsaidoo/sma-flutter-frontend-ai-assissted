@@ -78,7 +78,7 @@ String bulkPublishLabel({
   required int eligibleCount,
 }) {
   if (selectedCount == 0) {
-    return 'Publish all eligible ($eligibleCount)';
+    return 'Publish Results ($eligibleCount)';
   }
   if (selectedCount == eligibleCount) {
     return 'Publish selected ($eligibleCount)';

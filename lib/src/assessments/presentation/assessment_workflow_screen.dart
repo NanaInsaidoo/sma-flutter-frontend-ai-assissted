@@ -6502,6 +6502,7 @@ class _CompleteAssessmentWorkflowState
               child: _studentRequirementBadge(
                 _progressionStatusFor(student),
                 complete: _savedProgressionFor(student) != null,
+                maxLines: 2,
               ),
             ),
           ),
@@ -6530,7 +6531,11 @@ class _CompleteAssessmentWorkflowState
     );
   }
 
-  Widget _studentRequirementBadge(String label, {bool complete = false}) {
+  Widget _studentRequirementBadge(
+    String label, {
+    bool complete = false,
+    int maxLines = 1,
+  }) {
     final normalized = complete ? 'complete' : label.toLowerCase();
     final (foreground, background, border) = switch (normalized) {
       'complete' || 'selected' || 'approved' => (
@@ -6568,7 +6573,8 @@ class _CompleteAssessmentWorkflowState
       ),
       child: Text(
         label,
-        maxLines: 1,
+        maxLines: maxLines,
+        textAlign: TextAlign.center,
         overflow: TextOverflow.ellipsis,
         style: TextStyle(
           color: foreground,
@@ -7932,6 +7938,7 @@ class _CompleteAssessmentWorkflowState
                     _mobileRequirement(
                       'Progression',
                       _progressionStatusFor(student),
+                      complete: _savedProgressionFor(student) != null,
                     ),
                   ],
                 ),
@@ -7948,7 +7955,11 @@ class _CompleteAssessmentWorkflowState
     );
   }
 
-  Widget _mobileRequirement(String label, String status) {
+  Widget _mobileRequirement(
+    String label,
+    String status, {
+    bool complete = false,
+  }) {
     return Container(
       padding: const EdgeInsets.all(9),
       decoration: BoxDecoration(
@@ -7968,7 +7979,7 @@ class _CompleteAssessmentWorkflowState
             ),
           ),
           const SizedBox(height: 5),
-          _studentRequirementBadge(status),
+          _studentRequirementBadge(status, complete: complete),
         ],
       ),
     );
@@ -7984,7 +7995,6 @@ class _CompleteAssessmentWorkflowState
     final generated = reportHasGeneratedVersion(status);
     final published = canDistributeReport(status);
     final academicManager = _evaluationManager;
-    final canEditClass = academicManager && !generated;
     final canEditHead = academicManager && !generated;
     final reportSubjects = _studentReportCards[student.id]?['subjects'];
     final generatedAcademicRows = reportSubjects is List
@@ -8175,8 +8185,9 @@ class _CompleteAssessmentWorkflowState
             final promotionSection = _studentReportPromotionSection(
               student,
               remarks,
-              canEdit: canEditClass,
-              canRequestCorrection: academicManager && generated,
+              canEdit: academicManager,
+              canRequestCorrection:
+                  academicManager && reportHasPublishedVersion(status),
             );
             if (compact) {
               return Column(
