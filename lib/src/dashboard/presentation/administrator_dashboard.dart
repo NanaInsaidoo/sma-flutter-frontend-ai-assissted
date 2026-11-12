@@ -6708,8 +6708,7 @@ class _Sidebar extends StatelessWidget {
                         children: [
                           Text(
                             displaySchoolName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                            softWrap: true,
                             style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.w800,

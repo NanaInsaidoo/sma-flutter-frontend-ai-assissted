@@ -25,6 +25,7 @@ class BursarTermClosure {
     this.approvedAt,
     this.approvedBy,
     this.reviewReason = '',
+    this.pettyCashBlocker,
   });
   final int termId, pendingAdjustmentCount, pendingReversalCount;
   final String status, discrepancyExplanation, unresolvedItems;
@@ -32,6 +33,7 @@ class BursarTermClosure {
   final DateTime? submittedAt, approvedAt;
   final int? approvedBy;
   final String reviewReason;
+  final String? pettyCashBlocker;
   final double expectedFees,
       collectedFees,
       waivedFees,

@@ -343,7 +343,9 @@ class _ClassTeacherSettingsScreenState
         .where((staff) => !assignedIds.contains(staff.id))
         .toList();
     if (options.isEmpty) {
-      _showMessage('All available staff are already assigned to this stream.');
+      _showMessage(
+        'All available staff already have a class role in this section.',
+      );
       return;
     }
 
