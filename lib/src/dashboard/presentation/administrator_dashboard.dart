@@ -172,6 +172,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   bool _openAddEventOnNextCalendar = false;
   bool _openAddStaffOnNextStaff = false;
   bool _openFeeStructureOnNextFees = false;
+  int? _feeStructureTermToOpen;
   int? _assessmentStreamId;
   int? _evaluationStreamId;
   String? _evaluationStreamName;
@@ -419,6 +420,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
     final reloadingCurrentPage = page == _selectedPage;
     setState(() {
       _openFeeStructureOnNextFees = false;
+      _feeStructureTermToOpen = null;
       _focusStudentSearchOnNextStudents = false;
       _studentProfileToOpenId = null;
       _openNewRequisitionOnNextExpenses = false;
@@ -519,9 +521,10 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
     }
   }
 
-  void _openFeeWorkflow() {
+  void _openFeeWorkflow({int? termId}) {
     setState(() {
       _openFeeStructureOnNextFees = true;
+      _feeStructureTermToOpen = termId;
       _selectedPage = _SchoolAdminPage.fees;
       _feeWorkflowSummary = _loadFeeWorkflowSummary();
       _approvalInbox = _loadApprovalInbox();
@@ -663,6 +666,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                         onOpenFeeWorkflow: _openFeeWorkflow,
                         onFeeWorkflowChanged: _refreshFeeWorkflowSummary,
                         openFeeStructureOnNextFees: _openFeeStructureOnNextFees,
+                        feeStructureTermToOpen: _feeStructureTermToOpen,
                         schoolId: _schoolId,
                         schoolName: widget.schoolName,
                         accessToken: widget.accessToken,
@@ -759,6 +763,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                 onOpenFeeWorkflow: _openFeeWorkflow,
                 onFeeWorkflowChanged: _refreshFeeWorkflowSummary,
                 openFeeStructureOnNextFees: _openFeeStructureOnNextFees,
+                feeStructureTermToOpen: _feeStructureTermToOpen,
                 schoolId: _schoolId,
                 schoolName: widget.schoolName,
                 accessToken: widget.accessToken,
@@ -855,6 +860,7 @@ class _DashboardBody extends StatelessWidget {
     required this.onOpenFeeWorkflow,
     required this.onFeeWorkflowChanged,
     required this.openFeeStructureOnNextFees,
+    this.feeStructureTermToOpen,
     required this.schoolId,
     this.schoolName,
     this.accessToken,
@@ -904,9 +910,10 @@ class _DashboardBody extends StatelessWidget {
   final int? teacherClassStreamId;
   final ValueChanged<TeacherClassAssignment> onOpenTeacherClass;
   final ValueChanged<int> onOpenAssessmentsForStream;
-  final VoidCallback onOpenFeeWorkflow;
+  final void Function({int? termId}) onOpenFeeWorkflow;
   final VoidCallback onFeeWorkflowChanged;
   final bool openFeeStructureOnNextFees;
+  final int? feeStructureTermToOpen;
   final String schoolId;
   final String? schoolName;
   final String? accessToken;
@@ -1186,6 +1193,7 @@ class _DashboardBody extends StatelessWidget {
         openRecordPaymentOnLoad: openRecordPaymentOnNextFees,
         recordPaymentStudentId: recordPaymentStudentId,
         openFeeStructureOnLoad: openFeeStructureOnNextFees,
+        initialFeeStructureTermId: feeStructureTermToOpen,
         onRecordPaymentRequestConsumed: onRecordPaymentRequestConsumed,
         onWorkflowChanged: onFeeWorkflowChanged,
         onOpenStudent: onOpenStudentProfile,
@@ -1293,9 +1301,7 @@ class _DashboardBody extends StatelessWidget {
         accessToken: accessToken,
         onRefreshAccessToken: onRefreshAccessToken,
       );
-      if ((normalizedRole == 'CLASS_TEACHER' ||
-              normalizedRole == 'SUBJECT_TEACHER') &&
-          userId != null) {
+      if (_isTeachingRole(role) && userId != null) {
         return TeacherTermClosingScreen(
           schoolId: schoolId,
           teacherUserId: userId!,
@@ -1313,19 +1319,28 @@ class _DashboardBody extends StatelessWidget {
           onOpenExpenses: () => onSelectPage(_SchoolAdminPage.expenses),
         );
       }
+      final headmasterClosureRepository = HeadmasterTermClosureApiClient(
+        accessToken: accessToken,
+        onRefreshAccessToken: onRefreshAccessToken,
+      );
+      final canManageTermClosure = _canManageTermClosure(normalizedRole);
       return TermReviewScreen(
         schoolId: schoolId,
         reviewerUserId: userId,
+        reviewerDisplayName: userDisplayName,
         repository: StaffReviewApiClient(
           accessToken: accessToken,
           onRefreshAccessToken: onRefreshAccessToken,
         ),
         teacherReviewRepository: teacherRepository,
         bursarClosureRepository: bursarRepository,
-        headmasterClosureRepository: HeadmasterTermClosureApiClient(
-          accessToken: accessToken,
-          onRefreshAccessToken: onRefreshAccessToken,
-        ),
+        headmasterClosureRepository: headmasterClosureRepository,
+        onConfirmNoFinanceActivity: canManageTermClosure
+            ? (termId) => headmasterClosureRepository.confirmNoFinanceActivity(
+                schoolId,
+                termId,
+              )
+            : null,
         onOpenAttendance: () => onSelectPage(_SchoolAdminPage.attendance),
         onOpenStaffAttendance: () =>
             onSelectPage(_SchoolAdminPage.staffAttendance),
@@ -1339,7 +1354,37 @@ class _DashboardBody extends StatelessWidget {
           accessToken: accessToken,
           onRefreshAccessToken: onRefreshAccessToken,
         ),
-        onTermTransitioned: onRefresh,
+        onEditCurrentTermDates: canManageTermClosure
+            ? (termId) async {
+                final saved = await showCurrentTermDateEditor(
+                  context: context,
+                  schoolId: schoolId,
+                  termId: termId,
+                  accessToken: accessToken,
+                  onRefreshAccessToken: onRefreshAccessToken,
+                );
+                if (saved && context.mounted) onRefresh();
+                return saved;
+              }
+            : null,
+        onSetUpNextTerm: canManageTermClosure
+            ? (closedTermId) => showNextTermSetupEditor(
+                context: context,
+                schoolId: schoolId,
+                closedTermId: closedTermId,
+                accessToken: accessToken,
+                onRefreshAccessToken: onRefreshAccessToken,
+              )
+            : null,
+        onBeginNextTerm: canManageTermClosure
+            ? (closedTermId, nextTermId) => headmasterClosureRepository
+                  .beginNextTerm(schoolId, closedTermId, nextTermId)
+            : null,
+        onOpenFees: (termId) => onOpenFeeWorkflow(termId: termId),
+        onTermTransitioned: () {
+          onRefresh();
+          onSelectPage(_SchoolAdminPage.dashboard);
+        },
       );
     }
 
@@ -1422,6 +1467,29 @@ class _DashboardBody extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (data.termClosed && _canManageTermClosure(role)) ...[
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Wrap(
+                        spacing: 16,
+                        runSpacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          const Text(
+                            'Next term setup pending',
+                            style: TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                          FilledButton.tonal(
+                            onPressed: () =>
+                                onSelectPage(_SchoolAdminPage.termReview),
+                            child: const Text('Resume setup'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
                 if (dashboardUnavailable) ...[
                   _DashboardDataUnavailableBanner(onRetry: onRefresh),
                 ],
@@ -5593,6 +5661,13 @@ String _monthName(int month) {
   return months[month - 1];
 }
 
+bool _canManageTermClosure(String? role) => const {
+  'ADMINISTRATOR',
+  'ADMIN',
+  'HEAD_TEACHER',
+  'HEADMASTER',
+}.contains(role?.trim().toUpperCase());
+
 bool _isTeachingRole(String? role) {
   final value = role?.trim().toUpperCase() ?? '';
   return value == 'TEACHER' ||
@@ -6873,25 +6948,49 @@ class _SidebarNavigation extends StatefulWidget {
 class _SidebarNavigationState extends State<_SidebarNavigation> {
   late _SidebarSectionId? _expandedSection;
 
+  bool get _isBursar => widget.role?.trim().toUpperCase() == 'BURSAR';
+
+  bool get _standaloneTermClosure => const {
+    'ADMINISTRATOR',
+    'ADMIN',
+    'HEAD_TEACHER',
+    'HEADMASTER',
+    'ASSISTANT_HEAD_TEACHER',
+  }.contains(widget.role?.trim().toUpperCase());
+
   @override
   void initState() {
     super.initState();
-    _expandedSection =
-        _sectionForPage(widget.selectedPage) ?? _SidebarSectionId.academics;
+    final page = widget.selectedPage;
+    _expandedSection = _sectionForPage(page);
+    if (_expandedSection == null &&
+        page != _SchoolAdminPage.termReview &&
+        !_isBursar) {
+      _expandedSection = _SidebarSectionId.academics;
+    }
   }
 
   @override
   void didUpdateWidget(covariant _SidebarNavigation oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.selectedPage != widget.selectedPage) {
-      final selectedSection = _sectionForPage(widget.selectedPage);
-      if (selectedSection != null) {
+    final page = widget.selectedPage;
+    if (oldWidget.selectedPage != page ||
+        (oldWidget.role != widget.role &&
+            page == _SchoolAdminPage.termReview)) {
+      final selectedSection = _sectionForPage(page);
+      if (selectedSection != null || page == _SchoolAdminPage.termReview) {
         _expandedSection = selectedSection;
       }
     }
   }
 
   _SidebarSectionId? _sectionForPage(_SchoolAdminPage page) {
+    if (page == _SchoolAdminPage.termReview) {
+      if (_standaloneTermClosure) return null;
+      return _isBursar
+          ? _SidebarSectionId.finance
+          : _SidebarSectionId.academics;
+    }
     if (const {
       _SchoolAdminPage.admissions,
       _SchoolAdminPage.students,
@@ -6908,7 +7007,6 @@ class _SidebarNavigationState extends State<_SidebarNavigation> {
       _SchoolAdminPage.assessments,
       _SchoolAdminPage.evaluations,
       _SchoolAdminPage.finalReports,
-      _SchoolAdminPage.termReview,
     }.contains(page)) {
       return _SidebarSectionId.academics;
     }
@@ -6939,7 +7037,7 @@ class _SidebarNavigationState extends State<_SidebarNavigation> {
   @override
   Widget build(BuildContext context) {
     final role = widget.role;
-    final isBursar = role?.trim().toUpperCase() == 'BURSAR';
+    final isBursar = _isBursar;
     final isTeacher = _isTeachingRole(role);
     final selectedSection = _sectionForPage(widget.selectedPage);
 
@@ -7020,77 +7118,79 @@ class _SidebarNavigationState extends State<_SidebarNavigation> {
                 ),
             ],
           ),
-        _SidebarSection(
-          key: const ValueKey('sidebar-section-academics'),
-          icon: Icons.menu_book_outlined,
-          label: 'Academics',
-          collapsed: widget.collapsed,
-          expanded: _expandedSection == _SidebarSectionId.academics,
-          active: selectedSection == _SidebarSectionId.academics,
-          onTap: () => _toggleSection(_SidebarSectionId.academics),
-          children: [
-            if (isTeacher)
-              _navButton(
-                icon: Icons.class_outlined,
-                label: 'Classes',
-                page: _SchoolAdminPage.classes,
-              )
-            else if (!isBursar)
-              _navButton(
-                icon: Icons.account_tree_rounded,
-                label: 'Classes & Sections',
-                page: _SchoolAdminPage.classes,
-              ),
-            if (isTeacher)
-              FutureBuilder<TeacherWorkspaceSnapshot>(
-                future: widget.teacherWorkspace,
-                builder: (context, snapshot) {
-                  final hasActiveAssignments =
-                      snapshot.data?.assignedClasses.any(
-                        (assignment) => assignment.active,
-                      ) ==
-                      true;
-                  if (!hasActiveAssignments) return const SizedBox.shrink();
-                  return Column(
-                    children: [
-                      _navButton(
-                        icon: Icons.assessment_outlined,
-                        label: 'Assessments',
-                        page: _SchoolAdminPage.assessments,
-                      ),
-                      _navButton(
-                        icon: Icons.fact_check_outlined,
-                        label: 'Evaluations & Comments',
-                        page: _SchoolAdminPage.evaluations,
-                      ),
-                    ],
-                  );
-                },
-              ),
-            if (!isBursar && !isTeacher) ...[
-              _navButton(
-                icon: Icons.assessment_outlined,
-                label: 'Assessments',
-                page: _SchoolAdminPage.assessments,
-              ),
-              _navButton(
-                icon: Icons.fact_check_outlined,
-                label: 'Evaluations & Comments',
-                page: _SchoolAdminPage.evaluations,
-              ),
-              _navButton(
-                icon: Icons.inventory_2_outlined,
-                label: 'Final Reports',
-                page: _SchoolAdminPage.finalReports,
-              ),
+        if (!isBursar)
+          _SidebarSection(
+            key: const ValueKey('sidebar-section-academics'),
+            icon: Icons.menu_book_outlined,
+            label: 'Academics',
+            collapsed: widget.collapsed,
+            expanded: _expandedSection == _SidebarSectionId.academics,
+            active: selectedSection == _SidebarSectionId.academics,
+            onTap: () => _toggleSection(_SidebarSectionId.academics),
+            children: [
+              if (isTeacher)
+                _navButton(
+                  icon: Icons.class_outlined,
+                  label: 'Classes',
+                  page: _SchoolAdminPage.classes,
+                )
+              else
+                _navButton(
+                  icon: Icons.account_tree_rounded,
+                  label: 'Classes & Sections',
+                  page: _SchoolAdminPage.classes,
+                ),
+              if (isTeacher)
+                FutureBuilder<TeacherWorkspaceSnapshot>(
+                  future: widget.teacherWorkspace,
+                  builder: (context, snapshot) {
+                    final hasActiveAssignments =
+                        snapshot.data?.assignedClasses.any(
+                          (assignment) => assignment.active,
+                        ) ==
+                        true;
+                    if (!hasActiveAssignments) return const SizedBox.shrink();
+                    return Column(
+                      children: [
+                        _navButton(
+                          icon: Icons.assessment_outlined,
+                          label: 'Assessments',
+                          page: _SchoolAdminPage.assessments,
+                        ),
+                        _navButton(
+                          icon: Icons.fact_check_outlined,
+                          label: 'Evaluations & Comments',
+                          page: _SchoolAdminPage.evaluations,
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              if (!isTeacher) ...[
+                _navButton(
+                  icon: Icons.assessment_outlined,
+                  label: 'Assessments',
+                  page: _SchoolAdminPage.assessments,
+                ),
+                _navButton(
+                  icon: Icons.fact_check_outlined,
+                  label: 'Evaluations & Comments',
+                  page: _SchoolAdminPage.evaluations,
+                ),
+                _navButton(
+                  icon: Icons.inventory_2_outlined,
+                  label: 'Final Reports',
+                  page: _SchoolAdminPage.finalReports,
+                ),
+              ],
+              if (!_standaloneTermClosure)
+                _navButton(
+                  icon: Icons.event_available_outlined,
+                  label: isTeacher ? 'Term Review' : 'Term Closure',
+                  page: _SchoolAdminPage.termReview,
+                ),
             ],
-            _navButton(
-              icon: Icons.event_available_outlined,
-              label: isTeacher ? 'Term Review' : 'Term Closure',
-              page: _SchoolAdminPage.termReview,
-            ),
-          ],
-        ),
+          ),
         _SidebarSection(
           key: const ValueKey('sidebar-section-finance'),
           icon: Icons.account_balance_wallet_outlined,
@@ -7140,8 +7240,20 @@ class _SidebarNavigationState extends State<_SidebarNavigation> {
                   : 'Expenses & Petty Cash',
               page: _SchoolAdminPage.expenses,
             ),
+            if (isBursar)
+              _navButton(
+                icon: Icons.event_available_outlined,
+                label: 'Finance term closure',
+                page: _SchoolAdminPage.termReview,
+              ),
           ],
         ),
+        if (_standaloneTermClosure)
+          _navButton(
+            icon: Icons.event_available_outlined,
+            label: 'Term Closure',
+            page: _SchoolAdminPage.termReview,
+          ),
         _SidebarSection(
           key: const ValueKey('sidebar-section-oversight'),
           icon: Icons.query_stats_outlined,

@@ -42,6 +42,107 @@ Future<bool> showPreparedTermDateEditor({
   }
 }
 
+Future<bool> showNextTermSetupEditor({
+  required BuildContext context,
+  required String schoolId,
+  required int closedTermId,
+  required String? accessToken,
+  Future<String?> Function()? onRefreshAccessToken,
+}) async {
+  final api = _AcademicTermManagementApi(
+    accessToken: accessToken,
+    onRefreshAccessToken: onRefreshAccessToken,
+  );
+  try {
+    final terms = await api.terms(schoolId);
+    final closed = terms.where((term) => term.id == closedTermId).firstOrNull;
+    if (closed == null || !closed.isCurrent || closed.status != 'CLOSED') {
+      throw Exception(
+        'Refresh Term Closure to continue with the current setup.',
+      );
+    }
+    final operationalEnd = _jsonDate(closed.raw['endDate']);
+    final boundary = operationalEnd.isAfter(closed.closingDate)
+        ? operationalEnd
+        : closed.closingDate;
+    final prepared = terms.reversed
+        .where(
+          (term) =>
+              term.status == 'PREPARED' &&
+              !term.isCurrent &&
+              term.operationalStart.isAfter(boundary),
+        )
+        .firstOrNull;
+    if (!context.mounted) return false;
+    return await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => _CreatePreparedTermDialog(
+            schoolId: schoolId,
+            api: api,
+            existing: prepared,
+            followsClosedTerm: closed,
+            earliestStart: DateTime(
+              boundary.year,
+              boundary.month,
+              boundary.day + 1,
+            ),
+          ),
+        ) ==
+        true;
+  } catch (error) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.toString().replaceFirst('Exception: ', '')),
+        ),
+      );
+    }
+    return false;
+  }
+}
+
+Future<bool> showCurrentTermDateEditor({
+  required BuildContext context,
+  required String schoolId,
+  required int termId,
+  required String? accessToken,
+  Future<String?> Function()? onRefreshAccessToken,
+}) async {
+  final api = _AcademicTermManagementApi(
+    accessToken: accessToken,
+    onRefreshAccessToken: onRefreshAccessToken,
+  );
+  try {
+    final (term, limitDate, limitReason) = await api.currentTermDates(
+      schoolId,
+      termId,
+    );
+    if (!context.mounted) return false;
+    return await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => _CurrentTermDatesDialog(
+            schoolId: schoolId,
+            term: term,
+            limitDate: limitDate,
+            limitReason: limitReason,
+            api: api,
+          ),
+        ) ==
+        true;
+  } catch (error) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.toString().replaceFirst('Exception: ', '')),
+        ),
+      );
+    }
+    return false;
+  }
+}
+
 class AcademicTermManagementScreen extends StatefulWidget {
   const AcademicTermManagementScreen({
     super.key,
@@ -378,16 +479,174 @@ class _DateSummary extends StatelessWidget {
   }
 }
 
+class _CurrentTermDatesDialog extends StatefulWidget {
+  const _CurrentTermDatesDialog({
+    required this.schoolId,
+    required this.term,
+    required this.limitDate,
+    required this.limitReason,
+    required this.api,
+  });
+
+  final String schoolId;
+  final _ManagedTerm term;
+  final DateTime limitDate;
+  final String limitReason;
+  final _AcademicTermManagementApi api;
+
+  @override
+  State<_CurrentTermDatesDialog> createState() =>
+      _CurrentTermDatesDialogState();
+}
+
+class _CurrentTermDatesDialogState extends State<_CurrentTermDatesDialog> {
+  late DateTime _teachingEnd = widget.term.teachingEnd;
+  late DateTime _closingDate = widget.term.closingDate;
+  bool _saving = false;
+  String? _error;
+
+  DateTime get _minimumClosingDate =>
+      _teachingEnd.isAfter(widget.limitDate) ? _teachingEnd : widget.limitDate;
+
+  String get _closingDateHelp {
+    final reason = _teachingEnd.isAfter(widget.limitDate)
+        ? 'The last teaching day'
+        : widget.limitReason;
+    return 'Choose ${_friendlyDate(_minimumClosingDate)} or later. '
+        '$reason sets this limit.';
+  }
+
+  String? get _dateError {
+    if (_closingDate.isBefore(_teachingEnd)) {
+      return 'The earliest closing date must be on or after the last teaching day.';
+    }
+    if (_closingDate != widget.term.closingDate &&
+        _closingDate.isBefore(widget.limitDate)) {
+      return 'Select a new closing date within the allowed range.';
+    }
+    return null;
+  }
+
+  Future<void> _pickDate({required bool closing}) async {
+    final initial = closing ? _closingDate : _teachingEnd;
+    final firstDate = closing ? _minimumClosingDate : widget.term.teachingStart;
+    final lastDate = DateTime(widget.term.closingDate.year + 1, 12, 31);
+    final date = await showDatePicker(
+      context: context,
+      initialDate: initial.isBefore(firstDate) ? firstDate : initial,
+      firstDate: firstDate,
+      lastDate: firstDate.isAfter(lastDate) ? firstDate : lastDate,
+    );
+    if (!mounted || date == null) return;
+    setState(() {
+      _error = null;
+      if (closing) {
+        _closingDate = date;
+      } else {
+        _teachingEnd = date;
+      }
+    });
+  }
+
+  Future<void> _save() async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.api.saveCurrentTermDates(
+        schoolId: widget.schoolId,
+        termId: widget.term.id,
+        teachingEnd: _teachingEnd,
+        closingDate: _closingDate,
+      );
+      if (mounted) Navigator.pop(context, true);
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error = error.toString().replaceFirst('Exception: ', '');
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final changed =
+        _teachingEnd != widget.term.teachingEnd ||
+        _closingDate != widget.term.closingDate;
+    final error = _dateError ?? _error;
+    return AlertDialog(
+      title: const Text('Edit current term dates'),
+      content: SizedBox(
+        width: 440,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                '${widget.term.termName} · ${widget.term.academicYear}',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 16),
+              _DialogDate(
+                label: 'Teaching ends',
+                value: _teachingEnd,
+                onTap: _saving ? null : () => _pickDate(closing: false),
+              ),
+              const SizedBox(height: 6),
+              const Text('The last day of lessons.'),
+              const SizedBox(height: 16),
+              _DialogDate(
+                label: 'Earliest closing date',
+                value: _closingDate,
+                onTap: _saving ? null : () => _pickDate(closing: true),
+              ),
+              const SizedBox(height: 6),
+              Text(_closingDateHelp),
+              const SizedBox(height: 16),
+              const Text(
+                'After changing dates, check whether any published report cards need to be regenerated.',
+                style: TextStyle(color: AppColors.muted),
+              ),
+              if (error != null) ...[
+                const SizedBox(height: 12),
+                Text(error, style: const TextStyle(color: AppColors.red)),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _saving || !changed || _dateError != null ? null : _save,
+          child: Text(_saving ? 'Saving…' : 'Save changes'),
+        ),
+      ],
+    );
+  }
+}
+
 class _CreatePreparedTermDialog extends StatefulWidget {
   const _CreatePreparedTermDialog({
     required this.schoolId,
     required this.api,
     this.existing,
+    this.followsClosedTerm,
+    this.earliestStart,
   });
 
   final String schoolId;
   final _AcademicTermManagementApi api;
   final _ManagedTerm? existing;
+  final _ManagedTerm? followsClosedTerm;
+  final DateTime? earliestStart;
 
   @override
   State<_CreatePreparedTermDialog> createState() =>
@@ -410,17 +669,49 @@ class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
   void initState() {
     super.initState();
     final existing = widget.existing;
-    _lookups = Future.wait([
-      widget.api.academicYears(),
-      widget.api.termTypes(),
-    ]);
+    _lookups = _loadLookups();
     _description = TextEditingController(text: existing?.description ?? '');
     _academicYearId = existing?.academicYearId;
     _termTypeId = existing?.termTypeId;
-    _operationalStart = existing?.operationalStart;
+    _operationalStart = existing?.operationalStart ?? widget.earliestStart;
     _teachingStart = existing?.teachingStart;
     _teachingEnd = existing?.teachingEnd;
     _closingDate = existing?.closingDate;
+  }
+
+  Future<List<List<_LookupOption>>> _loadLookups() async {
+    final lookups = await Future.wait([
+      widget.api.academicYears(),
+      widget.api.termTypes(),
+    ]);
+    final closed = widget.followsClosedTerm;
+    if (closed != null && widget.existing == null) {
+      final years = lookups[0];
+      final types = lookups[1];
+      final sequence = types
+          .where((type) => type.id == closed.termTypeId)
+          .firstOrNull
+          ?.sequence;
+      final nextSequence = sequence == 3 ? 1 : (sequence ?? 0) + 1;
+      _termTypeId = types
+          .where((type) => type.sequence == nextSequence)
+          .firstOrNull
+          ?.id;
+      if (sequence != 3) {
+        _academicYearId = closed.academicYearId;
+      } else {
+        final startYear = int.tryParse(
+          closed.academicYear.split(RegExp(r'[-–—]')).first.trim(),
+        );
+        if (startYear != null) {
+          _academicYearId = years
+              .where((year) => year.name.startsWith('${startYear + 1}'))
+              .firstOrNull
+              ?.id;
+        }
+      }
+    }
+    return lookups;
   }
 
   @override
@@ -498,17 +789,16 @@ class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
         _teachingStart == null ||
         _teachingEnd == null ||
         _closingDate == null) {
-      setState(
-        () => _error = 'Complete the academic year, term and all four dates.',
-      );
+      setState(() => _error = 'Complete the academic year, term and dates.');
       return;
     }
     if (_teachingStart!.isBefore(_operationalStart!) ||
         _teachingEnd!.isBefore(_teachingStart!) ||
         _closingDate!.isBefore(_teachingEnd!)) {
       setState(() {
-        _error =
-            'Dates must follow this order: office opens, teaching starts, teaching ends, term closes.';
+        _error = widget.followsClosedTerm == null
+            ? 'Choose the office opening, teaching dates and closing date in order.'
+            : 'Teaching must start after the previous term and end on or before the closing date.';
       });
       return;
     }
@@ -660,16 +950,19 @@ class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
         children: [
           Expanded(
             child: Text(
-              widget.existing == null
+              widget.followsClosedTerm != null
+                  ? 'Set up the next term'
+                  : widget.existing == null
                   ? 'Prepare the next term'
                   : 'Modify the next term',
             ),
           ),
-          TextButton.icon(
-            onPressed: _showDateHelp,
-            icon: const Icon(Icons.help_outline_rounded),
-            label: const Text('Date help'),
-          ),
+          if (widget.followsClosedTerm == null)
+            TextButton.icon(
+              onPressed: _showDateHelp,
+              icon: const Icon(Icons.help_outline_rounded),
+              label: const Text('Date help'),
+            ),
         ],
       ),
       content: SizedBox(
@@ -689,9 +982,11 @@ class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text(
-                    'Choose the next academic period and set when the office reopens, teaching runs and the term may close.',
-                    style: TextStyle(color: AppColors.muted),
+                  Text(
+                    widget.followsClosedTerm == null
+                        ? 'Choose the next academic period and set when the office reopens, teaching runs and the term may close.'
+                        : 'Confirm the academic period, teaching dates and earliest closing date.',
+                    style: const TextStyle(color: AppColors.muted),
                   ),
                   const SizedBox(height: 16),
                   Row(
@@ -741,15 +1036,17 @@ class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 14),
-                  SizedBox(
-                    width: double.infinity,
-                    child: _DialogDate(
-                      label: 'Office opens / vacation begins',
-                      value: _operationalStart,
-                      onTap: () => _pick('operational', years),
+                  if (widget.followsClosedTerm == null) ...[
+                    const SizedBox(height: 14),
+                    SizedBox(
+                      width: double.infinity,
+                      child: _DialogDate(
+                        label: 'Office opens / vacation begins',
+                        value: _operationalStart,
+                        onTap: () => _pick('operational', years),
+                      ),
                     ),
-                  ),
+                  ],
                   const SizedBox(height: 14),
                   Row(
                     children: [
@@ -774,7 +1071,7 @@ class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
                   SizedBox(
                     width: double.infinity,
                     child: _DialogDate(
-                      label: 'Term closes',
+                      label: 'Earliest closing date',
                       value: _closingDate,
                       onTap: () => _pick('closing', years),
                     ),
@@ -783,10 +1080,11 @@ class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
                   TextField(
                     controller: _description,
                     maxLines: 2,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'Note (optional)',
-                      hintText:
-                          'For example: office opens during vacation for admissions and fee collection.',
+                      hintText: widget.followsClosedTerm == null
+                          ? 'For example: office opens during vacation for admissions and fee collection.'
+                          : null,
                     ),
                   ),
                   if (_error != null) ...[
@@ -821,6 +1119,8 @@ class _CreatePreparedTermDialogState extends State<_CreatePreparedTermDialog> {
           label: Text(
             _saving
                 ? 'Saving...'
+                : widget.followsClosedTerm != null
+                ? 'Save and review'
                 : widget.existing == null
                 ? 'Prepare term'
                 : 'Save changes',
@@ -938,7 +1238,7 @@ class _DialogDate extends StatelessWidget {
   });
   final String label;
   final DateTime? value;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -1034,9 +1334,10 @@ class _ManagedTerm {
 }
 
 class _LookupOption {
-  const _LookupOption(this.id, this.name);
+  const _LookupOption(this.id, this.name, {this.sequence});
   final int id;
   final String name;
+  final int? sequence;
 }
 
 class _AcademicTermManagementApi {
@@ -1060,6 +1361,42 @@ class _AcademicTermManagementApi {
         .toList();
   }
 
+  Future<(_ManagedTerm, DateTime, String)> currentTermDates(
+    String schoolId,
+    int termId,
+  ) async {
+    final response = await _send(
+      'GET',
+      _termPath(schoolId, termId, action: '/current-dates'),
+    );
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final limit = data['closingDateLimit'] as Map<String, dynamic>;
+    return (
+      _ManagedTerm.fromJson(data['term'] as Map<String, dynamic>),
+      _jsonDate(limit['earliestDate']),
+      limit['reason'] as String,
+    );
+  }
+
+  Future<void> saveCurrentTermDates({
+    required String schoolId,
+    required int termId,
+    required DateTime teachingEnd,
+    required DateTime closingDate,
+  }) async {
+    await _send(
+      'PUT',
+      _termPath(schoolId, termId, action: '/current-dates'),
+      body: jsonEncode({
+        'teachingEndDate': _iso(teachingEnd),
+        'closingDate': _iso(closingDate),
+      }),
+    );
+  }
+
+  String _termPath(String schoolId, int termId, {String action = ''}) =>
+      '/api/academic-terms/$termId$action?customSchoolId=${Uri.encodeQueryComponent(schoolId)}';
+
   Future<List<_LookupOption>> academicYears() =>
       _lookups('/api/lookup/academic-years');
   Future<List<_LookupOption>> termTypes() => _lookups('/api/lookup/term-types');
@@ -1069,7 +1406,11 @@ class _AcademicTermManagementApi {
     final decoded = jsonDecode(response.body);
     return (decoded as List? ?? const []).whereType<Map>().map((item) {
       final map = Map<String, dynamic>.from(item);
-      return _LookupOption((map['id'] as num).toInt(), '${map['name']}');
+      return _LookupOption(
+        (map['id'] as num).toInt(),
+        '${map['name']}',
+        sequence: (map['termSequence'] as num?)?.toInt(),
+      );
     }).toList();
   }
 

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:school_management_app/src/dashboard/data/dashboard_repository.dart';
 import 'package:school_management_app/src/dashboard/data/teacher_dashboard_summary.dart';
 import 'package:school_management_app/src/dashboard/data/teacher_workspace_api_client.dart';
@@ -8,6 +10,9 @@ import 'package:school_management_app/src/dashboard/domain/dashboard_models.dart
 import 'package:school_management_app/src/dashboard/presentation/administrator_dashboard.dart';
 import 'package:school_management_app/src/approvals/domain/approval_models.dart';
 import 'package:school_management_app/src/leave/presentation/leave_management_screen.dart';
+import 'package:school_management_app/src/term_review/presentation/bursar_term_closing_screen.dart';
+import 'package:school_management_app/src/term_review/presentation/teacher_term_closing_screen.dart';
+import 'package:school_management_app/src/term_review/presentation/term_review_screen.dart';
 import 'package:school_management_app/src/theme/app_theme.dart';
 
 ApprovalItem _pendingCorrection({required bool approver}) => ApprovalItem(
@@ -188,6 +193,128 @@ void main() {
     expect(find.text('Present'), findsNothing);
     expect(find.text('Absent'), findsNothing);
     expect(find.text('Late'), findsNothing);
+  });
+
+  testWidgets('school leaders open Term Closure directly below finance', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1280);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    for (final role in [
+      'ADMINISTRATOR',
+      'HEAD_TEACHER',
+      'HEADMASTER',
+      'ASSISTANT_HEAD_TEACHER',
+    ]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: AdministratorDashboard(
+            key: ValueKey(role),
+            repository: _EmptyDashboardRepository(),
+            schoolId: 'SCH-001',
+            userId: 12,
+            role: role,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final closure = find.text('Term Closure');
+      expect(closure, findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('sidebar-section-academics')),
+          matching: closure,
+        ),
+        findsNothing,
+      );
+      expect(
+        tester.getCenter(closure).dy,
+        greaterThan(tester.getCenter(find.text('Finance & Operations')).dy),
+      );
+      expect(
+        tester.getCenter(closure).dy,
+        lessThan(tester.getCenter(find.text('Insights & Oversight')).dy),
+      );
+      await tester.tap(closure);
+      await tester.pumpAndSettle();
+      expect(find.byType(TermReviewScreen), findsOneWidget);
+      expect(find.text('Final Reports'), findsNothing);
+    }
+  });
+
+  testWidgets('teachers and bursars open the term page from their own menus', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1280);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = MockClient((request) async {
+      final path = request.url.path;
+      if (path.endsWith('/teacher-term-reviews/school/SCH-001/teacher/12')) {
+        return http.Response(
+          '{"termId":1,"windowStatus":"NOT_RELEASED","status":"NOT_STARTED"}',
+          200,
+        );
+      }
+      if (path.endsWith('/bursar-term-closures/school/SCH-001')) {
+        return http.Response('{"termId":1,"status":"NOT_STARTED"}', 200);
+      }
+      return http.Response('', 404);
+    });
+    addTearDown(client.close);
+
+    await http.runWithClient(() async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: AdministratorDashboard(
+            repository: _EmptyDashboardRepository(),
+            schoolId: 'SCH-001',
+            userDisplayName: 'Adwoa Dual Role',
+            role: 'CLASS_TEACHER',
+            roles: const ['CLASS_TEACHER', 'BURSAR'],
+            userId: 12,
+            teacherDashboardLoader: () async => _teacherSummary,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final teacherReview = find.descendant(
+        of: find.byKey(const ValueKey('sidebar-section-academics')),
+        matching: find.text('Term Review'),
+      );
+      expect(teacherReview, findsOneWidget);
+      expect(find.text('Term Closure'), findsNothing);
+      await tester.tap(teacherReview);
+      await tester.pumpAndSettle();
+      expect(find.byType(TeacherTermClosingScreen), findsOneWidget);
+
+      await tester.tap(find.byType(DropdownButtonFormField<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Bursar').last);
+      await tester.pumpAndSettle();
+      expect(find.text('Academics'), findsNothing);
+      expect(find.text('Term Closure'), findsNothing);
+
+      await tester.tap(find.text('Finance & Operations'));
+      await tester.pumpAndSettle();
+      final financeClosure = find.descendant(
+        of: find.byKey(const ValueKey('sidebar-section-finance')),
+        matching: find.text('Finance term closure'),
+      );
+      expect(financeClosure, findsOneWidget);
+      await tester.tap(financeClosure);
+      await tester.pumpAndSettle();
+      expect(find.byType(BursarTermClosingScreen), findsOneWidget);
+      expect(financeClosure, findsOneWidget);
+    }, () => client);
   });
 
   testWidgets('sidebar groups keep only one destination section open', (

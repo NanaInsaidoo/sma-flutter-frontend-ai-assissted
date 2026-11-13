@@ -10,6 +10,90 @@ import 'package:school_management_app/src/expenses/presentation/expenses_screen.
 import 'package:school_management_app/src/theme/app_theme.dart';
 
 void main() {
+  testWidgets('administrator can close a balanced reconciliation', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    var closeCalls = 0;
+    final client = MockClient((request) async {
+      final path = request.url.path;
+      Object data = <dynamic>[];
+      if (path.endsWith('/academic-context/current')) {
+        data = {'academicTermId': 10};
+      } else if (path.endsWith('/finance/overview')) {
+        data = {
+          'cycle': {'status': 'ACTIVE', 'floatCeiling': 100},
+          'pockets': {'cash': 80, 'momo': 0},
+        };
+      } else if (path.endsWith('/finance/reconciliations')) {
+        data = {
+          'content': [
+            {
+              'id': 51,
+              'reconciliationCode': 'REC-FINAL',
+              'status': closeCalls == 0 ? 'CONFIRMED' : 'VARIANCE_CLOSED',
+              'requestedAt': '2026-11-12T10:00:00',
+              'confirmedAt': '2026-11-12T11:00:00',
+              'expectedCash': 80,
+              'expectedMomo': 0,
+              'actualCash': 80,
+              'actualMomo': 0,
+              if (closeCalls > 0) 'closedAt': '2026-11-12T12:00:00',
+            },
+          ],
+        };
+      } else if (path.endsWith('/finance/reconciliations/51/close')) {
+        expect(request.method, 'POST');
+        closeCalls++;
+        data = {'id': 51};
+      }
+      return http.Response(jsonEncode({'data': data}), 200);
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: ExpensesScreen(
+            customSchoolId: 'SCH-001',
+            accessToken: 'test-token',
+            currentUserId: 1,
+            role: 'ADMINISTRATOR',
+            financeApi: FinanceApiClient(
+              accessToken: 'test-token',
+              client: client,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Petty Cash'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Reconciliations').first);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('REC-FINAL'));
+    await tester.tap(find.text('REC-FINAL'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Close reconciliation'));
+    await tester.tap(find.text('Close reconciliation'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('Close reconciliation'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(closeCalls, 1);
+    expect(find.text('Reconciliation closed'), findsOneWidget);
+    expect(find.text('Close reconciliation'), findsNothing);
+  });
+
   testWidgets('expense quick action opens a new requisition after loading', (
     tester,
   ) async {
@@ -66,6 +150,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(consumed, isTrue);
+    expect(find.text('Request reconciliation'), findsNothing);
     expect(find.text('New requisition'), findsWidgets);
     expect(find.text('Request approval before spending.'), findsOneWidget);
     expect(find.text('Submit request'), findsOneWidget);

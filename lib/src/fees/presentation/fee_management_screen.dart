@@ -41,6 +41,7 @@ class FeeManagementScreen extends StatefulWidget {
     this.openRecordPaymentOnLoad = false,
     this.recordPaymentStudentId,
     this.openFeeStructureOnLoad = false,
+    this.initialFeeStructureTermId,
     this.onRecordPaymentRequestConsumed,
     this.onWorkflowChanged,
     this.onOpenStudent,
@@ -56,6 +57,7 @@ class FeeManagementScreen extends StatefulWidget {
   final bool openRecordPaymentOnLoad;
   final String? recordPaymentStudentId;
   final bool openFeeStructureOnLoad;
+  final int? initialFeeStructureTermId;
   final VoidCallback? onRecordPaymentRequestConsumed;
   final VoidCallback? onWorkflowChanged;
   final ValueChanged<String>? onOpenStudent;
@@ -154,13 +156,11 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
       _overview = overview;
       _currentTerm = currentTerm;
       _feeTerms = feeTerms;
-      for (final term in feeTerms) {
-        if (term.isCurrent) {
-          _selectedFeeStructureTermId = term.id;
-          break;
-        }
-      }
-      _selectedFeeStructureTermId ??= currentTerm.id;
+      final requestedTerm = widget.initialFeeStructureTermId;
+      _selectedFeeStructureTermId =
+          feeTerms.any((term) => term.id == requestedTerm)
+          ? requestedTerm
+          : currentTerm.id;
       _classCollections = overview.collectionByClass;
       _arrears = overview.outstandingArrears;
     });
@@ -1062,27 +1062,57 @@ class _FeeManagementScreenState extends State<FeeManagementScreen> {
         onRetry: () => _loadFeeStructures(force: true),
       );
     }
-    return FeeStructureWorkflowContent(
-      api: _api,
-      customSchoolId: widget.customSchoolId,
-      termId: _feeStructureTermId,
-      termName: _feeStructureTermName,
-      currentUserId: widget.userId ?? 0,
-      money: _money,
-      onChanged: _reloadFees,
+    final selectableTerms = _feeTerms
+        .where((term) => term.isCurrent || term.isPrepared)
+        .toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (selectableTerms.length > 1) ...[
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 360),
+            child: DropdownButtonFormField<int>(
+              key: const ValueKey('fee-structure-term-selector'),
+              value:
+                  selectableTerms.any((term) => term.id == _feeStructureTermId)
+                  ? _feeStructureTermId
+                  : null,
+              decoration: const InputDecoration(labelText: 'Fee term'),
+              isExpanded: true,
+              items: [
+                for (final term in selectableTerms)
+                  DropdownMenuItem(
+                    value: term.id,
+                    child: Text(
+                      term.isPrepared ? '${term.label} · Prepared' : term.label,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              ],
+              onChanged: (termId) {
+                if (termId != null) _changeFeeStructureTerm(termId);
+              },
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+        FeeStructureWorkflowContent(
+          key: ValueKey(_feeStructureTermId),
+          api: _api,
+          customSchoolId: widget.customSchoolId,
+          termId: _feeStructureTermId,
+          termName: _feeStructureTermName,
+          currentUserId: widget.userId ?? 0,
+          money: _money,
+          onChanged: _reloadFees,
+        ),
+      ],
     );
   }
 
-  // ignore: unused_element
   void _changeFeeStructureTerm(int termId) {
     if (termId <= 0 || termId == _feeStructureTermId) return;
-    setState(() {
-      _selectedFeeStructureTermId = termId;
-      _feeStructures = const [];
-      _feeStructuresLoaded = false;
-      _feeStructuresError = null;
-    });
-    unawaited(_loadFeeStructures(force: true));
+    setState(() => _selectedFeeStructureTermId = termId);
   }
 
   // ignore: unused_element

@@ -488,7 +488,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     final records = _reconciliations.where((item) {
       final matchesStatus =
           _reconciliationStatusFilter == 'All statuses' ||
-          item.status.label == _reconciliationStatusFilter;
+          item.statusLabel == _reconciliationStatusFilter;
       final matchesFrom =
           _reconciliationFromDate == null ||
           !item.requestedAt.isBefore(_startOfDay(_reconciliationFromDate!));
@@ -2065,7 +2065,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         );
         final actions = <Widget>[
           if (_financeLedgerPage != _FinanceLedgerPage.refunds &&
-              _canViewAllFinance)
+              _canApproveFinance)
             OutlinedButton.icon(
               onPressed: _openReconciliationRequestDialog,
               icon: const Icon(Icons.fact_check_outlined),
@@ -2740,11 +2740,12 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                           icon: const Icon(Icons.swap_horiz),
                           label: const Text('Transfer pocket'),
                         ),
-                        OutlinedButton.icon(
-                          onPressed: _openReconciliationRequestDialog,
-                          icon: const Icon(Icons.fact_check_outlined),
-                          label: const Text('Request reconciliation'),
-                        ),
+                        if (_canApproveFinance)
+                          OutlinedButton.icon(
+                            onPressed: _openReconciliationRequestDialog,
+                            icon: const Icon(Icons.fact_check_outlined),
+                            label: const Text('Request reconciliation'),
+                          ),
                         if (_canApproveFinance)
                           OutlinedButton.icon(
                             onPressed: _openCycleSetupDialog,
@@ -3179,12 +3180,14 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           title: 'Reconciliations',
           subtitle:
               'Compare system pockets with counted cash and the MoMo wallet. Variances stay open until an administrator records a resolution.',
-          trailing: FilledButton.icon(
-            onPressed: _openReconciliationRequestDialog,
-            icon: const Icon(Icons.add_task_outlined),
-            label: const Text('Request reconciliation'),
-            style: _primaryButtonStyle(),
-          ),
+          trailing: _canApproveFinance
+              ? FilledButton.icon(
+                  onPressed: _openReconciliationRequestDialog,
+                  icon: const Icon(Icons.add_task_outlined),
+                  label: const Text('Request reconciliation'),
+                  style: _primaryButtonStyle(),
+                )
+              : null,
           child: LayoutBuilder(
             builder: (context, constraints) {
               final compact = constraints.maxWidth < 720;
@@ -3266,6 +3269,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                                     'Requested',
                                     'In progress',
                                     'Confirmed',
+                                    'Closed',
                                     'Variance needs review',
                                     'Variance closed',
                                   ]
@@ -3362,7 +3366,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                           ),
                           _reconciliationVarianceCell(item),
                           _StatusPill(
-                            label: item.status.label,
+                            label: item.statusLabel,
                             color: item.status.color,
                           ),
                           OutlinedButton.icon(
@@ -3522,7 +3526,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           subtitle:
               'Requested by ${item.requestedBy} for ${item.assignedTo} on ${_date(item.requestedAt)}.',
           trailing: _StatusPill(
-            label: item.status.label,
+            label: item.statusLabel,
             color: item.status.color,
           ),
           child: Column(
@@ -3643,7 +3647,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               if (item.varianceResolvedAt != null)
                 timelineItem(
                   Icons.task_alt_outlined,
-                  'Variance resolved',
+                  item.varianceResolution.isEmpty
+                      ? 'Reconciliation closed'
+                      : 'Variance resolved',
                   '${item.varianceResolvedBy ?? 'Administrator'} · ${_date(item.varianceResolvedAt!)}',
                   color: AppColors.green,
                   isLast: true,
@@ -3656,15 +3662,20 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           title: item.status == _ReconciliationStatus.varianceOpen
               ? 'Variance action required'
               : 'Next action',
-          subtitle: item.status == _ReconciliationStatus.requested
-              ? 'The assigned custodian should start the physical count when ready.'
-              : item.status == _ReconciliationStatus.inProgress
-              ? 'Record the counted Cash and MoMo amounts with supporting evidence.'
-              : item.status == _ReconciliationStatus.varianceOpen
-              ? 'An administrator must document how the variance will be handled.'
-              : item.status == _ReconciliationStatus.varianceClosed
-              ? 'The reconciliation is closed. Its linked financial follow-up remains available for tracking.'
-              : 'The counted balance matches the system balance. No further action is needed.',
+          subtitle: switch (item.status) {
+            _ReconciliationStatus.requested =>
+              'The assigned custodian should start the physical count when ready.',
+            _ReconciliationStatus.inProgress =>
+              'Record the counted Cash and MoMo amounts with supporting evidence.',
+            _ReconciliationStatus.varianceOpen =>
+              'An administrator must document how the variance will be handled.',
+            _ReconciliationStatus.varianceClosed =>
+              linkedFollowUp == null
+                  ? 'The reconciliation is closed.'
+                  : 'The reconciliation is closed. Its linked financial follow-up remains available for tracking.',
+            _ReconciliationStatus.confirmed =>
+              'The balances match. A school leader can close this reconciliation.',
+          },
           child: Wrap(
             spacing: 10,
             runSpacing: 10,
@@ -3683,7 +3694,17 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                   icon: const Icon(Icons.fact_check_outlined),
                   label: const Text('Confirm balances'),
                 ),
-              if (item.status == _ReconciliationStatus.varianceOpen)
+              if (item.status == _ReconciliationStatus.confirmed &&
+                  _canApproveFinance &&
+                  item.serverId != null)
+                FilledButton.icon(
+                  onPressed: () => _openReconciliationCloseDialog(item),
+                  style: _primaryButtonStyle(),
+                  icon: const Icon(Icons.lock_outline),
+                  label: const Text('Close reconciliation'),
+                ),
+              if (item.status == _ReconciliationStatus.varianceOpen &&
+                  _canApproveFinance)
                 FilledButton.icon(
                   onPressed: () => _openVarianceClosureDialog(item),
                   style: FilledButton.styleFrom(
@@ -3708,6 +3729,38 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Future<void> _openReconciliationCloseDialog(
+    _ReconciliationRecord item,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Close reconciliation?'),
+        content: Text(
+          'The cash and MoMo balances match. Close ${item.reference} and keep the count in the audit trail.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Close reconciliation'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _runFinanceMutation(
+      request: () => _financeApi.post(
+        '/api/schools/${widget.customSchoolId}/finance/reconciliations/${item.serverId}/close',
+        body: {},
+      ),
+      successMessage: 'Reconciliation closed.',
     );
   }
 
@@ -13562,6 +13615,12 @@ class _ReconciliationRecord {
   String varianceResolution;
   DateTime? varianceResolvedAt;
   String? varianceResolvedBy;
+
+  String get statusLabel =>
+      status == _ReconciliationStatus.varianceClosed &&
+          varianceResolution.isEmpty
+      ? 'Closed'
+      : status.label;
 
   bool get hasSnapshot => expectedCash != null && expectedMomo != null;
 

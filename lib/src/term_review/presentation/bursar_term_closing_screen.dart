@@ -85,80 +85,106 @@ class _State extends State<BursarTermClosingScreen> {
       hydrate(s.requireData);
       final x = data!;
       final content = Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Finance term closure',
-                      style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.text,
-                      ),
-                    ),
-                    SizedBox(height: 5),
-                    Text(
-                      'Reconcile the term’s finances and submit them for headmaster approval.',
-                      style: TextStyle(color: AppColors.muted),
-                    ),
-                  ],
-                ),
-              ),
-              _status(x.status),
-            ],
-          ),
+          _heading(x),
           const SizedBox(height: 20),
-          _snapshot(x),
-          const SizedBox(height: 18),
-          if (widget.management) _management(x) else _form(x),
+          if (x.noFinanceActivity) ...[
+            _approvalStatus(x),
+            if (x.teacherRecommendations.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              _teacherRecommendations(x),
+            ],
+          ] else if (widget.management)
+            _management(x)
+          else ...[
+            _snapshot(x),
+            const SizedBox(height: 18),
+            _form(x),
+          ],
         ],
       );
       if (widget.embedded) return content;
       return ListView(
-        padding: const EdgeInsets.fromLTRB(28, 28, 28, 48),
-        children: [content],
+        padding: const EdgeInsets.fromLTRB(16, 24, 16, 48),
+        children: [
+          Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1120),
+              child: content,
+            ),
+          ),
+        ],
       );
     },
   );
+
+  Widget _heading(BursarTermClosure closure) => Wrap(
+    alignment: WrapAlignment.spaceBetween,
+    crossAxisAlignment: WrapCrossAlignment.start,
+    spacing: 16,
+    runSpacing: 10,
+    children: [
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Finance term closure',
+            style: TextStyle(
+              fontSize: 28,
+              fontWeight: FontWeight.w800,
+              color: AppColors.text,
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            closure.noFinanceActivity
+                ? 'Finance closure is not required for this term.'
+                : widget.management
+                ? 'Review the bursar’s reconciliation and sign off for term closure.'
+                : 'Reconcile the term’s finances and submit them for headmaster approval.',
+            style: const TextStyle(color: AppColors.muted),
+          ),
+        ],
+      ),
+      if (!widget.management && !closure.noFinanceActivity)
+        _status(closure.status),
+    ],
+  );
+
   Widget _snapshot(BursarTermClosure x) => _card(
     Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'System-generated finance snapshot',
+          'Fee snapshot',
           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 5),
         Text(
           x.snapshotLocked
-              ? 'Locked when the bursar submitted this closure${x.submittedAt == null ? '.' : ' on ${_dateTime(x.submittedAt!)}.'}'
-              : 'Live figures — the values update as transactions change.',
+              ? 'Figures at submission${x.submittedAt == null ? '.' : ' on ${_dateTime(x.submittedAt!)}.'}'
+              : 'Live totals for this term.',
           style: TextStyle(
             color: x.snapshotLocked ? AppColors.green : AppColors.muted,
             fontWeight: FontWeight.w600,
           ),
         ),
         const SizedBox(height: 16),
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: [
-            _metric('Expected fees', x.expectedFees),
-            _metric('Collected', x.collectedFees, color: AppColors.green),
-            _metric('Waived', x.waivedFees),
-            _metric('Adjustments', x.approvedAdjustments),
-            _metric(
-              'Outstanding',
-              x.outstandingFees,
-              color: x.outstandingFees > 0 ? AppColors.red : AppColors.green,
-            ),
-          ],
-        ),
+        _metrics([
+          _metric('Expected fees', x.expectedFees),
+          _metric('Collected', x.collectedFees, color: const Color(0xFF17685C)),
+          _metric('Waived', x.waivedFees),
+          _metric('Adjustments', x.approvedAdjustments),
+          _metric(
+            'Outstanding',
+            x.outstandingFees,
+            color: x.outstandingFees > 0
+                ? const Color(0xFF9B382E)
+                : AppColors.text,
+          ),
+        ]),
         if (x.pendingAdjustmentCount > 0) ...[
           const SizedBox(height: 14),
           Text(
@@ -324,14 +350,15 @@ class _State extends State<BursarTermClosingScreen> {
           const SizedBox(height: 14),
         ],
         if (!locked)
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 12,
+            runSpacing: 8,
             children: [
               OutlinedButton(
                 onPressed: saving ? null : () => save(false),
                 child: const Text('Save draft'),
               ),
-              const SizedBox(width: 12),
               FilledButton(
                 onPressed: saving || hasPending || x.pettyCashBlocker != null
                     ? null
@@ -619,64 +646,165 @@ class _State extends State<BursarTermClosingScreen> {
     }
   }
 
-  Widget _management(BursarTermClosure x) => Column(
+  Widget _management(BursarTermClosure closure) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      _card(
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+      _approvalStatus(closure),
+      const SizedBox(height: 16),
+      _snapshot(closure),
+      if (closure.locked) ...[
+        const SizedBox(height: 16),
+        _submittedDetails(closure),
+        const SizedBox(height: 16),
+        Wrap(
+          alignment: WrapAlignment.end,
+          spacing: 12,
+          runSpacing: 8,
           children: [
-            const Text(
-              'Headmaster approval',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              x.status == 'NOT_STARTED'
-                  ? 'The bursar has not started the closure.'
-                  : x.status == 'DRAFT'
-                  ? 'The bursar is still preparing the closure.'
-                  : x.status == 'SUBMITTED'
-                  ? 'The finance closure is ready for your review.'
-                  : 'The finance closure is approved.',
-            ),
-            const SizedBox(height: 14),
-            if (x.status == 'SUBMITTED')
-              Wrap(
-                spacing: 12,
-                children: [
-                  FilledButton.icon(
-                    onPressed: saving || x.pettyCashBlocker != null
-                        ? null
-                        : approve,
-                    icon: const Icon(Icons.check),
-                    label: const Text('Approve finance closure'),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: saving ? null : returnToBursar,
-                    icon: const Icon(Icons.undo),
-                    label: const Text('Return to bursar'),
-                  ),
-                ],
+            if (closure.status == 'SUBMITTED') ...[
+              OutlinedButton.icon(
+                onPressed: saving ? null : returnToBursar,
+                icon: const Icon(Icons.undo),
+                label: const Text('Return to bursar'),
               ),
-            if (x.status == 'APPROVED')
-              TextButton.icon(
+              FilledButton.icon(
+                onPressed: saving || closure.pettyCashBlocker != null
+                    ? null
+                    : approve,
+                icon: const Icon(Icons.check),
+                label: const Text('Approve finance closure'),
+              ),
+            ] else
+              OutlinedButton.icon(
                 onPressed: saving ? null : reopen,
                 icon: const Icon(Icons.lock_open),
                 label: const Text('Reopen approved closure'),
               ),
-            if (x.pettyCashBlocker case final reason?)
-              Text(reason, style: const TextStyle(color: AppColors.red)),
-            if (x.reviewReason.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Text('Latest review note: ${x.reviewReason}'),
-            ],
           ],
         ),
-      ),
-      const SizedBox(height: 18),
-      _reviewDetails(x),
+      ],
     ],
   );
+
+  Widget _teacherRecommendations(BursarTermClosure closure) => _card(
+    Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Teacher recommendations',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+        ),
+        for (final item in closure.teacherRecommendations)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.lightbulb_outline),
+            title: Text('${item['name'] ?? 'Item'}'),
+            subtitle: _recommendationDetails(item),
+          ),
+      ],
+    ),
+  );
+
+  Widget _approvalStatus(BursarTermClosure closure) {
+    final (title, detail, icon, color, background) = switch (closure.status) {
+      'NO_FINANCE_ACTIVITY' => (
+        'Not applicable',
+        'No finance activity was confirmed for this term.',
+        Icons.remove_circle_outline,
+        AppColors.muted,
+        AppColors.background,
+      ),
+      'SUBMITTED' => (
+        'Ready for your review',
+        'Review the submitted figures and unresolved items before approving.',
+        Icons.fact_check_outlined,
+        const Color(0xFF174A91),
+        const Color(0xFFEDF3FF),
+      ),
+      'APPROVED' => (
+        'Finance closure approved',
+        'Finance is signed off on the term closure checklist.',
+        Icons.verified_outlined,
+        const Color(0xFF17685C),
+        AppColors.greenSoft,
+      ),
+      'DRAFT' => (
+        'Bursar preparing the closure',
+        'Approval becomes available when the bursar submits the reconciliation.',
+        Icons.edit_note_outlined,
+        const Color(0xFF854B0A),
+        const Color(0xFFFFF3DC),
+      ),
+      _ => (
+        'Waiting for the bursar',
+        'The bursar needs to reconcile the term’s payments and petty cash and submit the closure.',
+        Icons.schedule_outlined,
+        const Color(0xFF475467),
+        AppColors.background,
+      ),
+    };
+    return _card(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ExcludeSemantics(
+                child: Container(
+                  padding: const EdgeInsets.all(11),
+                  decoration: BoxDecoration(
+                    color: background,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(icon, size: 22, color: color),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.text,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      detail,
+                      style: const TextStyle(color: Color(0xFF475467)),
+                    ),
+                    if (closure.approvedAt case final approvedAt?) ...[
+                      const SizedBox(height: 4),
+                      Text('Approved on ${_dateTime(approvedAt)}'),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (closure.reviewReason.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            const Text(
+              'Latest review note',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Text(closure.reviewReason),
+          ],
+          if (closure.pettyCashBlocker case final blocker?) ...[
+            const SizedBox(height: 14),
+            _blockingNotice(blocker),
+          ],
+        ],
+      ),
+    );
+  }
+
   Future<void> save(bool submit) async {
     final total = _num(cash) + _num(bank) + _num(mobile),
         diff = total - (data?.collectedFees ?? 0);
@@ -718,7 +846,7 @@ class _State extends State<BursarTermClosingScreen> {
   );
   Future<void> returnToBursar() async {
     final reason = await _reason('Return finance closure', 'Return to bursar');
-    if (reason == null) return;
+    if (!mounted || reason == null) return;
     await run(
       () => widget.repository.returnToBursar(
         widget.schoolId,
@@ -731,7 +859,7 @@ class _State extends State<BursarTermClosingScreen> {
 
   Future<void> reopen() async {
     final reason = await _reason('Reopen approved closure', 'Reopen');
-    if (reason != null) {
+    if (mounted && reason != null) {
       await run(
         () => widget.repository.reopen(
           widget.schoolId,
@@ -743,59 +871,163 @@ class _State extends State<BursarTermClosingScreen> {
     }
   }
 
-  Future<String?> _reason(String title, String action) async {
-    final c = TextEditingController();
-    final reason = await showDialog<String>(
+  Future<String?> _reason(String title, String action) {
+    var reason = '';
+    return showDialog<String>(
       context: context,
-      builder: (x) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: c,
-          autofocus: true,
-          minLines: 2,
-          maxLines: 4,
-          decoration: const InputDecoration(labelText: 'Reason (required)'),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(title),
+          content: TextField(
+            autofocus: true,
+            minLines: 2,
+            maxLines: 4,
+            onChanged: (value) => setDialogState(() => reason = value.trim()),
+            decoration: const InputDecoration(labelText: 'Reason (required)'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: reason.length >= 5
+                  ? () => Navigator.pop(context, reason)
+                  : null,
+              child: Text(action),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(x),
-            child: const Text('Cancel'),
+      ),
+    );
+  }
+
+  Widget _submittedDetails(BursarTermClosure closure) {
+    final hasDifference = closure.difference.abs() > .009;
+    final reconciliation = _card(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Payment reconciliation',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
           ),
-          FilledButton(
-            onPressed: () {
-              final value = c.text.trim();
-              if (value.length >= 5) Navigator.pop(x, value);
-            },
-            child: Text(action),
+          const SizedBox(height: 12),
+          _amountRow('Cash', closure.cashTotal),
+          _amountRow('Bank', closure.bankTotal),
+          _amountRow('Mobile money', closure.mobileMoneyTotal),
+          const Divider(height: 16, color: AppColors.border),
+          _amountRow(
+            'Reconciled total',
+            closure.reconciliationTotal,
+            emphasized: true,
           ),
+          _amountRow(
+            'Difference from recorded collections',
+            closure.difference,
+            emphasized: true,
+            color: hasDifference ? const Color(0xFF9B382E) : AppColors.text,
+          ),
+          if (closure.discrepancyExplanation.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Text(
+              'Discrepancy explanation',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Text(closure.discrepancyExplanation),
+          ],
         ],
       ),
     );
-    c.dispose();
-    return reason;
+    final followUp = _card(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Unresolved financial items',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            closure.unresolvedItems.isEmpty
+                ? 'None recorded.'
+                : closure.unresolvedItems,
+          ),
+          const Divider(height: 32, color: AppColors.border),
+          const Text(
+            'Next-term recommendations',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+          ),
+          if (closure.consolidatedRecommendations.isEmpty) ...[
+            const SizedBox(height: 8),
+            const Text('No next-term items submitted.'),
+          ],
+          for (final item in closure.consolidatedRecommendations)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${item['name'] ?? ''}',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  _recommendationDetails(item),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) => constraints.maxWidth >= 780
+          ? Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: reconciliation),
+                const SizedBox(width: 16),
+                Expanded(child: followUp),
+              ],
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [reconciliation, const SizedBox(height: 16), followUp],
+            ),
+    );
   }
 
-  Widget _reviewDetails(BursarTermClosure x) => _card(
-    Column(
+  Widget _amountRow(
+    String label,
+    double amount, {
+    bool emphasized = false,
+    Color color = AppColors.text,
+  }) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 5),
+    child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Submitted details',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+        Expanded(
+          flex: 3,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontWeight: emphasized ? FontWeight.w700 : FontWeight.w400,
+            ),
+          ),
         ),
-        const SizedBox(height: 12),
-        Text(
-          'Reconciled: ${_gh(x.reconciliationTotal)}  •  Difference: ${_gh(x.difference)}',
-        ),
-        if (x.discrepancyExplanation.isNotEmpty)
-          Text('Explanation: ${x.discrepancyExplanation}'),
-        const SizedBox(height: 10),
-        Text(
-          'Unresolved matters: ${x.unresolvedItems.isEmpty ? 'Not stated' : x.unresolvedItems}',
-        ),
-        const SizedBox(height: 10),
-        Text(
-          '${x.consolidatedRecommendations.length} next-term item recommendation${x.consolidatedRecommendations.length == 1 ? '' : 's'} consolidated.',
+        const SizedBox(width: 12),
+        Expanded(
+          flex: 2,
+          child: Text(
+            _gh(amount),
+            textAlign: TextAlign.end,
+            style: TextStyle(
+              color: color,
+              fontWeight: emphasized ? FontWeight.w800 : FontWeight.w600,
+            ),
+          ),
         ),
       ],
     ),
@@ -868,31 +1100,59 @@ class _State extends State<BursarTermClosingScreen> {
       decoration: InputDecoration(labelText: l, prefixText: 'GH₵ '),
     ),
   );
-  Widget _metric(String l, double v, {Color color = AppColors.text}) =>
+  Widget _metrics(List<Widget> metrics) => LayoutBuilder(
+    builder: (context, constraints) {
+      final width = constraints.maxWidth;
+      final columns = width >= 730
+          ? 5
+          : width >= 460
+          ? 3
+          : width >= 210
+          ? 2
+          : 1;
+      const gap = 10.0;
+      final tileWidth = (width - (columns - 1) * gap) / columns;
+      return Wrap(
+        spacing: gap,
+        runSpacing: gap,
+        children: [
+          for (final metric in metrics)
+            SizedBox(width: tileWidth, child: metric),
+        ],
+      );
+    },
+  );
+
+  Widget _metric(String label, double value, {Color color = AppColors.text}) =>
       Container(
-        width: 190,
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: AppColors.background,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(10),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(l, style: const TextStyle(color: AppColors.muted)),
+            Text(label, style: const TextStyle(color: Color(0xFF475467))),
             const SizedBox(height: 5),
-            Text(
-              _gh(v),
-              style: TextStyle(
-                fontSize: 19,
-                fontWeight: FontWeight.w800,
-                color: color,
+            FittedBox(
+              alignment: Alignment.centerLeft,
+              fit: BoxFit.scaleDown,
+              child: Text(
+                _gh(value),
+                style: TextStyle(
+                  fontSize: 19,
+                  fontWeight: FontWeight.w800,
+                  color: color,
+                ),
               ),
             ),
           ],
         ),
       );
+
   Widget _card(Widget c) => Container(
+    width: double.infinity,
     padding: const EdgeInsets.all(20),
     decoration: BoxDecoration(
       color: Colors.white,

@@ -11,7 +11,12 @@ class HeadmasterTermClosureScreen extends StatefulWidget {
     this.actorUserId,
     this.onTermTransitioned,
     this.onOpenTermDates,
+    this.onEditCurrentTermDates,
+    this.onSetUpNextTerm,
+    this.onBeginNextTerm,
+    this.onOpenFees,
     this.onOpenFacilities,
+    this.onConfirmNoFinanceActivity,
     this.embedded = false,
     this.workstreamActions = const {},
   });
@@ -20,7 +25,14 @@ class HeadmasterTermClosureScreen extends StatefulWidget {
   final int? actorUserId;
   final VoidCallback? onTermTransitioned;
   final Future<bool> Function()? onOpenTermDates;
+  final Future<bool> Function(int termId)? onEditCurrentTermDates;
+  final Future<bool> Function(int termId)? onSetUpNextTerm;
+  final Future<Map<String, dynamic>> Function(int closedTermId, int nextTermId)?
+  onBeginNextTerm;
+  final ValueChanged<int>? onOpenFees;
   final VoidCallback? onOpenFacilities;
+  final Future<HeadmasterTermClosure> Function(int termId)?
+  onConfirmNoFinanceActivity;
   final bool embedded;
   final Map<String, VoidCallback> workstreamActions;
   @override
@@ -125,7 +137,11 @@ class _State extends State<HeadmasterTermClosureScreen> {
     },
   );
 
+  bool _setupPending(HeadmasterTermClosure closure) =>
+      closure.termClosed && closure.transition['status'] == 'PENDING_SETUP';
+
   Widget _dashboard(HeadmasterTermClosure x) {
+    if (_setupPending(x)) return _pendingSetup(x);
     final blockers = x.items
         .where((item) => item.severity == 'BLOCKER' && !item.ready)
         .toList();
@@ -134,31 +150,51 @@ class _State extends State<HeadmasterTermClosureScreen> {
         .length;
     final scheduled = blockers.where(_isScheduleItem).length;
     final actionableBlockers = blockers.length - scheduled;
+    final scheduledOnly =
+        !x.termClosed &&
+        scheduled > 0 &&
+        actionableBlockers == 0 &&
+        pendingWarnings == 0;
+    final transitionChecks = x.items.where(_isTransitionCheck).toList();
+    final otherChecks = x.items
+        .where((item) => !_isTransitionCheck(item))
+        .toList();
+    final showTransition =
+        transitionChecks.isNotEmpty || x.transitionPreview.isNotEmpty;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _header(x),
+        _header(x, scheduledOnly),
         const SizedBox(height: 20),
-        _summary(x),
+        _summary(x, scheduledOnly),
         const SizedBox(height: 24),
+        if (showTransition) ...[
+          _transition(x, transitionChecks),
+          const SizedBox(height: 24),
+        ],
         _sectionHeading(
-          'All closure actions',
-          'Every action remains visible. Use the action on each row to complete or review the work in its owning area.',
+          showTransition ? 'Other closure actions' : 'All closure actions',
+          'Open an action to review or complete it.',
         ),
         const SizedBox(height: 12),
-        _actionRegister(x.items),
+        _actionRegister(otherChecks),
         const SizedBox(height: 24),
         _sectionHeading(
           'Final closure',
-          'Review the transition, preserve the closing snapshot and begin the next operational term.',
+          'Review the checklist and save the closing record for this term.',
         ),
         const SizedBox(height: 12),
-        _closurePanel(x, actionableBlockers, pendingWarnings),
+        _closurePanel(
+          x,
+          actionableBlockers,
+          pendingWarnings,
+          scheduledOnly: scheduledOnly,
+        ),
       ],
     );
   }
 
-  Widget _header(HeadmasterTermClosure x) => LayoutBuilder(
+  Widget _header(HeadmasterTermClosure x, bool scheduledOnly) => LayoutBuilder(
     builder: (context, constraints) {
       final title = Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -183,7 +219,10 @@ class _State extends State<HeadmasterTermClosureScreen> {
         runSpacing: 8,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          _badge(_statusLabel(x), _statusColor(x)),
+          _badge(
+            _statusLabel(x, scheduledOnly),
+            _statusColor(x, scheduledOnly),
+          ),
           IconButton.outlined(
             tooltip: 'Recheck readiness',
             onPressed: saving ? null : _reloadCurrentTerm,
@@ -207,21 +246,26 @@ class _State extends State<HeadmasterTermClosureScreen> {
     },
   );
 
-  String _statusLabel(HeadmasterTermClosure x) => x.termClosed
+  String _statusLabel(HeadmasterTermClosure x, bool scheduledOnly) =>
+      x.termClosed
       ? 'CLOSED'
       : x.readyToClose
       ? 'READY TO CLOSE'
+      : scheduledOnly
+      ? 'CLOSURE SCHEDULED'
       : 'ACTION REQUIRED';
 
-  Color _statusColor(HeadmasterTermClosure x) {
+  Color _statusColor(HeadmasterTermClosure x, bool scheduledOnly) {
     if (x.termClosed || x.readyToClose) return AppColors.green;
+    if (scheduledOnly) return AppColors.blue;
     final hasBlockers = x.items.any(
-      (item) => item.severity == 'BLOCKER' && !item.ready,
+      (item) =>
+          item.severity == 'BLOCKER' && !item.ready && !_isScheduleItem(item),
     );
     return hasBlockers ? AppColors.red : AppColors.amber;
   }
 
-  Widget _summary(HeadmasterTermClosure x) {
+  Widget _summary(HeadmasterTermClosure x, bool scheduledOnly) {
     final ready = x.items
         .where((item) => item.ready || _isReviewedWarning(item))
         .length;
@@ -266,7 +310,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
                 style: TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.w900,
-                  color: _statusColor(x),
+                  color: _statusColor(x, scheduledOnly),
                 ),
               ),
             ],
@@ -277,7 +321,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
             child: LinearProgressIndicator(
               value: progress,
               minHeight: 10,
-              color: _statusColor(x),
+              color: _statusColor(x, scheduledOnly),
               backgroundColor: AppColors.border,
             ),
           ),
@@ -296,11 +340,12 @@ class _State extends State<HeadmasterTermClosureScreen> {
                 '$ready cleared',
                 AppColors.green,
               ),
-              _summaryChip(
-                Icons.error_outline,
-                '$blockers need attention',
-                AppColors.red,
-              ),
+              if (blockers > 0)
+                _summaryChip(
+                  Icons.error_outline,
+                  '$blockers need attention',
+                  AppColors.red,
+                ),
               if (reviewedWarnings > 0)
                 _summaryChip(
                   Icons.fact_check_outlined,
@@ -416,19 +461,53 @@ class _State extends State<HeadmasterTermClosureScreen> {
   }) {
     final status = _actionStatus(item);
     final color = _actionStatusColor(status);
-    final action = _actionFor(item);
-    final button = action == null
-        ? null
-        : TextButton.icon(
-            onPressed: action,
-            icon: Icon(
-              item.ready
-                  ? Icons.visibility_outlined
-                  : Icons.arrow_forward_rounded,
-              size: 18,
+    final isFacilities = item.key == 'FACILITIES';
+    final VoidCallback? openWorkstream = isFacilities
+        ? widget.onOpenFacilities ?? _openFacilitiesDialog
+        : widget.workstreamActions[item.key];
+    final VoidCallback? reviewWarning = item.warning
+        ? () => _openWarning(item)
+        : null;
+    final action = reviewWarning ?? (isFacilities ? null : openWorkstream);
+    final title = _actionTitle(item.label, openWorkstream ?? reviewWarning);
+    final showFinanceOptions =
+        item.key == 'FINANCE' &&
+        !item.ready &&
+        item.canConfirmNoFinanceActivity &&
+        data?.termClosed == false &&
+        widget.onConfirmNoFinanceActivity != null;
+    final buttons = [
+      if (isFacilities)
+        OutlinedButton.icon(
+          onPressed: openWorkstream,
+          icon: const Icon(Icons.fact_check_outlined, size: 18),
+          label: const Text('Open inspection'),
+        ),
+      if (action != null)
+        TextButton.icon(
+          onPressed: action,
+          icon: Icon(
+            item.ready
+                ? Icons.visibility_outlined
+                : Icons.arrow_forward_rounded,
+            size: 18,
+          ),
+          label: Text(_actionLabel(item)),
+        ),
+      if (showFinanceOptions)
+        PopupMenuButton<String>(
+          enabled: !saving,
+          tooltip: 'Finance options',
+          icon: const Icon(Icons.more_horiz),
+          onSelected: (_) => _confirmNoFinanceActivity(),
+          itemBuilder: (_) => const [
+            PopupMenuItem(
+              value: 'confirm',
+              child: Text('Confirm no finance activity'),
             ),
-            label: Text(_actionLabel(item)),
-          );
+          ],
+        ),
+    ];
     final decoration = showDivider
         ? const BoxDecoration(
             border: Border(bottom: BorderSide(color: AppColors.border)),
@@ -453,12 +532,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
                   ),
                 ),
                 const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    item.label,
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                ),
+                Expanded(child: title),
                 const SizedBox(width: 8),
                 _badge(status, color),
               ],
@@ -474,18 +548,24 @@ class _State extends State<HeadmasterTermClosureScreen> {
             const SizedBox(height: 8),
             Padding(
               padding: const EdgeInsets.only(left: 32),
-              child: Row(
-                children: [
-                  Text(
-                    _actionArea(item),
-                    style: const TextStyle(
-                      color: AppColors.muted,
-                      fontWeight: FontWeight.w700,
+              child: SizedBox(
+                width: double.infinity,
+                child: Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 8,
+                  runSpacing: 4,
+                  children: [
+                    Text(
+                      _actionArea(item),
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                  ),
-                  const Spacer(),
-                  if (button != null) button,
-                ],
+                    ...buttons,
+                  ],
+                ),
               ),
             ),
           ],
@@ -509,10 +589,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  item.label,
-                  style: const TextStyle(fontWeight: FontWeight.w800),
-                ),
+                title,
                 const SizedBox(height: 3),
                 Text(
                   item.detail,
@@ -536,9 +613,11 @@ class _State extends State<HeadmasterTermClosureScreen> {
           SizedBox(width: 148, child: Align(child: _badge(status, color))),
           SizedBox(
             width: 215,
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: button ?? const SizedBox.shrink(),
+            child: Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              runSpacing: 4,
+              children: buttons,
             ),
           ),
         ],
@@ -546,7 +625,31 @@ class _State extends State<HeadmasterTermClosureScreen> {
     );
   }
 
+  Widget _actionTitle(String label, VoidCallback? onPressed) {
+    if (onPressed == null) {
+      return Text(label, style: const TextStyle(fontWeight: FontWeight.w800));
+    }
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton(
+        onPressed: onPressed,
+        style: TextButton.styleFrom(
+          alignment: Alignment.centerLeft,
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          minimumSize: const Size(0, 32),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          textStyle: const TextStyle(
+            fontWeight: FontWeight.w800,
+            decoration: TextDecoration.underline,
+          ),
+        ),
+        child: Text(label),
+      ),
+    );
+  }
+
   String _actionStatus(TermClosureItem item) {
+    if (item.noFinanceActivity) return 'Not applicable';
     if (item.ready) return 'Complete';
     if (_isScheduleItem(item)) return 'Scheduled';
     if (_isReviewedWarning(item)) return 'Reviewed';
@@ -569,11 +672,15 @@ class _State extends State<HeadmasterTermClosureScreen> {
     return key.contains('CLOSING_DATE') || label.contains('closing date');
   }
 
+  bool _isTransitionCheck(TermClosureItem item) =>
+      _isScheduleItem(item) || item.key == 'NEXT_TERM';
+
   bool _isReviewedWarning(TermClosureItem item) =>
       item.warning && (acknowledgements[item.key]?.trim().length ?? 0) >= 5;
 
   Color _actionStatusColor(String status) => switch (status) {
     'Complete' || 'Reviewed' => AppColors.green,
+    'Not applicable' => AppColors.muted,
     'Scheduled' || 'In progress' => AppColors.blue,
     'Needs review' => AppColors.amber,
     'Not started' => AppColors.muted,
@@ -582,6 +689,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
 
   IconData _actionStatusIcon(String status) => switch (status) {
     'Complete' => Icons.check_circle_rounded,
+    'Not applicable' => Icons.remove_circle_outline_rounded,
     'Reviewed' => Icons.fact_check_rounded,
     'Scheduled' => Icons.schedule_rounded,
     'In progress' => Icons.pending_rounded,
@@ -601,25 +709,11 @@ class _State extends State<HeadmasterTermClosureScreen> {
     if (key.contains('FINANCE')) return 'Finance';
     if (key.contains('STAFF')) return 'Staff';
     if (key.contains('INCIDENT')) return 'Student welfare';
-    if (key.contains('NEXT_TERM')) return 'Next term';
     if (key.contains('FACILIT')) return 'Operations';
     if (key.contains('DATE') || item.label.toLowerCase().contains('date')) {
       return 'Schedule';
     }
     return 'Term closure';
-  }
-
-  VoidCallback? _actionFor(TermClosureItem item) {
-    if (item.warning) return () => _openWarning(item);
-    if (item.key.toUpperCase().contains('FACILIT')) {
-      return widget.onOpenFacilities ?? _openFacilitiesDialog;
-    }
-    final key = item.key.toUpperCase();
-    if ((key.contains('CLOSING_DATE') || key.contains('NEXT_TERM')) &&
-        widget.onOpenTermDates != null) {
-      return _openTermDates;
-    }
-    return widget.workstreamActions[item.key];
   }
 
   String _actionLabel(TermClosureItem item) {
@@ -638,9 +732,40 @@ class _State extends State<HeadmasterTermClosureScreen> {
     if (key.contains('REPORT')) return 'Review reports';
     if (key.contains('ATTENDANCE')) return 'Review attendance';
     if (key.contains('INCIDENT')) return 'Review incidents';
-    if (key.contains('NEXT_TERM')) return 'Set up term';
-    if (key.contains('DATE')) return 'View dates';
     return 'Go to area';
+  }
+
+  Future<void> _confirmNoFinanceActivity() async {
+    final confirm = widget.onConfirmNoFinanceActivity;
+    final termId = data?.termId;
+    if (saving || confirm == null || termId == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Confirm no finance activity'),
+        content: const SizedBox(
+          width: 416,
+          child: Text(
+            'Confirm this term had no fee charges, payments, expenses or '
+            'petty-cash setup. The app will check the term’s records before '
+            'marking Finance and petty cash as not applicable.',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true || saving) return;
+    await run(() => confirm(termId), 'No finance activity confirmed.');
   }
 
   Future<void> _openWarning(TermClosureItem item) async {
@@ -649,9 +774,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
       () => TextEditingController(text: acknowledgements[item.key] ?? ''),
     );
     final locked = data?.termClosed == true;
-    final areaAction = item.key.toUpperCase().contains('FACILIT')
-        ? widget.onOpenFacilities ?? _openFacilitiesDialog
-        : widget.workstreamActions[item.key];
+    final areaAction = widget.workstreamActions[item.key];
     final result = await showDialog<String>(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -813,20 +936,34 @@ class _State extends State<HeadmasterTermClosureScreen> {
   Future<void> _openTermDates() async {
     final changed = await widget.onOpenTermDates?.call() ?? false;
     if (!changed || !mounted) return;
-    notice('The next-term dates have been updated.');
+    notice('Next term dates updated.');
     await _reloadCurrentTerm();
+  }
+
+  Future<void> _editCurrentTermDates(int termId) async {
+    final edit = widget.onEditCurrentTermDates;
+    if (edit == null || saving) return;
+    setState(() => saving = true);
+    bool changed;
+    try {
+      changed = await edit(termId);
+    } finally {
+      if (mounted) setState(() => saving = false);
+    }
+    if (!mounted || !changed) return;
+    await _reloadCurrentTerm();
+    if (mounted) notice('Current term dates updated.');
   }
 
   Widget _closurePanel(
     HeadmasterTermClosure x,
     int blockerCount,
-    int warningCount,
-  ) => _card(
+    int warningCount, {
+    required bool scheduledOnly,
+  }) => _card(
     Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _transition(x),
-        const SizedBox(height: 18),
         Container(
           width: double.infinity,
           padding: const EdgeInsets.all(14),
@@ -849,15 +986,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  x.termClosed
-                      ? 'The closing snapshot is locked and available in the management report.'
-                      : x.readyToClose
-                      ? 'All checks have passed. The term can now be closed.'
-                      : blockerCount > 0
-                      ? '$blockerCount required ${blockerCount == 1 ? 'action remains' : 'actions remain'}. Complete the work and review any warnings before closing.'
-                      : warningCount > 0
-                      ? '$warningCount ${warningCount == 1 ? 'warning requires' : 'warnings require'} a saved acknowledgement before closing.'
-                      : 'All required work is complete. Term closure will become available on the scheduled closing date.',
+                  _closureMessage(x, blockerCount, warningCount),
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
               ),
@@ -876,11 +1005,15 @@ class _State extends State<HeadmasterTermClosureScreen> {
               label: const Text('Management report'),
             ),
             FilledButton.icon(
-              onPressed: saving || x.termClosed || !x.readyToClose
+              onPressed: saving || x.termClosed
                   ? null
-                  : closeTerm,
+                  : x.readyToClose
+                  ? closeTerm
+                  : scheduledOnly
+                  ? () => _showScheduledClosure(x)
+                  : null,
               icon: const Icon(Icons.lock_outline),
-              label: const Text('Close term and begin next term'),
+              label: const Text('Close term'),
             ),
           ],
         ),
@@ -888,71 +1021,388 @@ class _State extends State<HeadmasterTermClosureScreen> {
     ),
   );
 
-  Widget _transition(HeadmasterTermClosure x) {
-    final p = x.transitionPreview;
-    if (p.isEmpty) {
-      return const Text(
-        'Next-term details are not available yet.',
-        style: TextStyle(color: AppColors.muted),
-      );
-    }
-    final available = p['available'] == true;
+  String _termLabel(
+    HeadmasterTermClosure closure,
+    String key,
+    String fallback,
+  ) => closure.transitionPreview[key]?.toString() ?? fallback;
+
+  Widget _pendingSetup(HeadmasterTermClosure closure) {
+    final preview = closure.transitionPreview;
+    final currentName = _termLabel(
+      closure,
+      'currentTermName',
+      'The previous term',
+    );
+    final nextName = _termLabel(closure, 'nextTermName', 'next term');
+    final datesReady = preview['available'] == true;
+    final nextId = int.tryParse('${preview['nextTermId']}');
+    final ready = preview['ready'] == true && nextId != null;
+    final missingFees =
+        (preview['missingPublishedFeeStructures'] as num? ?? 0) > 0;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            const Expanded(
-              child: Text(
-                'Term transition summary',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-              ),
-            ),
-            if (widget.onOpenTermDates != null && !x.termClosed)
-              TextButton.icon(
-                onPressed: saving ? null : _openTermDates,
-                icon: const Icon(Icons.edit_calendar_outlined),
-                label: const Text('Modify dates'),
-              ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        Text(
-          available
-              ? '${p['nextTermName'] ?? 'Next term'} begins operationally as soon as this term closes.'
-              : '${p['detail'] ?? 'Configure the next term before closing.'}',
-          style: const TextStyle(color: AppColors.muted),
-        ),
-        if (available) ...[
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 12,
-            runSpacing: 12,
+        _header(closure, false),
+        const SizedBox(height: 20),
+        _card(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _transitionValue(
-                'Current term closes',
-                _transitionDate(p['currentTermClosingDate'], showToday: true),
+              _sectionHeading(
+                'Next term setup pending',
+                '$currentName is closed. Review the setup before beginning $nextName.',
               ),
-              _transitionValue(
-                'Office opens / vacation begins',
-                _transitionDate(p['operationalStartDate']),
+              const SizedBox(height: 16),
+              if (datesReady) ...[
+                Text(
+                  '$nextName · ${preview['academicYear'] ?? ''}',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 10,
+                  children: [
+                    _transitionValue(
+                      'Teaching starts',
+                      _transitionDate(preview['teachingStartDate']),
+                    ),
+                    _transitionValue(
+                      'Teaching ends',
+                      _transitionDate(preview['teachingEndDate']),
+                    ),
+                    _transitionValue(
+                      'Earliest closing date',
+                      _transitionDate(preview['closingDate']),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  '${preview['promotionsResolvable'] ?? 0} of ${preview['students'] ?? 0} student progression decisions ready.',
+                ),
+                const SizedBox(height: 6),
+              ],
+              Text(
+                preview['detail']?.toString() ??
+                    'Confirm the academic period and dates.',
+                style: TextStyle(
+                  color: ready ? AppColors.green : AppColors.muted,
+                ),
               ),
-              _transitionValue(
-                'Teaching starts',
-                _transitionDate(p['teachingStartDate']),
-              ),
-              _transitionValue(
-                'Teaching ends',
-                _transitionDate(p['teachingEndDate']),
-              ),
-              _transitionValue(
-                'Next term closes',
-                _transitionDate(p['closingDate']),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: saving ? null : openReport,
+                    icon: const Icon(Icons.picture_as_pdf_outlined),
+                    label: const Text('Management report'),
+                  ),
+                  if (widget.onSetUpNextTerm != null)
+                    OutlinedButton.icon(
+                      onPressed: saving
+                          ? null
+                          : () => _setUpNextTerm(closure.termId),
+                      icon: const Icon(Icons.edit_calendar_outlined),
+                      label: const Text('Resume setup'),
+                    ),
+                  if (datesReady &&
+                      nextId != null &&
+                      missingFees &&
+                      !ready &&
+                      widget.onOpenFees != null)
+                    OutlinedButton(
+                      onPressed: saving
+                          ? null
+                          : () => widget.onOpenFees!(nextId),
+                      child: const Text('Open fee setup'),
+                    ),
+                  if (widget.onBeginNextTerm != null)
+                    FilledButton(
+                      onPressed: saving || !ready
+                          ? null
+                          : () => _beginNextTerm(closure.termId, nextId),
+                      child: Text('Begin $nextName'),
+                    ),
+                ],
               ),
             ],
           ),
-        ],
+        ),
       ],
+    );
+  }
+
+  Future<void> _setUpNextTerm(int closedTermId) async {
+    final setup = widget.onSetUpNextTerm;
+    if (saving || setup == null) return;
+    setState(() => saving = true);
+    bool saved;
+    try {
+      saved = await setup(closedTermId);
+    } finally {
+      if (mounted) setState(() => saving = false);
+    }
+    if (saved && mounted) await _reloadCurrentTerm();
+  }
+
+  Future<void> _beginNextTerm(int closedTermId, int nextTermId) async {
+    final begin = widget.onBeginNextTerm;
+    if (saving || begin == null) return;
+    setState(() => saving = true);
+    Map<String, dynamic> result;
+    try {
+      result = await begin(closedTermId, nextTermId);
+    } catch (error) {
+      if (mounted) {
+        setState(() => saving = false);
+        notice(error.toString().replaceFirst('Exception: ', ''));
+      }
+      return;
+    }
+    if (!mounted) return;
+    await _showTransitionComplete(result);
+    if (!mounted) return;
+    setState(() => saving = false);
+    await _reloadCurrentTerm();
+    if (mounted) widget.onTermTransitioned?.call();
+  }
+
+  Future<void> _showClosureComplete(HeadmasterTermClosure closure) async {
+    final currentName = _termLabel(closure, 'currentTermName', 'This term');
+    final nextName = _termLabel(closure, 'nextTermName', 'next term');
+    final beginSetup = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('$currentName is complete'),
+        content: SizedBox(
+          width: 390,
+          child: Text(
+            'The closing record is saved. Set up $nextName when you’re ready.',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Later'),
+          ),
+          if (widget.onSetUpNextTerm != null)
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text('Begin $nextName'),
+            ),
+        ],
+      ),
+    );
+    if (mounted && beginSetup == true) await _setUpNextTerm(closure.termId);
+  }
+
+  String _closureMessage(
+    HeadmasterTermClosure closure,
+    int blockerCount,
+    int warningCount,
+  ) {
+    if (closure.termClosed) {
+      return 'The closing snapshot is locked and available in the management report.';
+    }
+    if (closure.readyToClose) {
+      return 'All checks have passed. The term can now be closed.';
+    }
+
+    final scheduledMessage = _scheduledClosureMessage(closure);
+    final String pendingMessage;
+    if (blockerCount > 0) {
+      pendingMessage =
+          '$blockerCount required ${blockerCount == 1 ? 'action remains' : 'actions remain'}. Complete the work and review any warnings before closing.';
+    } else if (warningCount > 0) {
+      pendingMessage =
+          '$warningCount ${warningCount == 1 ? 'warning requires' : 'warnings require'} a saved acknowledgement before closing.';
+    } else {
+      return scheduledMessage ?? 'Recheck readiness before closing the term.';
+    }
+    return scheduledMessage == null
+        ? pendingMessage
+        : '$pendingMessage\n$scheduledMessage';
+  }
+
+  String? _scheduledClosureMessage(HeadmasterTermClosure closure) {
+    final scheduledCheck = closure.items
+        .where((item) => !item.ready && _isScheduleItem(item))
+        .firstOrNull;
+    final closingDate = _parseDate(
+      closure.transitionPreview['currentTermClosingDate'],
+    );
+    return scheduledCheck == null
+        ? null
+        : closingDate == null
+        ? scheduledCheck.detail
+        : 'You can close this term on or after ${_transitionDate(closingDate, fullMonth: true)}.';
+  }
+
+  Future<void> _showScheduledClosure(HeadmasterTermClosure closure) {
+    return showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Term closure is scheduled'),
+        content: SizedBox(
+          width: 400,
+          child: Text(
+            _scheduledClosureMessage(closure) ??
+                'Recheck readiness to see the earliest closing date.',
+          ),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Got it'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _transition(
+    HeadmasterTermClosure closure,
+    List<TermClosureItem> checks,
+  ) {
+    final preview = closure.transitionPreview;
+    final closingDate = preview['currentTermClosingDate'];
+    final hasClosingCheck = checks.any(_isScheduleItem);
+    return _card(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: double.infinity,
+            child: Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 12,
+              runSpacing: 8,
+              children: [
+                const Text(
+                  'Term transition',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+                ),
+                if (widget.onOpenTermDates != null && !closure.termClosed)
+                  OutlinedButton.icon(
+                    onPressed: saving ? null : _openTermDates,
+                    icon: const Icon(Icons.edit_calendar_outlined),
+                    label: const Text('Manage next term dates'),
+                  ),
+              ],
+            ),
+          ),
+          for (final check in checks) ...[
+            const SizedBox(height: 12),
+            _transitionCheck(closure, check, closingDate),
+          ],
+          if (!hasClosingCheck && closingDate != null) ...[
+            const SizedBox(height: 12),
+            _transitionValue(
+              'Earliest closing date',
+              _transitionDate(closingDate, showToday: true, fullMonth: true),
+            ),
+          ],
+          if (preview['available'] == true) ...[
+            const SizedBox(height: 16),
+            Text(
+              '${preview['nextTermName'] ?? 'Next term'} dates',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                _transitionValue(
+                  'Teaching starts',
+                  _transitionDate(preview['teachingStartDate']),
+                ),
+                _transitionValue(
+                  'Teaching ends',
+                  _transitionDate(preview['teachingEndDate']),
+                ),
+                _transitionValue(
+                  'Next term closes',
+                  _transitionDate(preview['closingDate']),
+                ),
+              ],
+            ),
+          ] else if (checks.every(_isScheduleItem)) ...[
+            const SizedBox(height: 12),
+            Text(
+              '${preview['detail'] ?? 'Next-term details are not available yet.'}',
+              style: const TextStyle(color: AppColors.muted),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _transitionCheck(
+    HeadmasterTermClosure closure,
+    TermClosureItem check,
+    Object? closingDate,
+  ) {
+    final isClosingDate = _isScheduleItem(check);
+    final status = _actionStatus(check);
+    final detail = isClosingDate && closingDate != null
+        ? _transitionDate(closingDate, showToday: true, fullMonth: true)
+        : check.detail;
+    final description = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          isClosingDate ? 'Earliest closing date' : 'Next term readiness',
+          style: const TextStyle(fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 4),
+        Text(detail, style: const TextStyle(color: AppColors.muted)),
+      ],
+    );
+    final controls = Wrap(
+      spacing: 10,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        _badge(status, _actionStatusColor(status)),
+        if (isClosingDate &&
+            !closure.termClosed &&
+            widget.onEditCurrentTermDates != null)
+          OutlinedButton.icon(
+            onPressed: saving
+                ? null
+                : () => _editCurrentTermDates(closure.termId),
+            icon: const Icon(Icons.edit_calendar_outlined, size: 18),
+            label: const Text('Edit current term dates'),
+          ),
+      ],
+    );
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.border),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) => constraints.maxWidth < 520
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [description, const SizedBox(height: 8), controls],
+              )
+            : Row(
+                children: [
+                  Expanded(child: description),
+                  const SizedBox(width: 10),
+                  controls,
+                ],
+              ),
+      ),
     );
   }
 
@@ -974,24 +1424,30 @@ class _State extends State<HeadmasterTermClosureScreen> {
     ),
   );
 
-  String _transitionDate(dynamic value, {bool showToday = false}) {
+  String _transitionDate(
+    dynamic value, {
+    bool showToday = false,
+    bool fullMonth = false,
+  }) {
     final parsed = _parseDate(value);
     if (parsed == null) return _displayDate(value);
     const months = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
+      'January',
+      'February',
+      'March',
+      'April',
       'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
     ];
-    final date = '${parsed.day} ${months[parsed.month - 1]} ${parsed.year}';
+    final month = months[parsed.month - 1];
+    final date =
+        '${parsed.day} ${fullMonth ? month : month.substring(0, 3)} ${parsed.year}';
     final today = DateTime.now();
     final isToday =
         parsed.year == today.year &&
@@ -1015,6 +1471,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
   HeadmasterTermClosureInput input({String? confirmation}) =>
       HeadmasterTermClosureInput(
         actorUserId: widget.actorUserId,
+        termId: data?.termId,
         acknowledgements: acknowledgements,
         facilities: {
           ...?data?.facilities,
@@ -1034,7 +1491,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (x) => AlertDialog(
-        title: const Text('Close this term and begin the next term?'),
+        title: const Text('Close this term?'),
         content: SizedBox(
           width: 560,
           child: SingleChildScrollView(
@@ -1042,37 +1499,10 @@ class _State extends State<HeadmasterTermClosureScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'This preserves the immutable closing snapshot, applies approved promotions, assigns published next-term fees and makes ${data?.transitionPreview['nextTermName'] ?? 'the next term'} operational for vacation admissions and payments.',
+                const Text(
+                  'This saves the closing record. You can set up and begin the next term afterward.',
                 ),
                 const SizedBox(height: 14),
-                _confirmationDate(
-                  'Current term closes',
-                  data?.transitionPreview['currentTermClosingDate'],
-                  showToday: true,
-                ),
-                _confirmationDate(
-                  'Office opens / vacation begins',
-                  data?.transitionPreview['operationalStartDate'],
-                ),
-                _confirmationDate(
-                  'Teaching starts',
-                  data?.transitionPreview['teachingStartDate'],
-                ),
-                _confirmationDate(
-                  'Teaching ends',
-                  data?.transitionPreview['teachingEndDate'],
-                ),
-                _confirmationDate(
-                  'Next term closes',
-                  data?.transitionPreview['closingDate'],
-                ),
-                const SizedBox(height: 10),
-                const Text(
-                  'Academic activity before teaching starts remains available with a warning and mandatory reason.',
-                  style: TextStyle(color: AppColors.muted),
-                ),
-                const SizedBox(height: 12),
                 const Text(
                   'Type CLOSE TERM to continue.',
                   style: TextStyle(fontWeight: FontWeight.w700),
@@ -1100,7 +1530,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
                   : null,
               child: child,
             ),
-            child: const Text('Close term and begin next term'),
+            child: const Text('Close term'),
           ),
         ],
       ),
@@ -1112,40 +1542,26 @@ class _State extends State<HeadmasterTermClosureScreen> {
           widget.schoolId,
           input(confirmation: 'CLOSE TERM'),
         ),
-        'The term is closed and the next term is operational.',
+        'The term is closed.',
       );
-      if (mounted && data?.transition.isNotEmpty == true) {
-        await _showTransitionComplete();
+      final closed = data;
+      if (!mounted || closed == null || !closed.termClosed) return;
+      if (_setupPending(closed)) {
+        await _showClosureComplete(closed);
+      } else if (closed.transition.isNotEmpty) {
+        await _showTransitionComplete(closed.transition);
+        if (!mounted) return;
         await _reloadCurrentTerm();
-        widget.onTermTransitioned?.call();
+        if (mounted) widget.onTermTransitioned?.call();
       }
     }
   }
 
-  Widget _confirmationDate(
-    String label,
-    dynamic value, {
-    bool showToday = false,
-  }) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Row(
-      children: [
-        Expanded(
-          child: Text(label, style: const TextStyle(color: AppColors.muted)),
-        ),
-        const SizedBox(width: 16),
-        Text(
-          _transitionDate(value, showToday: showToday),
-          style: const TextStyle(fontWeight: FontWeight.w800),
-        ),
-      ],
-    ),
-  );
-
-  Future<void> _showTransitionComplete() => showDialog<void>(
+  Future<void> _showTransitionComplete(
+    Map<String, dynamic> t,
+  ) => showDialog<void>(
     context: context,
     builder: (context) {
-      final t = data!.transition;
       return AlertDialog(
         title: const Text('Term transition completed'),
         content: Column(
@@ -1160,9 +1576,15 @@ class _State extends State<HeadmasterTermClosureScreen> {
             Text(
               '${t['studentsTransitioned'] ?? 0} student placements applied',
             ),
-            Text(
-              '${t['nextTermFeeLinesAssigned'] ?? 0} next-term fee lines assigned',
-            ),
+            if (t['nextTermFeesDeferred'] != true ||
+                (t['nextTermFeeLinesAssigned'] as num? ?? 0) > 0)
+              Text(
+                '${t['nextTermFeeLinesAssigned'] ?? 0} next-term fee lines assigned',
+              ),
+            if (t['nextTermFeesDeferred'] == true)
+              const Text(
+                'You can set up any missing fees during the new term.',
+              ),
             const SizedBox(height: 10),
             const Text(
               'Vacation admissions, fees and payments are available. Academic activity before teaching starts will show a warning and require a reason.',
@@ -1173,7 +1595,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
         actions: [
           FilledButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Done'),
+            child: const Text('Continue to dashboard'),
           ),
         ],
       );
@@ -1210,7 +1632,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => saving = false);
-        notice('$e');
+        notice(e.toString().replaceFirst('Exception: ', ''));
       }
     }
   }

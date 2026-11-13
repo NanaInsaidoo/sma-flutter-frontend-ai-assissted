@@ -1041,6 +1041,7 @@ class AdmissionTermContext {
     required this.term,
     required this.startDate,
     required this.endDate,
+    this.closed = false,
   });
 
   factory AdmissionTermContext.fromJson(Map<String, dynamic> json) {
@@ -1050,6 +1051,7 @@ class AdmissionTermContext {
       id: _intValue(json['id']),
       academicYear: _text(academicYear?['name']),
       term: _text(termType?['name']),
+      closed: json['isClosed'] == true || json['lifecycleStatus'] == 'CLOSED',
       // Vacation operations belong to the new term. Admissions, fees and the
       // shared term header therefore begin at the operational opening date,
       // while older records fall back to the legacy start/end fields.
@@ -1069,6 +1071,7 @@ class AdmissionTermContext {
   final String term;
   final String startDate;
   final String endDate;
+  final bool closed;
 }
 
 class AdmissionGuardian {
