@@ -5,8 +5,13 @@ class TermClosureItem {
     required this.status,
     required this.severity,
     required this.detail,
+    this.resolution,
+    this.canConfirmNoFinanceActivity = true,
   });
   final String key, label, status, severity, detail;
+  final String? resolution;
+  final bool canConfirmNoFinanceActivity;
+  bool get noFinanceActivity => ready && resolution == 'NO_FINANCE_ACTIVITY';
   bool get ready => status == 'READY';
   bool get warning => severity == 'WARNING' && !ready;
 }
@@ -39,11 +44,15 @@ class HeadmasterTermClosureInput {
     required this.acknowledgements,
     required this.facilities,
     this.confirmation,
+    this.termId,
+    this.submitInspection = false,
   });
   final int? actorUserId;
   final Map<String, String> acknowledgements;
   final Map<String, dynamic> facilities;
   final String? confirmation;
+  final int? termId;
+  final bool submitInspection;
 }
 
 abstract class HeadmasterTermClosureRepository {

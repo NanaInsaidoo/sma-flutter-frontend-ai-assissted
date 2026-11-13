@@ -15,6 +15,11 @@ class HeadmasterTermClosureApiClient
   final http.Client _client;
   @override
   Future<HeadmasterTermClosure> get(String s) => _call('GET', s);
+  Future<HeadmasterTermClosure> confirmNoFinanceActivity(
+    String schoolId,
+    int termId,
+  ) => _call('POST', schoolId, action: 'terms/$termId/no-finance-activity');
+
   @override
   Future<HeadmasterTermClosure> saveDraft(
     String s,
@@ -55,17 +60,31 @@ class HeadmasterTermClosureApiClient
     'warningAcknowledgements': i.acknowledgements,
     'facilities': i.facilities,
     'confirmation': i.confirmation,
+    if (i.termId != null) 'termId': i.termId,
+    if (i.submitInspection) 'submitInspection': true,
   };
-  Future<HeadmasterTermClosure> _call(
+  Future<Map<String, dynamic>> beginNextTerm(
+    String schoolId,
+    int closedTermId,
+    int nextTermId,
+  ) => _request(
+    'POST',
+    schoolId,
+    action: 'terms/$closedTermId/begin-next',
+    queryParameters: {'nextTermId': '$nextTermId'},
+  );
+
+  Future<Map<String, dynamic>> _request(
     String method,
     String s, {
     String? action,
     Object? body,
+    Map<String, String>? queryParameters,
   }) async {
     Future<http.Response> go() {
       final u = Uri.parse(
         '${ApiConfig.baseUrl}/api/v2/headmaster-term-closures/school/$s${action == null ? '' : '/$action'}',
-      );
+      ).replace(queryParameters: queryParameters);
       final h = {
         'Content-Type': 'application/json',
         if (accessToken?.isNotEmpty == true)
@@ -85,13 +104,22 @@ class HeadmasterTermClosureApiClient
       r = await go();
     }
     if (r.statusCode < 200 || r.statusCode >= 300) throw Exception(_error(r));
-    final j = Map<String, dynamic>.from(jsonDecode(r.body) as Map);
+    return Map<String, dynamic>.from(jsonDecode(r.body) as Map);
+  }
+
+  Future<HeadmasterTermClosure> _call(
+    String method,
+    String schoolId, {
+    String? action,
+    Object? body,
+  }) async {
+    final j = await _request(method, schoolId, action: action, body: body);
     int n(Object? x) => int.tryParse('$x') ?? 0;
     Map<String, dynamic> m(String k) =>
         j[k] is Map ? Map<String, dynamic>.from(j[k] as Map) : {};
     final transitionPreview = m('transitionPreview');
     await _addTermDates(
-      schoolId: s,
+      schoolId: schoolId,
       currentTermId: n(j['termId']),
       preview: transitionPreview,
     );
@@ -108,6 +136,9 @@ class HeadmasterTermClosureApiClient
           status: '${x['status']}',
           severity: '${x['severity']}',
           detail: '${x['detail']}',
+          resolution: x['resolution']?.toString(),
+          canConfirmNoFinanceActivity:
+              x['canConfirmNoFinanceActivity'] != false,
         );
       }).toList(),
       acknowledgements: m(

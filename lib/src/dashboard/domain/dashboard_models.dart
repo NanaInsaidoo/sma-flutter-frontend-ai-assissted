@@ -186,6 +186,7 @@ class DashboardSnapshot {
     required this.administratorName,
     required this.term,
     this.academicTermId,
+    this.termClosed = false,
     required this.academicYear,
     required this.termStartDate,
     required this.termEndDate,
@@ -204,6 +205,7 @@ class DashboardSnapshot {
   final String administratorName;
   final String term;
   final int? academicTermId;
+  final bool termClosed;
   final String academicYear;
   final String termStartDate;
   final String termEndDate;

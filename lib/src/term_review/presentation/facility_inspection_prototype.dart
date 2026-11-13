@@ -16,6 +16,7 @@ class FacilityInspectionPrototype extends StatefulWidget {
     required this.termName,
     required this.repository,
     this.actorUserId,
+    this.actorDisplayName,
     this.onChanged,
   });
 
@@ -24,6 +25,7 @@ class FacilityInspectionPrototype extends StatefulWidget {
   final String termName;
   final HeadmasterTermClosureRepository repository;
   final int? actorUserId;
+  final String? actorDisplayName;
   final VoidCallback? onChanged;
 
   @override
@@ -34,6 +36,13 @@ class FacilityInspectionPrototype extends StatefulWidget {
 enum _InspectionTab { checklist, flags, report }
 
 enum _Condition { good, fair, poor, notApplicable }
+
+String _conditionLabel(_Condition condition) => switch (condition) {
+  _Condition.good => 'Good',
+  _Condition.fair => 'Fair',
+  _Condition.poor => 'Poor',
+  _Condition.notApplicable => 'Not applicable',
+};
 
 const _findingStatusOptions = <String, String>{
   'OPEN': 'Open',
@@ -53,19 +62,25 @@ String _normaliseFindingStatus(Object? value) {
 class _FacilityInspectionPrototypeState
     extends State<FacilityInspectionPrototype> {
   _InspectionTab _tab = _InspectionTab.checklist;
+  final _scrollController = ScrollController();
   final Set<String> _openDetails = {};
+  final _checklistTargetKey = GlobalKey();
+  String? _checklistTarget;
   final Map<String, _Condition> _ratings = {};
+  final Map<String, String> _notApplicableReasons = {};
+  final Map<String, String> _comments = {};
   final Map<String, _FlagDetail> _flagDetails = {};
   final Map<String, List<_EvidencePhoto>> _evidencePhotos = {};
+  Map<String, List<_EvidencePhoto>> _photosBeforeEditing = {};
   Map<String, String> _acknowledgements = {};
   Map<String, dynamic> _existingFacilities = {};
   bool _loading = true;
   bool _saving = false;
   bool _submitted = false;
+  bool _editing = false;
+  bool _termClosed = false;
   DateTime? _savedAt;
   DateTime? _closingDate;
-  final _headteacher = TextEditingController(text: 'Nana Boateng');
-  final _assistantHead = TextEditingController(text: 'Adwoa Mensah');
 
   @override
   void initState() {
@@ -75,46 +90,24 @@ class _FacilityInspectionPrototypeState
 
   @override
   void dispose() {
-    _headteacher.dispose();
-    _assistantHead.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
+
+  bool get _readOnly => _termClosed || (_submitted && !_editing);
 
   Future<void> _load() async {
     try {
       final closure = await widget.repository.get(widget.schoolId);
-      final facilities = Map<String, dynamic>.from(closure.facilities);
-      final storedRatings = facilities['ratings'];
-      final storedFlags = facilities['findings'];
       if (!mounted) return;
       setState(() {
         _acknowledgements = Map<String, String>.from(closure.acknowledgements);
-        _existingFacilities = facilities;
-        _submitted = facilities['inspectionCompleted'] == true;
-        _savedAt = DateTime.tryParse('${facilities['savedAt'] ?? ''}');
+        _termClosed = closure.termClosed;
         _closingDate = _parseDate(
           closure.transitionPreview['currentTermClosingDate'],
         );
-        if (storedRatings is Map) {
-          for (final entry in storedRatings.entries) {
-            final parsed = _conditionFromApi('${entry.value}');
-            if (parsed != null) _ratings['${entry.key}'] = parsed;
-          }
-        }
-        if (storedFlags is Map) {
-          for (final entry in storedFlags.entries) {
-            if (entry.value is Map) {
-              _flagDetails['${entry.key}'] = _FlagDetail.fromMap(
-                Map<String, dynamic>.from(entry.value as Map),
-              );
-            }
-          }
-        }
-        final signoff = facilities['signoff'];
-        if (signoff is Map) {
-          _headteacher.text = '${signoff['headteacher'] ?? ''}';
-          _assistantHead.text = '${signoff['assistantHead'] ?? ''}';
-        }
+        _hydrateFacilities(closure.facilities);
+        if (_readOnly) _tab = _InspectionTab.report;
         _loading = false;
       });
     } catch (error) {
@@ -124,11 +117,101 @@ class _FacilityInspectionPrototypeState
     }
   }
 
+  void _hydrateFacilities(Map<String, dynamic> facilities) {
+    _existingFacilities = facilities;
+    _submitted = facilities['inspectionCompleted'] == true;
+    _savedAt = DateTime.tryParse('${facilities['savedAt'] ?? ''}');
+    _openDetails.clear();
+    _checklistTarget = null;
+    _ratings.clear();
+    _notApplicableReasons.clear();
+    _comments.clear();
+    _flagDetails.clear();
+    final storedRatings = facilities['ratings'];
+    final storedComments = facilities['comments'];
+    final storedFlags = facilities['findings'];
+    if (storedRatings is Map) {
+      for (final entry in storedRatings.entries) {
+        final parsed = _conditionFromApi('${entry.value}');
+        if (parsed != null) _ratings['${entry.key}'] = parsed;
+      }
+    }
+    final storedReasons = facilities['notApplicableReasons'];
+    if (storedReasons is Map) {
+      for (final entry in storedReasons.entries) {
+        final id = entry.key;
+        final reason = entry.value;
+        if (id is String &&
+            _ratings[id] == _Condition.notApplicable &&
+            reason is String &&
+            reason.trim().isNotEmpty) {
+          _notApplicableReasons[id] = reason.trim();
+        }
+      }
+    }
+    if (storedComments is Map) {
+      for (final entry in storedComments.entries) {
+        if (entry.key is String && entry.value is String) {
+          _comments[entry.key as String] = entry.value as String;
+        }
+      }
+    }
+    if (storedFlags is Map) {
+      for (final entry in storedFlags.entries) {
+        if (entry.value is Map) {
+          final id = '${entry.key}';
+          final flag = Map<String, dynamic>.from(entry.value as Map);
+          _flagDetails[id] = _FlagDetail.fromMap(flag);
+          final comment = flag['finding'];
+          if (comment is String && comment.trim().isNotEmpty) {
+            _comments[id] = comment;
+          }
+        }
+      }
+    }
+  }
+
+  void _beginEditing() {
+    _photosBeforeEditing = {
+      for (final entry in _evidencePhotos.entries)
+        entry.key: List.of(entry.value),
+    };
+    setState(() {
+      _editing = true;
+      _tab = _InspectionTab.checklist;
+    });
+  }
+
+  void _cancelEditing() {
+    setState(() {
+      _editing = false;
+      _hydrateFacilities(_existingFacilities);
+      _evidencePhotos
+        ..clear()
+        ..addAll(_photosBeforeEditing);
+      _photosBeforeEditing = {};
+      _tab = _InspectionTab.report;
+    });
+    _scrollToTop();
+  }
+
+  void _scrollToTop() {
+    if (_scrollController.hasClients) _scrollController.jumpTo(0);
+  }
+
   int get _totalItems => _sections.fold(0, (sum, s) => sum + s.items.length);
   int get _completed => _ratings.length;
   int get _flags => _flagDetails.length;
+  int get _incompleteFollowUpCount => _flagDetails.entries
+      .where(
+        (entry) =>
+            (_comments[entry.key]?.trim().isEmpty ?? true) ||
+            entry.value.assignedTo.trim().isEmpty ||
+            entry.value.due.trim().isEmpty,
+      )
+      .length;
   int get _toInspect => _totalItems - _completed;
-  int get _score {
+  int? get _score {
     var points = 0.0;
     var rated = 0;
     for (final condition in _ratings.values) {
@@ -137,7 +220,22 @@ class _FacilityInspectionPrototypeState
       if (condition == _Condition.good) points += 1;
       if (condition == _Condition.fair) points += .5;
     }
-    return rated == 0 ? 0 : (points / rated * 100).round();
+    return rated == 0 ? null : (points / rated * 100).round();
+  }
+
+  String get _scoreLabel => _score == null ? '—' : '$_score%';
+
+  String? get _recordedSigner {
+    final signoff = _existingFacilities['signoff'];
+    if (signoff is! Map) return null;
+    final name = signoff['signedByName'] ?? signoff['headteacher'];
+    return name is String && name.trim().isNotEmpty ? name.trim() : null;
+  }
+
+  String get _signoffName {
+    if (_readOnly) return _recordedSigner ?? 'Not recorded';
+    final name = widget.actorDisplayName?.trim();
+    return name == null || name.isEmpty ? 'Signed-in user' : name;
   }
 
   @override
@@ -151,6 +249,7 @@ class _FacilityInspectionPrototypeState
     return ColoredBox(
       color: AppColors.background,
       child: ListView(
+        controller: _scrollController,
         padding: const EdgeInsets.fromLTRB(28, 22, 28, 52),
         children: [
           _pageHeader(),
@@ -192,11 +291,13 @@ class _FacilityInspectionPrototypeState
               fontWeight: FontWeight.w800,
             ),
           ),
-          const SizedBox(height: 6),
-          const Text(
-            'Inspect every applicable area, document problems and assign follow-up work before the school closes.',
-            style: TextStyle(color: AppColors.muted, fontSize: 15),
-          ),
+          if (!_readOnly) ...[
+            const SizedBox(height: 6),
+            const Text(
+              'Inspect every applicable area, document problems and assign follow-up work before the school closes.',
+              style: TextStyle(color: AppColors.muted, fontSize: 15),
+            ),
+          ],
           const SizedBox(height: 10),
           Wrap(
             spacing: 12,
@@ -216,21 +317,37 @@ class _FacilityInspectionPrototypeState
         spacing: 10,
         runSpacing: 10,
         children: [
-          OutlinedButton.icon(
-            onPressed: _downloadChecklistTemplate,
-            icon: const Icon(Icons.download_outlined),
-            label: const Text('Download checklist template'),
-          ),
-          OutlinedButton.icon(
-            onPressed: _saving ? null : () => _save(submit: false),
-            icon: const Icon(Icons.save_outlined),
-            label: const Text('Save draft'),
-          ),
-          FilledButton.icon(
-            onPressed: _saving ? null : () => _save(submit: true),
-            icon: const Icon(Icons.check_circle_outline_rounded),
-            label: Text(_submitted ? 'Update inspection' : 'Submit inspection'),
-          ),
+          if (!_readOnly && !_editing) ...[
+            OutlinedButton.icon(
+              onPressed: _downloadChecklistTemplate,
+              icon: const Icon(Icons.download_outlined),
+              label: const Text('Download checklist template'),
+            ),
+            OutlinedButton.icon(
+              onPressed: _saving ? null : () => _save(submit: false),
+              icon: const Icon(Icons.save_outlined),
+              label: const Text('Save draft'),
+            ),
+          ],
+          if (_editing)
+            TextButton(
+              onPressed: _saving ? null : _cancelEditing,
+              child: const Text('Cancel editing'),
+            ),
+          if (!_readOnly)
+            FilledButton.icon(
+              onPressed: _saving ? null : () => _save(submit: true),
+              icon: const Icon(Icons.check_circle_outline_rounded),
+              label: Text(
+                _editing ? 'Resubmit inspection' : 'Submit inspection',
+              ),
+            ),
+          if (_readOnly && _submitted && !_termClosed)
+            OutlinedButton.icon(
+              onPressed: _beginEditing,
+              icon: const Icon(Icons.edit_outlined),
+              label: const Text('Edit inspection'),
+            ),
         ],
       );
       if (narrow) {
@@ -250,45 +367,67 @@ class _FacilityInspectionPrototypeState
     },
   );
 
-  Widget _previewNotice() => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-    decoration: BoxDecoration(
-      color: _submitted ? AppColors.greenSoft : const Color(0xFFEFF6FF),
-      border: Border.all(
-        color: _submitted
-            ? AppColors.green.withValues(alpha: .3)
-            : AppColors.blue.withValues(alpha: .25),
+  Widget _previewNotice() {
+    final submitted = _submitted && !_editing;
+    final submittedAt = _parseDate(_existingFacilities['submittedAt']);
+    final submissionDetails = [
+      if (_recordedSigner case final String name) 'Signed off by $name',
+      if (submittedAt != null) _formatDate(submittedAt.toLocal()),
+    ].join(' · ');
+    final color = submitted ? AppColors.green : AppColors.blue;
+    final title = switch ((submitted, _termClosed, _editing)) {
+      (true, _, _) => 'Submitted',
+      (_, true, _) => 'Term closed',
+      (_, _, true) => 'Editing submitted inspection',
+      _ => _savedAt == null ? 'Inspection in progress' : 'Draft saved',
+    };
+    final detail = switch ((submitted, _termClosed, _editing)) {
+      (true, _, _) => submissionDetails,
+      (_, true, _) => '',
+      (_, _, true) => 'Resubmit to save your changes.',
+      _ => 'Submit the inspection when every checklist item is answered.',
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: submitted ? AppColors.greenSoft : const Color(0xFFEFF6FF),
+        border: Border.all(color: color.withValues(alpha: .25)),
+        borderRadius: BorderRadius.circular(12),
       ),
-      borderRadius: BorderRadius.circular(12),
-    ),
-    child: Row(
-      children: [
-        Icon(
-          _submitted ? Icons.verified_outlined : Icons.cloud_done_outlined,
-          color: _submitted ? AppColors.green : AppColors.blue,
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            _submitted
-                ? 'Inspection submitted. You can update and resubmit it until the term is closed.'
-                : _savedAt == null
-                ? 'This inspection is connected to the term closure record. Save a draft at any time.'
-                : 'Draft saved. Continue the inspection and submit it when every applicable item is rated.',
-            style: const TextStyle(fontWeight: FontWeight.w700),
+      child: Row(
+        children: [
+          Icon(
+            submitted ? Icons.verified_outlined : Icons.cloud_done_outlined,
+            color: color,
           ),
-        ),
-        if (_saving) ...[
           const SizedBox(width: 12),
-          const SizedBox(
-            width: 18,
-            height: 18,
-            child: CircularProgressIndicator(strokeWidth: 2),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(fontWeight: FontWeight.w800, color: color),
+                ),
+                if (detail.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(detail),
+                ],
+              ],
+            ),
           ),
+          if (_saving) ...[
+            const SizedBox(width: 12),
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ],
         ],
-      ],
-    ),
-  );
+      ),
+    );
+  }
 
   Widget _summaryStrip() => Wrap(
     spacing: 12,
@@ -296,12 +435,16 @@ class _FacilityInspectionPrototypeState
     children: [
       _SummaryMetric(
         label: 'Condition score',
-        value: '$_score%',
+        value: _scoreLabel,
         icon: Icons.speed_outlined,
-        color: _score >= 80 ? AppColors.green : AppColors.amber,
+        color: switch (_score) {
+          null => AppColors.muted,
+          >= 80 => AppColors.green,
+          _ => AppColors.amber,
+        },
       ),
       _SummaryMetric(
-        label: 'Inspected',
+        label: 'Items answered',
         value: '$_completed / $_totalItems',
         icon: Icons.fact_check_outlined,
         color: AppColors.blue,
@@ -313,7 +456,7 @@ class _FacilityInspectionPrototypeState
         color: AppColors.red,
       ),
       _SummaryMetric(
-        label: 'Still to inspect',
+        label: 'Unanswered',
         value: '$_toInspect',
         icon: Icons.pending_actions_outlined,
         color: AppColors.muted,
@@ -365,7 +508,7 @@ class _FacilityInspectionPrototypeState
       label: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(label),
+          Flexible(child: Text(label)),
           if (badge != null) ...[
             const SizedBox(width: 7),
             Container(
@@ -398,15 +541,14 @@ class _FacilityInspectionPrototypeState
   Widget _checklist() => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      _inspectionDetails(),
-      const SizedBox(height: 18),
+      if (!_readOnly) ...[_inspectionDetails(), const SizedBox(height: 18)],
       ..._sections.map(
         (section) => Padding(
           padding: const EdgeInsets.only(bottom: 12),
           child: _section(section),
         ),
       ),
-      _bottomActions(),
+      if (!_readOnly) _bottomActions(),
     ],
   );
 
@@ -441,7 +583,7 @@ class _FacilityInspectionPrototypeState
         const Align(
           alignment: Alignment.centerLeft,
           child: Text(
-            'Sections for facilities the school does not have are marked N/A automatically.',
+            'For facilities your school does not have, open the section and choose Mark all as… → Not applicable.',
             style: TextStyle(color: AppColors.muted, fontSize: 13),
           ),
         ),
@@ -459,7 +601,9 @@ class _FacilityInspectionPrototypeState
     return Card(
       clipBehavior: Clip.antiAlias,
       child: ExpansionTile(
-        initiallyExpanded: section.id == 'classrooms',
+        initiallyExpanded:
+            section.id == 'classrooms' ||
+            section.items.any((item) => item.id == _checklistTarget),
         tilePadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 9),
         childrenPadding: EdgeInsets.zero,
         leading: Container(
@@ -480,7 +624,7 @@ class _FacilityInspectionPrototypeState
           child: Row(
             children: [
               Text(
-                '$done of ${section.items.length} inspected',
+                '$done of ${section.items.length} answered',
                 style: const TextStyle(color: AppColors.muted, fontSize: 12),
               ),
               if (sectionFlags > 0) ...[
@@ -499,10 +643,141 @@ class _FacilityInspectionPrototypeState
         ),
         children: [
           const Divider(height: 1),
+          if (!_readOnly) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: MenuAnchor(
+                  menuChildren: [
+                    for (final rating in _Condition.values)
+                      MenuItemButton(
+                        onPressed: () => _confirmSectionRating(section, rating),
+                        child: Text(_conditionLabel(rating)),
+                      ),
+                  ],
+                  builder: (context, controller, _) => OutlinedButton.icon(
+                    onPressed: () {
+                      if (controller.isOpen) {
+                        controller.close();
+                      } else {
+                        controller.open();
+                      }
+                    },
+                    iconAlignment: IconAlignment.end,
+                    icon: const Icon(Icons.arrow_drop_down),
+                    label: const Text('Mark all as…'),
+                  ),
+                ),
+              ),
+            ),
+            const Divider(height: 1),
+          ],
           ...section.items.map((item) => _inspectionItem(item)),
         ],
       ),
     );
+  }
+
+  Future<void> _confirmSectionRating(
+    _InspectionSection section,
+    _Condition rating,
+  ) async {
+    var replaceAnswered = false;
+    final label = _conditionLabel(rating);
+    final hasAnswered = section.items.any(
+      (item) => _ratings.containsKey(item.id),
+    );
+    final selection = await showDialog<List<_InspectionItem>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final items = [
+            for (final item in section.items)
+              if ((replaceAnswered || !_ratings.containsKey(item.id)) &&
+                  _ratings[item.id] != rating)
+                item,
+          ];
+          final count = items.length;
+          final scope = replaceAnswered ? '' : 'unanswered ';
+          final noun = count == 1 ? 'item' : 'items';
+          return AlertDialog(
+            title: Text('Update ${section.name}'),
+            scrollable: true,
+            content: SizedBox(
+              width: 420,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    count > 0
+                        ? 'Mark $count $scope$noun as $label.'
+                        : replaceAnswered
+                        ? 'All items are already marked $label.'
+                        : 'There are no unanswered items to mark as $label.',
+                  ),
+                  if (rating == _Condition.notApplicable) ...[
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Not applicable counts as answered and is excluded from the condition score.',
+                    ),
+                  ],
+                  if (rating == _Condition.poor) ...[
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Items rated Poor appear in Management flags for follow-up.',
+                    ),
+                  ],
+                  if (hasAnswered) ...[
+                    const SizedBox(height: 10),
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: replaceAnswered,
+                      onChanged: (checked) => setDialogState(
+                        () => replaceAnswered = checked ?? false,
+                      ),
+                      title: const Text('Include already answered items'),
+                      subtitle: const Text(
+                        'By default, only unanswered items are rated.',
+                      ),
+                    ),
+                  ],
+                  if (rating != _Condition.poor &&
+                      items.any((item) => _flagDetails.containsKey(item.id)))
+                    const Text(
+                      'Changing these ratings clears their management follow-up.',
+                    ),
+                  if (rating != _Condition.notApplicable &&
+                      items.any(
+                        (item) => _notApplicableReasons.containsKey(item.id),
+                      ))
+                    const Text('Changing an N/A rating clears its reason.'),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: items.isEmpty
+                    ? null
+                    : () => Navigator.pop(context, items),
+                child: const Text('Apply rating'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (!mounted || selection == null) return;
+    setState(() {
+      for (final item in selection) {
+        _setRating(item, rating);
+      }
+    });
   }
 
   Widget _inspectionItem(_InspectionItem item) {
@@ -510,13 +785,17 @@ class _FacilityInspectionPrototypeState
     final flagged = _flagDetails.containsKey(item.id);
     final evidenceCount = _evidencePhotos[item.id]?.length ?? 0;
     final detailOpen = _openDetails.contains(item.id);
+    final hasDetails = _comments.containsKey(item.id) || evidenceCount > 0;
+    final showDetailsButton = _readOnly ? hasDetails : condition != null;
     return Container(
+      key: ValueKey(item.id),
       decoration: BoxDecoration(
         color: flagged ? const Color(0xFFFFFAF1) : Colors.white,
         border: const Border(bottom: BorderSide(color: AppColors.border)),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
       child: Column(
+        key: item.id == _checklistTarget ? _checklistTargetKey : null,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           LayoutBuilder(
@@ -553,33 +832,70 @@ class _FacilityInspectionPrototypeState
                       ],
                     ),
                   ),
-                  if (condition != null)
-                    IconButton(
-                      tooltip: 'Add finding details',
-                      onPressed: () => setState(() {
-                        detailOpen
-                            ? _openDetails.remove(item.id)
-                            : _openDetails.add(item.id);
-                      }),
-                      icon: Icon(
-                        detailOpen ? Icons.expand_less : Icons.notes_outlined,
-                        color: flagged ? AppColors.red : AppColors.muted,
-                      ),
+                  SizedBox(
+                    width: 104,
+                    height: 40,
+                    child: Align(
+                      alignment: Alignment.topRight,
+                      child: !_readOnly && condition == _Condition.notApplicable
+                          ? TextButton(
+                              onPressed: () => _editNotApplicableReason(item),
+                              style: TextButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                ),
+                              ),
+                              child: Text(
+                                _notApplicableReasons.containsKey(item.id)
+                                    ? 'Edit reason'
+                                    : 'Add reason',
+                              ),
+                            )
+                          : !showDetailsButton
+                          ? null
+                          : IconButton(
+                              tooltip: 'Comment and photos',
+                              onPressed: () => setState(() {
+                                detailOpen
+                                    ? _openDetails.remove(item.id)
+                                    : _openDetails.add(item.id);
+                              }),
+                              icon: Icon(
+                                detailOpen
+                                    ? Icons.expand_less
+                                    : Icons.notes_outlined,
+                                color: flagged
+                                    ? AppColors.red
+                                    : AppColors.muted,
+                              ),
+                            ),
                     ),
+                  ),
                 ],
               );
               final choices = Wrap(
                 spacing: 6,
                 runSpacing: 6,
-                children: _Condition.values
-                    .map(
-                      (value) => _conditionChoice(
-                        item: item,
-                        value: value,
-                        selected: condition == value,
-                      ),
-                    )
-                    .toList(),
+                children: _readOnly
+                    ? [
+                        _SmallTag(
+                          label: condition == null
+                              ? 'Unanswered'
+                              : _conditionLabel(condition),
+                          color: condition == null
+                              ? AppColors.muted
+                              : _conditionColor(condition),
+                        ),
+                      ]
+                    : _Condition.values
+                          .map(
+                            (value) => _conditionChoice(
+                              item: item,
+                              value: value,
+                              selected: condition == value,
+                            ),
+                          )
+                          .toList(),
               );
               if (constraints.maxWidth < 820) {
                 return Column(
@@ -602,43 +918,29 @@ class _FacilityInspectionPrototypeState
     );
   }
 
+  Color _conditionColor(_Condition value) => switch (value) {
+    _Condition.good => AppColors.green,
+    _Condition.fair => AppColors.amber,
+    _Condition.poor => AppColors.red,
+    _Condition.notApplicable => AppColors.muted,
+  };
+
   Widget _conditionChoice({
     required _InspectionItem item,
     required _Condition value,
     required bool selected,
   }) {
-    final (label, color) = switch (value) {
-      _Condition.good => ('Good', AppColors.green),
-      _Condition.fair => ('Fair', AppColors.amber),
-      _Condition.poor => ('Poor', AppColors.red),
-      _Condition.notApplicable => ('N/A', AppColors.muted),
-    };
+    final color = _conditionColor(value);
     return ChoiceChip(
-      label: Text(label),
+      label: Text(
+        value == _Condition.notApplicable ? 'N/A' : _conditionLabel(value),
+      ),
       selected: selected,
       showCheckmark: false,
-      onSelected: (_) => setState(() {
-        _ratings[item.id] = value;
-        if (value == _Condition.poor) {
-          _flagDetails.putIfAbsent(
-            item.id,
-            () => _FlagDetail(
-              severity: item.safety ? 'Urgent' : 'High',
-              finding: '',
-              assignedTo: '',
-              due: '',
-              status: 'OPEN',
-            ),
-          );
-          _openDetails.add(item.id);
-        } else if (value == _Condition.notApplicable) {
-          _openDetails.add(item.id);
-          _flagDetails.remove(item.id);
-        } else {
-          _flagDetails.remove(item.id);
-        }
-        _submitted = false;
-      }),
+      onSelected: (_) {
+        if (selected && value == _Condition.notApplicable) return;
+        setState(() => _setRating(item, value, openPoorDetails: true));
+      },
       labelStyle: TextStyle(
         color: selected ? Colors.white : AppColors.muted,
         fontSize: 12,
@@ -651,8 +953,75 @@ class _FacilityInspectionPrototypeState
     );
   }
 
+  void _setRating(
+    _InspectionItem item,
+    _Condition rating, {
+    bool openPoorDetails = false,
+  }) {
+    _ratings[item.id] = rating;
+    if (rating != _Condition.notApplicable) {
+      _notApplicableReasons.remove(item.id);
+    }
+    if (rating == _Condition.poor) {
+      _flagDetails.putIfAbsent(
+        item.id,
+        () => _FlagDetail(
+          severity: item.safety ? 'Urgent' : 'High',
+          assignedTo: '',
+          due: '',
+          status: 'OPEN',
+        ),
+      );
+      if (openPoorDetails) _openDetails.add(item.id);
+    } else {
+      _flagDetails.remove(item.id);
+      if (rating == _Condition.notApplicable) _openDetails.remove(item.id);
+    }
+  }
+
+  Future<void> _editNotApplicableReason(_InspectionItem item) async {
+    final previous = _notApplicableReasons[item.id] ?? '';
+    var reason = previous;
+    final saved = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Why is this item not applicable?'),
+        content: SizedBox(
+          width: 400,
+          child: TextFormField(
+            autofocus: true,
+            initialValue: previous,
+            onChanged: (value) => reason = value,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              labelText: 'Reason (optional)',
+              alignLabelWithHint: true,
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, reason.trim()),
+            child: const Text('Save reason'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || saved == null || saved == previous) return;
+    setState(() {
+      if (saved.isEmpty) {
+        _notApplicableReasons.remove(item.id);
+      } else {
+        _notApplicableReasons[item.id] = saved;
+      }
+    });
+  }
+
   Widget _findingDetail(_InspectionItem item) {
-    final flag = _flagDetails[item.id];
     final photos = _evidencePhotos[item.id] ?? const <_EvidencePhoto>[];
     return Container(
       padding: const EdgeInsets.all(16),
@@ -664,120 +1033,31 @@ class _FacilityInspectionPrototypeState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (flag != null) ...[
-            Row(
-              children: [
-                const Icon(Icons.flag_outlined, color: AppColors.red, size: 19),
-                const SizedBox(width: 7),
-                Text(
-                  'Sent to management · ${flag.severity}',
-                  style: const TextStyle(
-                    color: AppColors.red,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ],
+          if (_readOnly) ...[
+            if (_comments[item.id] case final String comment) Text(comment),
+          ] else ...[
+            TextFormField(
+              initialValue: _comments[item.id] ?? '',
+              onChanged: (value) {
+                if (value.trim().isEmpty) {
+                  _comments.remove(item.id);
+                } else {
+                  _comments[item.id] = value;
+                }
+              },
+              maxLines: 2,
+              decoration: const InputDecoration(
+                labelText: 'Comment',
+                alignLabelWithHint: true,
+              ),
             ),
             const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () => _pickEvidencePhotos(item),
+              icon: const Icon(Icons.add_a_photo_outlined),
+              label: const Text('Add photos'),
+            ),
           ],
-          TextFormField(
-            initialValue: flag?.finding ?? '',
-            onChanged: (value) => _updateFlag(
-              item,
-              (current) => current.copyWith(finding: value),
-            ),
-            maxLines: 2,
-            decoration: InputDecoration(
-              labelText: _ratings[item.id] == _Condition.notApplicable
-                  ? 'Reason this does not apply'
-                  : 'Finding or comment',
-              hintText: 'Describe the location, extent and action needed.',
-              alignLabelWithHint: true,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children: [
-              if (item.quantity)
-                const SizedBox(
-                  width: 240,
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          decoration: InputDecoration(labelText: 'Found'),
-                        ),
-                      ),
-                      SizedBox(width: 8),
-                      Expanded(
-                        child: TextField(
-                          decoration: InputDecoration(labelText: 'Expected'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              if (flag != null) ...[
-                SizedBox(
-                  width: 190,
-                  child: TextFormField(
-                    initialValue: flag.assignedTo,
-                    onChanged: (value) => _updateFlag(
-                      item,
-                      (current) => current.copyWith(assignedTo: value),
-                    ),
-                    decoration: const InputDecoration(labelText: 'Assigned to'),
-                  ),
-                ),
-                SizedBox(
-                  width: 160,
-                  child: TextFormField(
-                    initialValue: flag.due,
-                    onChanged: (value) => _updateFlag(
-                      item,
-                      (current) => current.copyWith(due: value),
-                    ),
-                    decoration: const InputDecoration(labelText: 'Fix by'),
-                  ),
-                ),
-                SizedBox(
-                  width: 190,
-                  child: DropdownButtonFormField<String>(
-                    key: ValueKey('${item.id}:${flag.status}'),
-                    value: flag.status,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Finding status',
-                    ),
-                    items: _findingStatusOptions.entries
-                        .map(
-                          (entry) => DropdownMenuItem<String>(
-                            value: entry.key,
-                            child: Text(entry.value),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) {
-                      if (value == null) return;
-                      setState(
-                        () => _updateFlag(
-                          item,
-                          (current) => current.copyWith(status: value),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ],
-              OutlinedButton.icon(
-                onPressed: () => _pickEvidencePhotos(item),
-                icon: const Icon(Icons.add_a_photo_outlined),
-                label: const Text('Add evidence photo'),
-              ),
-            ],
-          ),
           if (photos.isNotEmpty) ...[
             const SizedBox(height: 14),
             Wrap(
@@ -789,13 +1069,101 @@ class _FacilityInspectionPrototypeState
             ),
             const SizedBox(height: 8),
             const Text(
-              'Photo previews are attached to this form only. Permanent storage will be connected with the backend.',
+              'Photo previews are available during this session.',
               style: TextStyle(color: AppColors.muted, fontSize: 12),
             ),
           ],
         ],
       ),
     );
+  }
+
+  Future<void> _editFollowUp(_InspectionItem item, _FlagDetail flag) async {
+    var updated = flag;
+    final saved = await showDialog<_FlagDetail>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Update follow-up'),
+        content: SizedBox(
+          width: 400,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(item.label),
+                const SizedBox(height: 16),
+                TextFormField(
+                  initialValue: flag.assignedTo,
+                  onChanged: (value) =>
+                      updated = updated.copyWith(assignedTo: value.trim()),
+                  decoration: const InputDecoration(labelText: 'Assigned to'),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  initialValue: flag.due,
+                  onChanged: (value) =>
+                      updated = updated.copyWith(due: value.trim()),
+                  decoration: const InputDecoration(labelText: 'Fix by'),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  value: flag.status,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Finding status',
+                  ),
+                  items: [
+                    for (final entry in _findingStatusOptions.entries)
+                      DropdownMenuItem(
+                        value: entry.key,
+                        child: Text(entry.value),
+                      ),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) {
+                      updated = updated.copyWith(status: value);
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, updated),
+            child: const Text('Apply changes'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || saved == null || identical(saved, flag)) return;
+    setState(() {
+      _flagDetails[item.id] = saved;
+    });
+  }
+
+  void _openChecklistItem(_InspectionItem item) {
+    setState(() {
+      _tab = _InspectionTab.checklist;
+      _checklistTarget = item.id;
+      _openDetails.add(item.id);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = _checklistTargetKey.currentContext;
+      if (target != null) {
+        Scrollable.ensureVisible(
+          target,
+          alignment: .2,
+          duration: const Duration(milliseconds: 250),
+        );
+      }
+    });
   }
 
   Widget _managementFlags() {
@@ -848,11 +1216,13 @@ class _FacilityInspectionPrototypeState
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-                    const SizedBox(height: 5),
-                    Text(
-                      flag.finding,
-                      style: const TextStyle(color: AppColors.muted),
-                    ),
+                    if (_comments[item.id] case final String comment) ...[
+                      const SizedBox(height: 5),
+                      Text(
+                        comment,
+                        style: const TextStyle(color: AppColors.muted),
+                      ),
+                    ],
                     const SizedBox(height: 14),
                     Wrap(
                       spacing: 22,
@@ -860,11 +1230,15 @@ class _FacilityInspectionPrototypeState
                       children: [
                         _Meta(
                           icon: Icons.person_outline,
-                          label: flag.assignedTo,
+                          label: flag.assignedTo.isEmpty
+                              ? 'Unassigned'
+                              : flag.assignedTo,
                         ),
                         _Meta(
                           icon: Icons.event_outlined,
-                          label: 'Fix by ${flag.due}',
+                          label: flag.due.isEmpty
+                              ? 'No due date'
+                              : 'Fix by ${flag.due}',
                         ),
                         _Meta(
                           icon: Icons.photo_outlined,
@@ -880,20 +1254,16 @@ class _FacilityInspectionPrototypeState
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
                         OutlinedButton(
-                          onPressed: () => setState(() {
-                            _tab = _InspectionTab.checklist;
-                            _openDetails.add(entry.key);
-                          }),
+                          onPressed: () => _openChecklistItem(item),
                           child: const Text('Open checklist item'),
                         ),
-                        const SizedBox(width: 10),
-                        FilledButton.tonal(
-                          onPressed: () => setState(() {
-                            _tab = _InspectionTab.checklist;
-                            _openDetails.add(entry.key);
-                          }),
-                          child: const Text('Update follow-up'),
-                        ),
+                        if (!_readOnly) ...[
+                          const SizedBox(width: 10),
+                          FilledButton.tonal(
+                            onPressed: () => _editFollowUp(item, flag),
+                            child: const Text('Update follow-up'),
+                          ),
+                        ],
                       ],
                     ),
                   ],
@@ -935,7 +1305,7 @@ class _FacilityInspectionPrototypeState
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '$_score%',
+                    _scoreLabel,
                     style: const TextStyle(
                       fontSize: 48,
                       height: 1,
@@ -987,38 +1357,49 @@ class _FacilityInspectionPrototypeState
           ),
         ),
       ),
-      const SizedBox(height: 12),
-      Container(
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          color: const Color(0xFFFFEEEE),
-          border: Border.all(color: const Color(0xFFF2B9B9)),
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: const Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(Icons.health_and_safety_outlined, color: AppColors.red),
-            SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '2 urgent safety issues require acknowledgement',
-                    style: TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                  SizedBox(height: 4),
-                  Text(
-                    'The score does not override safety. Each urgent issue must have an owner and due date before the report can be submitted.',
-                    style: TextStyle(color: AppColors.muted),
-                  ),
-                ],
+      if (_notApplicableReasons.isNotEmpty) ...[
+        const SizedBox(height: 12),
+        _notApplicableReasonSummary(),
+      ],
+      if (_incompleteFollowUpCount > 0) ...[
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFEEEE),
+            border: Border.all(color: const Color(0xFFF2B9B9)),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(
+                Icons.health_and_safety_outlined,
+                color: AppColors.red,
               ),
-            ),
-          ],
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _incompleteFollowUpCount == 1
+                          ? '1 finding needs follow-up details'
+                          : '$_incompleteFollowUpCount findings need follow-up details',
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Add a comment, owner and fix-by date for each finding before submitting.',
+                      style: TextStyle(color: AppColors.muted),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
-      ),
+      ],
       const SizedBox(height: 12),
       Card(
         child: Padding(
@@ -1087,9 +1468,11 @@ class _FacilityInspectionPrototypeState
                     children: [
                       Icon(Icons.photo_outlined, color: AppColors.muted),
                       SizedBox(width: 10),
-                      Text(
-                        'No photo evidence has been added.',
-                        style: TextStyle(color: AppColors.muted),
+                      Expanded(
+                        child: Text(
+                          'No photo evidence has been added.',
+                          style: TextStyle(color: AppColors.muted),
+                        ),
                       ),
                     ],
                   ),
@@ -1127,49 +1510,69 @@ class _FacilityInspectionPrototypeState
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 5),
-              const Text(
-                'Names are recorded when the final inspection is submitted.',
-                style: TextStyle(color: AppColors.muted),
+              Text(
+                _readOnly ? 'Signed off by' : 'Signing as',
+                style: const TextStyle(color: AppColors.muted),
               ),
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: [
-                  SizedBox(
-                    width: 260,
-                    child: TextField(
-                      controller: _headteacher,
-                      decoration: const InputDecoration(
-                        labelText: 'Headteacher',
-                      ),
+              const SizedBox(height: 6),
+              Text(
+                _signoffName,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              if (!_readOnly) ...[
+                const SizedBox(height: 18),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton.icon(
+                    onPressed: _saving ? null : () => _save(submit: true),
+                    icon: const Icon(Icons.verified_outlined),
+                    label: Text(
+                      _editing
+                          ? 'Resubmit inspection'
+                          : 'Submit final inspection',
                     ),
                   ),
-                  SizedBox(
-                    width: 260,
-                    child: TextField(
-                      controller: _assistantHead,
-                      decoration: const InputDecoration(
-                        labelText: 'Assistant head',
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 18),
-              Align(
-                alignment: Alignment.centerRight,
-                child: FilledButton.icon(
-                  onPressed: _saving ? null : () => _save(submit: true),
-                  icon: const Icon(Icons.verified_outlined),
-                  label: const Text('Submit final inspection'),
                 ),
-              ),
+              ],
             ],
           ),
         ),
       ),
     ],
+  );
+
+  Widget _notApplicableReasonSummary() => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Not applicable reasons',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+          ),
+          for (final section in _sections)
+            for (final item in section.items)
+              if (_notApplicableReasons[item.id] case final String reason)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item.label,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      Text(
+                        reason,
+                        style: const TextStyle(color: AppColors.muted),
+                      ),
+                    ],
+                  ),
+                ),
+        ],
+      ),
+    ),
   );
 
   Widget _reportSectionRow(_InspectionSection section) {
@@ -1180,47 +1583,63 @@ class _FacilityInspectionPrototypeState
     final flags = section.items
         .where((item) => _flagDetails.containsKey(item.id))
         .length;
+    final name = Text(
+      section.name,
+      style: const TextStyle(fontWeight: FontWeight.w700),
+    );
+    final progressBar = LinearProgressIndicator(
+      value: progress,
+      minHeight: 8,
+      borderRadius: BorderRadius.circular(8),
+      backgroundColor: AppColors.border,
+      color: flags > 0 ? AppColors.amber : AppColors.green,
+    );
+    final count = Text(
+      '$done/${section.items.length}',
+      textAlign: TextAlign.right,
+      style: const TextStyle(color: AppColors.muted),
+    );
+    final flagCount = Text(
+      flags == 0 ? 'No flags' : '$flags flagged',
+      textAlign: TextAlign.right,
+      style: TextStyle(
+        color: flags == 0 ? AppColors.green : AppColors.red,
+        fontWeight: FontWeight.w700,
+      ),
+    );
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 190,
-            child: Text(
-              section.name,
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-          ),
-          Expanded(
-            child: LinearProgressIndicator(
-              value: progress,
-              minHeight: 8,
-              borderRadius: BorderRadius.circular(8),
-              backgroundColor: AppColors.border,
-              color: flags > 0 ? AppColors.amber : AppColors.green,
-            ),
-          ),
-          const SizedBox(width: 14),
-          SizedBox(
-            width: 88,
-            child: Text(
-              '$done/${section.items.length}',
-              textAlign: TextAlign.right,
-              style: const TextStyle(color: AppColors.muted),
-            ),
-          ),
-          SizedBox(
-            width: 90,
-            child: Text(
-              flags == 0 ? 'No flags' : '$flags flagged',
-              textAlign: TextAlign.right,
-              style: TextStyle(
-                color: flags == 0 ? AppColors.green : AppColors.red,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 520) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: name),
+                    const SizedBox(width: 10),
+                    count,
+                    const SizedBox(width: 10),
+                    flagCount,
+                  ],
+                ),
+                const SizedBox(height: 8),
+                progressBar,
+              ],
+            );
+          }
+          return Row(
+            children: [
+              SizedBox(width: 190, child: name),
+              Expanded(child: progressBar),
+              const SizedBox(width: 14),
+              SizedBox(width: 88, child: count),
+              SizedBox(width: 90, child: flagCount),
+            ],
+          );
+        },
       ),
     );
   }
@@ -1254,12 +1673,14 @@ class _FacilityInspectionPrototypeState
     child: Row(
       mainAxisAlignment: MainAxisAlignment.end,
       children: [
-        OutlinedButton.icon(
-          onPressed: _saving ? null : () => _save(submit: false),
-          icon: const Icon(Icons.save_outlined),
-          label: const Text('Save draft'),
-        ),
-        const SizedBox(width: 10),
+        if (!_editing) ...[
+          OutlinedButton.icon(
+            onPressed: _saving ? null : () => _save(submit: false),
+            icon: const Icon(Icons.save_outlined),
+            label: const Text('Save draft'),
+          ),
+          const SizedBox(width: 10),
+        ],
         FilledButton.icon(
           onPressed: () => setState(() => _tab = _InspectionTab.report),
           icon: const Icon(Icons.arrow_forward_rounded),
@@ -1307,7 +1728,6 @@ class _FacilityInspectionPrototypeState
       if (selected.isNotEmpty) {
         setState(() {
           _evidencePhotos[item.id] = [...existing, ...selected];
-          _submitted = false;
         });
       }
       if (rejectedForSize > 0) {
@@ -1373,18 +1793,18 @@ class _FacilityInspectionPrototypeState
               ],
             ),
           ),
-          IconButton(
-            tooltip: 'Remove photo',
-            visualDensity: VisualDensity.compact,
-            onPressed: () => setState(() {
-              _evidencePhotos[item.id]?.remove(photo);
-              if (_evidencePhotos[item.id]?.isEmpty ?? false) {
-                _evidencePhotos.remove(item.id);
-              }
-              _submitted = false;
-            }),
-            icon: const Icon(Icons.close_rounded, size: 18),
-          ),
+          if (!_readOnly)
+            IconButton(
+              tooltip: 'Remove photo',
+              visualDensity: VisualDensity.compact,
+              onPressed: () => setState(() {
+                _evidencePhotos[item.id]?.remove(photo);
+                if (_evidencePhotos[item.id]?.isEmpty ?? false) {
+                  _evidencePhotos.remove(item.id);
+                }
+              }),
+              icon: const Icon(Icons.close_rounded, size: 18),
+            ),
         ],
       ),
     );
@@ -1479,25 +1899,8 @@ class _FacilityInspectionPrototypeState
   _InspectionItem _itemById(String id) =>
       _sectionForItem(id).items.firstWhere((item) => item.id == id);
 
-  void _updateFlag(
-    _InspectionItem item,
-    _FlagDetail Function(_FlagDetail current) update,
-  ) {
-    if (_ratings[item.id] != _Condition.poor) return;
-    final current =
-        _flagDetails[item.id] ??
-        _FlagDetail(
-          severity: item.safety ? 'Urgent' : 'High',
-          finding: '',
-          assignedTo: '',
-          due: '',
-          status: 'OPEN',
-        );
-    _flagDetails[item.id] = update(current);
-    _submitted = false;
-  }
-
   Future<void> _save({required bool submit}) async {
+    if (_readOnly || _saving || (_editing && !submit)) return;
     if (submit) {
       if (_toInspect > 0) {
         _showMessage(
@@ -1507,23 +1910,12 @@ class _FacilityInspectionPrototypeState
         setState(() => _tab = _InspectionTab.checklist);
         return;
       }
-      final incompleteFlags = _flagDetails.values.where(
-        (flag) =>
-            flag.finding.trim().isEmpty ||
-            flag.assignedTo.trim().isEmpty ||
-            flag.due.trim().isEmpty,
-      );
-      if (incompleteFlags.isNotEmpty) {
+      if (_incompleteFollowUpCount > 0) {
         _showMessage(
-          'Every poor condition needs a finding, owner and fix-by date.',
+          'Add a comment for each poor condition. Set its owner and fix-by date in Management flags.',
           error: true,
         );
         setState(() => _tab = _InspectionTab.flags);
-        return;
-      }
-      if (_headteacher.text.trim().isEmpty) {
-        _showMessage('Add the headteacher sign-off.', error: true);
-        setState(() => _tab = _InspectionTab.report);
         return;
       }
     }
@@ -1543,9 +1935,17 @@ class _FacilityInspectionPrototypeState
         for (final entry in _ratings.entries)
           entry.key: _conditionToApi(entry.value),
       },
+      'notApplicableReasons': Map.of(_notApplicableReasons),
+      'comments': {
+        for (final entry in _comments.entries)
+          if (!_flagDetails.containsKey(entry.key))
+            entry.key: entry.value.trim(),
+      },
       'findings': {
         for (final entry in _flagDetails.entries)
-          entry.key: entry.value.toMap(),
+          entry.key: entry.value.toMap(
+            finding: _comments[entry.key]?.trim() ?? '',
+          ),
       },
       'applicableFacilities': {
         'ictLab': true,
@@ -1554,27 +1954,31 @@ class _FacilityInspectionPrototypeState
         'kitchen': true,
         'boarding': false,
       },
-      'signoff': {
-        'headteacher': _headteacher.text.trim(),
-        'assistantHead': _assistantHead.text.trim(),
-      },
     };
+    if (facilities['score'] == null) facilities.remove('score');
     try {
-      await widget.repository.saveDraft(
+      final saved = await widget.repository.saveDraft(
         widget.schoolId,
         HeadmasterTermClosureInput(
           actorUserId: widget.actorUserId,
           acknowledgements: _acknowledgements,
           facilities: facilities,
+          submitInspection: submit,
         ),
       );
       if (!mounted) return;
       setState(() {
-        _existingFacilities = facilities;
-        _submitted = submit;
+        _existingFacilities = saved.facilities;
+        _submitted = saved.facilities['inspectionCompleted'] == true;
         _savedAt = now;
         _saving = false;
+        if (_submitted) {
+          _editing = false;
+          _photosBeforeEditing = {};
+          _tab = _InspectionTab.report;
+        }
       });
+      if (_submitted) _scrollToTop();
       widget.onChanged?.call();
       _showMessage(
         submit
@@ -1846,21 +2250,18 @@ class _InspectionItem {
 class _FlagDetail {
   const _FlagDetail({
     required this.severity,
-    required this.finding,
     required this.assignedTo,
     required this.due,
     required this.status,
   });
 
   final String severity;
-  final String finding;
   final String assignedTo;
   final String due;
   final String status;
 
   factory _FlagDetail.fromMap(Map<String, dynamic> map) => _FlagDetail(
     severity: '${map['severity'] ?? 'High'}',
-    finding: '${map['finding'] ?? ''}',
     assignedTo: '${map['assignedTo'] ?? ''}',
     due: '${map['due'] ?? ''}',
     status: _normaliseFindingStatus(map['status']),
@@ -1870,19 +2271,17 @@ class _FlagDetail {
 
   _FlagDetail copyWith({
     String? severity,
-    String? finding,
     String? assignedTo,
     String? due,
     String? status,
   }) => _FlagDetail(
     severity: severity ?? this.severity,
-    finding: finding ?? this.finding,
     assignedTo: assignedTo ?? this.assignedTo,
     due: due ?? this.due,
     status: status ?? this.status,
   );
 
-  Map<String, dynamic> toMap() => {
+  Map<String, dynamic> toMap({required String finding}) => {
     'severity': severity,
     'finding': finding,
     'assignedTo': assignedTo,

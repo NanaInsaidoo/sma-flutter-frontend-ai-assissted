@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../../theme/app_theme.dart';
 import '../domain/teacher_term_review_models.dart';
 
+const _pendingTextColor = Color(0xFF805209);
+
 class TeacherTermClosingScreen extends StatefulWidget {
   const TeacherTermClosingScreen({
     super.key,
@@ -24,6 +26,7 @@ class _TeacherTermClosingScreenState extends State<TeacherTermClosingScreen> {
   late Future<TeacherTermReview> _future;
   TeacherTermReview? _review;
   bool _saving = false;
+  bool _showErrors = false;
   final _reflection = <String, TextEditingController>{};
   final _leadership = <String, String>{};
   final _recommendations = <NextTermRecommendation>[];
@@ -46,6 +49,24 @@ class _TeacherTermClosingScreenState extends State<TeacherTermClosingScreen> {
     'safe': 'Do you feel safe at this school?',
     'speakFreely': 'Do you feel able to speak your mind without retaliation?',
   };
+  final _requiredFields = <String, GlobalKey>{
+    for (final key in reflectionQuestions.keys) key: GlobalKey(),
+    for (final key in leadershipQuestions.keys) key: GlobalKey(),
+    'damage': GlobalKey(),
+    'recommendations': GlobalKey(),
+    'concern': GlobalKey(),
+  };
+
+  Iterable<String> get _missingReflection => reflectionQuestions.keys.where(
+    (key) =>
+        key != 'personalCircumstances' &&
+        (_reflection[key]?.text.trim().isEmpty ?? true),
+  );
+  Iterable<String> get _missingLeadership => leadershipQuestions.keys.where(
+    (key) => _leadership[key]?.trim().isNotEmpty != true,
+  );
+  bool get _missingConcern => _serious && _concern.text.trim().length < 10;
+
   @override
   void initState() {
     super.initState();
@@ -106,80 +127,83 @@ class _TeacherTermClosingScreenState extends State<TeacherTermClosingScreen> {
       }
       return ColoredBox(
         color: AppColors.background,
-        child: ListView(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(28, 28, 28, 48),
-          children: [
-            Row(
-              children: [
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Close your teaching term',
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w800,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Close your teaching term',
+                          style: TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
+                        SizedBox(height: 5),
+                        Text(
+                          'Resolve outstanding work, reflect, and submit your end-of-term review.',
+                          style: TextStyle(color: AppColors.muted),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _Status(r.reviewStatus),
+                ],
+              ),
+              const SizedBox(height: 18),
+              if (!_available && !_locked)
+                _Notice(
+                  icon: Icons.lock_clock_outlined,
+                  title: r.status == 'NOT_RELEASED'
+                      ? 'The review has not been released'
+                      : 'The review window is closed',
+                  message: r.status == 'NOT_RELEASED'
+                      ? 'Your headmaster will release this review at the appropriate time.'
+                      : 'Contact the headmaster if you need the review reopened.',
+                ),
+              if (_available || _locked) ...[
+                _outstanding(r),
+                const SizedBox(height: 18),
+                _reflectionSection(),
+                const SizedBox(height: 18),
+                _damageSection(),
+                const SizedBox(height: 18),
+                _recommendationSection(),
+                const SizedBox(height: 18),
+                _leadershipSection(),
+                const SizedBox(height: 24),
+                if (!_locked)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      OutlinedButton(
+                        onPressed: _saving ? null : () => _save(false),
+                        child: const Text('Save draft'),
                       ),
-                      SizedBox(height: 5),
-                      Text(
-                        'Resolve outstanding work, reflect, and submit your end-of-term review.',
-                        style: TextStyle(color: AppColors.muted),
+                      const SizedBox(width: 12),
+                      FilledButton.icon(
+                        onPressed: _saving ? null : () => _save(true),
+                        icon: const Icon(Icons.send_outlined),
+                        label: const Text('Submit term review'),
                       ),
                     ],
                   ),
-                ),
-                _Status(r.reviewStatus),
               ],
-            ),
-            const SizedBox(height: 18),
-            if (!_available && !_locked)
-              _Notice(
-                icon: Icons.lock_clock_outlined,
-                title: r.status == 'NOT_RELEASED'
-                    ? 'The review has not been released'
-                    : 'The review window is closed',
-                message: r.status == 'NOT_RELEASED'
-                    ? 'Your headmaster will release this review at the appropriate time.'
-                    : 'Contact the headmaster if you need the review reopened.',
-              ),
-            if (_available || _locked) ...[
-              _outstanding(r),
-              const SizedBox(height: 18),
-              _reflectionSection(),
-              const SizedBox(height: 18),
-              _damageSection(),
-              const SizedBox(height: 18),
-              _recommendationSection(),
-              const SizedBox(height: 18),
-              _leadershipSection(),
-              const SizedBox(height: 24),
-              if (!_locked)
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    OutlinedButton(
-                      onPressed: _saving ? null : () => _save(false),
-                      child: const Text('Save draft'),
-                    ),
-                    const SizedBox(width: 12),
-                    FilledButton.icon(
-                      onPressed: _saving ? null : () => _save(true),
-                      icon: const Icon(Icons.send_outlined),
-                      label: const Text('Submit term review'),
-                    ),
-                  ],
-                ),
             ],
-          ],
+          ),
         ),
       );
     },
   );
   Widget _outstanding(TeacherTermReview r) => _Section(
     title: 'Items requiring action',
-    subtitle: 'Only items that can block submission appear here.',
+    subtitle: 'Review outstanding work and required answers.',
     child: Column(
       children: [
         _ActionRow(
@@ -198,6 +222,7 @@ class _TeacherTermClosingScreenState extends State<TeacherTermClosingScreen> {
           complete: r.evaluationIncompleteCount == 0,
           onTap: widget.onOpenAssessments,
         ),
+        _questionProgress('Teaching reflection', _missingReflection),
         _ActionRow(
           label: 'Loss and damage declaration',
           detail: _damage ? 'Confirmed' : 'Not confirmed',
@@ -212,11 +237,107 @@ class _TeacherTermClosingScreenState extends State<TeacherTermClosingScreen> {
               ? 'No items added'
               : '${_recommendations.length} item(s) still in draft',
           complete: _recommendationsFinal,
-          onTap: null,
+          onTap: _locked || _recommendationsFinal
+              ? null
+              : () => _goToField('recommendations'),
         ),
+        _questionProgress('Headmaster assessment', _missingLeadership),
+        if (_serious)
+          _questionProgress('Serious concern details', [
+            if (_missingConcern) 'concern',
+          ]),
       ],
     ),
   );
+
+  Widget _questionProgress(String label, Iterable<String> pending) {
+    final count = pending.length;
+    return _ActionRow(
+      label: label,
+      detail: count == 0
+          ? 'Complete'
+          : '$count required ${count == 1 ? 'answer' : 'answers'} pending',
+      complete: count == 0,
+      onTap: count == 0 || _locked ? null : () => _goToField(pending.first),
+    );
+  }
+
+  void _goToField(String key) {
+    final target = _requiredFields[key]?.currentContext;
+    if (target != null) {
+      Scrollable.ensureVisible(
+        target,
+        alignment: .16,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  InputDecoration _requiredDecoration(
+    String label, {
+    required bool pending,
+    String error = 'Answer required',
+    bool alignLabelWithHint = false,
+  }) {
+    final highlight = pending && !_locked;
+    return InputDecoration(
+      labelText: label,
+      alignLabelWithHint: alignLabelWithHint,
+      helperText: highlight && !_showErrors ? 'Required · Pending' : null,
+      helperStyle: const TextStyle(
+        color: _pendingTextColor,
+        fontWeight: FontWeight.w700,
+      ),
+      errorText: highlight && _showErrors ? error : null,
+      filled: highlight ? true : null,
+      fillColor: highlight ? AppColors.amber.withValues(alpha: .08) : null,
+      enabledBorder: highlight
+          ? OutlineInputBorder(
+              borderRadius: BorderRadius.circular(9),
+              borderSide: const BorderSide(color: AppColors.amber),
+            )
+          : null,
+    );
+  }
+
+  Widget _requiredConfirmation({
+    required String field,
+    required bool value,
+    required String label,
+    required ValueChanged<bool> onChanged,
+  }) {
+    final pending = !value && !_locked;
+    final color = _showErrors
+        ? Theme.of(context).colorScheme.error
+        : _pendingTextColor;
+    return Container(
+      key: _requiredFields[field],
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: pending
+          ? BoxDecoration(
+              color: AppColors.amber.withValues(alpha: .08),
+              border: Border.all(color: _showErrors ? color : AppColors.amber),
+              borderRadius: BorderRadius.circular(9),
+            )
+          : null,
+      child: CheckboxListTile(
+        contentPadding: EdgeInsets.zero,
+        value: value,
+        onChanged: _locked
+            ? null
+            : (checked) => setState(() => onChanged(checked == true)),
+        title: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: pending
+            ? Text(
+                _showErrors ? 'Confirmation required' : 'Required · Pending',
+                style: TextStyle(color: color, fontWeight: FontWeight.w700),
+              )
+            : null,
+      ),
+    );
+  }
+
   Widget _reflectionSection() => _Section(
     title: 'Teaching reflection',
     subtitle: 'Give management concise, practical information for next term.',
@@ -226,11 +347,16 @@ class _TeacherTermClosingScreenState extends State<TeacherTermClosingScreen> {
             (e) => Padding(
               padding: const EdgeInsets.only(bottom: 14),
               child: TextField(
+                key: _requiredFields[e.key],
                 controller: _reflection[e.key],
                 enabled: !_locked,
                 maxLines: e.key == 'personalCircumstances' ? 2 : 3,
-                decoration: InputDecoration(
-                  labelText: e.value,
+                onChanged: e.key == 'personalCircumstances'
+                    ? null
+                    : (_) => setState(() {}),
+                decoration: _requiredDecoration(
+                  e.value,
+                  pending: _missingReflection.contains(e.key),
                   alignLabelWithHint: true,
                 ),
               ),
@@ -246,16 +372,12 @@ class _TeacherTermClosingScreenState extends State<TeacherTermClosingScreen> {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        CheckboxListTile(
-          contentPadding: EdgeInsets.zero,
+        _requiredConfirmation(
+          field: 'damage',
           value: _damage,
-          onChanged: _locked
-              ? null
-              : (v) => setState(() => _damage = v == true),
-          title: const Text(
-            'I confirm that all known losses and damages have been reported.',
-            style: TextStyle(fontWeight: FontWeight.w700),
-          ),
+          onChanged: (value) => _damage = value,
+          label:
+              'I confirm that all known losses and damages have been reported.',
         ),
         const SizedBox(height: 8),
         OutlinedButton.icon(
@@ -300,17 +422,11 @@ class _TeacherTermClosingScreenState extends State<TeacherTermClosingScreen> {
               label: const Text('Add recommendation'),
             ),
           ),
-        CheckboxListTile(
-          contentPadding: EdgeInsets.zero,
+        _requiredConfirmation(
+          field: 'recommendations',
           value: _recommendationsFinal,
-          onChanged: _locked
-              ? null
-              : (value) =>
-                    setState(() => _recommendationsFinal = value == true),
-          title: const Text(
-            'My recommendations are ready for bursar review.',
-            style: TextStyle(fontWeight: FontWeight.w700),
-          ),
+          onChanged: (value) => _recommendationsFinal = value,
+          label: 'My recommendations are ready for bursar review.',
         ),
       ],
     ),
@@ -326,8 +442,13 @@ class _TeacherTermClosingScreenState extends State<TeacherTermClosingScreen> {
           (e) => Padding(
             padding: const EdgeInsets.only(bottom: 14),
             child: DropdownButtonFormField<String>(
+              key: _requiredFields[e.key],
               value: _leadership[e.key],
-              decoration: InputDecoration(labelText: e.value),
+              isExpanded: true,
+              decoration: _requiredDecoration(
+                e.value,
+                pending: _missingLeadership.contains(e.key),
+              ),
               items: _options(
                 e.key,
               ).map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(),
@@ -351,11 +472,15 @@ class _TeacherTermClosingScreenState extends State<TeacherTermClosingScreen> {
         ),
         if (_serious)
           TextField(
+            key: _requiredFields['concern'],
             controller: _concern,
             enabled: !_locked,
             maxLines: 4,
-            decoration: const InputDecoration(
-              labelText: 'Serious concern details *',
+            onChanged: (_) => setState(() {}),
+            decoration: _requiredDecoration(
+              'Serious concern details',
+              pending: _missingConcern,
+              error: 'Enter at least 10 characters.',
               alignLabelWithHint: true,
             ),
           ),
@@ -392,6 +517,23 @@ class _TeacherTermClosingScreenState extends State<TeacherTermClosingScreen> {
     seriousConcernDetails: _concern.text.trim(),
   );
   Future<void> _save(bool submit) async {
+    if (submit) {
+      final missing = [
+        ..._missingReflection,
+        if (!_damage) 'damage',
+        if (!_recommendationsFinal) 'recommendations',
+        ..._missingLeadership,
+        if (_missingConcern) 'concern',
+      ];
+      if (missing.isNotEmpty) {
+        setState(() => _showErrors = true);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _goToField(missing.first);
+        });
+        _msg('Complete the highlighted required items.', error: true);
+        return;
+      }
+    }
     setState(() => _saving = true);
     try {
       final r = submit
@@ -415,7 +557,10 @@ class _TeacherTermClosingScreenState extends State<TeacherTermClosingScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _saving = false);
-        _msg('$e', error: true);
+        _msg(
+          e.toString().replaceFirst(RegExp(r'^Exception: '), ''),
+          error: true,
+        );
       }
     }
   }
@@ -578,7 +723,32 @@ class _ActionRow extends StatelessWidget {
     ),
     title: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
     subtitle: Text(detail),
-    trailing: onTap == null ? null : const Icon(Icons.chevron_right),
+    trailing: complete && onTap == null
+        ? null
+        : Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (!complete)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.amber.withValues(alpha: .14),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Text(
+                    'Pending',
+                    style: TextStyle(
+                      color: _pendingTextColor,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              if (onTap != null) const Icon(Icons.chevron_right),
+            ],
+          ),
     onTap: onTap,
   );
 }

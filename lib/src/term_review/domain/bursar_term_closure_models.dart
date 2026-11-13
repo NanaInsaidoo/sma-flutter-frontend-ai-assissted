@@ -48,6 +48,7 @@ class BursarTermClosure {
       recommendationsReviewed;
   final List<Map<String, dynamic>> teacherRecommendations,
       consolidatedRecommendations;
+  bool get noFinanceActivity => status == 'NO_FINANCE_ACTIVITY';
   bool get locked => status == 'SUBMITTED' || status == 'APPROVED';
   double get reconciliationTotal => cashTotal + bankTotal + mobileMoneyTotal;
   double get difference => reconciliationTotal - collectedFees;

@@ -198,6 +198,7 @@ class ApiDashboardRepository implements DashboardRepository {
             : administratorName.trim(),
         term: termName,
         academicTermId: term.id > 0 ? term.id : null,
+        termClosed: admissionTerm?.closed ?? false,
         academicYear: academicYear,
         termStartDate: _formatDate(admissionTerm?.startDate),
         termEndDate: _formatDate(admissionTerm?.endDate),
