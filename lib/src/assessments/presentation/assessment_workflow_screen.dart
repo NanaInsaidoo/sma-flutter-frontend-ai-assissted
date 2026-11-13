@@ -9031,6 +9031,7 @@ class _CompleteAssessmentWorkflowState
                 : null,
           ),
           const SizedBox(height: 18),
+          _reportInfoLine('Next term begins on', _nextTermBeginsOn(student)),
           _reportInfoLine(
             'School days',
             _reportValue(student, 'totalSchoolDays'),
@@ -9048,6 +9049,11 @@ class _CompleteAssessmentWorkflowState
     final value = _studentReportCards[student.id]?[key];
     if (value == null || value.toString().trim().isEmpty) return '—';
     return value.toString();
+  }
+
+  String _nextTermBeginsOn(_StudentRecord student) {
+    final date = _reportValue(student, 'nextTermBegins');
+    return date == '—' ? 'TBD' : date;
   }
 
   Widget _reportInfoLine(String label, String value) {
@@ -10713,10 +10719,10 @@ class _CompleteAssessmentWorkflowState
         _section(
           title: 'Promotion & Next Term',
           child: LayoutBuilder(
-            builder: (_, c) => _detailGrid(c.maxWidth, const [
+            builder: (_, c) => _detailGrid(c.maxWidth, [
               ('PROMOTED TO', 'JHS 2A'),
-              ('NEXT TERM BEGINS', '5 January 2026'),
-              ('NEXT TERM FEES', 'GHc 850.00'),
+              if (_studentReportCards.containsKey(student.id))
+                ('NEXT TERM BEGINS ON', _nextTermBeginsOn(student)),
             ]),
           ),
         ),
@@ -10914,6 +10920,23 @@ class _CompleteAssessmentWorkflowState
       );
       return;
     }
+    if (!_studentReportCards.containsKey(student.id) &&
+        widget.customSchoolId.trim().isNotEmpty) {
+      try {
+        final setup = await _assessmentFormSetup;
+        final report = await _assessmentApi.getStudentReportCard(
+          customSchoolId: widget.customSchoolId,
+          customStudentId: student.id,
+          termId: setup.termId,
+          academicYearId: setup.academicYearId,
+        );
+        if (!mounted) return;
+        setState(() => _studentReportCards[student.id] = report);
+      } on AssessmentApiException catch (error) {
+        if (mounted) _notice(error.message);
+        return;
+      }
+    }
     final published = canDistributeReport(_reportStatusFor(student));
     final classTeacherComment = _classTeacherCommentFor(
       student,
@@ -11052,8 +11075,7 @@ class _CompleteAssessmentWorkflowState
                               ? _reportRemarks[student.id]!.promotedTo
                               : 'Not set',
                         ),
-                        ('Next term begins', '5 January 2026'),
-                        ('Next term fees', 'GHS 850.00'),
+                        ('Next term begins on', _nextTermBeginsOn(student)),
                       ]),
                       const SizedBox(height: 16),
                       _reportSection('REPORT RECORD', [
