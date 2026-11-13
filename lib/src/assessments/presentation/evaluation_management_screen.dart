@@ -12,6 +12,9 @@ class EvaluationManagementScreen extends StatefulWidget {
     required this.accessToken,
     this.initialStreamId,
     this.initialStreamName,
+    this.openClassApproval = false,
+    this.onBackToApprovals,
+    this.onApprovalChanged,
     this.onRefreshAccessToken,
   });
 
@@ -21,6 +24,9 @@ class EvaluationManagementScreen extends StatefulWidget {
   final String? accessToken;
   final int? initialStreamId;
   final String? initialStreamName;
+  final bool openClassApproval;
+  final VoidCallback? onBackToApprovals;
+  final VoidCallback? onApprovalChanged;
   final Future<String?> Function()? onRefreshAccessToken;
 
   @override
@@ -101,6 +107,9 @@ class _EvaluationManagementScreenState
           setup: snapshot.requireData,
           initialStreamId: widget.initialStreamId,
           initialStreamName: widget.initialStreamName,
+          openClassApproval: widget.openClassApproval,
+          onBackToApprovals: widget.onBackToApprovals,
+          onApprovalChanged: widget.onApprovalChanged,
           managementProgressOnly: true,
         );
       },

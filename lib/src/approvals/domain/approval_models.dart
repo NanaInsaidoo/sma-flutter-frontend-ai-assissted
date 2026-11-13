@@ -11,7 +11,19 @@ class ApprovalInbox {
   final List<ApprovalItem> myApprovals;
   final List<ApprovalItem> myRequests;
 
-  int get pendingTotal => pendingMyRequests + pendingMyApproval;
+  int get pendingTotal {
+    final pendingEvaluationApprovals = myApprovals
+        .where((item) => item.type == 'CLASS_EVALUATION' && item.pending)
+        .map((item) => item.key)
+        .toSet();
+    final sharedCount = myRequests
+        .where(
+          (item) =>
+              item.pending && pendingEvaluationApprovals.contains(item.key),
+        )
+        .length;
+    return pendingMyRequests + pendingMyApproval - sharedCount;
+  }
 
   String get navigationLabel =>
       'Requests ($pendingMyRequests) & Approvals ($pendingMyApproval)';
