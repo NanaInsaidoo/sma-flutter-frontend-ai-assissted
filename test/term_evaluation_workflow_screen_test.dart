@@ -1163,14 +1163,66 @@ void main() {
         find.text('Ratings & comments progress — Grade 1 - Stream A'),
         findsOneWidget,
       );
-      expect(
-        find.text('Teacher ratings & comment responsibilities'),
-        findsOneWidget,
-      );
+      expect(find.text('Student ratings & comments'), findsOneWidget);
       expect(find.textContaining('Kojo Pending'), findsOneWidget);
       expect(find.textContaining('Esi Submitted'), findsNothing);
       expect(find.text('Remind'), findsOneWidget);
       expect(find.text('Report readiness'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'class progress names the actions for saved ratings and comments',
+    (tester) async {
+      for (final width in [1200.0, 1920.0]) {
+        await tester.binding.setSurfaceSize(Size(width, 1000));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final api = AssessmentApiClient(
+          accessToken: 'token',
+          client: MockClient(
+            (_) async => http.Response(
+              jsonEncode({
+                'released': true,
+                'assignments': [
+                  {
+                    'id': 41,
+                    'streamId': 10,
+                    'staffName': 'Esi Assessment',
+                    'streamName': 'Basic 4 - Section 1',
+                    'assignmentType': 'CLASS_TEACHER',
+                    'status': 'SUBMITTED',
+                    'workflowStatus': 'COMMENTS_IN_PROGRESS',
+                    'studentCount': 5,
+                    'commentsCompleted': 1,
+                    'completionPercent': 100,
+                    'students': const [],
+                  },
+                ],
+              }),
+              200,
+            ),
+          ),
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            home: TermEvaluationWorkflowScreen(
+              key: ValueKey(width),
+              api: api,
+              schoolId: 'SCHOOL-1',
+              viewerName: 'Esi Assessment',
+              viewerRole: 'HEADMASTER',
+              setup: setup,
+              initialStreamId: 10,
+              initialStreamName: 'Basic 4 - Section 1',
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Student ratings & comments'), findsOneWidget);
+        expect(find.text('Edit student ratings'), findsOneWidget);
+        expect(find.text('Edit student comments'), findsOneWidget);
+      }
     },
   );
 
@@ -1968,7 +2020,7 @@ void main() {
         find.byKey(const ValueKey('evaluation-workspace-menu')),
         findsOneWidget,
       );
-      expect(find.text('Leadership approval'), findsOneWidget);
+      expect(find.text('Evaluation approvals'), findsOneWidget);
       expect(find.byKey(const ValueKey('evaluation-by-class')), findsNothing);
 
       await openManagerWorkspace(tester, 'Overview');
@@ -2042,6 +2094,7 @@ void main() {
       http.Request? batchApprovalRequest;
       http.Request? undoApprovalRequest;
       var batchApproved = false;
+      var inboxRefreshes = 0;
       final undoneApprovals = <String>{};
       final ratings = {
         'HOMEWORK_HABITS': 'Excellent',
@@ -2149,13 +2202,13 @@ void main() {
             viewerRole: 'HEADMASTER',
             setup: setup,
             managementProgressOnly: true,
+            initialStreamId: 18,
+            initialStreamName: 'Creche - Section 1',
+            openClassApproval: true,
+            onApprovalChanged: () => inboxRefreshes++,
           ),
         ),
       );
-      await tester.pumpAndSettle();
-
-      expect(find.text('Rejected'), findsOneWidget);
-      await tester.tap(find.text('View'));
       await tester.pumpAndSettle();
 
       expect(find.text('Class ratings & comments approval'), findsOneWidget);
@@ -2186,6 +2239,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(batchApprovalRequest, isNotNull);
+      expect(inboxRefreshes, 1);
       expect(batchApprovalRequest!.body, contains('STU-2'));
       expect(batchApprovalRequest!.body, contains('STU-3'));
       expect(batchApprovalRequest!.body, isNot(contains('STU-1')));

@@ -176,6 +176,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   int? _assessmentStreamId;
   int? _evaluationStreamId;
   String? _evaluationStreamName;
+  bool _evaluationOpenedFromInbox = false;
   int? _teacherClassStreamId;
   bool _selectingTeacherClass = false;
   late String _activeRole;
@@ -427,6 +428,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
       _assessmentStreamId = null;
       _evaluationStreamId = null;
       _evaluationStreamName = null;
+      _evaluationOpenedFromInbox = false;
       _selectedPage = page;
       if (reloadingCurrentPage) {
         _pageReloadRevision += 1;
@@ -440,6 +442,16 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
             ? Future.value(SchoolReadiness.readySchool)
             : widget.readinessRepository!.getReadiness(_schoolId);
       }
+    });
+  }
+
+  void _openClassEvaluationFromInbox(ApprovalItem item) {
+    setState(() {
+      _assessmentStreamId = null;
+      _evaluationStreamId = item.entityId;
+      _evaluationStreamName = item.className;
+      _evaluationOpenedFromInbox = true;
+      _selectedPage = _SchoolAdminPage.evaluations;
     });
   }
 
@@ -507,6 +519,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
           _evaluationStreamId = selected.streamId;
           _evaluationStreamName = selected.label;
         }
+        _evaluationOpenedFromInbox = false;
         _selectedPage = page;
       });
     } catch (error) {
@@ -660,6 +673,9 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                         assessmentStreamId: _assessmentStreamId,
                         evaluationStreamId: _evaluationStreamId,
                         evaluationStreamName: _evaluationStreamName,
+                        evaluationOpenedFromInbox: _evaluationOpenedFromInbox,
+                        onOpenClassEvaluationFromInbox: _openClassEvaluationFromInbox,
+                        onEvaluationApprovalChanged: _refreshApprovalInbox,
                         teacherClassStreamId: _teacherClassStreamId,
                         onOpenTeacherClass: _openTeacherClass,
                         onOpenAssessmentsForStream: _openAssessmentsForStream,
@@ -757,6 +773,9 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
                 assessmentStreamId: _assessmentStreamId,
                 evaluationStreamId: _evaluationStreamId,
                 evaluationStreamName: _evaluationStreamName,
+                evaluationOpenedFromInbox: _evaluationOpenedFromInbox,
+                onOpenClassEvaluationFromInbox: _openClassEvaluationFromInbox,
+                onEvaluationApprovalChanged: _refreshApprovalInbox,
                 teacherClassStreamId: _teacherClassStreamId,
                 onOpenTeacherClass: _openTeacherClass,
                 onOpenAssessmentsForStream: _openAssessmentsForStream,
@@ -854,6 +873,9 @@ class _DashboardBody extends StatelessWidget {
     this.assessmentStreamId,
     this.evaluationStreamId,
     this.evaluationStreamName,
+    required this.evaluationOpenedFromInbox,
+    required this.onOpenClassEvaluationFromInbox,
+    required this.onEvaluationApprovalChanged,
     this.teacherClassStreamId,
     required this.onOpenTeacherClass,
     required this.onOpenAssessmentsForStream,
@@ -907,6 +929,9 @@ class _DashboardBody extends StatelessWidget {
   final int? assessmentStreamId;
   final int? evaluationStreamId;
   final String? evaluationStreamName;
+  final bool evaluationOpenedFromInbox;
+  final ValueChanged<ApprovalItem> onOpenClassEvaluationFromInbox;
+  final VoidCallback onEvaluationApprovalChanged;
   final int? teacherClassStreamId;
   final ValueChanged<TeacherClassAssignment> onOpenTeacherClass;
   final ValueChanged<int> onOpenAssessmentsForStream;
@@ -1020,6 +1045,8 @@ class _DashboardBody extends StatelessWidget {
             onSelectPage(_SchoolAdminPage.expenses);
           } else if (item.sourcePage == 'assessments') {
             onSelectPage(_SchoolAdminPage.assessments);
+          } else if (item.type == 'CLASS_EVALUATION') {
+            onOpenClassEvaluationFromInbox(item);
           } else if (item.sourcePage == 'evaluations') {
             onSelectPage(_SchoolAdminPage.evaluations);
           } else if (item.sourcePage == 'finalReports') {
@@ -1123,7 +1150,9 @@ class _DashboardBody extends StatelessWidget {
 
     if (selectedPage == _SchoolAdminPage.evaluations) {
       return EvaluationManagementScreen(
-        key: ValueKey('evaluation-management-screen-$evaluationStreamId'),
+        key: ValueKey(
+          'evaluation-management-screen-$evaluationStreamId-$evaluationOpenedFromInbox',
+        ),
         schoolId: schoolId,
         accessToken: accessToken,
         onRefreshAccessToken: onRefreshAccessToken,
@@ -1135,6 +1164,11 @@ class _DashboardBody extends StatelessWidget {
             : data.administratorName,
         initialStreamId: evaluationStreamId,
         initialStreamName: evaluationStreamName,
+        openClassApproval: evaluationOpenedFromInbox,
+        onBackToApprovals: evaluationOpenedFromInbox
+            ? () => onSelectPage(_SchoolAdminPage.approvals)
+            : null,
+        onApprovalChanged: onEvaluationApprovalChanged,
       );
     }
 

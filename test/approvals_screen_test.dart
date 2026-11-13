@@ -6,6 +6,56 @@ import 'package:school_management_app/src/approvals/presentation/approvals_scree
 import 'package:school_management_app/src/theme/app_theme.dart';
 
 void main() {
+  testWidgets('class evaluation counts once and opens its class', (
+    tester,
+  ) async {
+    await _useDesktopSurface(tester);
+    const item = ApprovalItem(
+      key: 'CLASS_EVALUATION:18',
+      type: 'CLASS_EVALUATION',
+      entityId: 18,
+      category: 'Evaluations & comments',
+      title: 'Class evaluation · Basic 4 - Section 1',
+      subtitle: 'First Term · 2026–2027',
+      status: 'PENDING_APPROVAL',
+      requesterName: 'Esi Assessment',
+      approverName: 'School leadership',
+      reason: '',
+      canApprove: false,
+      canReject: false,
+      canWithdraw: false,
+      sourcePage: 'evaluations',
+      className: 'Basic 4 - Section 1',
+    );
+    const inbox = ApprovalInbox(
+      pendingMyApproval: 1,
+      pendingMyRequests: 1,
+      myApprovals: [item],
+      myRequests: [item],
+    );
+    expect(inbox.pendingTotal, 1);
+    ApprovalItem? opened;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: ApprovalsScreen(
+            schoolId: 'SCH-1',
+            repository: _SingleApprovalApiClient(item),
+            onOpenSource: (item) => opened = item,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(item.title));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Open class evaluation'));
+    await tester.tap(find.text('Open class evaluation'));
+    await tester.pumpAndSettle();
+    expect(opened?.entityId, 18);
+  });
+
   testWidgets(
     'score correction appears in the approver inbox with correction actions',
     (tester) async {

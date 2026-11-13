@@ -146,6 +146,9 @@ class TermEvaluationWorkflowScreen extends StatefulWidget {
     this.managementProgressOnly = false,
     this.initialManagerView,
     this.dedicatedManagerWorkspace = false,
+    this.openClassApproval = false,
+    this.onBackToApprovals,
+    this.onApprovalChanged,
   });
 
   final AssessmentApiClient api;
@@ -158,6 +161,9 @@ class TermEvaluationWorkflowScreen extends StatefulWidget {
   final bool managementProgressOnly;
   final String? initialManagerView;
   final bool dedicatedManagerWorkspace;
+  final bool openClassApproval;
+  final VoidCallback? onBackToApprovals;
+  final VoidCallback? onApprovalChanged;
 
   @override
   State<TermEvaluationWorkflowScreen> createState() =>
@@ -190,7 +196,7 @@ class _TermEvaluationWorkflowScreenState
 
   bool get _manager {
     final role = widget.viewerRole.toLowerCase();
-    return role.contains('admin') || role.contains('head');
+    return role.contains('admin') || role.contains('head') || role == 'owner';
   }
 
   bool get _headmaster =>
@@ -376,6 +382,22 @@ class _TermEvaluationWorkflowScreenState
           }
           return leftSubmitted ? 1 : -1;
         });
+    if (_manager &&
+        focusedStream &&
+        widget.openClassApproval &&
+        !_loading &&
+        _error == null &&
+        rows.isNotEmpty) {
+      return _ClassEvaluationResultsView(
+        api: widget.api,
+        schoolId: widget.schoolId,
+        termId: widget.setup.termId,
+        className: _focusedStreamName,
+        students: _classStudents(rows),
+        onBackToApprovals: widget.onBackToApprovals,
+        onApprovalChanged: widget.onApprovalChanged,
+      );
+    }
     final submittedAssignments = rows
         .where((assignment) => assignment['status'] == 'SUBMITTED')
         .length;
@@ -404,6 +426,7 @@ class _TermEvaluationWorkflowScreenState
         managerWorkspace && widget.dedicatedManagerWorkspace;
     return Scaffold(
       appBar: AppBar(
+        leading: _backToApprovalsButton(widget.onBackToApprovals),
         title: Text(
           dedicatedManagerWorkspace
               ? _managerView
@@ -447,7 +470,7 @@ class _TermEvaluationWorkflowScreenState
                             children: [
                               Text(
                                 managerWorkspace
-                                    ? 'Leadership approval'
+                                    ? 'Evaluation approvals'
                                     : focusedStream
                                     ? 'Ratings & comments progress — $_focusedStreamName'
                                     : 'My evaluation responsibilities',
@@ -1366,6 +1389,7 @@ class _TermEvaluationWorkflowScreenState
           managementProgressOnly: true,
           initialManagerView: view,
           dedicatedManagerWorkspace: true,
+          onApprovalChanged: widget.onApprovalChanged,
         ),
       );
 
@@ -1453,22 +1477,16 @@ class _TermEvaluationWorkflowScreenState
       children: [
         if (showHeading) ...[
           const Text(
-            'Leadership approval',
+            'Evaluation approvals',
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 4),
-          const Text(
-            'Review classes submitted by class teachers. Open a class to approve students individually or in a group.',
-            style: TextStyle(color: Colors.blueGrey),
-          ),
-          const SizedBox(height: 12),
-        ] else ...[
-          const Text(
-            'Review classes submitted by class teachers. Open a class to approve students individually or in a group.',
-            style: TextStyle(color: Colors.blueGrey),
-          ),
-          const SizedBox(height: 12),
         ],
+        const Text(
+          'Open a class to review submitted ratings and comments.',
+          style: TextStyle(color: Colors.blueGrey),
+        ),
+        const SizedBox(height: 12),
         if (groups.isEmpty)
           const Card(
             child: Padding(
@@ -2268,13 +2286,9 @@ class _TermEvaluationWorkflowScreenState
     ),
   );
 
-  Future<void> _openClassEvaluations(
-    String className,
-    List<Map<String, dynamic>> rows,
-  ) async {
-    final classRows = rows
-        .where((row) => row['streamName']?.toString() == className)
-        .toList();
+  List<Map<String, dynamic>> _classStudents(
+    Iterable<Map<String, dynamic>> classRows,
+  ) {
     final studentsById = <String, Map<String, dynamic>>{};
     for (final assignment in classRows) {
       for (final raw in assignment['students'] as List? ?? const []) {
@@ -2286,6 +2300,13 @@ class _TermEvaluationWorkflowScreenState
         if (id.isNotEmpty) studentsById[id] = student;
       }
     }
+    return studentsById.values.toList();
+  }
+
+  Future<void> _openClassEvaluations(
+    String className,
+    List<Map<String, dynamic>> rows,
+  ) async {
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -2294,7 +2315,10 @@ class _TermEvaluationWorkflowScreenState
           schoolId: widget.schoolId,
           termId: widget.setup.termId,
           className: className,
-          students: studentsById.values.toList(),
+          students: _classStudents(
+            rows.where((row) => row['streamName']?.toString() == className),
+          ),
+          onApprovalChanged: widget.onApprovalChanged,
         ),
       ),
     );
@@ -2550,7 +2574,7 @@ class _TermEvaluationWorkflowScreenState
               ? (_manager
                     ? 'Teacher ratings & comments progress'
                     : 'Responsibilities by class')
-              : 'Teacher ratings & comment responsibilities',
+              : 'Student ratings & comments',
           style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
         ),
         if (personalDashboard) ...[
@@ -2561,12 +2585,6 @@ class _TermEvaluationWorkflowScreenState
           ),
           const SizedBox(height: 16),
           _teacherStageTabs(rows),
-        ] else if (streamName != null) ...[
-          const SizedBox(height: 4),
-          Text(
-            'Each teacher appears once for this class, with all assigned subjects shown together.',
-            style: const TextStyle(color: Colors.blueGrey),
-          ),
         ],
         const SizedBox(height: 10),
         if (rows.isNotEmpty) ...[
@@ -2592,7 +2610,9 @@ class _TermEvaluationWorkflowScreenState
                       prefixIcon: const Icon(Icons.search),
                       hintText: personalDashboard
                           ? 'Search class or role'
-                          : 'Search teacher, class or responsibility',
+                          : streamName != null
+                          ? 'Search teacher or subject'
+                          : 'Search teacher, class or role',
                       filled: true,
                       fillColor: Colors.white,
                       isDense: true,
@@ -3506,8 +3526,6 @@ class _TermEvaluationWorkflowScreenState
     final pendingGeneration = assignment['pendingGeneration'] == true;
     final progress = (assignment['completionPercent'] as num?)?.round() ?? 0;
     final classTeacher = assignment['assignmentType'] == 'CLASS_TEACHER';
-    final commentsCompleted =
-        (assignment['commentsCompleted'] as num?)?.toInt() ?? 0;
     return DataRow(
       cells: [
         DataCell(
@@ -3581,18 +3599,14 @@ class _TermEvaluationWorkflowScreenState
                   onPressed: () => _openAssignment(assignment),
                   child: Text(
                     assignment['ratingsReadOnly'] == true
-                        ? 'View ratings'
-                        : 'Edit ratings',
+                        ? 'View student ratings'
+                        : 'Edit student ratings',
                   ),
                 ),
               if (own && submitted && classTeacher)
                 FilledButton.tonal(
                   onPressed: () => _review(assignment),
-                  child: Text(
-                    commentsCompleted == 0
-                        ? 'Add student comments'
-                        : 'Continue student comments',
-                  ),
+                  child: Text(_studentCommentActionLabel(assignment)),
                 ),
               if (_manager && submitted && (!classTeacher || own))
                 TextButton(
@@ -3634,8 +3648,6 @@ class _TermEvaluationWorkflowScreenState
     final pendingGeneration = assignment['pendingGeneration'] == true;
     final progress = (assignment['completionPercent'] as num?)?.round() ?? 0;
     final classTeacher = assignment['assignmentType'] == 'CLASS_TEACHER';
-    final commentsCompleted =
-        (assignment['commentsCompleted'] as num?)?.toInt() ?? 0;
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: const BoxDecoration(
@@ -3692,18 +3704,14 @@ class _TermEvaluationWorkflowScreenState
                   onPressed: () => _openAssignment(assignment),
                   child: Text(
                     assignment['ratingsReadOnly'] == true
-                        ? 'View ratings'
-                        : 'Edit ratings',
+                        ? 'View student ratings'
+                        : 'Edit student ratings',
                   ),
                 ),
               if (own && submitted && classTeacher)
                 FilledButton.tonal(
                   onPressed: () => _review(assignment),
-                  child: Text(
-                    commentsCompleted == 0
-                        ? 'Add student comments'
-                        : 'Continue student comments',
-                  ),
+                  child: Text(_studentCommentActionLabel(assignment)),
                 ),
               if (_manager && submitted && (!classTeacher || own))
                 TextButton(
@@ -3731,6 +3739,16 @@ class _TermEvaluationWorkflowScreenState
         ],
       ),
     );
+  }
+
+  String _studentCommentActionLabel(Map<String, dynamic> assignment) {
+    final status = assignment['workflowStatus']?.toString().toUpperCase();
+    if (status == 'UNDER_REVIEW' || status == 'APPROVED') {
+      return 'View student comments';
+    }
+    return _intValue(assignment['commentsCompleted']) == 0
+        ? 'Add student comments'
+        : 'Edit student comments';
   }
 
   Widget _readinessView() {
@@ -4398,6 +4416,7 @@ class _TermEvaluationWorkflowScreenState
         assignmentId: assignmentId,
         schoolId: widget.schoolId,
       );
+      widget.onApprovalChanged?.call();
       await _load();
       _message('Class evaluation submitted for approval.');
     } on AssessmentApiException catch (error) {
@@ -4443,6 +4462,7 @@ class _TermEvaluationWorkflowScreenState
           canRequestCorrections: ownsClassTeacherEvaluation,
           assignmentId: _intValue(assignment['id']),
           pendingTeacherEvaluations: pendingTeacherEvaluations,
+          onApprovalChanged: widget.onApprovalChanged,
           className: assignment['streamName']?.toString() ?? 'Class',
           teacherName: assignment['staffName']?.toString() ?? '',
           students: (assignment['students'] as List)
@@ -4532,6 +4552,9 @@ class _TeacherWorkflowStageDisplay extends StatelessWidget {
   );
 }
 
+Widget? _backToApprovalsButton(VoidCallback? onBack) =>
+    onBack == null ? null : BackButton(onPressed: onBack);
+
 class _ClassEvaluationResultsView extends StatefulWidget {
   const _ClassEvaluationResultsView({
     required this.api,
@@ -4539,6 +4562,8 @@ class _ClassEvaluationResultsView extends StatefulWidget {
     required this.termId,
     required this.className,
     required this.students,
+    this.onBackToApprovals,
+    this.onApprovalChanged,
   });
 
   final AssessmentApiClient api;
@@ -4546,6 +4571,8 @@ class _ClassEvaluationResultsView extends StatefulWidget {
   final int termId;
   final String className;
   final List<Map<String, dynamic>> students;
+  final VoidCallback? onBackToApprovals;
+  final VoidCallback? onApprovalChanged;
 
   @override
   State<_ClassEvaluationResultsView> createState() =>
@@ -4650,6 +4677,7 @@ class _ClassEvaluationResultsViewState
         termId: widget.termId,
         studentIds: selected,
       );
+      widget.onApprovalChanged?.call();
       await _refresh();
       if (mounted) {
         final approved = (result['approved'] as num?)?.toInt() ?? 0;
@@ -4726,6 +4754,7 @@ class _ClassEvaluationResultsViewState
         termId: widget.termId,
         reason: reason,
       );
+      widget.onApprovalChanged?.call();
       await _refresh();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -4773,6 +4802,7 @@ class _ClassEvaluationResultsViewState
         schoolId: widget.schoolId,
         termId: widget.termId,
       );
+      widget.onApprovalChanged?.call();
       await _refresh();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -4796,7 +4826,10 @@ class _ClassEvaluationResultsViewState
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Class ratings & comments approval')),
+    appBar: AppBar(
+      leading: _backToApprovalsButton(widget.onBackToApprovals),
+      title: const Text('Class ratings & comments approval'),
+    ),
     body: FutureBuilder<List<Map<String, dynamic>>>(
       future: _results,
       builder: (context, snapshot) {
@@ -6621,6 +6654,7 @@ class _ConsolidatedReview extends StatefulWidget {
     required this.className,
     required this.teacherName,
     required this.students,
+    this.onApprovalChanged,
   });
 
   final AssessmentApiClient api;
@@ -6635,6 +6669,7 @@ class _ConsolidatedReview extends StatefulWidget {
   final String className;
   final String teacherName;
   final List<Map<String, dynamic>> students;
+  final VoidCallback? onApprovalChanged;
 
   @override
   State<_ConsolidatedReview> createState() => _ConsolidatedReviewState();
@@ -6751,6 +6786,7 @@ class _ConsolidatedReviewState extends State<_ConsolidatedReview> {
               canEditFinalWordings: widget.canEditFinalWordings,
               canRequestCorrections: widget.canRequestCorrections,
               hasNextStudent: hasNext,
+              onApprovalChanged: widget.onApprovalChanged,
               student: current,
               initialReview: initialReview,
               commentProgress: editingComments
@@ -6854,6 +6890,7 @@ class _ConsolidatedReviewState extends State<_ConsolidatedReview> {
       assignmentId: widget.assignmentId,
       schoolId: widget.schoolId,
     );
+    widget.onApprovalChanged?.call();
   }
 
   Future<void> _submitClassEvaluation() async {
@@ -6918,6 +6955,7 @@ class _ConsolidatedReviewState extends State<_ConsolidatedReview> {
         termId: widget.termId,
         studentIds: selected,
       );
+      widget.onApprovalChanged?.call();
       await _loadReviewStatuses();
       if (mounted) {
         final approved = (result['approved'] as num?)?.toInt() ?? 0;
@@ -7637,6 +7675,7 @@ class _StudentFinalReview extends StatefulWidget {
     required this.commentProgress,
     required this.canSubmitClass,
     required this.onCommentSaved,
+    this.onApprovalChanged,
   });
 
   final AssessmentApiClient api;
@@ -7653,6 +7692,7 @@ class _StudentFinalReview extends StatefulWidget {
   final bool canSubmitClass;
   final Future<void> Function(String comment, String status, bool submit)
   onCommentSaved;
+  final VoidCallback? onApprovalChanged;
 
   @override
   State<_StudentFinalReview> createState() => _StudentFinalReviewState();
@@ -7938,6 +7978,7 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
         schoolId: widget.schoolId,
         termId: widget.termId,
       );
+      widget.onApprovalChanged?.call();
       await _load();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -7976,6 +8017,7 @@ class _StudentFinalReviewState extends State<_StudentFinalReview> {
         termId: widget.termId,
         reason: reason,
       );
+      widget.onApprovalChanged?.call();
       await _load();
     } on AssessmentApiException catch (error) {
       if (mounted) {

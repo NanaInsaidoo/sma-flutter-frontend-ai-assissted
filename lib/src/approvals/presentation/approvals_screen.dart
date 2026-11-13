@@ -4035,6 +4035,7 @@ bool _isReportCorrection(ApprovalItem item) =>
     item.type == 'REPORT_CORRECTION' || item.type == 'REPORT_SCORE_CORRECTION';
 
 String _sourceActionLabel(ApprovalItem item) {
+  if (item.type == 'CLASS_EVALUATION') return 'Open class evaluation';
   final page = item.sourcePage.trim().toLowerCase();
   final title = item.title.trim().toLowerCase();
   return switch (page) {
