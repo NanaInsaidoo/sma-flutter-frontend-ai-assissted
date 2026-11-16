@@ -9,6 +9,28 @@ void main() {
     expect(householdFeeState(account), HouseholdFeeState.notAssessed);
   });
 
+  test(
+    'collection requires approval, a positive balance and an active fee',
+    () {
+      final fee = _assessment('ACTIVE', DateTime(2026, 9, 1));
+      final assessed = _account(balance: 100, assessments: [fee]);
+      expect(canReceiveHouseholdPayment('PENDING_APPROVAL', assessed), isFalse);
+      expect(canReceiveHouseholdPayment('DRAFT', assessed), isFalse);
+      expect(canReceiveHouseholdPayment('ACTIVE', assessed), isTrue);
+      expect(
+        canReceiveHouseholdPayment('ACTIVE', _account(balance: 100)),
+        isFalse,
+      );
+      expect(
+        canReceiveHouseholdPayment(
+          'ACTIVE',
+          _account(balance: 0, assessments: [fee]),
+        ),
+        isFalse,
+      );
+    },
+  );
+
   test('missing account remains unavailable rather than zero', () {
     expect(householdFeeState(null), HouseholdFeeState.unavailable);
   });

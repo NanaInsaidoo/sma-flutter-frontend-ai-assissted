@@ -3881,9 +3881,9 @@ Future<bool?> showHouseholdFeeCollection({
       householdId: householdId,
       termId: term.id,
     );
-    final methods = await api.getPaymentMethods();
     if (!context.mounted) return false;
     final students = options.students
+        .where((student) => student.items.any((item) => item.outstandingAmount > 0))
         .map(
           (student) => _StudentFeeRow(
             name: student.studentName,
@@ -3899,10 +3899,14 @@ Future<bool?> showHouseholdFeeCollection({
         .toList();
     if (students.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('This household has no students.')),
+        const SnackBar(
+          content: Text('No students in this household have outstanding assessed fees.'),
+        ),
       );
       return false;
     }
+    final methods = await api.getPaymentMethods();
+    if (!context.mounted) return false;
     return showDialog<bool>(
       context: context,
       barrierDismissible: false,

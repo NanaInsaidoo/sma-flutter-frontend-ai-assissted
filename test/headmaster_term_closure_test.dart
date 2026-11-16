@@ -269,14 +269,13 @@ void main() {
   });
 
   testWidgets(
-    'groups both transition checks and refreshes after editing dates',
+    'keeps both transition checks with one term date editor',
     (tester) async {
       tester.view.physicalSize = const Size(1200, 2200);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final repo = _DateRepo();
-      var editorOpens = 0;
       var editedCurrentTermId = 0;
       await tester.pumpWidget(
         MaterialApp(
@@ -284,14 +283,8 @@ void main() {
             body: HeadmasterTermClosureScreen(
               schoolId: 'TEST',
               repository: repo,
-              onOpenTermDates: () async {
-                editorOpens++;
-                repo.nextTermReady = true;
-                return true;
-              },
               onEditCurrentTermDates: (termId) async {
                 editedCurrentTermId = termId;
-                repo.closingDateReached = true;
                 return true;
               },
             ),
@@ -300,7 +293,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final manageDates = find.text('Manage next term dates');
+      final editDates = find.text('Edit current term dates');
       final closeTerm = find.ancestor(
         of: find.text('Close term'),
         matching: find.byWidgetPredicate((widget) => widget is FilledButton),
@@ -320,13 +313,21 @@ void main() {
       expect(find.text('View dates'), findsNothing);
       expect(find.text('Set up term'), findsNothing);
       expect(find.text('Modify dates'), findsNothing);
-      expect(manageDates, findsOneWidget);
+      expect(editDates, findsOneWidget);
+      expect(find.text('Manage next term dates'), findsNothing);
+      expect(find.text('Edit closing date'), findsNothing);
       expect(tester.widget<FilledButton>(closeTerm).onPressed, isNull);
 
-      await tester.tap(manageDates);
+      await tester.tap(editDates);
       await tester.pumpAndSettle();
-      expect(editorOpens, 1);
-      expect(repo.getCalls, 2);
+      expect(editedCurrentTermId, repo.value.termId);
+      expect(find.text('Scheduled'), findsOneWidget);
+      expect(tester.widget<FilledButton>(closeTerm).onPressed, isNull);
+
+      repo.nextTermReady = true;
+      await tester.tap(find.byTooltip('Recheck readiness'));
+      await tester.pumpAndSettle();
+      expect(repo.getCalls, 3);
       expect(find.text('Second Term dates'), findsOneWidget);
       expect(find.text('11 December 2026'), findsOneWidget);
       expect(
@@ -340,7 +341,7 @@ void main() {
         find.text('You can close this term on or after 11 December 2026.'),
         findsOneWidget,
       );
-      expect(manageDates, findsOneWidget);
+      expect(editDates, findsOneWidget);
       expect(tester.widget<FilledButton>(closeTerm).onPressed, isNotNull);
 
       await tester.tap(closeTerm);
@@ -360,10 +361,10 @@ void main() {
       await tester.tap(find.text('Got it'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Edit current term dates'));
+      repo.closingDateReached = true;
+      await tester.tap(find.byTooltip('Recheck readiness'));
       await tester.pumpAndSettle();
-      expect(editedCurrentTermId, repo.value.termId);
-      expect(repo.getCalls, 3);
+      expect(repo.getCalls, 4);
       expect(find.text('Scheduled'), findsNothing);
       expect(find.text('READY TO CLOSE'), findsOneWidget);
       expect(tester.widget<FilledButton>(closeTerm).onPressed, isNotNull);

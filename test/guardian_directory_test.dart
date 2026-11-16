@@ -54,6 +54,106 @@ void main() {
     expect(directory.households.single.id, isNull);
     expect(directory.households.single.matches('Unlinked'), true);
     expect(directory.guardians.single.phone, '');
+    expect(
+      directory.households.single.guardianSetup,
+      GuardianSetupStatus.noHouseholdLinked,
+    );
+  });
+
+  test('guardian setup is complete once all linked guardians are approved', () {
+    GuardianSetupStatus setup(List<String> statuses) =>
+        GuardianSetupStatus.fromGuardians(
+          householdId: 1,
+          guardianStatuses: statuses,
+        );
+
+    expect(setup([]), GuardianSetupStatus.detailsIncomplete);
+    expect(
+      setup(['DRAFT', 'PENDING_REVIEW']),
+      GuardianSetupStatus.detailsIncomplete,
+    );
+    expect(
+      setup(['APPROVED', 'pending_approval']),
+      GuardianSetupStatus.awaitingApproval,
+    );
+    expect(setup(['APPROVED', 'REJECTED']), GuardianSetupStatus.needsAttention);
+    expect(setup(['APPROVED', 'APPROVED']), GuardianSetupStatus.complete);
+  });
+
+  testWidgets('guardian setup filters households independently of student count', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1500, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final api = AdmissionsApiClient(
+      accessToken: 'test',
+      client: MockClient((_) async => http.Response(
+        jsonEncode({
+          'guardians': [
+            for (final (id, name, status) in [
+              (1, 'Adu', 'APPROVED'),
+              (2, 'Boateng', 'APPROVED'),
+              (3, 'Mensah', 'PENDING_REVIEW'),
+              (4, 'Ofori', 'DRAFT'),
+              (5, 'Tetteh', 'REJECTED'),
+            ])
+              {
+                'customGuardianId': 'G-$id',
+                'firstName': name,
+                'householdId': id,
+                'isPrimary': true,
+                'status': status,
+              },
+            {'customGuardianId': 'UNLINKED', 'firstName': 'Unlinked'},
+          ],
+          'studentCounts': {'2': 3, '4': 2},
+        }),
+        200,
+      )),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: HouseholdsGuardiansScreen(customSchoolId: 'SCHOOL', api: api),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('GUARDIAN SETUP'), findsOneWidget);
+
+    Finder household(int id) => find.byKey(ValueKey('directory-row-household-$id'));
+    Finder badge(int id, String label) =>
+        find.descendant(of: household(id), matching: find.text(label));
+    expect(badge(1, 'Complete'), findsOneWidget);
+    expect(badge(2, 'Complete'), findsOneWidget);
+    expect(badge(3, 'Awaiting approval'), findsOneWidget);
+    expect(badge(4, 'Details incomplete'), findsOneWidget);
+    expect(badge(5, 'Needs attention'), findsOneWidget);
+    expect(find.text('No household linked'), findsOneWidget);
+
+    final filter = find.byKey(const Key('guardian-setup-filter'));
+    await tester.tap(filter);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Complete').last);
+    await tester.pumpAndSettle();
+    expect(household(1), findsOneWidget);
+    expect(household(2), findsOneWidget);
+    expect(household(3), findsNothing);
+
+    await tester.enterText(find.byType(TextField), 'Boateng');
+    await tester.pumpAndSettle();
+    expect(household(1), findsNothing);
+    expect(household(2), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), '');
+    await tester.tap(filter);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('All statuses').last);
+    await tester.pumpAndSettle();
+    expect(household(3), findsOneWidget);
   });
 
   test(

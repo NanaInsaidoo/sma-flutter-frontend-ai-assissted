@@ -200,8 +200,8 @@ class ApiDashboardRepository implements DashboardRepository {
         academicTermId: term.id > 0 ? term.id : null,
         termClosed: admissionTerm?.closed ?? false,
         academicYear: academicYear,
-        termStartDate: _formatDate(admissionTerm?.startDate),
-        termEndDate: _formatDate(admissionTerm?.endDate),
+        termStartDate: _formatDate(admissionTerm?.teachingStartDate),
+        termEndDate: _formatDate(admissionTerm?.teachingEndDate),
         lastUpdated: DateTime.now(),
         metrics: [
           DashboardMetric(

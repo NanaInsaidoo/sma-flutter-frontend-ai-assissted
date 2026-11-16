@@ -13,6 +13,8 @@ void main() {
 
     expect(term.startDate, '2026-07-06');
     expect(term.endDate, '2026-07-31');
+    expect(term.teachingStartDate, '2026-07-06');
+    expect(term.teachingEndDate, '2026-07-31');
   });
 
   test('uses operational opening and closing dates for the active term', () {
@@ -24,11 +26,14 @@ void main() {
       'endDate': [2027, 4, 16],
       'operationalStartDate': [2026, 8, 9],
       'teachingStartDate': [2027, 1, 11],
+      'teachingEndDate': '2027-04-09',
       'closingDate': [2027, 4, 16],
     });
 
     expect(term.startDate, '2026-08-09');
     expect(term.endDate, '2027-04-16');
+    expect(term.teachingStartDate, '2027-01-11');
+    expect(term.teachingEndDate, '2027-04-09');
   });
 
   test('maps full student details used by the household dashboard', () {

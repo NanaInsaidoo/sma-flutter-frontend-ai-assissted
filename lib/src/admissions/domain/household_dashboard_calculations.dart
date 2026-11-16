@@ -8,6 +8,29 @@ bool householdHasAssessedFees(FeeStudentAccount account) {
       account.totalExpected > 0;
 }
 
+bool canReceiveHouseholdPayment(
+  String studentStatus,
+  FeeStudentAccount? account,
+) {
+  final approved = switch (studentStatus.trim().toUpperCase()) {
+    'ACTIVE' ||
+    'APPROVED' ||
+    'INACTIVE' ||
+    'ALUMNI' ||
+    'SUSPENDED' ||
+    'LOCKED' ||
+    'WITHDRAWN' => true,
+    _ => false,
+  };
+  return approved &&
+      account != null &&
+      account.balance > 0 &&
+      account.assessments.any(
+        (item) =>
+            item.status.trim().toUpperCase() == 'ACTIVE' && item.amount > 0,
+      );
+}
+
 HouseholdFeeState householdFeeState(FeeStudentAccount? account) {
   if (account == null) return HouseholdFeeState.unavailable;
   if (account.balance > 0) return HouseholdFeeState.due;

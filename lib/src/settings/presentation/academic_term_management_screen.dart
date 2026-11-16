@@ -6,42 +6,6 @@ import 'package:http/http.dart' as http;
 import '../../config/api_config.dart';
 import '../../theme/app_theme.dart';
 
-Future<bool> showPreparedTermDateEditor({
-  required BuildContext context,
-  required String schoolId,
-  required String? accessToken,
-  Future<String?> Function()? onRefreshAccessToken,
-}) async {
-  final api = _AcademicTermManagementApi(
-    accessToken: accessToken,
-    onRefreshAccessToken: onRefreshAccessToken,
-  );
-  try {
-    final terms = await api.terms(schoolId);
-    if (!context.mounted) return false;
-    final prepared = terms
-        .where((term) => term.status == 'PREPARED' && !term.isCurrent)
-        .firstOrNull;
-    final saved = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => _CreatePreparedTermDialog(
-        schoolId: schoolId,
-        api: api,
-        existing: prepared,
-      ),
-    );
-    return saved == true;
-  } catch (error) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Unable to open term dates: $error')),
-      );
-    }
-    return false;
-  }
-}
-
 Future<bool> showNextTermSetupEditor({
   required BuildContext context,
   required String schoolId,
@@ -114,21 +78,13 @@ Future<bool> showCurrentTermDateEditor({
     onRefreshAccessToken: onRefreshAccessToken,
   );
   try {
-    final (term, limitDate, limitReason) = await api.currentTermDates(
-      schoolId,
-      termId,
-    );
+    final term = await api.currentTermDates(schoolId, termId);
     if (!context.mounted) return false;
     return await showDialog<bool>(
           context: context,
           barrierDismissible: false,
-          builder: (context) => _CurrentTermDatesDialog(
-            schoolId: schoolId,
-            term: term,
-            limitDate: limitDate,
-            limitReason: limitReason,
-            api: api,
-          ),
+          builder: (context) =>
+              _CurrentTermDatesDialog(schoolId: schoolId, term: term, api: api),
         ) ==
         true;
   } catch (error) {
@@ -483,15 +439,11 @@ class _CurrentTermDatesDialog extends StatefulWidget {
   const _CurrentTermDatesDialog({
     required this.schoolId,
     required this.term,
-    required this.limitDate,
-    required this.limitReason,
     required this.api,
   });
 
   final String schoolId;
   final _ManagedTerm term;
-  final DateTime limitDate;
-  final String limitReason;
   final _AcademicTermManagementApi api;
 
   @override
@@ -500,37 +452,19 @@ class _CurrentTermDatesDialog extends StatefulWidget {
 }
 
 class _CurrentTermDatesDialogState extends State<_CurrentTermDatesDialog> {
-  late DateTime _teachingEnd = widget.term.teachingEnd;
-  late DateTime _closingDate = widget.term.closingDate;
+  late DateTime _start = widget.term.teachingStart;
+  late DateTime _end = widget.term.teachingEnd;
   bool _saving = false;
   String? _error;
 
-  DateTime get _minimumClosingDate =>
-      _teachingEnd.isAfter(widget.limitDate) ? _teachingEnd : widget.limitDate;
+  String? get _dateError => _end.isBefore(_start)
+      ? 'The term end date must be on or after the start date.'
+      : null;
 
-  String get _closingDateHelp {
-    final reason = _teachingEnd.isAfter(widget.limitDate)
-        ? 'The last teaching day'
-        : widget.limitReason;
-    return 'Choose ${_friendlyDate(_minimumClosingDate)} or later. '
-        '$reason sets this limit.';
-  }
-
-  String? get _dateError {
-    if (_closingDate.isBefore(_teachingEnd)) {
-      return 'The earliest closing date must be on or after the last teaching day.';
-    }
-    if (_closingDate != widget.term.closingDate &&
-        _closingDate.isBefore(widget.limitDate)) {
-      return 'Select a new closing date within the allowed range.';
-    }
-    return null;
-  }
-
-  Future<void> _pickDate({required bool closing}) async {
-    final initial = closing ? _closingDate : _teachingEnd;
-    final firstDate = closing ? _minimumClosingDate : widget.term.teachingStart;
-    final lastDate = DateTime(widget.term.closingDate.year + 1, 12, 31);
+  Future<void> _pickDate({required bool start}) async {
+    final initial = start ? _start : _end;
+    final firstDate = widget.term.operationalStart;
+    final lastDate = widget.term.closingDate;
     final date = await showDatePicker(
       context: context,
       initialDate: initial.isBefore(firstDate) ? firstDate : initial,
@@ -540,10 +474,10 @@ class _CurrentTermDatesDialogState extends State<_CurrentTermDatesDialog> {
     if (!mounted || date == null) return;
     setState(() {
       _error = null;
-      if (closing) {
-        _closingDate = date;
+      if (start) {
+        _start = date;
       } else {
-        _teachingEnd = date;
+        _end = date;
       }
     });
   }
@@ -557,8 +491,8 @@ class _CurrentTermDatesDialogState extends State<_CurrentTermDatesDialog> {
       await widget.api.saveCurrentTermDates(
         schoolId: widget.schoolId,
         termId: widget.term.id,
-        teachingEnd: _teachingEnd,
-        closingDate: _closingDate,
+        teachingStart: _start,
+        teachingEnd: _end,
       );
       if (mounted) Navigator.pop(context, true);
     } catch (error) {
@@ -574,8 +508,7 @@ class _CurrentTermDatesDialogState extends State<_CurrentTermDatesDialog> {
   @override
   Widget build(BuildContext context) {
     final changed =
-        _teachingEnd != widget.term.teachingEnd ||
-        _closingDate != widget.term.closingDate;
+        _start != widget.term.teachingStart || _end != widget.term.teachingEnd;
     final error = _dateError ?? _error;
     return AlertDialog(
       title: const Text('Edit current term dates'),
@@ -591,25 +524,34 @@ class _CurrentTermDatesDialogState extends State<_CurrentTermDatesDialog> {
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 16),
-              _DialogDate(
-                label: 'Teaching ends',
-                value: _teachingEnd,
-                onTap: _saving ? null : () => _pickDate(closing: false),
-              ),
-              const SizedBox(height: 6),
-              const Text('The last day of lessons.'),
-              const SizedBox(height: 16),
-              _DialogDate(
-                label: 'Earliest closing date',
-                value: _closingDate,
-                onTap: _saving ? null : () => _pickDate(closing: true),
-              ),
-              const SizedBox(height: 6),
-              Text(_closingDateHelp),
-              const SizedBox(height: 16),
-              const Text(
-                'After changing dates, check whether any published report cards need to be regenerated.',
-                style: TextStyle(color: AppColors.muted),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final fieldWidth = constraints.maxWidth < 360
+                      ? constraints.maxWidth
+                      : (constraints.maxWidth - 12) / 2;
+                  return Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      SizedBox(
+                        width: fieldWidth,
+                        child: _DialogDate(
+                          label: 'Term start date',
+                          value: _start,
+                          onTap: _saving ? null : () => _pickDate(start: true),
+                        ),
+                      ),
+                      SizedBox(
+                        width: fieldWidth,
+                        child: _DialogDate(
+                          label: 'Term end date',
+                          value: _end,
+                          onTap: _saving ? null : () => _pickDate(start: false),
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
               if (error != null) ...[
                 const SizedBox(height: 12),
@@ -1361,35 +1303,27 @@ class _AcademicTermManagementApi {
         .toList();
   }
 
-  Future<(_ManagedTerm, DateTime, String)> currentTermDates(
-    String schoolId,
-    int termId,
-  ) async {
+  Future<_ManagedTerm> currentTermDates(String schoolId, int termId) async {
     final response = await _send(
       'GET',
       _termPath(schoolId, termId, action: '/current-dates'),
     );
     final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final limit = data['closingDateLimit'] as Map<String, dynamic>;
-    return (
-      _ManagedTerm.fromJson(data['term'] as Map<String, dynamic>),
-      _jsonDate(limit['earliestDate']),
-      limit['reason'] as String,
-    );
+    return _ManagedTerm.fromJson(data['term'] as Map<String, dynamic>);
   }
 
   Future<void> saveCurrentTermDates({
     required String schoolId,
     required int termId,
+    required DateTime teachingStart,
     required DateTime teachingEnd,
-    required DateTime closingDate,
   }) async {
     await _send(
       'PUT',
       _termPath(schoolId, termId, action: '/current-dates'),
       body: jsonEncode({
+        'teachingStartDate': _iso(teachingStart),
         'teachingEndDate': _iso(teachingEnd),
-        'closingDate': _iso(closingDate),
       }),
     );
   }

@@ -35,7 +35,6 @@ class TermReviewScreen extends StatefulWidget {
     this.onOpenFinalReports,
     this.onOpenIncidents,
     this.onOpenSettings,
-    this.onOpenTermDates,
     this.onEditCurrentTermDates,
     this.onSetUpNextTerm,
     this.onBeginNextTerm,
@@ -57,7 +56,6 @@ class TermReviewScreen extends StatefulWidget {
   final VoidCallback? onOpenFinalReports;
   final VoidCallback? onOpenIncidents;
   final VoidCallback? onOpenSettings;
-  final Future<bool> Function()? onOpenTermDates;
   final Future<bool> Function(int termId)? onEditCurrentTermDates;
   final Future<bool> Function(int termId)? onSetUpNextTerm;
   final Future<Map<String, dynamic>> Function(int closedTermId, int nextTermId)?
@@ -168,7 +166,6 @@ class _TermReviewScreenState extends State<TermReviewScreen> {
           actorUserId: widget.reviewerUserId,
           repository: widget.headmasterClosureRepository!,
           embedded: true,
-          onOpenTermDates: widget.onOpenTermDates,
           onEditCurrentTermDates: widget.onEditCurrentTermDates,
           onSetUpNextTerm: widget.onSetUpNextTerm,
           onBeginNextTerm: widget.onBeginNextTerm,

@@ -57,6 +57,425 @@ Map<String, Object?> address(int id) => {
 };
 
 void main() {
+  testWidgets('new household shows only the primary guardian setup', (
+    tester,
+  ) async {
+    wide(tester);
+    var writes = 0;
+    final api = AdmissionsApiClient(
+      accessToken: 'test',
+      client: MockClient((request) async {
+        if (request.method != 'GET') writes++;
+        if (request.url.path.contains('current-term')) {
+          return json({
+            'id': 1,
+            'startDate': '2026-09-01',
+            'endDate': '2026-12-18',
+          });
+        }
+        return json([]);
+      }),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: AdmissionsScreen(customSchoolId: 'SCHOOL', api: api),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Start Admission'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Create new household'));
+    await tester.pumpAndSettle();
+
+    final addGuardian = find.text('Add guardian');
+    expect(find.text('Add the primary guardian'), findsOneWidget);
+    expect(addGuardian, findsOneWidget);
+    expect(find.text('Add child'), findsNothing);
+    expect(find.text('Recent activity'), findsNothing);
+    expect(find.text('Last payment'), findsNothing);
+
+    await tester.tap(addGuardian);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Step 1 of 5'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(addGuardian, findsOneWidget);
+    expect(writes, 0);
+  });
+
+  testWidgets('opens a pending guardian for review and refreshes after approval', (
+    tester,
+  ) async {
+    wide(tester);
+    var approved = false;
+    var approvals = 0;
+    var invitations = 0;
+    Map<String, dynamic> guardian() => {
+      'customGuardianId': 'GUA-1',
+      'firstName': 'Ama',
+      'lastName': 'Mensah',
+      'householdId': 10,
+      'isPrimary': true,
+      'status': approved ? 'APPROVED' : 'PENDING_REVIEW',
+      'canApproveAdmission': !approved,
+    };
+    final api = AdmissionsApiClient(
+      accessToken: 'test',
+      client: MockClient((request) async {
+        final path = request.url.path;
+        if (path.contains('/guardian-portal-access/')) {
+          expect(approved, isTrue);
+          invitations++;
+          return json({
+            'newlyCreated': true,
+            'invitationDeliveryStatus': 'FAILED',
+            'message': 'The invitation was created, but delivery failed.',
+          });
+        }
+        if (path.endsWith('/directory')) {
+          return json({'guardians': [guardian()], 'studentCounts': {}});
+        }
+        if (path.endsWith('/guardians/GUA-1/approve-admission')) {
+          expect(request.method, 'POST');
+          approvals++;
+          approved = true;
+          return json(guardian());
+        }
+        if (path.endsWith('/guardians/GUA-1')) return json(guardian());
+        return json([]);
+      }),
+    );
+    await tester.pumpWidget(MaterialApp(
+      theme: AppTheme.light,
+      home: Scaffold(
+        body: HouseholdsGuardiansScreen(customSchoolId: 'SCHOOL', api: api),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('Awaiting approval'), findsNWidgets(2));
+    await tester.tap(find.byKey(const ValueKey('directory-row-household-10')));
+    await tester.pumpAndSettle();
+    expect(find.text('Awaiting approval'), findsOneWidget);
+
+    await tester.tap(find.text('Review guardian'));
+    await tester.pumpAndSettle();
+    expect(find.text('Guardian profile'), findsOneWidget);
+    expect(find.text('Pending approval'), findsOneWidget);
+    final enableLogin = find.byKey(const Key('enable-guardian-login'));
+    expect(tester.widget<OutlinedButton>(enableLogin).onPressed, isNull);
+    await tester.tap(enableLogin);
+    await tester.pumpAndSettle();
+    expect(invitations, 0);
+    expect(
+      find.text('Approve the guardian before enabling login.'),
+      findsOneWidget,
+    );
+    expect(approvals, 0);
+
+    await tester.tap(find.text('Approve guardian'));
+    await tester.pumpAndSettle();
+    expect(approvals, 0);
+    await tester.tap(find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.text('Approve guardian'),
+    ));
+    await tester.pumpAndSettle();
+    expect(approvals, 1);
+    expect(find.text('Approve guardian'), findsNothing);
+    expect(find.text('Approved'), findsOneWidget);
+    expect(tester.widget<OutlinedButton>(enableLogin).onPressed, isNotNull);
+    await tester.tap(enableLogin);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Send invitation'));
+    await tester.pumpAndSettle();
+    expect(invitations, 1);
+    expect(find.text('Parent invitation could not be delivered'), findsOneWidget);
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithIcon(IconButton, Icons.arrow_back_rounded));
+    await tester.pumpAndSettle();
+    expect(find.text('Review guardian'), findsNothing);
+    expect(find.text('View profile'), findsOneWidget);
+    expect(find.text('Complete'), findsOneWidget);
+    await tester.tap(find.widgetWithIcon(IconButton, Icons.arrow_back_rounded));
+    await tester.pumpAndSettle();
+    expect(find.text('Complete'), findsOneWidget);
+  });
+
+  testWidgets('guardian ID saves and reopens a city outside the lookup', (
+    tester,
+  ) async {
+    wide(tester);
+    final guardian = <String, dynamic>{
+      'customGuardianId': 'GUA-1',
+      'firstName': 'Ama',
+      'lastName': 'Mensah',
+      'householdId': 10,
+      'isPrimary': true,
+    };
+    final proof = <String, dynamic>{
+      'proofOfIDTypeId': 1,
+      'idNumber': 'DEMO-ID',
+      'issueDate': '2024-01-01',
+      'expirationDate': '2030-01-01',
+      'countryId': 2,
+      'cityId': 1,
+      'city': {'id': 1, 'name': 'Accra'},
+    };
+    Map<String, dynamic>? submitted;
+    final api = AdmissionsApiClient(
+      accessToken: 'test',
+      client: MockClient((request) async {
+        final path = request.url.path;
+        if (path.endsWith('/directory')) {
+          return json({'guardians': [guardian], 'studentCounts': {}});
+        }
+        if (path.endsWith('/guardians/GUA-1')) {
+          return json({...guardian, 'proofOfID': proof});
+        }
+        if (path.endsWith('/proof-of-id')) {
+          submitted = jsonDecode(request.body) as Map<String, dynamic>;
+          proof
+            ..remove('city')
+            ..remove('cityId')
+            ..addAll(submitted!);
+          return json(guardian);
+        }
+        if (path.endsWith('/proof-of-id-types')) {
+          return json([{'id': 1, 'name': 'Passport'}]);
+        }
+        if (path.endsWith('/nationalities')) {
+          return json([{'id': 2, 'countryName': 'United Kingdom'}]);
+        }
+        return json([]);
+      }),
+    );
+    await tester.pumpWidget(MaterialApp(
+      theme: AppTheme.light,
+      home: Scaffold(
+        body: HouseholdsGuardiansScreen(customSchoolId: 'SCHOOL', api: api),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('directory-row-household-10')));
+    await tester.pumpAndSettle();
+
+    Future<void> openIdEditor() async {
+      final actions = find.byTooltip('More guardian actions');
+      await tester.ensureVisible(actions);
+      await tester.tap(actions);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Edit guardian'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Guardian ID').last);
+      await tester.pumpAndSettle();
+    }
+
+    await openIdEditor();
+    final city = find.widgetWithText(TextField, 'City of issue');
+    await tester.ensureVisible(city);
+    await tester.enterText(city, 'London');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save changes'));
+    await tester.pumpAndSettle();
+
+    expect(submitted?['cityName'], 'London');
+    expect(submitted?.containsKey('cityId'), isFalse);
+    await openIdEditor();
+    expect(tester.widget<TextField>(city).controller!.text, 'London');
+  });
+
+  testWidgets('vaccination comments open on demand and retain their text', (
+    tester,
+  ) async {
+    final api = AdmissionsApiClient(
+      accessToken: 'test',
+      client: MockClient((request) async {
+        final path = request.url.path;
+        if (path.endsWith('/context')) {
+          return json({
+            'baseVersion': 'v1',
+            'student': {
+              'customStudentId': 'STU-1',
+              'householdId': 10,
+              'status': 'DRAFT',
+              'vaccinationRecords': [
+                {'vaccinationId': 2, 'status': 'NO', 'notes': 'Prior note'},
+              ],
+            },
+          });
+        }
+        if (path.endsWith('/vaccinations/default')) {
+          return json([
+            {'id': 1, 'name': 'BCG'},
+            {'id': 2, 'name': 'Polio'},
+          ]);
+        }
+        return json([]);
+      }),
+    );
+    await editor(tester, api, initialStep: 3);
+    final bcgComment = find.widgetWithText(TextField, 'Comment for BCG');
+    final polioComment = find.widgetWithText(TextField, 'Comment for Polio');
+    expect(bcgComment, findsNothing);
+    expect(polioComment, findsNothing);
+    expect(find.text('Add comment'), findsNothing);
+    expect(find.text('Edit comment'), findsOneWidget);
+    expect(find.text('Date received (optional)'), findsNothing);
+
+    final yes = find.text('Yes').first;
+    await tester.tap(yes);
+    await tester.pumpAndSettle();
+    expect(bcgComment, findsNothing);
+    final addComment = find.text('Add comment');
+    expect(addComment, findsOneWidget);
+    expect(tester.getCenter(addComment).dy, closeTo(tester.getCenter(yes).dy, 1));
+    expect(find.text('Date received (optional)'), findsOneWidget);
+
+    await tester.tap(addComment);
+    await tester.pumpAndSettle();
+    expect(bcgComment, findsOneWidget);
+    expect(polioComment, findsNothing);
+    await tester.enterText(bcgComment, 'BCG card checked');
+    await tester.tap(find.text('Hide comment'));
+    await tester.pumpAndSettle();
+    expect(bcgComment, findsNothing);
+
+    await tester.tap(find.text('Edit comment').first);
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<TextField>(bcgComment).controller!.text,
+      'BCG card checked',
+    );
+    expect(polioComment, findsNothing);
+  });
+
+  testWidgets('medical condition notes stay collapsed until requested', (
+    tester,
+  ) async {
+    final api = AdmissionsApiClient(
+      accessToken: 'test',
+      client: MockClient((request) async {
+        final path = request.url.path;
+        if (path.endsWith('/context')) {
+          return json({
+            'baseVersion': 'v1',
+            'student': {
+              'customStudentId': 'STU-1',
+              'householdId': 10,
+              'status': 'DRAFT',
+              'medicalCondition': {
+                'medicalConditions': [
+                  {'conditionTypeId': 1, 'value': '1', 'notes': 'Prior note'},
+                ],
+              },
+            },
+          });
+        }
+        if (path.endsWith('/medical-conditions/default')) {
+          return json([
+            {'id': 1, 'name': 'Asthma'},
+            {'id': 2, 'name': 'Diabetes'},
+          ]);
+        }
+        return json([]);
+      }),
+    );
+    await editor(tester, api, initialStep: 2);
+    final saved = find.widgetWithText(TextField, 'Comment for Asthma');
+    final added = find.widgetWithText(TextField, 'Comment for Diabetes');
+    expect(saved, findsNothing);
+    final yes = find.text('Yes').last;
+    await tester.tap(yes);
+    await tester.pumpAndSettle();
+    expect(added, findsNothing);
+    final addComment = find.text('Add comment');
+    expect(addComment, findsOneWidget);
+    expect(tester.getCenter(addComment).dy, closeTo(tester.getCenter(yes).dy, 1));
+    await tester.tap(find.text('No').last);
+    await tester.pumpAndSettle();
+    expect(addComment, findsNothing);
+
+    await tester.tap(find.text('Edit comment'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(saved).controller!.text, 'Prior note');
+    expect(added, findsNothing);
+  });
+
+  testWidgets('household payment only appears for an eligible child', (
+    tester,
+  ) async {
+    wide(tester);
+    final students = [
+      {'customStudentId': 'STU-1', 'firstName': 'Ama', 'status': 'PENDING_APPROVAL'},
+      {'customStudentId': 'STU-2', 'firstName': 'Kojo', 'status': 'ACTIVE'},
+      {'customStudentId': 'STU-3', 'firstName': 'Akosua', 'status': 'ACTIVE'},
+    ];
+    final client = MockClient((request) async {
+      final path = request.url.path;
+      if (path.endsWith('/directory')) {
+        return json({
+          'guardians': [
+            {
+              'customGuardianId': 'GUA-1',
+              'firstName': 'Demo',
+              'lastName': 'Guardian',
+              'householdId': 10,
+              'isPrimary': true,
+            },
+          ],
+          'studentCounts': {'10': 3},
+        });
+      }
+      if (path.endsWith('/students/filter')) return json(students);
+      if (path.contains('/current-term/')) {
+        return json({'id': 1, 'startDate': '2026-09-01', 'endDate': '2026-12-31'});
+      }
+      if (path.endsWith('/fee-account')) {
+        final assessed = !path.contains('/STU-2/');
+        return json({
+          'balance': assessed ? 100 : 0,
+          'assessments': [
+            if (assessed) {'assessmentId': 1, 'status': 'ACTIVE', 'amount': 100},
+          ],
+        });
+      }
+      return json(students.firstWhere((student) => path.endsWith('/${student['customStudentId']}')));
+    });
+    addTearDown(client.close);
+    await http.runWithClient(() async {
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: HouseholdsGuardiansScreen(
+            customSchoolId: 'SCHOOL',
+            api: AdmissionsApiClient(accessToken: 'test', client: client),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('directory-row-household-10')));
+      await tester.pumpAndSettle();
+      expect(find.text('Fees not assessed'), findsOneWidget);
+      expect(find.byKey(const Key('split-household-payment')), findsOneWidget);
+
+      final menus = find.byTooltip('More child actions');
+      expect(menus, findsNWidgets(3));
+      for (var index = 0; index < 3; index++) {
+        await tester.ensureVisible(menus.at(index));
+        await tester.tap(menus.at(index));
+        await tester.pumpAndSettle();
+        expect(find.text('Receive payment'), findsNWidgets(index == 2 ? 2 : 1));
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+      }
+    }, () => client);
+  });
+
   for (final count in [1, 3]) {
     testWidgets('shows and explicitly selects all $count household addresses', (
       tester,
@@ -312,6 +731,69 @@ void main() {
     expect(basic['admissionSource'], 'OTHER');
     expect(basic['admissionSourceOther'], 'Neighbourhood banner');
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('applied dates sort backend timestamps by day and time', (
+    tester,
+  ) async {
+    wide(tester);
+    final timestamps = <String, Object?>{
+      'Z': [2026, 9, 30, 18, 20],
+      'M': null,
+      'A': [2026, 10, 1, 8, 12, 0, 200000000],
+      'B': '2026-10-01T08:12:00.100',
+    };
+    final api = AdmissionsApiClient(
+      accessToken: 'test',
+      client: MockClient((request) async {
+        if (request.url.path.contains('current-term')) {
+          return json({
+            'id': 1,
+            'startDate': '2026-09-01',
+            'endDate': '2026-12-11',
+          });
+        }
+        return json({
+          'content': [
+            for (final entry in timestamps.entries)
+              {
+                'customStudentId': entry.key,
+                'firstName': 'Student ${entry.key}',
+                'createdAt': entry.value,
+                'status': 'DRAFT',
+              },
+          ],
+        });
+      }),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: Scaffold(
+          body: AdmissionsScreen(customSchoolId: 'SCHOOL', api: api),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    List<String> rowOrder() {
+      final ids = timestamps.keys.toList();
+      double rowY(String id) => tester
+          .getTopLeft(find.byKey(ValueKey('admission-row-$id')))
+          .dy;
+      ids.sort((first, second) => rowY(first).compareTo(rowY(second)));
+      return ids;
+    }
+
+    expect(find.text('30 Sep 2026'), findsOneWidget);
+    expect(find.text('1 Oct 2026'), findsNWidgets(2));
+    expect(rowOrder(), ['A', 'B', 'Z', 'M']);
+    await tester.tap(find.byKey(const ValueKey('sort-Applied')));
+    await tester.pumpAndSettle();
+    expect(rowOrder(), ['Z', 'B', 'A', 'M']);
+    await tester.tap(find.byKey(const ValueKey('sort-Applied')));
+    await tester.pumpAndSettle();
+    expect(rowOrder(), ['A', 'B', 'Z', 'M']);
   });
 
   testWidgets(

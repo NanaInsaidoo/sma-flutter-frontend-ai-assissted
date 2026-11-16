@@ -12,14 +12,19 @@ class ApprovalInbox {
   final List<ApprovalItem> myRequests;
 
   int get pendingTotal {
-    final pendingEvaluationApprovals = myApprovals
-        .where((item) => item.type == 'CLASS_EVALUATION' && item.pending)
+    final pendingSharedApprovals = myApprovals
+        .where(
+          (item) =>
+              (item.type == 'CLASS_EVALUATION' ||
+                  item.type == 'STUDENT_ADMISSION') &&
+              item.pending,
+        )
         .map((item) => item.key)
         .toSet();
     final sharedCount = myRequests
         .where(
           (item) =>
-              item.pending && pendingEvaluationApprovals.contains(item.key),
+              item.pending && pendingSharedApprovals.contains(item.key),
         )
         .length;
     return pendingMyRequests + pendingMyApproval - sharedCount;
@@ -69,6 +74,7 @@ class ApprovalItem {
     required this.canWithdraw,
     required this.sourcePage,
     this.customStudentId = '',
+    this.customGuardianId = '',
     this.className = '',
     this.termId,
     this.academicYearId,
@@ -100,6 +106,7 @@ class ApprovalItem {
   final bool canWithdraw;
   final String sourcePage;
   final String customStudentId;
+  final String customGuardianId;
   final String className;
   final int? termId;
   final int? academicYearId;
@@ -179,6 +186,7 @@ class ApprovalItem {
       canWithdraw: json['canWithdraw'] == true,
       sourcePage: text('sourcePage'),
       customStudentId: text('customStudentId'),
+      customGuardianId: text('customGuardianId'),
       className: text('className'),
       termId: (json['termId'] as num?)?.toInt(),
       academicYearId: (json['academicYearId'] as num?)?.toInt(),

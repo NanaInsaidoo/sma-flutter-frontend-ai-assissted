@@ -10,7 +10,6 @@ class HeadmasterTermClosureScreen extends StatefulWidget {
     required this.repository,
     this.actorUserId,
     this.onTermTransitioned,
-    this.onOpenTermDates,
     this.onEditCurrentTermDates,
     this.onSetUpNextTerm,
     this.onBeginNextTerm,
@@ -24,7 +23,6 @@ class HeadmasterTermClosureScreen extends StatefulWidget {
   final HeadmasterTermClosureRepository repository;
   final int? actorUserId;
   final VoidCallback? onTermTransitioned;
-  final Future<bool> Function()? onOpenTermDates;
   final Future<bool> Function(int termId)? onEditCurrentTermDates;
   final Future<bool> Function(int termId)? onSetUpNextTerm;
   final Future<Map<String, dynamic>> Function(int closedTermId, int nextTermId)?
@@ -933,13 +931,6 @@ class _State extends State<HeadmasterTermClosureScreen> {
     });
   }
 
-  Future<void> _openTermDates() async {
-    final changed = await widget.onOpenTermDates?.call() ?? false;
-    if (!changed || !mounted) return;
-    notice('Next term dates updated.');
-    await _reloadCurrentTerm();
-  }
-
   Future<void> _editCurrentTermDates(int termId) async {
     final edit = widget.onEditCurrentTermDates;
     if (edit == null || saving) return;
@@ -1287,18 +1278,20 @@ class _State extends State<HeadmasterTermClosureScreen> {
                   'Term transition',
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
                 ),
-                if (widget.onOpenTermDates != null && !closure.termClosed)
+                if (!closure.termClosed && widget.onEditCurrentTermDates != null)
                   OutlinedButton.icon(
-                    onPressed: saving ? null : _openTermDates,
+                    onPressed: saving
+                        ? null
+                        : () => _editCurrentTermDates(closure.termId),
                     icon: const Icon(Icons.edit_calendar_outlined),
-                    label: const Text('Manage next term dates'),
+                    label: const Text('Edit current term dates'),
                   ),
               ],
             ),
           ),
           for (final check in checks) ...[
             const SizedBox(height: 12),
-            _transitionCheck(closure, check, closingDate),
+            _transitionCheck(check, closingDate),
           ],
           if (!hasClosingCheck && closingDate != null) ...[
             const SizedBox(height: 12),
@@ -1345,7 +1338,6 @@ class _State extends State<HeadmasterTermClosureScreen> {
   }
 
   Widget _transitionCheck(
-    HeadmasterTermClosure closure,
     TermClosureItem check,
     Object? closingDate,
   ) {
@@ -1365,24 +1357,7 @@ class _State extends State<HeadmasterTermClosureScreen> {
         Text(detail, style: const TextStyle(color: AppColors.muted)),
       ],
     );
-    final controls = Wrap(
-      spacing: 10,
-      runSpacing: 8,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        _badge(status, _actionStatusColor(status)),
-        if (isClosingDate &&
-            !closure.termClosed &&
-            widget.onEditCurrentTermDates != null)
-          OutlinedButton.icon(
-            onPressed: saving
-                ? null
-                : () => _editCurrentTermDates(closure.termId),
-            icon: const Icon(Icons.edit_calendar_outlined, size: 18),
-            label: const Text('Edit current term dates'),
-          ),
-      ],
-    );
+    final badge = _badge(status, _actionStatusColor(status));
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
@@ -1393,13 +1368,13 @@ class _State extends State<HeadmasterTermClosureScreen> {
         builder: (context, constraints) => constraints.maxWidth < 520
             ? Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: [description, const SizedBox(height: 8), controls],
+                children: [description, const SizedBox(height: 8), badge],
               )
             : Row(
                 children: [
                   Expanded(child: description),
                   const SizedBox(width: 10),
-                  controls,
+                  badge,
                 ],
               ),
       ),

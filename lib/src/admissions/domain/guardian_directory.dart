@@ -39,6 +39,42 @@ class GuardianDirectoryEntry {
   }
 }
 
+enum GuardianSetupStatus {
+  detailsIncomplete('Details incomplete'),
+  awaitingApproval('Awaiting approval'),
+  complete('Complete'),
+  noHouseholdLinked('No household linked'),
+  needsAttention('Needs attention');
+
+  const GuardianSetupStatus(this.label);
+  final String label;
+
+  static GuardianSetupStatus fromGuardians({
+    required int? householdId,
+    required Iterable<String> guardianStatuses,
+  }) {
+    if (householdId == null) return noHouseholdLinked;
+    final statuses = guardianStatuses
+        .map((status) => status.trim().toUpperCase())
+        .toSet();
+    if (statuses.isEmpty ||
+        statuses.contains('DRAFT') ||
+        statuses.contains('INCOMPLETE') ||
+        statuses.contains('')) {
+      return detailsIncomplete;
+    }
+    if (statuses.any(isAwaitingApproval)) return awaitingApproval;
+    return statuses.every((status) => status == 'APPROVED')
+        ? complete
+        : needsAttention;
+  }
+
+  static bool isAwaitingApproval(String status) {
+    final value = status.trim().toUpperCase();
+    return value == 'PENDING_REVIEW' || value == 'PENDING_APPROVAL';
+  }
+}
+
 class GuardianDirectoryHousehold {
   GuardianDirectoryHousehold(this.guardians, this.studentCount)
     : primary = guardians.firstWhere(
@@ -57,10 +93,13 @@ class GuardianDirectoryHousehold {
       ? primary.name
       : '${primary.name} Household';
   int get pendingCount => guardians
-      .where((g) => g.status.contains('PENDING') || g.status.contains('REVIEW'))
+      .where(
+        (guardian) => GuardianSetupStatus.isAwaitingApproval(guardian.status),
+      )
       .length;
-  bool get incomplete => guardians.any(
-    (g) => g.status.contains('DRAFT') || g.status.contains('INCOMPLETE'),
+  GuardianSetupStatus get guardianSetup => GuardianSetupStatus.fromGuardians(
+    householdId: id,
+    guardianStatuses: guardians.map((guardian) => guardian.status),
   );
 
   bool matches(String query) =>

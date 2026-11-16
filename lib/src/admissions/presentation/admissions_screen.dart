@@ -50,8 +50,6 @@ Future<void> openStudentHousehold({
           householdName: 'Household $householdId',
           primaryGuardian: '',
           phone: '',
-          status: 'Active',
-          statusColor: AppColors.green,
           students: 0,
           pendingGuardians: 0,
           started: '',
@@ -297,15 +295,24 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
       1 => item.guardianName,
       2 => item.applyingFor,
       3 => item.type,
-      4 => item.createdAt,
       _ => item.status.label,
     };
     visible.sort((a, b) {
-      final comparison = _sortColumn == 4
-          ? (DateTime.tryParse(a.createdAt) ?? DateTime(1900)).compareTo(
-              DateTime.tryParse(b.createdAt) ?? DateTime(1900),
-            )
-          : sortValue(a).toLowerCase().compareTo(sortValue(b).toLowerCase());
+      final int comparison;
+      if (_sortColumn == 4) {
+        final firstDate = DateTime.tryParse(a.createdAt);
+        final secondDate = DateTime.tryParse(b.createdAt);
+        if (firstDate == null || secondDate == null) {
+          if (firstDate != secondDate) return firstDate == null ? 1 : -1;
+          comparison = 0;
+        } else {
+          comparison = firstDate.compareTo(secondDate);
+        }
+      } else {
+        comparison = sortValue(a).toLowerCase().compareTo(
+          sortValue(b).toLowerCase(),
+        );
+      }
       final stable = comparison == 0
           ? a.studentId.compareTo(b.studentId)
           : comparison;
@@ -440,6 +447,7 @@ class HouseholdsGuardiansScreen extends StatefulWidget {
 
 class _HouseholdsGuardiansScreenState extends State<HouseholdsGuardiansScreen> {
   String _search = '';
+  GuardianSetupStatus? _setupFilter;
   late final AdmissionsApiClient _api;
   late Future<List<_HouseholdRecord>> _householdsFuture;
 
@@ -462,9 +470,12 @@ class _HouseholdsGuardiansScreenState extends State<HouseholdsGuardiansScreen> {
 
   List<_HouseholdRecord> _visibleHouseholds(List<_HouseholdRecord> households) {
     final query = _search.trim().toLowerCase();
-    if (query.isEmpty) return households;
     return households.where((household) {
-      return (household.directoryHousehold?.matches(query) ?? false) ||
+      if (_setupFilter != null && household.guardianSetup != _setupFilter) {
+        return false;
+      }
+      return query.isEmpty ||
+          (household.directoryHousehold?.matches(query) ?? false) ||
           household.householdName.toLowerCase().contains(query) ||
           household.primaryGuardian.toLowerCase().contains(query) ||
           household.phone.toLowerCase().contains(query);
@@ -506,6 +517,9 @@ class _HouseholdsGuardiansScreenState extends State<HouseholdsGuardiansScreen> {
                         _HouseholdFilters(
                           onSearchChanged: (value) =>
                               setState(() => _search = value),
+                          setupFilter: _setupFilter,
+                          onSetupChanged: (value) =>
+                              setState(() => _setupFilter = value),
                         ),
                         const SizedBox(height: 12),
                         if (snapshot.connectionState == ConnectionState.waiting)
@@ -721,9 +735,7 @@ class _HouseholdSummaryCards extends StatelessWidget {
   Widget build(BuildContext context) {
     final incomplete = households
         .where(
-          (item) =>
-              item.status == 'Guardian incomplete' ||
-              item.status == 'No student added',
+          (item) => item.guardianSetup == GuardianSetupStatus.detailsIncomplete,
         )
         .length;
     final pendingGuardians = households.fold<int>(
@@ -754,7 +766,7 @@ class _HouseholdSummaryCards extends StatelessWidget {
         _SummaryCard(
           title: 'Pending Guardians',
           value: pendingGuardians.toString(),
-          subtitle: 'Additional guardians',
+          subtitle: 'Awaiting approval',
           color: AppColors.blue,
         ),
       ],
@@ -910,29 +922,15 @@ class _AdmissionsFilters extends StatelessWidget {
 }
 
 class _HouseholdFilters extends StatelessWidget {
-  const _HouseholdFilters({required this.onSearchChanged});
-  final ValueChanged<String> onSearchChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return _FilterBar(
-      searchHint: 'Search by guardian name, phone, or household',
-      onSearchChanged: onSearchChanged,
-      filters: const ['All statuses', 'All guardians'],
-    );
-  }
-}
-
-class _FilterBar extends StatelessWidget {
-  const _FilterBar({
-    required this.searchHint,
+  const _HouseholdFilters({
     required this.onSearchChanged,
-    required this.filters,
+    required this.setupFilter,
+    required this.onSetupChanged,
   });
 
-  final String searchHint;
   final ValueChanged<String> onSearchChanged;
-  final List<String> filters;
+  final GuardianSetupStatus? setupFilter;
+  final ValueChanged<GuardianSetupStatus?> onSetupChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -948,22 +946,27 @@ class _FilterBar extends StatelessWidget {
               width: 420,
               child: TextField(
                 onChanged: onSearchChanged,
-                decoration: InputDecoration(
-                  hintText: searchHint,
-                  prefixIcon: const Icon(Icons.search_rounded),
-                  contentPadding: const EdgeInsets.symmetric(vertical: 13),
+                decoration: const InputDecoration(
+                  hintText: 'Search by guardian name, phone, or household',
+                  prefixIcon: Icon(Icons.search_rounded),
+                  contentPadding: EdgeInsets.symmetric(vertical: 13),
                 ),
               ),
             ),
-            ...filters.map(
-              (filter) => SizedBox(
-                width: 170,
-                child: DropdownButtonFormField<String>(
-                  value: filter,
-                  isExpanded: true,
-                  items: [DropdownMenuItem(value: filter, child: Text(filter))],
-                  onChanged: (_) {},
-                ),
+            SizedBox(
+              width: 216,
+              child: DropdownButtonFormField<GuardianSetupStatus>(
+                key: const Key('guardian-setup-filter'),
+                value: setupFilter,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Guardian setup'),
+                hint: const Text('All statuses'),
+                items: [
+                  const DropdownMenuItem(child: Text('All statuses')),
+                  for (final status in GuardianSetupStatus.values)
+                    DropdownMenuItem(value: status, child: Text(status.label)),
+                ],
+                onChanged: onSetupChanged,
               ),
             ),
           ],
@@ -1057,14 +1060,14 @@ class _HouseholdsTable extends StatelessWidget {
               'Students',
               'Pending guardians',
               'Started',
-              'Status',
+              'Guardian setup',
             ],
           );
         }
         if (households.isEmpty) {
           return const _EmptyState(
             title: 'No households found',
-            subtitle: 'Try another search term.',
+            subtitle: 'Try another search or guardian setup filter.',
           );
         }
         final household = households[index - 1];
@@ -1213,8 +1216,6 @@ class _ApplicationRow extends StatelessWidget {
             phone: application.guardianPhone.isEmpty
                 ? 'No phone yet'
                 : application.guardianPhone,
-            status: application.status.label,
-            statusColor: application.status.color,
             students: 1,
             pendingGuardians: 0,
             started: application.appliedDate,
@@ -1260,6 +1261,30 @@ class _ApplicationRow extends StatelessWidget {
   }
 }
 
+Future<void> showGuardianAdmissionReview({
+  required BuildContext context,
+  required String schoolId,
+  required String guardianId,
+  required String? accessToken,
+  Future<String?> Function()? onRefreshAccessToken,
+}) => Navigator.of(context).push<void>(
+  MaterialPageRoute(
+    builder: (_) => _GuardianDetailScreen(
+      guardian: AdmissionGuardian.fromJson({'customGuardianId': guardianId}),
+      householdId: null,
+      customSchoolId: schoolId,
+      admissionsApi: AdmissionsApiClient(
+        accessToken: accessToken,
+        onRefreshAccessToken: onRefreshAccessToken,
+      ),
+      feeApi: FeeApiClient(
+        accessToken: accessToken,
+        onRefreshAccessToken: onRefreshAccessToken,
+      ),
+    ),
+  ),
+);
+
 class _GuardianDetailScreen extends StatefulWidget {
   const _GuardianDetailScreen({
     required this.guardian,
@@ -1281,6 +1306,7 @@ class _GuardianDetailScreen extends StatefulWidget {
 
 class _GuardianDetailScreenState extends State<_GuardianDetailScreen> {
   late Future<_GuardianDetailData> _detailFuture;
+  bool _approving = false;
 
   @override
   void initState() {
@@ -1389,7 +1415,7 @@ class _GuardianDetailScreenState extends State<_GuardianDetailScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text(
-                'We will send a restricted SMS invitation. The guardian verifies their own details and chooses their permanent username and password.',
+                'The guardian uses the invitation to verify their details and set up their login.',
               ),
               const SizedBox(height: 18),
               TextField(
@@ -1446,11 +1472,14 @@ class _GuardianDetailScreenState extends State<_GuardianDetailScreen> {
         dateOfBirth: dobController.text,
       );
       if (!mounted) return;
+      final deliveryFailed = result.invitationDeliveryStatus == 'FAILED';
       await showDialog<void>(
         context: context,
         builder: (dialogContext) => AlertDialog(
           title: Text(
-            result.newlyCreated
+            deliveryFailed
+                ? 'Parent invitation could not be delivered'
+                : result.newlyCreated
                 ? 'Parent invitation sent'
                 : 'Parent access already enabled',
           ),
@@ -1462,7 +1491,7 @@ class _GuardianDetailScreenState extends State<_GuardianDetailScreen> {
               children: [
                 Text(result.message),
                 const SizedBox(height: 16),
-                if (result.invitationMaskedPhone.isNotEmpty) ...[
+                if (!deliveryFailed && result.invitationMaskedPhone.isNotEmpty) ...[
                   const SizedBox(height: 12),
                   const Text(
                     'Sent to',
@@ -1488,7 +1517,7 @@ class _GuardianDetailScreenState extends State<_GuardianDetailScreen> {
           ],
         ),
       );
-      _reload();
+      if (mounted) _reload();
     } on AdmissionsApiException catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -1498,6 +1527,47 @@ class _GuardianDetailScreenState extends State<_GuardianDetailScreen> {
       emailController.dispose();
       phoneController.dispose();
       dobController.dispose();
+    }
+  }
+
+  Future<void> _approveGuardian(AdmissionGuardian guardian) async {
+    if (_approving) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Approve guardian?'),
+        content: Text('Approve the guardian record for ${guardian.displayName}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Approve guardian'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _approving = true);
+    try {
+      await widget.admissionsApi.approveGuardianAdmission(
+        customSchoolId: widget.customSchoolId,
+        customGuardianId: guardian.customGuardianId,
+      );
+      if (!mounted) return;
+      _reload();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Guardian approved.')),
+      );
+    } on AdmissionsApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message)),
+      );
+    } finally {
+      if (mounted) setState(() => _approving = false);
     }
   }
 
@@ -1537,6 +1607,10 @@ class _GuardianDetailScreenState extends State<_GuardianDetailScreen> {
                     data: data,
                     onOpenStudent: (student) =>
                         _openStudent(student, data.guardian),
+                    approving: _approving,
+                    onApprove: data.guardian.rawJson['canApproveAdmission'] == true
+                        ? () => _approveGuardian(data.guardian)
+                        : null,
                     onEnableParentAccess: () =>
                         _enableParentAccess(data.guardian),
                   );
@@ -1567,11 +1641,15 @@ class _GuardianDetailOverview extends StatelessWidget {
     required this.data,
     required this.onOpenStudent,
     required this.onEnableParentAccess,
+    required this.approving,
+    required this.onApprove,
   });
 
   final _GuardianDetailData data;
   final ValueChanged<AdmissionStudent> onOpenStudent;
   final VoidCallback onEnableParentAccess;
+  final bool approving;
+  final VoidCallback? onApprove;
 
   @override
   Widget build(BuildContext context) {
@@ -1592,10 +1670,22 @@ class _GuardianDetailOverview extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _GuardianProfileHeader(guardian: guardian),
+              if (onApprove != null) ...[
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton.icon(
+                    onPressed: approving ? null : onApprove,
+                    icon: const Icon(Icons.check_circle_outline),
+                    label: Text(approving ? 'Approving…' : 'Approve guardian'),
+                  ),
+                ),
+              ],
               const SizedBox(height: 16),
               _GuardianPortalAccessCard(
                 enabled:
                     raw['portalAccessEnabled'] == true || raw['userId'] != null,
+                approved: guardian.status.trim().toUpperCase() == 'APPROVED',
                 onEnable: onEnableParentAccess,
               ),
               const SizedBox(height: 16),
@@ -1672,7 +1762,10 @@ class _GuardianDetailOverview extends StatelessWidget {
                   ('Issue date', _guardianDate(proof?['issueDate'])),
                   ('Expiry date', _guardianDate(proof?['expirationDate'])),
                   ('Country of issue', _guardianNamedValue(proof?['country'])),
-                  ('City of issue', _guardianNamedValue(proof?['city'])),
+                  (
+                    'City of issue',
+                    _guardianNamedValue(proof?['city'] ?? proof?['cityName']),
+                  ),
                 ],
               ),
               const SizedBox(height: 16),
@@ -1704,9 +1797,11 @@ class _GuardianDetailOverview extends StatelessWidget {
 class _GuardianPortalAccessCard extends StatelessWidget {
   const _GuardianPortalAccessCard({
     required this.enabled,
+    required this.approved,
     required this.onEnable,
   });
   final bool enabled;
+  final bool approved;
   final VoidCallback onEnable;
 
   @override
@@ -1744,7 +1839,9 @@ class _GuardianPortalAccessCard extends StatelessWidget {
                 Text(
                   enabled
                       ? 'They can see household children, fees, attendance and published report cards.'
-                      : 'Create a protected login for this household.',
+                      : approved
+                      ? 'Send an invitation for the guardian to set up their login.'
+                      : 'Approve the guardian before enabling login.',
                   style: const TextStyle(color: AppColors.muted),
                 ),
               ],
@@ -1753,7 +1850,7 @@ class _GuardianPortalAccessCard extends StatelessWidget {
           const SizedBox(width: 12),
           OutlinedButton.icon(
             key: const Key('enable-guardian-login'),
-            onPressed: onEnable,
+            onPressed: enabled || approved ? onEnable : null,
             icon: Icon(
               enabled ? Icons.manage_accounts_outlined : Icons.add_rounded,
             ),
@@ -2320,8 +2417,6 @@ class _StudentProfileScreenState extends State<_StudentProfileScreen> {
                 : '${guardian.displayName} Household',
             primaryGuardian: guardian?.displayName ?? 'Guardian',
             phone: guardian?.phone ?? 'No phone yet',
-            status: 'Active household',
-            statusColor: AppColors.green,
             students: data.householdStudents.length,
             pendingGuardians: 0,
             started: _formatDateText(
@@ -2455,10 +2550,7 @@ class _HouseholdRow extends StatelessWidget {
           Text(household.started),
           Align(
             alignment: Alignment.centerLeft,
-            child: _StatusPill(
-              label: household.status,
-              color: household.statusColor,
-            ),
+            child: _GuardianSetupPill(status: household.guardianSetup),
           ),
         ],
       ),
@@ -2538,6 +2630,28 @@ class _TwoLine extends StatelessWidget {
           style: const TextStyle(color: AppColors.muted, fontSize: 12),
         ),
       ],
+    );
+  }
+}
+
+class _GuardianSetupPill extends StatelessWidget {
+  const _GuardianSetupPill({required this.status});
+
+  final GuardianSetupStatus? status;
+
+  @override
+  Widget build(BuildContext context) {
+    final setup = status;
+    if (setup == null) return const SizedBox.shrink();
+    return _StatusPill(
+      label: setup.label,
+      color: switch (setup) {
+        GuardianSetupStatus.complete => AppColors.green,
+        GuardianSetupStatus.awaitingApproval => AppColors.blue,
+        GuardianSetupStatus.detailsIncomplete ||
+        GuardianSetupStatus.noHouseholdLinked ||
+        GuardianSetupStatus.needsAttention => AppColors.amber,
+      },
     );
   }
 }
@@ -2630,7 +2744,7 @@ class _StartAdmissionDialog extends StatelessWidget {
                 icon: Icons.home_work_rounded,
                 title: 'Create new household',
                 subtitle:
-                    'Use this when the guardian is new. Create the household, complete guardian details, then add the student.',
+                    'Add the primary guardian, then start the student application.',
                 onTap: () =>
                     Navigator.pop(context, _AdmissionStartMode.newHousehold),
               ),
@@ -2806,35 +2920,28 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
         ),
       ),
     );
+    final guardianStatuses = guardians.map((guardian) => guardian.status);
+    _household = _household.copyWith(
+      students: students.length,
+      pendingGuardians: guardianStatuses
+          .where(GuardianSetupStatus.isAwaitingApproval)
+          .length,
+      guardianSetup: GuardianSetupStatus.fromGuardians(
+        householdId: householdId,
+        guardianStatuses: guardianStatuses,
+      ),
+    );
     if (guardians.isNotEmpty) {
       final primary = guardians.firstWhere(
         (guardian) => guardian.isPrimary,
         orElse: () => guardians.first,
       );
-      final incompleteGuardians = guardians.where((guardian) {
-        return _isIncompleteGuardian(guardian.status);
-      }).length;
-      final pendingGuardians = guardians.where((guardian) {
-        return _isPendingReviewGuardian(guardian.status);
-      }).length;
       _household = _household.copyWith(
         householdName:
             _household.directoryHousehold?.name ??
             '${primary.displayName} Household',
         primaryGuardian: primary.displayName,
         phone: primary.phone.isEmpty ? 'No phone yet' : primary.phone,
-        students: students.length,
-        pendingGuardians: pendingGuardians,
-        status: incompleteGuardians > 0
-            ? 'Guardian incomplete'
-            : pendingGuardians > 0
-            ? 'Pending review'
-            : 'Ready for student',
-        statusColor: incompleteGuardians > 0
-            ? AppColors.amber
-            : pendingGuardians > 0
-            ? AppColors.blue
-            : AppColors.green,
       );
     }
     final feeAccounts = <String, FeeStudentAccount>{};
@@ -2920,8 +3027,6 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
               if (_household.householdId == null && savedHouseholdId != null) {
                 _household = _household.copyWith(
                   householdId: savedHouseholdId,
-                  status: 'Ready for student',
-                  statusColor: AppColors.green,
                 );
               }
               final nextDashboard = _loadDashboard();
@@ -2989,6 +3094,9 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
         ),
       ),
     );
+    if (mounted && _isPendingReviewGuardian(guardian.status)) {
+      _reloadDashboard();
+    }
   }
 
   Future<void> _editStudent(AdmissionStudent student) async {
@@ -3231,6 +3339,7 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final needsPrimaryGuardian = _household.householdId == null;
     return Scaffold(
       backgroundColor: const Color(0xFFF5F8F7),
       body: SafeArea(
@@ -3238,14 +3347,21 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
           children: [
             _AdmissionFlowTopBar(
               title: _household.householdName,
-              subtitle:
-                  'Household dashboard · Guardians and student applications',
+              subtitle: needsPrimaryGuardian
+                  ? null
+                  : 'Household dashboard · Guardians and student applications',
               onClose: () => Navigator.pop(context),
             ),
             Expanded(
               child: FutureBuilder<_HouseholdDashboardData>(
                 future: _dashboardFuture,
                 builder: (context, snapshot) {
+                  if (needsPrimaryGuardian) {
+                    return _NewHouseholdSetup(
+                      onAddGuardian: () =>
+                          _openDrawer(_AdmissionFlowKind.primaryGuardian),
+                    );
+                  }
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const Padding(
                       padding: EdgeInsets.all(24),
@@ -3295,7 +3411,10 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
                     onApprovePendingHousehold: _approvePendingHousehold,
                     onDeleteEmptyHousehold: _deleteEmptyHousehold,
                     onSplitPayment: () async {
-                      if (_household.householdId == null) return;
+                      if (_household.householdId == null ||
+                          !dashboard.hasPayableStudents) {
+                        return;
+                      }
                       await showHouseholdFeeCollection(
                         context: context,
                         customSchoolId: widget.customSchoolId,
@@ -3309,6 +3428,53 @@ class _HouseholdDashboardScreenState extends State<_HouseholdDashboardScreen> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NewHouseholdSetup extends StatelessWidget {
+  const _NewHouseholdSetup({required this.onAddGuardian});
+
+  final VoidCallback onAddGuardian;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(20, 32, 20, 32),
+      child: Center(
+        child: SizedBox(
+          width: 520,
+          child: Card(
+            margin: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Add the primary guardian',
+                    style: theme.textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Save their details to create the household, then add a child to start an application.',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: AppColors.muted,
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  FilledButton.icon(
+                    onPressed: onAddGuardian,
+                    icon: const Icon(Icons.person_add_alt_1_rounded),
+                    label: const Text('Add guardian'),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -3392,11 +3558,12 @@ class _HouseholdWorkspace extends StatelessWidget {
                               student: student,
                               feeAccount: dashboard
                                   .feeAccounts[student.customStudentId],
-                              financeAvailable: dashboard.financeAvailable,
                               onOpen: () => onOpenStudent(student),
                               onEdit: () => onEditStudent(student),
                               onDelete: () => onDeleteStudent(student),
-                              onPayment: onSplitPayment,
+                              onPayment: dashboard.canReceivePayment(student)
+                                  ? onSplitPayment
+                                  : null,
                             ),
                           )
                           .toList(),
@@ -3447,7 +3614,7 @@ class _HouseholdWorkspace extends StatelessWidget {
               outstanding: dashboard.totalOutstanding,
               nextDueDate: dashboard.nextDueDate,
               hasStudents: _hasStudent,
-              onPayment: onSplitPayment,
+              onPayment: dashboard.hasPayableStudents ? onSplitPayment : null,
             ),
             const SizedBox(height: 16),
             _HouseholdRecentActivityCard(items: dashboard.recentActivity),
@@ -3558,10 +3725,7 @@ class _HouseholdProfileHeader extends StatelessWidget {
                               fontWeight: FontWeight.w800,
                             ),
                           ),
-                          _StatusPill(
-                            label: household.status,
-                            color: household.statusColor,
-                          ),
+                          _GuardianSetupPill(status: household.guardianSetup),
                         ],
                       ),
                       const SizedBox(height: 7),
@@ -3880,7 +4044,6 @@ class _HouseholdChildProfileCard extends StatelessWidget {
   const _HouseholdChildProfileCard({
     required this.student,
     required this.feeAccount,
-    required this.financeAvailable,
     required this.onOpen,
     required this.onEdit,
     required this.onDelete,
@@ -3889,11 +4052,10 @@ class _HouseholdChildProfileCard extends StatelessWidget {
 
   final AdmissionStudent student;
   final FeeStudentAccount? feeAccount;
-  final bool financeAvailable;
   final VoidCallback onOpen;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
-  final VoidCallback onPayment;
+  final VoidCallback? onPayment;
 
   @override
   Widget build(BuildContext context) {
@@ -4040,11 +4202,11 @@ class _HouseholdChildProfileCard extends StatelessWidget {
                     PopupMenuButton<String>(
                       tooltip: 'More child actions',
                       onSelected: (value) {
-                        if (value == 'payment') onPayment();
+                        if (value == 'payment') onPayment?.call();
                         if (value == 'delete') onDelete();
                       },
                       itemBuilder: (_) => [
-                        if (feeAccount != null)
+                        if (onPayment != null)
                           const PopupMenuItem(
                             value: 'payment',
                             child: Text('Receive payment'),
@@ -4166,7 +4328,12 @@ class _HouseholdGuardianContactCard extends StatelessWidget {
               ],
             ),
           ),
-          TextButton(onPressed: onOpen, child: const Text('View profile')),
+          TextButton(
+            onPressed: onOpen,
+            child: Text(_isPendingReviewGuardian(guardian.status)
+                ? 'Review guardian'
+                : 'View profile'),
+          ),
           if (!isPrimary)
             TextButton.icon(
               onPressed: isSettingPrimary ? null : onSetPrimary,
@@ -4219,7 +4386,7 @@ class _HouseholdAttentionCard extends StatelessWidget {
   final double outstanding;
   final DateTime? nextDueDate;
   final bool hasStudents;
-  final VoidCallback onPayment;
+  final VoidCallback? onPayment;
 
   @override
   Widget build(BuildContext context) {
@@ -4323,7 +4490,7 @@ class _HouseholdAttentionCard extends StatelessWidget {
                 ],
               ),
             ),
-            if (financeAvailable && hasStudents) ...[
+            if (onPayment != null) ...[
               const SizedBox(height: 12),
               SizedBox(
                 width: double.infinity,
@@ -4492,10 +4659,7 @@ class _HouseholdIdentityCard extends StatelessWidget {
                           runSpacing: 6,
                           crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
-                            _StatusPill(
-                              label: household.status,
-                              color: household.statusColor,
-                            ),
+                            _GuardianSetupPill(status: household.guardianSetup),
                             Text(
                               '${household.primaryGuardian} · ${household.phone} · Started ${household.started}',
                               style: const TextStyle(color: AppColors.muted),
@@ -5708,8 +5872,15 @@ class _GuardianAdmissionDraft {
       ),
       'countryId': _requiredId(idCountry, 'Select ID country of issue.'),
     };
-    final idCity = proofLocationDraft.cityId ?? addressDraft.cityId;
-    if (idCity != null) payload['cityId'] = '$idCity';
+    final cityId = proofLocationDraft.cityId;
+    if (cityId != null) {
+      payload['cityId'] = cityId;
+    } else {
+      payload['cityName'] = _requiredText(
+        proofLocationDraft.cityName,
+        'Enter the city of issue.',
+      );
+    }
     return payload;
   }
 
@@ -6832,9 +7003,11 @@ class _AdmissionSideDrawerState extends State<_AdmissionSideDrawer> {
         if (_guardianDraft.proofCountryId == null) {
           errors['proofCountry'] = 'Select the country of issue.';
         }
-        if (_guardianDraft.proofLocationDraft.cityId == null &&
-            _guardianDraft.addressDraft.cityId == null) {
-          errors['proofCity'] = 'Select the city of issue.';
+        final issueCity = _guardianDraft.proofLocationDraft;
+        if (issueCity.cityId == null && issueCity.cityName.trim().isEmpty) {
+          errors['proofCity'] = 'Enter the city of issue.';
+        } else if (issueCity.cityName.trim().length > 255) {
+          errors['proofCity'] = 'Use 255 characters or fewer.';
         }
       case 4:
         if (_guardianDraft.selectedOccupations.isEmpty) {
@@ -6924,15 +7097,6 @@ class _AdmissionSideDrawerState extends State<_AdmissionSideDrawer> {
           customSchoolId: widget.customSchoolId,
           customGuardianId: guardianId,
         );
-        if (!_isEditing) {
-          await widget.api.enableGuardianPortalAccess(
-            customSchoolId: widget.customSchoolId,
-            customGuardianId: guardianId,
-            email: _guardianDraft.emailAddresses.first.text,
-            phoneNumber: _guardianDraft.phoneNumbers.first.number.text,
-            dateOfBirth: _guardianDraft.dob.text,
-          );
-        }
     }
   }
 
@@ -7472,7 +7636,7 @@ class _HouseholdHeroCard extends StatelessWidget {
                 ],
               ),
             ),
-            _StatusPill(label: household.status, color: household.statusColor),
+            _GuardianSetupPill(status: household.guardianSetup),
           ],
         ),
       ),
@@ -7817,8 +7981,6 @@ class _AdmissionFlowScreenState extends State<_AdmissionFlowScreen> {
                 householdName: 'New Household',
                 primaryGuardian: 'New guardian',
                 phone: 'Phone pending',
-                status: 'Ready for student',
-                statusColor: AppColors.green,
                 students: 0,
                 pendingGuardians: 0,
                 started: 'Today',
@@ -8007,12 +8169,12 @@ class _AdmissionFormStep {
 class _AdmissionFlowTopBar extends StatelessWidget {
   const _AdmissionFlowTopBar({
     required this.title,
-    required this.subtitle,
+    this.subtitle,
     required this.onClose,
   });
 
   final String title;
-  final String subtitle;
+  final String? subtitle;
   final VoidCallback onClose;
 
   @override
@@ -8035,8 +8197,10 @@ class _AdmissionFlowTopBar extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(title, style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 4),
-                Text(subtitle, style: const TextStyle(color: AppColors.muted)),
+                if (subtitle case final subtitle?) ...[
+                  const SizedBox(height: 4),
+                  Text(subtitle, style: const TextStyle(color: AppColors.muted)),
+                ],
               ],
             ),
           ),
@@ -8295,16 +8459,11 @@ class _GuardianBasicInfoFormState extends State<_GuardianBasicInfoForm> {
     final draft = widget.draft;
     return Column(
       children: [
-        _DrawerFormSection(
-          title: 'Parent portal invitation',
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'After this guardian record is completed, SMA sends a restricted SMS invitation. The guardian—not the school—will verify the details and choose whether to reuse a proven guardian account or create separate access.',
-                style: TextStyle(color: AppColors.muted, height: 1.4),
-              ),
-            ],
+        const _DrawerFormSection(
+          title: 'Parent portal access',
+          child: Text(
+            'After approval, open the guardian profile and select Enable login to send an invitation.',
+            style: TextStyle(color: AppColors.muted, height: 1.4),
           ),
         ),
         const SizedBox(height: 12),
@@ -9117,6 +9276,8 @@ class _GuardianProofOfIdForm extends StatelessWidget {
                 api: api,
                 draft: draft.proofLocationDraft,
                 label: 'City of issue',
+                allowFreeText: true,
+                freeTextHint: 'Enter the city shown on the ID',
                 errorText: errors['proofCity'],
               ),
             ],
@@ -9599,38 +9760,38 @@ class _StudentVaccinationFormState extends State<_StudentVaccinationForm> {
             );
           }
           return Column(
-            children: vaccinations
-                .map(
-                  (vaccination) => Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: _VaccinationRecordCard(
-                      vaccination: vaccination,
-                      status: vaccination.id == null
-                          ? null
-                          : widget.draft.vaccinationStatuses[vaccination.id],
-                      dateController: vaccination.id == null
-                          ? null
-                          : widget.draft.vaccinationDateFor(vaccination.id!),
-                      notesController: vaccination.id == null
-                          ? null
-                          : widget.draft.vaccinationNotesFor(vaccination.id!),
-                      onChanged: (value) {
-                        if (vaccination.id != null) {
-                          setState(() {
-                            widget.draft.vaccinationStatuses[vaccination.id!] =
-                                value;
-                            if (value != 'YES') {
-                              widget.draft
-                                  .vaccinationDateFor(vaccination.id!)
-                                  .clear();
-                            }
-                          });
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Has the student received each vaccine?',
+                style: TextStyle(color: AppColors.muted),
+              ),
+              const SizedBox(height: 8),
+              for (final vaccination in vaccinations)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _VaccinationRecordCard(
+                    vaccination: vaccination,
+                    status: widget.draft.vaccinationStatuses[vaccination.id],
+                    dateController: vaccination.id == null
+                        ? null
+                        : widget.draft.vaccinationDateFor(vaccination.id!),
+                    notesController: vaccination.id == null
+                        ? null
+                        : widget.draft.vaccinationNotesFor(vaccination.id!),
+                    onChanged: (value) {
+                      final id = vaccination.id;
+                      if (id == null) return;
+                      setState(() {
+                        widget.draft.vaccinationStatuses[id] = value;
+                        if (value != 'YES') {
+                          widget.draft.vaccinationDateFor(id).clear();
                         }
-                      },
-                    ),
+                      });
+                    },
                   ),
-                )
-                .toList(),
+                ),
+            ],
           );
         },
       ),
@@ -10204,6 +10365,7 @@ class _CitySearchField extends StatefulWidget {
     this.onSelected,
     this.requiresLocationScope = false,
     this.allowFreeText = false,
+    this.freeTextHint,
     this.errorText,
   });
 
@@ -10213,6 +10375,7 @@ class _CitySearchField extends StatefulWidget {
   final ValueChanged<AdmissionLookupOption?>? onSelected;
   final bool requiresLocationScope;
   final bool allowFreeText;
+  final String? freeTextHint;
   final String? errorText;
 
   @override
@@ -10234,7 +10397,10 @@ class _CitySearchFieldState extends State<_CitySearchField> {
   @override
   void didUpdateWidget(covariant _CitySearchField oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.draft.cityName != _controller.text) {
+    if (!identical(widget.draft, oldWidget.draft)) {
+      _searchRevision++;
+      _options = const [];
+      _loading = false;
       _controller.text = widget.draft.cityName;
     }
   }
@@ -10295,7 +10461,7 @@ class _CitySearchFieldState extends State<_CitySearchField> {
                 : null,
             helperMaxLines: 2,
             hintText: locationScopeReady
-                ? 'Type at least 3 letters'
+                ? widget.freeTextHint ?? 'Type at least 3 letters'
                 : 'Select region and district first',
             suffixIcon: _loading
                 ? const Padding(
@@ -10578,54 +10744,24 @@ class _MedicalConditionChoiceRow extends StatelessWidget {
   final ValueChanged<bool> onChanged;
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(11, 9, 8, 9),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: const Color(0xFFD8E2EA)),
-        borderRadius: BorderRadius.circular(7),
+  Widget build(BuildContext context) => _AdmissionHealthRow(
+    title: condition.name,
+    subtitle: condition.description,
+    choices: [
+      _TinyChoiceChip(
+        label: 'Yes',
+        active: value == true,
+        onTap: () => onChanged(true),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: _TwoLine(
-                  condition.name,
-                  condition.description.isEmpty
-                      ? 'Select Yes or No'
-                      : condition.description,
-                ),
-              ),
-              const SizedBox(width: 10),
-              _TinyChoiceChip(
-                label: 'Yes',
-                active: value == true,
-                onTap: () => onChanged(true),
-              ),
-              const SizedBox(width: 5),
-              _TinyChoiceChip(
-                label: 'No',
-                active: value == false,
-                onTap: () => onChanged(false),
-              ),
-            ],
-          ),
-          if (value == true && notesController != null) ...[
-            const SizedBox(height: 10),
-            _Field(
-              label: 'Notes for ${condition.name}',
-              hint: 'Add relevant details, treatment or support needs',
-              controller: notesController,
-              maxLines: 3,
-            ),
-          ],
-        ],
+      _TinyChoiceChip(
+        label: 'No',
+        active: value == false,
+        onTap: () => onChanged(false),
       ),
-    );
-  }
+    ],
+    notesController: value == true ? notesController : null,
+    commentHint: 'Treatment or support needs',
+  );
 }
 
 class _AllergyChecklistSection extends StatefulWidget {
@@ -10778,87 +10914,167 @@ class _VaccinationRecordCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasBeenReceived = status == 'YES';
+    final received = status == 'YES';
+    final hasComment = notesController?.text.trim().isNotEmpty == true;
+    return _AdmissionHealthRow(
+      title: vaccination.name,
+      subtitle: [
+        if (vaccination.protectedDisease.isNotEmpty)
+          vaccination.protectedDisease,
+        if (vaccination.recommendedAge.isNotEmpty)
+          'Age: ${vaccination.recommendedAge}',
+        if (vaccination.isRequired) 'Required',
+      ].join(' · '),
+      choices: [
+        _TinyChoiceChip(
+          label: 'Yes',
+          active: received,
+          onTap: () => onChanged('YES'),
+        ),
+        _TinyChoiceChip(
+          label: 'No',
+          active: status == 'NO',
+          onTap: () => onChanged('NO'),
+        ),
+        _TinyChoiceChip(
+          label: 'Pending',
+          active: status == 'NOT_ANSWERED',
+          onTap: () => onChanged('NOT_ANSWERED'),
+        ),
+      ],
+      notesController: received || hasComment ? notesController : null,
+      commentHint: 'Vaccination details',
+      detail: received && dateController != null
+          ? _DateField(
+              label: 'Date received (optional)',
+              controller: dateController,
+            )
+          : null,
+    );
+  }
+}
+
+class _AdmissionHealthRow extends StatefulWidget {
+  const _AdmissionHealthRow({
+    required this.title,
+    required this.subtitle,
+    required this.choices,
+    required this.notesController,
+    required this.commentHint,
+    this.detail,
+  });
+
+  final String title;
+  final String subtitle;
+  final List<Widget> choices;
+  final TextEditingController? notesController;
+  final String commentHint;
+  final Widget? detail;
+
+  @override
+  State<_AdmissionHealthRow> createState() => _AdmissionHealthRowState();
+}
+
+class _AdmissionHealthRowState extends State<_AdmissionHealthRow> {
+  bool _commentExpanded = false;
+
+  @override
+  void didUpdateWidget(covariant _AdmissionHealthRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.notesController != oldWidget.notesController) {
+      _commentExpanded = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final notes = widget.notesController;
+    final heading = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(widget.title, style: const TextStyle(fontWeight: FontWeight.w800)),
+        if (widget.subtitle.isNotEmpty) ...[
+          const SizedBox(height: 3),
+          Text(
+            widget.subtitle,
+            style: const TextStyle(color: AppColors.muted, fontSize: 12),
+          ),
+        ],
+      ],
+    );
+    final actions = Wrap(
+      alignment: WrapAlignment.end,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 5,
+      runSpacing: 4,
+      children: [
+        ...widget.choices,
+        if (notes != null)
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: notes,
+            builder: (context, value, _) => TextButton(
+              onPressed: () =>
+                  setState(() => _commentExpanded = !_commentExpanded),
+              style: TextButton.styleFrom(
+                minimumSize: const Size(0, 32),
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                textStyle: const TextStyle(fontSize: 12),
+              ),
+              child: Text(
+                _commentExpanded
+                    ? 'Hide comment'
+                    : value.text.trim().isNotEmpty
+                    ? 'Edit comment'
+                    : 'Add comment',
+              ),
+            ),
+          ),
+      ],
+    );
+
     return Container(
-      padding: const EdgeInsets.all(11),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.white,
         border: Border.all(color: const Color(0xFFD8E2EA)),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            vaccination.name,
-            style: const TextStyle(
-              color: AppColors.text,
-              fontWeight: FontWeight.w900,
-              fontSize: 13,
-            ),
+          LayoutBuilder(
+            builder: (context, constraints) => constraints.maxWidth < 310
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [heading, const SizedBox(height: 4), actions],
+                  )
+                : Row(
+                    children: [
+                      Expanded(child: heading),
+                      const SizedBox(width: 8),
+                      ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: constraints.maxWidth * .8,
+                        ),
+                        child: actions,
+                      ),
+                    ],
+                  ),
           ),
-          if (vaccination.protectedDisease.isNotEmpty) ...[
-            const SizedBox(height: 2),
-            Text(
-              vaccination.protectedDisease,
-              style: const TextStyle(
-                color: AppColors.muted,
-                fontWeight: FontWeight.w700,
-                fontSize: 11,
-              ),
+          if (widget.detail case final detail?) ...[
+            const SizedBox(height: 8),
+            detail,
+          ],
+          if (_commentExpanded && notes != null) ...[
+            const SizedBox(height: 8),
+            _Field(
+              label: 'Comment for ${widget.title}',
+              hint: widget.commentHint,
+              controller: notes,
+              maxLines: 3,
             ),
           ],
-          const SizedBox(height: 7),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              if (vaccination.recommendedAge.isNotEmpty)
-                _SoftMetaChip(label: 'Age: ${vaccination.recommendedAge}'),
-              if (vaccination.isRequired)
-                const _SoftMetaChip(label: 'Required', danger: true),
-            ],
-          ),
-          const SizedBox(height: 9),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              _TinyChoiceChip(
-                label: 'Vaccinated',
-                icon: Icons.check_rounded,
-                active: status == 'YES',
-                onTap: () => onChanged('YES'),
-              ),
-              _TinyChoiceChip(
-                label: 'Not vaccinated',
-                icon: Icons.close_rounded,
-                active: status == 'NO',
-                onTap: () => onChanged('NO'),
-              ),
-              _TinyChoiceChip(
-                label: 'Pending',
-                icon: Icons.hourglass_empty_rounded,
-                active: status == 'NOT_ANSWERED',
-                onTap: () => onChanged('NOT_ANSWERED'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          _ResponsiveFormGrid(
-            children: [
-              _DateField(
-                label: 'Date received',
-                controller: dateController,
-                enabled: hasBeenReceived,
-              ),
-              _Field(
-                label: 'Notes',
-                hint: 'Optional notes',
-                controller: notesController,
-              ),
-            ],
-          ),
         ],
       ),
     );
@@ -10868,77 +11084,40 @@ class _VaccinationRecordCard extends StatelessWidget {
 class _TinyChoiceChip extends StatelessWidget {
   const _TinyChoiceChip({
     required this.label,
-    this.icon,
     this.active = false,
     this.onTap,
   });
 
   final String label;
-  final IconData? icon;
   final bool active;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(999),
-      child: Container(
-        height: 24,
-        padding: const EdgeInsets.symmetric(horizontal: 9),
-        decoration: BoxDecoration(
-          color: active ? AppColors.greenSoft : Colors.white,
-          border: Border.all(
-            color: active ? AppColors.green : const Color(0xFFD8E2EA),
-          ),
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (icon != null) ...[
-              Icon(
-                icon,
-                size: 12,
-                color: active ? AppColors.green : AppColors.muted,
-              ),
-              const SizedBox(width: 4),
-            ],
-            Text(
-              label,
-              style: TextStyle(
-                color: active ? AppColors.green : AppColors.muted,
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SoftMetaChip extends StatelessWidget {
-  const _SoftMetaChip({required this.label, this.danger = false});
-
-  final String label;
-  final bool danger;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: danger ? const Color(0xFFFFF0F0) : const Color(0xFFF3F6F8),
+    return Semantics(
+      button: true,
+      selected: active,
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: danger ? AppColors.red : AppColors.muted,
-          fontSize: 10,
-          fontWeight: FontWeight.w900,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 24),
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+          decoration: BoxDecoration(
+            color: active ? AppColors.greenSoft : Colors.white,
+            border: Border.all(
+              color: active ? AppColors.green : const Color(0xFFD8E2EA),
+            ),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: active ? AppColors.green : AppColors.muted,
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
         ),
       ),
     );
@@ -12030,16 +12209,61 @@ class _AdmissionsErrorCard extends StatelessWidget {
   }
 }
 
+Future<void> showStudentAdmissionReview({
+  required BuildContext context,
+  required String schoolId,
+  required String studentId,
+  required String status,
+  required bool canReview,
+  required String? accessToken,
+  DateTime? createdAt,
+  Future<String?> Function()? onRefreshAccessToken,
+}) {
+  final timestamp = createdAt?.toIso8601String() ?? '';
+  return Navigator.of(context).push<void>(
+    MaterialPageRoute(
+      builder: (_) => _ApplicantDetailScreen(
+        application: _StudentApplication(
+          id: null,
+          householdId: null,
+          admissionId: null,
+          studentName: 'Student application',
+          studentId: studentId,
+          guardianName: '',
+          guardianPhone: '',
+          applyingFor: '',
+          type: 'Student',
+          appliedDate: _formatDateText(timestamp),
+          createdAt: timestamp,
+          rawStatus: status,
+          status: _studentStatusFromApi(status),
+        ),
+        customSchoolId: schoolId,
+        api: AdmissionsApiClient(
+          accessToken: accessToken,
+          onRefreshAccessToken: onRefreshAccessToken,
+        ),
+        fromInbox: true,
+        readOnly: !canReview,
+      ),
+    ),
+  );
+}
+
 class _ApplicantDetailScreen extends StatefulWidget {
   const _ApplicantDetailScreen({
     required this.application,
     required this.customSchoolId,
     required this.api,
+    this.fromInbox = false,
+    this.readOnly = false,
   });
 
   final _StudentApplication application;
   final String customSchoolId;
   final AdmissionsApiClient api;
+  final bool fromInbox;
+  final bool readOnly;
 
   @override
   State<_ApplicantDetailScreen> createState() => _ApplicantDetailScreenState();
@@ -12047,13 +12271,15 @@ class _ApplicantDetailScreen extends StatefulWidget {
 
 class _ApplicantDetailScreenState extends State<_ApplicantDetailScreen> {
   late Future<_ApplicantDetailData> _detailFuture;
+  late _StudentApplication _application;
   late StudentApplicationStatus _status;
   bool _updatingStatus = false;
 
   @override
   void initState() {
     super.initState();
-    _status = widget.application.status;
+    _application = widget.application;
+    _status = _application.status;
     _detailFuture = _loadDetail();
   }
 
@@ -12096,6 +12322,18 @@ class _ApplicantDetailScreenState extends State<_ApplicantDetailScreen> {
         customSchoolId: widget.customSchoolId,
         customGuardianId: summary.customGuardianId,
       );
+    }
+    if (widget.fromInbox && mounted) {
+      setState(() {
+        _application = _studentApplicationFromAdmission(student, guardian);
+        if (_status == StudentApplicationStatus.pendingApproval) {
+          _status = switch (student.status.toUpperCase()) {
+            'ACTIVE' || 'APPROVED' => StudentApplicationStatus.approved,
+            'WITHDRAWN' || 'REJECTED' => StudentApplicationStatus.rejected,
+            _ => _status,
+          };
+        }
+      });
     }
     return _ApplicantDetailData(
       student: student,
@@ -12221,8 +12459,11 @@ class _ApplicantDetailScreenState extends State<_ApplicantDetailScreen> {
         child: Column(
           children: [
             _ApplicantDetailTopBar(
-              application: widget.application,
+              application: _application,
               status: _status,
+              backLabel: widget.fromInbox
+                  ? 'Back to approvals'
+                  : 'Back to admissions',
               onBack: () => Navigator.pop(context),
             ),
             Expanded(
@@ -12246,9 +12487,10 @@ class _ApplicantDetailScreenState extends State<_ApplicantDetailScreen> {
                   }
                   final data = snapshot.data!;
                   return _ApplicantDetailWorkspace(
-                    application: widget.application,
+                    application: _application,
                     data: data,
                     status: _status,
+                    readOnly: widget.readOnly,
                     updatingStatus: _updatingStatus,
                     onEdit: () => _editApplication(data.student),
                     onEditStep: (step) =>
@@ -12291,11 +12533,13 @@ class _ApplicantDetailTopBar extends StatelessWidget {
   const _ApplicantDetailTopBar({
     required this.application,
     required this.status,
+    required this.backLabel,
     required this.onBack,
   });
 
   final _StudentApplication application;
   final StudentApplicationStatus status;
+  final String backLabel;
   final VoidCallback onBack;
 
   @override
@@ -12310,7 +12554,7 @@ class _ApplicantDetailTopBar extends StatelessWidget {
       child: Row(
         children: [
           IconButton(
-            tooltip: 'Back to admissions',
+            tooltip: backLabel,
             onPressed: onBack,
             icon: const Icon(Icons.arrow_back_rounded),
           ),
@@ -12352,6 +12596,7 @@ class _ApplicantDetailWorkspace extends StatelessWidget {
     required this.application,
     required this.data,
     required this.status,
+    required this.readOnly,
     required this.updatingStatus,
     required this.onEdit,
     required this.onEditStep,
@@ -12364,6 +12609,7 @@ class _ApplicantDetailWorkspace extends StatelessWidget {
   final _StudentApplication application;
   final _ApplicantDetailData data;
   final StudentApplicationStatus status;
+  final bool readOnly;
   final bool updatingStatus;
   final VoidCallback onEdit;
   final ValueChanged<int> onEditStep;
@@ -12380,11 +12626,12 @@ class _ApplicantDetailWorkspace extends StatelessWidget {
         final content = _ApplicantInformationColumn(
           application: application,
           data: data,
-          onEditStep: onEditStep,
+          onEditStep: readOnly ? null : onEditStep,
           onViewDocument: onViewDocument,
         );
         final sidebar = _ApplicantDecisionSidebar(
           status: status,
+          readOnly: readOnly,
           updating: updatingStatus,
           application: application,
           onEdit: onEdit,
@@ -12427,7 +12674,7 @@ class _ApplicantInformationColumn extends StatelessWidget {
 
   final _StudentApplication application;
   final _ApplicantDetailData data;
-  final ValueChanged<int> onEditStep;
+  final ValueChanged<int>? onEditStep;
   final ValueChanged<AdmissionStudentDocument> onViewDocument;
 
   @override
@@ -12436,12 +12683,13 @@ class _ApplicantInformationColumn extends StatelessWidget {
     final raw = student.rawJson;
     final country = _admissionMap(raw['countryOfBirth']);
     final city = _admissionMap(raw['cityOfBirth']);
+    final edit = onEditStep;
     return Column(
       children: [
         _ApplicantSectionCard(
           number: 1,
           title: 'Student Information',
-          onEdit: () => onEditStep(0),
+          onEdit: edit == null ? null : () => edit(0),
           child: _ApplicantDetailGrid(
             fields: [
               ('First name', _value(raw['firstName'])),
@@ -12464,28 +12712,28 @@ class _ApplicantInformationColumn extends StatelessWidget {
         _ApplicantSectionCard(
           number: 2,
           title: 'Medical Conditions & Allergies',
-          onEdit: () => onEditStep(2),
+          onEdit: edit == null ? null : () => edit(2),
           child: _ApplicantMedicalContent(data: data),
         ),
         const SizedBox(height: 14),
         _ApplicantSectionCard(
           number: 3,
           title: 'Vaccination Records',
-          onEdit: () => onEditStep(3),
+          onEdit: edit == null ? null : () => edit(3),
           child: _ApplicantVaccinationContent(data: data),
         ),
         const SizedBox(height: 14),
         _ApplicantSectionCard(
           number: 4,
           title: 'School History',
-          onEdit: () => onEditStep(4),
+          onEdit: edit == null ? null : () => edit(4),
           child: _ApplicantSchoolHistory(student: student),
         ),
         const SizedBox(height: 14),
         _ApplicantSectionCard(
           number: 5,
           title: 'Required Documents',
-          onEdit: () => onEditStep(5),
+          onEdit: edit == null ? null : () => edit(5),
           child: _ApplicantDocuments(
             documents: data.documents,
             onViewDocument: onViewDocument,
@@ -12520,6 +12768,7 @@ class _ApplicantInformationColumn extends StatelessWidget {
 class _ApplicantDecisionSidebar extends StatelessWidget {
   const _ApplicantDecisionSidebar({
     required this.status,
+    required this.readOnly,
     required this.updating,
     required this.application,
     required this.onEdit,
@@ -12529,6 +12778,7 @@ class _ApplicantDecisionSidebar extends StatelessWidget {
   });
 
   final StudentApplicationStatus status;
+  final bool readOnly;
   final bool updating;
   final _StudentApplication application;
   final VoidCallback onEdit;
@@ -12540,7 +12790,7 @@ class _ApplicantDecisionSidebar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Card(
+        if (!readOnly) Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
@@ -12604,7 +12854,7 @@ class _ApplicantDecisionSidebar extends StatelessWidget {
             ),
           ),
         ),
-        const SizedBox(height: 14),
+        if (!readOnly) const SizedBox(height: 14),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -13557,8 +13807,7 @@ class _HouseholdRecord {
     required this.householdName,
     required this.primaryGuardian,
     required this.phone,
-    required this.status,
-    required this.statusColor,
+    this.guardianSetup,
     required this.students,
     required this.pendingGuardians,
     required this.started,
@@ -13571,8 +13820,7 @@ class _HouseholdRecord {
   final String householdName;
   final String primaryGuardian;
   final String phone;
-  final String status;
-  final Color statusColor;
+  final GuardianSetupStatus? guardianSetup;
   final int students;
   final int pendingGuardians;
   final String started;
@@ -13584,8 +13832,7 @@ class _HouseholdRecord {
     String? householdName,
     String? primaryGuardian,
     String? phone,
-    String? status,
-    Color? statusColor,
+    GuardianSetupStatus? guardianSetup,
     int? students,
     int? pendingGuardians,
     String? started,
@@ -13598,8 +13845,7 @@ class _HouseholdRecord {
       householdName: householdName ?? this.householdName,
       primaryGuardian: primaryGuardian ?? this.primaryGuardian,
       phone: phone ?? this.phone,
-      status: status ?? this.status,
-      statusColor: statusColor ?? this.statusColor,
+      guardianSetup: guardianSetup ?? this.guardianSetup,
       students: students ?? this.students,
       pendingGuardians: pendingGuardians ?? this.pendingGuardians,
       started: started ?? this.started,
@@ -13623,8 +13869,6 @@ _HouseholdRecord _newHouseholdRecord() {
     householdName: 'New Household',
     primaryGuardian: 'Guardian pending',
     phone: 'Phone pending',
-    status: 'Draft',
-    statusColor: AppColors.muted,
     students: 0,
     pendingGuardians: 0,
     started: 'Today',
@@ -13669,6 +13913,15 @@ class _HouseholdDashboardData {
   final bool financeAvailable;
   final String? financeMessage;
   final AdmissionTermContext? term;
+
+  bool canReceivePayment(AdmissionStudent student) =>
+      term?.closed == false &&
+      canReceiveHouseholdPayment(
+        student.status,
+        feeAccounts[student.customStudentId],
+      );
+
+  bool get hasPayableStudents => students.any(canReceivePayment);
 
   double get totalOutstanding => householdOutstandingTotal(feeAccounts.values);
 
@@ -13831,18 +14084,7 @@ _HouseholdRecord _householdFromDirectory(GuardianDirectoryHousehold household) {
     phone: household.primary.phone.isEmpty
         ? 'No phone yet'
         : household.primary.phone,
-    status: household.id == null
-        ? 'No household linked'
-        : household.incomplete
-        ? 'Guardian incomplete'
-        : household.pendingCount > 0
-        ? 'Pending review'
-        : 'Ready for student',
-    statusColor: household.id == null || household.incomplete
-        ? AppColors.amber
-        : household.pendingCount > 0
-        ? AppColors.blue
-        : AppColors.green,
+    guardianSetup: household.guardianSetup,
     students: household.studentCount,
     pendingGuardians: household.pendingCount,
     started: _formatDateText(household.primary.createdAt),
@@ -13877,11 +14119,6 @@ Widget _directoryDestination(
   );
 }
 
-bool _isIncompleteGuardian(String status) {
-  final normalized = status.toUpperCase();
-  return normalized.contains('DRAFT') || normalized.contains('INCOMPLETE');
-}
-
 bool _isPendingReviewGuardian(String status) {
   final normalized = status.toUpperCase();
   return normalized.contains('PENDING') || normalized.contains('REVIEW');
@@ -13901,6 +14138,10 @@ StudentApplicationStatus _studentStatusFromApi(String status) {
 String _guardianStatusLabel(String status) {
   final normalized = status.trim();
   if (normalized.isEmpty) return 'In progress';
+  final state = normalized.toUpperCase();
+  if (state == 'PENDING_REVIEW' || state == 'PENDING_APPROVAL') {
+    return 'Pending approval';
+  }
   return _titleCase(normalized.replaceAll('_', ' '));
 }
 
@@ -13964,7 +14205,7 @@ String _formatDateText(String value) {
 
 DateTime? _parseBackendDate(String value) {
   final match = RegExp(
-    r'^(\d{4})\D+(\d{1,2})\D+(\d{1,2})',
+    r'^\[?(\d{4})\D+(\d{1,2})\D+(\d{1,2})',
   ).firstMatch(value.trim());
   if (match == null) return null;
 

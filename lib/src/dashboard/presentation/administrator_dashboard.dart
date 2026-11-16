@@ -177,6 +177,7 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
   int? _evaluationStreamId;
   String? _evaluationStreamName;
   bool _evaluationOpenedFromInbox = false;
+  StreamSubscription<String>? _admissionReviewChanges;
   int? _teacherClassStreamId;
   bool _selectingTeacherClass = false;
   late String _activeRole;
@@ -192,10 +193,21 @@ class _AdministratorDashboardState extends State<AdministratorDashboard> {
         : widget.readinessRepository!.getReadiness(_schoolId);
     _feeWorkflowSummary = _loadFeeWorkflowSummary();
     _approvalInbox = _loadApprovalInbox();
+    _admissionReviewChanges = AdmissionsApiClient.admissionReviewChanges.listen(
+      (school) {
+        if (school == _schoolId) _refreshApprovalInbox();
+      },
+    );
     _notifications = _loadNotifications();
     _shopAccess = _loadShopAccess();
     _payrollAccess = _loadPayrollAccess();
     _teacherWorkspace = _loadTeacherWorkspace(_activeRole);
+  }
+
+  @override
+  void dispose() {
+    _admissionReviewChanges?.cancel();
+    super.dispose();
   }
 
   @override
@@ -1032,6 +1044,23 @@ class _DashboardBody extends StatelessWidget {
           onRefreshAccessToken: onRefreshAccessToken,
         ),
         onInboxChanged: (_) => onFeeWorkflowChanged(),
+        onReviewGuardian: (item) => showGuardianAdmissionReview(
+          context: context,
+          schoolId: schoolId,
+          guardianId: item.customGuardianId,
+          accessToken: accessToken,
+          onRefreshAccessToken: onRefreshAccessToken,
+        ),
+        onOpenStudentAdmission: (item, canReview) => showStudentAdmissionReview(
+          context: context,
+          schoolId: schoolId,
+          studentId: item.customStudentId,
+          status: item.status,
+          canReview: canReview,
+          accessToken: accessToken,
+          createdAt: item.createdAt,
+          onRefreshAccessToken: onRefreshAccessToken,
+        ),
         onOpenSource: (ApprovalItem item) {
           if (item.sourcePage == 'fees') {
             onSelectPage(_SchoolAdminPage.fees);
@@ -1358,6 +1387,18 @@ class _DashboardBody extends StatelessWidget {
         onRefreshAccessToken: onRefreshAccessToken,
       );
       final canManageTermClosure = _canManageTermClosure(normalizedRole);
+      Future<bool> editTermDates(int termId) async {
+        final saved = await showCurrentTermDateEditor(
+          context: context,
+          schoolId: schoolId,
+          termId: termId,
+          accessToken: accessToken,
+          onRefreshAccessToken: onRefreshAccessToken,
+        );
+        if (saved && context.mounted) onRefresh();
+        return saved;
+      }
+
       return TermReviewScreen(
         schoolId: schoolId,
         reviewerUserId: userId,
@@ -1382,25 +1423,7 @@ class _DashboardBody extends StatelessWidget {
         onOpenFinalReports: () => onSelectPage(_SchoolAdminPage.finalReports),
         onOpenIncidents: () => onSelectPage(_SchoolAdminPage.incidents),
         onOpenSettings: () => onSelectPage(_SchoolAdminPage.settings),
-        onOpenTermDates: () => showPreparedTermDateEditor(
-          context: context,
-          schoolId: schoolId,
-          accessToken: accessToken,
-          onRefreshAccessToken: onRefreshAccessToken,
-        ),
-        onEditCurrentTermDates: canManageTermClosure
-            ? (termId) async {
-                final saved = await showCurrentTermDateEditor(
-                  context: context,
-                  schoolId: schoolId,
-                  termId: termId,
-                  accessToken: accessToken,
-                  onRefreshAccessToken: onRefreshAccessToken,
-                );
-                if (saved && context.mounted) onRefresh();
-                return saved;
-              }
-            : null,
+        onEditCurrentTermDates: canManageTermClosure ? editTermDates : null,
         onSetUpNextTerm: canManageTermClosure
             ? (closedTermId) => showNextTermSetupEditor(
                 context: context,

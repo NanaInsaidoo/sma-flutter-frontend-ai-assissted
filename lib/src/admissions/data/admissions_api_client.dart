@@ -10,6 +10,8 @@ class AdmissionsApiClient {
   // School-scoped invalidation shared by admission and household screens.
   static final _studentChanges = StreamController<String>.broadcast();
   static Stream<String> get studentChanges => _studentChanges.stream;
+  static final _admissionReviewChanges = StreamController<String>.broadcast();
+  static Stream<String> get admissionReviewChanges => _admissionReviewChanges.stream;
   AdmissionsApiClient({
     required this.accessToken,
     this.onRefreshAccessToken,
@@ -190,6 +192,18 @@ class AdmissionsApiClient {
     return AdmissionGuardian.fromJson(_decodeMap(response));
   }
 
+  Future<AdmissionGuardian> approveGuardianAdmission({
+    required String customSchoolId,
+    required String customGuardianId,
+  }) async {
+    final response = await _send(
+      'POST',
+      '/api/v1/guardians/schools/$customSchoolId/guardians/$customGuardianId/approve-admission',
+    );
+    _admissionReviewChanges.add(customSchoolId);
+    return AdmissionGuardian.fromJson(_decodeMap(response));
+  }
+
   Future<List<AdmissionStudent>> getStudents({
     required String customSchoolId,
     int? householdId,
@@ -303,6 +317,7 @@ class AdmissionsApiClient {
         'The application status could not be updated.',
       );
     }
+    _admissionReviewChanges.add(customSchoolId);
   }
 
   Future<void> updateHouseholdStatus({
@@ -326,6 +341,7 @@ class AdmissionsApiClient {
         'No pending household members were updated.',
       );
     }
+    _admissionReviewChanges.add(customSchoolId);
   }
 
   Future<void> deleteEmptyHousehold({
@@ -587,7 +603,12 @@ class AdmissionsApiClient {
       '/api/v1/guardians/schools/$customSchoolId/guardians/$customGuardianId/review/complete',
       body: {},
     );
-    return AdmissionSavedPerson.fromJson(_decodeMap(response));
+    final data = _decodeMap(response);
+    if (data['status'] == 'PENDING_REVIEW' ||
+        data['status'] == 'PENDING_APPROVAL') {
+      _admissionReviewChanges.add(customSchoolId);
+    }
+    return AdmissionSavedPerson.fromJson(data);
   }
 
   Future<AdmissionSavedPerson> createStudent({
@@ -807,7 +828,11 @@ class AdmissionsApiClient {
       '/api/students/schools/$customSchoolId/students/$customStudentId/review/complete',
       body: {},
     );
-    return AdmissionSavedPerson.fromJson(_decodeMap(response));
+    final data = _decodeMap(response);
+    if (data['status'] == 'PENDING_APPROVAL' || data['status'] == 'PENDING_REVIEW') {
+      _admissionReviewChanges.add(customSchoolId);
+    }
+    return AdmissionSavedPerson.fromJson(data);
   }
 
   Future<http.Response> _send(
@@ -1011,7 +1036,7 @@ class AdmissionListItem {
       householdId: _intValue(json['householdId']),
       admissionId: _intValue(json['admissionId']),
       status: _text(json['status']),
-      createdAt: _text(json['createdAt']),
+      createdAt: _timestampText(json['createdAt']),
       gender: _text(json['gender']),
       customStudentId: _text(json['customStudentId']),
       gradeLevelName: _text(json['gradeLevelName']),
@@ -1042,6 +1067,8 @@ class AdmissionTermContext {
     required this.startDate,
     required this.endDate,
     this.closed = false,
+    this.teachingStartDate,
+    this.teachingEndDate,
   });
 
   factory AdmissionTermContext.fromJson(Map<String, dynamic> json) {
@@ -1052,11 +1079,11 @@ class AdmissionTermContext {
       academicYear: _text(academicYear?['name']),
       term: _text(termType?['name']),
       closed: json['isClosed'] == true || json['lifecycleStatus'] == 'CLOSED',
-      // Vacation operations belong to the new term. Admissions, fees and the
-      // shared term header therefore begin at the operational opening date,
-      // while older records fall back to the legacy start/end fields.
+      // Admissions can operate during vacation before teaching begins.
       startDate: _dateText(json['operationalStartDate'] ?? json['startDate']),
       endDate: _dateText(json['closingDate'] ?? json['endDate']),
+      teachingStartDate: _dateText(json['teachingStartDate'] ?? json['startDate']),
+      teachingEndDate: _dateText(json['teachingEndDate'] ?? json['endDate']),
     );
     if (result.startDate.isEmpty || result.endDate.isEmpty) {
       throw const AdmissionsApiException(
@@ -1072,6 +1099,8 @@ class AdmissionTermContext {
   final String startDate;
   final String endDate;
   final bool closed;
+  final String? teachingStartDate;
+  final String? teachingEndDate;
 }
 
 class AdmissionGuardian {
@@ -1134,6 +1163,7 @@ class GuardianPortalAccessResult {
     required this.message,
     required this.invitationToken,
     required this.invitationStatus,
+    this.invitationDeliveryStatus = '',
     required this.invitationMaskedPhone,
   });
 
@@ -1146,6 +1176,7 @@ class GuardianPortalAccessResult {
         message: _text(json['message']),
         invitationToken: _text(json['invitationToken']),
         invitationStatus: _text(json['invitationStatus']),
+        invitationDeliveryStatus: _text(json['invitationDeliveryStatus']),
         invitationMaskedPhone: _text(json['invitationMaskedPhone']),
       );
 
@@ -1156,6 +1187,7 @@ class GuardianPortalAccessResult {
   final String message;
   final String invitationToken;
   final String invitationStatus;
+  final String invitationDeliveryStatus;
   final String invitationMaskedPhone;
 }
 
@@ -1411,6 +1443,24 @@ String _dateText(Object? value) {
     }
   }
   return _text(value);
+}
+
+String _timestampText(Object? value) {
+  if (value is! List || value.length < 3) return _text(value);
+  if (value.any((part) => part is! int)) return '';
+
+  int part(int index) => index < value.length ? value[index] as int : 0;
+  final nanos = part(6);
+  return DateTime(
+    part(0),
+    part(1),
+    part(2),
+    part(3),
+    part(4),
+    part(5),
+    nanos ~/ 1000000,
+    (nanos % 1000000) ~/ 1000,
+  ).toIso8601String();
 }
 
 String _joinName(String firstName, String lastName) {

@@ -75,6 +75,8 @@ class ApprovalsScreen extends StatefulWidget {
     required this.repository,
     this.onOpenSource,
     this.onInboxChanged,
+    this.onReviewGuardian,
+    this.onOpenStudentAdmission,
     this.leaveApi,
   });
 
@@ -82,6 +84,8 @@ class ApprovalsScreen extends StatefulWidget {
   final ApprovalApiClient repository;
   final ValueChanged<ApprovalItem>? onOpenSource;
   final ValueChanged<ApprovalInbox>? onInboxChanged;
+  final Future<void> Function(ApprovalItem)? onReviewGuardian;
+  final Future<void> Function(ApprovalItem, bool)? onOpenStudentAdmission;
   final LeaveApiClient? leaveApi;
 
   @override
@@ -308,6 +312,22 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
   }
 
   Future<void> _openItem(BuildContext context, ApprovalItem item) async {
+    final openStudentAdmission = widget.onOpenStudentAdmission;
+    if (item.type == 'STUDENT_ADMISSION' &&
+        item.customStudentId.isNotEmpty &&
+        openStudentAdmission != null) {
+      await openStudentAdmission(item, _myApprovals && item.canApprove);
+      if (mounted) _refresh();
+      return;
+    }
+    final reviewGuardian = widget.onReviewGuardian;
+    if (item.type == 'GUARDIAN_ADMISSION' &&
+        item.customGuardianId.isNotEmpty &&
+        reviewGuardian != null) {
+      await reviewGuardian(item);
+      if (mounted) _refresh();
+      return;
+    }
     if (item.type == 'STAFF_LEAVE') {
       await showLeaveRequestDetails(
         context: context,
