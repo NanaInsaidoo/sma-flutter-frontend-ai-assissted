@@ -857,11 +857,7 @@ class _SchoolCreationScreenState extends State<SchoolCreationScreen> {
         } catch (error) {
           if (!mounted) return;
           final detail = error.toString().replaceFirst('ClientException: ', '');
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Could not save ${_steps[index].title}. $detail'),
-            ),
-          );
+          throw StateError('Could not save ${_steps[index].title}. $detail');
         }
       },
       onUnchanged: () async {
@@ -2540,6 +2536,12 @@ class _StepFormDialogState extends State<_StepFormDialog> {
         await widget.onSaved?.call();
       } else if (mounted) {
         Navigator.pop(context, true);
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _validationMessage = error.toString().replaceFirst('Bad state: ', '');
+        });
       }
     } finally {
       if (mounted) setState(() => _saving = false);
