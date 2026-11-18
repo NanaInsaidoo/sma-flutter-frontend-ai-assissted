@@ -12,6 +12,26 @@ import 'package:school_management_app/src/platform/presentation/school_creation_
 import 'support/fake_platform_repository.dart';
 
 void main() {
+  testWidgets('failed profile saves show the server error inside the editor', (
+    tester,
+  ) async {
+    final repository = await _pumpRegistration(tester);
+    repository.saveError = 'Document service is temporarily unavailable';
+    await tester.enterText(
+      find.byKey(const ValueKey('Specify GES registration type')),
+      'Changed permit',
+    );
+
+    await _save(tester);
+
+    expect(
+      find.textContaining('Document service is temporarily unavailable'),
+      findsOneWidget,
+    );
+    expect(find.text('Save Changes'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'hydrates, edits and sends both Other descriptions with permanent IDs',
     (tester) async {
@@ -249,12 +269,14 @@ Future<_RegistrationRepository> _pumpRegistration(
 
 class _RegistrationRepository extends FakePlatformRepository {
   SchoolOnboardingDraft? savedDraft;
+  String? saveError;
   @override
   Future<SchoolOnboardingProgress> saveSchoolOnboardingStep({
     required int stepIndex,
     required SchoolOnboardingDraft draft,
   }) async {
     savedDraft = draft;
+    if (saveError != null) throw Exception(saveError);
     return const SchoolOnboardingProgress(
       customSchoolId: 'SCH-OTHER',
       registrationStatus: 'IN_PROGRESS',

@@ -17,6 +17,7 @@ import 'platform/data/live_platform_repository.dart';
 import 'platform/data/platform_repository.dart';
 import 'platform/domain/platform_models.dart';
 import 'platform/presentation/platform_admin_shell.dart';
+import 'platform/presentation/school_administrator_preview_screen.dart';
 import 'theme/app_theme.dart';
 import 'readiness/data/school_readiness_repository.dart';
 
@@ -47,7 +48,6 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
     with WidgetsBindingObserver {
   static const _roleRefreshInterval = Duration(minutes: 5);
 
-  bool _showSchoolAdministrator = false;
   AuthSession? _session;
   final AuthApiClient _authApi = AuthApiClient();
   final SessionStore _sessionStore = SessionStore();
@@ -175,9 +175,18 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
         GoRoute(
           path: '/school-admin',
           builder: (context, state) => _selectable(
-            _schoolStaffDashboard(
-              initialPage: state.uri.queryParameters['page'],
-            ),
+            _session != null && _isPlatformRole(_session!)
+                ? SchoolAdministratorPreviewScreen(
+                    repository: _currentPlatformRepository,
+                    onExit: () => _router.go(_routeForSession(_session)),
+                    schoolBuilder: (school) => _schoolStaffDashboard(
+                      initialPage: state.uri.queryParameters['page'],
+                      previewSchool: school,
+                    ),
+                  )
+                : _schoolStaffDashboard(
+                    initialPage: state.uri.queryParameters['page'],
+                  ),
           ),
         ),
         GoRoute(
@@ -375,9 +384,6 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
     String? schoolCode,
     String? managerName,
   }) {
-    if (_showSchoolAdministrator) {
-      return _schoolStaffDashboard();
-    }
     return PlatformAdminShell(
       accessToken: _session?.accessToken,
       userDisplayName: _session?.displayName ?? 'Super Admin',
@@ -403,23 +409,26 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
       onNavigatePath: _router.go,
       onLogout: _logout,
       onOpenSchoolAdministrator: () {
-        setState(() => _showSchoolAdministrator = true);
         _router.go('/school-admin');
       },
     );
   }
 
-  Widget _schoolStaffDashboard({String? initialPage}) {
+  Widget _schoolStaffDashboard({
+    String? initialPage,
+    ManagedSchool? previewSchool,
+  }) {
     final session = _session;
     return AdministratorDashboard(
+      key: previewSchool == null ? null : ValueKey(previewSchool.code),
       repository: ApiDashboardRepository(
         accessToken: session?.accessToken,
         administratorName: session?.displayName ?? '',
-        schoolName: session?.schoolName,
+        schoolName: previewSchool?.name ?? session?.schoolName,
         onRefreshAccessToken: _refreshAccessToken,
       ),
-      schoolId: session?.customSchoolId,
-      schoolName: session?.schoolName,
+      schoolId: previewSchool?.code ?? session?.customSchoolId,
+      schoolName: previewSchool?.name ?? session?.schoolName,
       userDisplayName: session?.displayName,
       role: session?.role,
       roles: session?.effectiveRoles ?? const [],
@@ -453,7 +462,6 @@ class _SchoolManagementAppState extends State<SchoolManagementApp>
     _sessionStore.clear();
     setState(() {
       _session = null;
-      _showSchoolAdministrator = false;
       _platformRepository = null;
       _platformSnapshot = null;
       _platformSnapshotData = null;
